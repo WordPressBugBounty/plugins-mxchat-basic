@@ -5,7 +5,7 @@ Tags: ai chatbot, chatgpt, woocommerce, customer support, live chat
 Requires at least: 5.0
 Tested up to: 6.9
 Requires PHP: 7.2
-Stable tag: 3.0.5
+Stable tag: 3.0.6
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -37,18 +37,14 @@ Extend the free plugin with these optional premium features:
 
 👉 [Visit our website to view all add-ons](https://mxchat.ai)
 
-## 🔥 What's New in Version 3.0.5
+## 🔥 What's New in Version 3.0.6
 
-🔧 **Gemini Embedding Model Update**
-- Fixed: Updated Gemini embedding model from deprecated `gemini-embedding-exp-03-07` to stable `gemini-embedding-001`
-
-🐛 **Bug Fixes**
-- Fixed: Notification settings not saving on new installations
-- Fixed: Save indicators not visible on settings fields (API keys, Slack, Telegram, Loops, Brave Search)
-
-✨ **Improvements**
-- Added: Warning notice for WordPress database users recommending Pinecone for large knowledge bases (500+ entries)
-- Improved: Minor admin UI updates for better user experience
+- New: RAG Sources Limit slider - control how many knowledge base sources (3-10) are included in AI responses
+- New: {visitor_name} placeholder support in Intro Message and AI Behavior settings for personalized greetings
+- New: Added Claude Opus 4.6 and Claude Opus 4.5 models
+- Fixed: Chat persistence OFF now correctly starts fresh AI context on page reload
+- Deprecated: Removed all GPT-4 series, GPT-3.5 Turbo, and Claude 3.x models per provider deprecations
+- Updated: Users on deprecated models auto-migrated to GPT-5.1/GPT-5 Mini or Claude Opus 4.6/Haiku 4.5
 
 ## Core Features That Set MxChat Apart
 
@@ -68,10 +64,10 @@ Extend the free plugin with these optional premium features:
 Access the world's most advanced AI models based on your specific needs:
 
 **OpenRouter**: 100+ models from multiple providers with a single API key – including OpenAI, Anthropic, Google, Meta, Mistral, and more!
-**OpenAI**:  
-GPT-5.2, GPT-5, GPT-5-mini, GPT-5-nano, GPT-5.1, GPT-4.1, GPT-4o, GPT-4o-mini, GPT-4-turbo, GPT-4, GPT-3.5-turbo
-**Anthropic Claude**:  
-Claude Sonnet 4.5, Claude Opus 4.1, Claude Haiku 4.5, Claude 4 Sonnet, Claude 4 Opus, Claude 3.7 Sonnet, Claude 3.5 Sonnet (deprecated), Claude 3 Opus
+**OpenAI**:
+GPT-5.2, GPT-5.1 Chat Latest, GPT-5.1, GPT-5, GPT-5-mini, GPT-5-nano
+**Anthropic Claude**:
+Claude Opus 4.6, Claude Opus 4.5, Claude Sonnet 4.5, Claude Opus 4.1, Claude Haiku 4.5, Claude 4 Sonnet, Claude 4 Opus
 **X.AI**:  
 Grok-4, Grok-3, Grok-3 Fast, Grok-3 Mini, Grok-3 Mini Fast, Grok-2, **Grok 4.1 Fast (Reasoning)**, **Grok 4.1 Fast (Non-Reasoning)**
 **Google Gemini**:
@@ -163,7 +159,7 @@ Please ensure compliance with applicable terms and data privacy laws.
 
 = What AI models does MxChat support? =
 
-MxChat supports 100+ AI models including OpenAI GPT-5, GPT-5 Mini, GPT-4.1, GPT-4o, GPT-4 Turbo, Anthropic Claude Sonnet 4.5, Claude Opus 4, Claude Haiku, Google Gemini 2.0 Flash, Gemini 1.5 Pro, xAI Grok 4, Grok 3, DeepSeek Chat, and many more. With OpenRouter integration, you get access to models from OpenAI, Anthropic, Google, Meta, Mistral, and other providers with a single API key.
+MxChat supports 100+ AI models including OpenAI GPT-5.2, GPT-5.1, GPT-5, GPT-5 Mini, Anthropic Claude Opus 4.6, Claude Opus 4.5, Claude Sonnet 4.5, Claude Haiku 4.5, Google Gemini 2.0 Flash, Gemini 1.5 Pro, xAI Grok 4, Grok 3, DeepSeek Chat, and many more. With OpenRouter integration, you get access to models from OpenAI, Anthropic, Google, Meta, Mistral, and other providers with a single API key.
 
 = How do I get API keys for the AI chatbot? =
 
@@ -265,6 +261,16 @@ Yes. MxChat is available for free on the WordPress plugin repository with full A
 *(Note: Screenshots will be added in future updates)*
 
 == Changelog ==
+
+= 3.0.6 - February 11, 2026 =
+- New: RAG Sources Limit slider - control how many knowledge base sources (3-10) are included in AI responses
+- New: {visitor_name} placeholder support in Intro Message and AI Behavior settings for personalized greetings
+- New: Added Claude Opus 4.6 and Claude Opus 4.5 models
+- Fixed: Chat persistence OFF now correctly starts fresh AI context on page reload (previously AI retained full history)
+- Deprecated: Removed all GPT-4 series and GPT-3.5 Turbo from model selection (OpenAI deprecation)
+- Deprecated: Removed Claude 3.x series models (3.7 Sonnet, 3.5 Sonnet, 3 Opus, 3 Sonnet, 3 Haiku) per Anthropic deprecation
+- Updated: Users on deprecated OpenAI models auto-migrated to GPT-5.1 Chat Latest (or GPT-5 Mini for mini models)
+- Updated: Users on deprecated Claude models auto-migrated to Claude Opus 4.6 (or Claude Haiku 4.5 for Haiku users)
 
 = 3.0.5 - January 28, 2026 =
 - Fixed: Updated Gemini embedding model from deprecated `gemini-embedding-exp-03-07` to stable `gemini-embedding-001`
@@ -789,8 +795,8 @@ Yes. MxChat is available for free on the WordPress plugin repository with full A
 
 == Upgrade Notice ==
 
-= 3.0.5 - January 28, 2026 =
-Minor update: Updated Gemini embedding model to stable version, fixed notification settings on new installs, improved save indicators visibility, and added WordPress database warning for large knowledge bases.
+= 3.0.6 - February 11, 2026 =
+New: RAG Sources Limit slider, Claude Opus 4.6/4.5 models, {visitor_name} placeholder support. Deprecated OpenAI & Claude models auto-migrated.
 
 == License & Warranty ==
 

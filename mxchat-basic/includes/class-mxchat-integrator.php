@@ -184,8 +184,23 @@ function mxchat_fetch_conversation_history() {
     ]);
     wp_die();
 }
-private function mxchat_fetch_conversation_history_for_ai($session_id) {
+private function mxchat_fetch_conversation_history_for_ai($session_id, $session_start_timestamp = 0) {
     $history = get_option("mxchat_history_{$session_id}", []);
+
+    // Check persistence setting - when OFF, only include messages from current page load
+    $options = get_option('mxchat_options', []);
+    $persistence_enabled = isset($options['chat_persistence_toggle']) && $options['chat_persistence_toggle'] === 'on';
+
+    // Filter history when persistence is OFF to match what the user sees
+    if (!$persistence_enabled && $session_start_timestamp > 0) {
+        $history = array_filter($history, function($entry) use ($session_start_timestamp) {
+            // Include messages from this page load onwards
+            return isset($entry['timestamp']) && $entry['timestamp'] >= $session_start_timestamp;
+        });
+        // Re-index array after filtering
+        $history = array_values($history);
+    }
+
     $formatted_history = [];
 
     // Adjusted for code-heavy conversations
@@ -1576,9 +1591,11 @@ public function mxchat_handle_chat_request() {
         }
 
         // If we get here, no intent matched OR the intent didn't provide a usable response
-        
+
         // Step 4: Generate AI response
-        $conversation_history = $this->mxchat_fetch_conversation_history_for_ai($session_id);
+        // Get session start timestamp - when persistence is OFF, only include messages from this page load
+        $session_start_timestamp = isset($_POST['session_start_timestamp']) ? intval($_POST['session_start_timestamp']) : 0;
+        $conversation_history = $this->mxchat_fetch_conversation_history_for_ai($session_id, $session_start_timestamp);
         $this->mxchat_increment_chat_count();
         
         // Generate embedding for the user's query - USE BOT-SPECIFIC API KEY
@@ -1666,7 +1683,7 @@ public function mxchat_handle_chat_request() {
         $fresh_options = get_option('mxchat_options', []);
         $citation_links_enabled = isset($fresh_options['citation_links_toggle']) ? ($fresh_options['citation_links_toggle'] === 'on') : true;
 
-        $system_instructions = $this->get_system_instructions($bot_id);
+        $system_instructions = $this->get_system_instructions($bot_id, $session_id);
         if ($citation_links_enabled && !empty($system_instructions)) {
             preg_match_all(
                 '#\bhttps?://[^\s<>"\']+#i',
@@ -1752,7 +1769,7 @@ if ($testing_data !== null && !empty($this->current_valid_urls)) {
         $context_content = apply_filters('mxchat_prepare_context', $context_content, $session_id);
 
         // Extract model from current options for bot-specific model support
-        $selected_model = isset($current_options['model']) ? $current_options['model'] : 'gpt-4o';
+        $selected_model = isset($current_options['model']) ? $current_options['model'] : 'gpt-5.1-chat-latest';
         
         $response = $this->mxchat_generate_response(
             $context_content,
@@ -2534,7 +2551,7 @@ public function mxchat_interpret_search_query($user_query) {
     
     // Get options and determine the selected model
     $options = $this->options ?? get_option('mxchat_options');
-    $selected_model = isset($options['model']) ? $options['model'] : 'gpt-4o';
+    $selected_model = isset($options['model']) ? $options['model'] : 'gpt-5.1-chat-latest';
     
     // Extract model prefix to determine the provider
     $model_parts = explode('-', $selected_model);
@@ -2584,7 +2601,7 @@ public function mxchat_interpret_search_query($user_query) {
 /**
  * Interpret query using OpenAI models
  */
-private function interpret_query_with_openai($user_query, $system_prompt, $api_key, $model = 'gpt-4o') {
+private function interpret_query_with_openai($user_query, $system_prompt, $api_key, $model = 'gpt-5.1-chat-latest') {
     $url = 'https://api.openai.com/v1/chat/completions';
     $args = [
         'headers' => [
@@ -4437,7 +4454,7 @@ private function mxchat_find_relevant_content($user_embedding, $bot_id = 'defaul
         $bot_options = $this->get_bot_options($bot_id);
         $mxchat_options = get_option('mxchat_options', array());
         $current_options = !empty($bot_options) ? $bot_options : $mxchat_options;
-        $selected_model = $current_options['model'] ?? 'gpt-4o';
+        $selected_model = $current_options['model'] ?? 'gpt-5.1-chat-latest';
 
         if ($this->is_openai_chat_model($selected_model)) {
             error_log("MXCHAT DEBUG: Using OpenAI Vector Store for knowledge retrieval");
@@ -4652,8 +4669,13 @@ private function find_relevant_content_wordpress($user_embedding, $bot_id = 'def
         return $b['best_score'] <=> $a['best_score'];
     });
 
-    // Take top 3 unique URLs
-    $top_urls = array_slice($url_groups, 0, 3, true);
+    // Get RAG sources limit from options (default 6, min 3, max 10)
+    $rag_sources_limit = isset($options['rag_sources_limit']) ? intval($options['rag_sources_limit']) : 6;
+    if ($rag_sources_limit < 3) $rag_sources_limit = 3;
+    if ($rag_sources_limit > 10) $rag_sources_limit = 10;
+
+    // Take top N unique URLs based on user setting
+    $top_urls = array_slice($url_groups, 0, $rag_sources_limit, true);
 
     // Track which document IDs are used for context
     $used_document_ids = [];
@@ -4679,6 +4701,8 @@ private function find_relevant_content_wordpress($user_embedding, $bot_id = 'def
     // Initialize final content
     $content = '';
     $matches_used = 0;
+    $total_chunks_used = 0;
+    $max_total_chunks = 30; // Hard cap on total chunks to prevent excessive token usage
 
     // Check if citation links are enabled (default to 'on' for backwards compatibility)
     // Use fresh options to ensure we get the latest setting value
@@ -4687,11 +4711,20 @@ private function find_relevant_content_wordpress($user_embedding, $bot_id = 'def
 
     // Build content from top URLs
     foreach ($top_urls as $source_url => $group) {
+        // Stop if we've hit the total chunk limit
+        if ($total_chunks_used >= $max_total_chunks) {
+            break;
+        }
+
         $full_text = '';
+        $chunks_in_this_source = 1; // Default for non-chunked content
 
         if ($group['is_chunked']) {
-            // Fetch all chunks for this URL and reassemble
-            $full_text = $this->reassemble_chunks_from_wordpress($source_url);
+            // Calculate how many chunks we can still use
+            $chunks_remaining = $max_total_chunks - $total_chunks_used;
+
+            // Fetch chunks for this URL with limit
+            $full_text = $this->reassemble_chunks_from_wordpress($source_url, $chunks_remaining, $chunks_in_this_source);
 
             // If fetching all chunks fails, fall back to matched chunks
             if (empty($full_text)) {
@@ -4701,13 +4734,19 @@ private function find_relevant_content_wordpress($user_embedding, $bot_id = 'def
                 });
 
                 $chunk_texts = array();
+                $chunks_in_this_source = 0;
                 foreach ($group['chunks'] as $chunk) {
+                    if ($total_chunks_used + $chunks_in_this_source >= $max_total_chunks) {
+                        break;
+                    }
                     $chunk_texts[] = $chunk['text'];
+                    $chunks_in_this_source++;
                 }
                 $full_text = implode("\n\n", $chunk_texts);
             }
         } else {
             $full_text = $group['single_text'];
+            $chunks_in_this_source = 1;
         }
 
         if (!empty($full_text)) {
@@ -4739,6 +4778,7 @@ private function find_relevant_content_wordpress($user_embedding, $bot_id = 'def
             }
 
             $matches_used++;
+            $total_chunks_used += $chunks_in_this_source;
         }
     }
 
@@ -4771,12 +4811,14 @@ private function find_relevant_content_wordpress($user_embedding, $bot_id = 'def
 }
 
 /**
- * Fetch and reassemble all chunks for a URL from WordPress database
+ * Fetch and reassemble chunks for a URL from WordPress database
  *
  * @param string $source_url The source URL to fetch chunks for
- * @return string Reassembled content from all chunks
+ * @param int $max_chunks Maximum number of chunks to return (0 = unlimited)
+ * @param int &$chunk_count Reference to store the actual number of chunks returned
+ * @return string Reassembled content from chunks
  */
-private function reassemble_chunks_from_wordpress($source_url) {
+private function reassemble_chunks_from_wordpress($source_url, $max_chunks = 0, &$chunk_count = 0) {
     global $wpdb;
     $table = $wpdb->prefix . 'mxchat_system_prompt_content';
 
@@ -4789,6 +4831,7 @@ private function reassemble_chunks_from_wordpress($source_url) {
     ));
 
     if (empty($rows)) {
+        $chunk_count = 0;
         return '';
     }
 
@@ -4808,6 +4851,14 @@ private function reassemble_chunks_from_wordpress($source_url) {
 
     // Sort by chunk index
     ksort($chunks);
+
+    // Apply chunk limit if specified
+    if ($max_chunks > 0 && count($chunks) > $max_chunks) {
+        $chunks = array_slice($chunks, 0, $max_chunks, true);
+    }
+
+    // Store actual chunk count
+    $chunk_count = count($chunks);
 
     // Reassemble content
     return implode("\n\n", $chunks);
@@ -4875,7 +4926,7 @@ private function find_relevant_content_pinecone($user_embedding, $bot_id = 'defa
     
     $request_body = array(
         'vector' => $user_embedding,
-        'topK' => 50, // Increased for chunked content grouping - need more candidates to find top 3 unique URLs
+        'topK' => 50, // Increased for chunked content grouping - need more candidates to find top N unique URLs
         'includeMetadata' => true,
         'includeValues' => true
     );
@@ -4960,6 +5011,8 @@ private function find_relevant_content_pinecone($user_embedding, $bot_id = 'defa
     $content = '';
     $matches_used = 0;
     $matches_used_for_context = [];
+    $total_chunks_used = 0;
+    $max_total_chunks = 30; // Hard cap on total chunks to prevent excessive token usage
 
     // Check if citation links are enabled (default to 'on' for backwards compatibility)
     // Use fresh options to ensure we get the latest setting value
@@ -5028,10 +5081,15 @@ private function find_relevant_content_pinecone($user_embedding, $bot_id = 'defa
         return $b['best_score'] <=> $a['best_score'];
     });
 
-    // Take top 3 unique URLs
-    $top_urls = array_slice($url_groups, 0, 3, true);
+    // Get RAG sources limit from options (default 6, min 3, max 10)
+    $rag_sources_limit = isset($current_options['rag_sources_limit']) ? intval($current_options['rag_sources_limit']) : 6;
+    if ($rag_sources_limit < 3) $rag_sources_limit = 3;
+    if ($rag_sources_limit > 10) $rag_sources_limit = 10;
 
-    // Track which match IDs are actually used for context (only from top 3 URLs)
+    // Take top N unique URLs based on user setting
+    $top_urls = array_slice($url_groups, 0, $rag_sources_limit, true);
+
+    // Track which match IDs are actually used for context
     foreach ($top_urls as $group) {
         if ($group['is_chunked']) {
             foreach ($group['chunks'] as $chunk) {
@@ -5044,11 +5102,20 @@ private function find_relevant_content_pinecone($user_embedding, $bot_id = 'defa
 
     // Build content from top URLs
     foreach ($top_urls as $source_url => $group) {
+        // Stop if we've hit the total chunk limit
+        if ($total_chunks_used >= $max_total_chunks) {
+            break;
+        }
+
         $full_text = '';
+        $chunks_in_this_source = 1; // Default for non-chunked content
 
         if ($group['is_chunked']) {
-            // Fetch all chunks for this URL and reassemble
-            $full_text = $this->reassemble_chunks_from_pinecone($source_url, $bot_config);
+            // Calculate how many chunks we can still use
+            $chunks_remaining = $max_total_chunks - $total_chunks_used;
+
+            // Fetch chunks for this URL with limit
+            $full_text = $this->reassemble_chunks_from_pinecone($source_url, $bot_config, $chunks_remaining, $chunks_in_this_source);
 
             // If fetching all chunks fails, fall back to matched chunks
             if (empty($full_text)) {
@@ -5058,13 +5125,19 @@ private function find_relevant_content_pinecone($user_embedding, $bot_id = 'defa
                 });
 
                 $chunk_texts = array();
+                $chunks_in_this_source = 0;
                 foreach ($group['chunks'] as $chunk) {
+                    if ($total_chunks_used + $chunks_in_this_source >= $max_total_chunks) {
+                        break;
+                    }
                     $chunk_texts[] = $chunk['text'];
+                    $chunks_in_this_source++;
                 }
                 $full_text = implode("\n\n", $chunk_texts);
             }
         } else {
             $full_text = $group['single_text'];
+            $chunks_in_this_source = 1;
         }
 
         if (!empty($full_text)) {
@@ -5096,6 +5169,7 @@ private function find_relevant_content_pinecone($user_embedding, $bot_id = 'defa
             }
 
             $matches_used++;
+            $total_chunks_used += $chunks_in_this_source;
         }
     }
 
@@ -5229,12 +5303,13 @@ private function get_single_vector_role($vector_id, $metadata = array()) {
  * @param array $bot_config Bot-specific Pinecone configuration
  * @return string Reassembled content from all chunks
  */
-private function reassemble_chunks_from_pinecone($source_url, $bot_config) {
+private function reassemble_chunks_from_pinecone($source_url, $bot_config, $max_chunks = 0, &$chunk_count = 0) {
     $api_key = $bot_config['api_key'] ?? '';
     $host = $bot_config['host'] ?? '';
     $namespace = $bot_config['namespace'] ?? '';
 
     if (empty($host) || empty($api_key)) {
+        $chunk_count = 0;
         return '';
     }
 
@@ -5243,9 +5318,12 @@ private function reassemble_chunks_from_pinecone($source_url, $bot_config) {
     // Use Pinecone list API to find all chunk vectors with this prefix
     $list_url = "https://{$host}/vectors/list";
 
+    // Limit to max_chunks if specified, otherwise fetch up to 100
+    $fetch_limit = ($max_chunks > 0 && $max_chunks < 100) ? $max_chunks : 100;
+
     $list_body = array(
         'prefix' => $base_hash . '_chunk_',
-        'limit' => 100
+        'limit' => $fetch_limit
     );
 
     if (!empty($namespace)) {
@@ -5332,6 +5410,14 @@ private function reassemble_chunks_from_pinecone($source_url, $bot_config) {
     // Sort by chunk index
     ksort($chunks);
 
+    // Apply chunk limit if specified
+    if ($max_chunks > 0 && count($chunks) > $max_chunks) {
+        $chunks = array_slice($chunks, 0, $max_chunks, true);
+    }
+
+    // Store actual chunk count
+    $chunk_count = count($chunks);
+
     // Reassemble content
     return implode("\n\n", $chunks);
 }
@@ -5395,7 +5481,7 @@ private function find_relevant_content_openai_vectorstore($user_query, $bot_id =
     // Get the selected model
     $bot_options = $this->get_bot_options($bot_id);
     $current_options = !empty($bot_options) ? $bot_options : $mxchat_options;
-    $selected_model = $current_options['model'] ?? 'gpt-4o';
+    $selected_model = $current_options['model'] ?? 'gpt-5.1-chat-latest';
 
     // Verify it's an OpenAI model
     if (!$this->is_openai_chat_model($selected_model)) {
@@ -5897,10 +5983,12 @@ private function fetch_content_with_product_links($most_relevant_id) {
  * Get system instructions for a specific bot or default
  * Checks for multi-bot add-on and uses bot-specific instructions if available
  * Automatically strips URLs if citation links are disabled
+ * Replaces {visitor_name} placeholder with actual visitor name if available
  *
  * @param string $bot_id The bot ID to get instructions for
+ * @param string $session_id Optional session ID to lookup visitor name
  */
-private function get_system_instructions($bot_id = 'default') {
+private function get_system_instructions($bot_id = 'default', $session_id = '') {
     $instructions = '';
 
     // Check if multi-bot add-on is active
@@ -5928,6 +6016,20 @@ private function get_system_instructions($bot_id = 'default') {
         $instructions = preg_replace('/\s+/', ' ', trim($instructions)); // Clean up extra spaces
     }
 
+    // Replace {visitor_name} placeholder with actual visitor name if available
+    if (!empty($instructions) && !empty($session_id) && stripos($instructions, '{visitor_name}') !== false) {
+        $name_option_key = "mxchat_name_{$session_id}";
+        $visitor_name = get_option($name_option_key, '');
+
+        if (!empty($visitor_name)) {
+            $instructions = str_ireplace('{visitor_name}', sanitize_text_field($visitor_name), $instructions);
+        } else {
+            // Remove placeholder if no name is available
+            $instructions = str_ireplace('{visitor_name}', '', $instructions);
+            $instructions = preg_replace('/\s{2,}/', ' ', trim($instructions)); // Clean up extra spaces
+        }
+    }
+
     return $instructions;
 }
 /**
@@ -5950,7 +6052,7 @@ private function get_current_bot_id($session_id = '') {
     // Fall back to default
     return 'default';
 }
-private function mxchat_generate_response($relevant_content, $api_key, $xai_api_key, $claude_api_key, $deepseek_api_key, $gemini_api_key, $openrouter_api_key, $conversation_history, $streaming = false, $session_id = '', $testing_data = null, $selected_model = 'gpt-4o') {
+private function mxchat_generate_response($relevant_content, $api_key, $xai_api_key, $claude_api_key, $deepseek_api_key, $gemini_api_key, $openrouter_api_key, $conversation_history, $streaming = false, $session_id = '', $testing_data = null, $selected_model = 'gpt-5.1-chat-latest') {
     try {
         if (!$relevant_content) {
             $error_response = [
@@ -6261,7 +6363,7 @@ private function mxchat_generate_response($relevant_content, $api_key, $xai_api_
 private function mxchat_generate_response_openrouter_stream($selected_model, $openrouter_api_key, $conversation_history, $relevant_content, $session_id, $testing_data = null) {
     try {
         $bot_id = $this->get_current_bot_id($session_id);
-        $system_prompt_instructions = $this->get_system_instructions($bot_id);
+        $system_prompt_instructions = $this->get_system_instructions($bot_id, $session_id);
         
         if (!is_array($conversation_history)) {
             $conversation_history = array();
@@ -6471,7 +6573,7 @@ private function mxchat_generate_response_openai_stream($selected_model, $api_ke
         $bot_id = $this->get_current_bot_id($session_id);
         
         // Get system prompt instructions using centralized function
-        $system_prompt_instructions = $this->get_system_instructions($bot_id);
+        $system_prompt_instructions = $this->get_system_instructions($bot_id, $session_id);
         
         // Ensure conversation_history is an array
         if (!is_array($conversation_history)) {
@@ -6756,7 +6858,7 @@ private function mxchat_generate_response_openai_stream($selected_model, $api_ke
 private function mxchat_generate_response_openai_web_search($selected_model, $api_key, $conversation_history, $relevant_content, $session_id, $testing_data = null, $streaming = false) {
     try {
         $bot_id = $this->get_current_bot_id($session_id);
-        $system_prompt_instructions = $this->get_system_instructions($bot_id);
+        $system_prompt_instructions = $this->get_system_instructions($bot_id, $session_id);
 
         if (!is_array($conversation_history)) {
             $conversation_history = array();
@@ -7086,7 +7188,7 @@ private function mxchat_generate_response_claude_stream($selected_model, $claude
         $bot_id = $this->get_current_bot_id($session_id);
         
         // Get system prompt instructions using centralized function
-        $system_prompt_instructions = $this->get_system_instructions($bot_id);
+        $system_prompt_instructions = $this->get_system_instructions($bot_id, $session_id);
         // Ensure conversation_history is an array
         if (!is_array($conversation_history)) {
             $conversation_history = array();
@@ -7381,7 +7483,7 @@ private function mxchat_generate_response_xai_stream($selected_model, $xai_api_k
         $bot_id = $this->get_current_bot_id($session_id);
         
         // Get system prompt instructions using centralized function
-        $system_prompt_instructions = $this->get_system_instructions($bot_id);
+        $system_prompt_instructions = $this->get_system_instructions($bot_id, $session_id);
         
         // Ensure conversation_history is an array
         if (!is_array($conversation_history)) {
@@ -7618,7 +7720,7 @@ private function mxchat_generate_response_deepseek_stream($selected_model, $deep
         $bot_id = $this->get_current_bot_id($session_id);
         
         // Get system prompt instructions using centralized function
-        $system_prompt_instructions = $this->get_system_instructions($bot_id);
+        $system_prompt_instructions = $this->get_system_instructions($bot_id, $session_id);
         
         // Ensure conversation_history is an array
         if (!is_array($conversation_history)) {
@@ -7882,7 +7984,7 @@ private function mxchat_generate_response_openrouter($selected_model, $openroute
         }
 
         $bot_id = $this->get_current_bot_id('');
-        $system_prompt_instructions = $this->get_system_instructions($bot_id);
+        $system_prompt_instructions = $this->get_system_instructions($bot_id, $session_id);
         
         $formatted_conversation = array();
 
@@ -7984,7 +8086,7 @@ private function mxchat_generate_response_claude($selected_model, $claude_api_ke
         $bot_id = $this->get_current_bot_id($session_id);
         
         // Get system prompt instructions using centralized function
-        $system_prompt_instructions = $this->get_system_instructions($bot_id);
+        $system_prompt_instructions = $this->get_system_instructions($bot_id, $session_id);
         
     // Clean and validate conversation history
     foreach ($conversation_history as &$message) {
@@ -8093,7 +8195,7 @@ private function mxchat_generate_response_openai($selected_model, $api_key, $con
         $bot_id = $this->get_current_bot_id('');
         
         // Get system prompt instructions using centralized function
-        $system_prompt_instructions = $this->get_system_instructions($bot_id);
+        $system_prompt_instructions = $this->get_system_instructions($bot_id, $session_id);
         
         // Create a new array for the formatted conversation
         $formatted_conversation = array();
@@ -8261,7 +8363,7 @@ private function mxchat_generate_response_xai($selected_model, $xai_api_key, $co
         $bot_id = $this->get_current_bot_id($session_id);
         
         // Get system prompt instructions using centralized function
-        $system_prompt_instructions = $this->get_system_instructions($bot_id);
+        $system_prompt_instructions = $this->get_system_instructions($bot_id, $session_id);
         
         // Add system prompt to relevant content
     $content_with_instructions = $system_prompt_instructions . " " . $relevant_content;
@@ -8460,7 +8562,7 @@ private function mxchat_generate_response_deepseek($selected_model, $deepseek_ap
         $bot_id = $this->get_current_bot_id($session_id);
         
         // Get system prompt instructions using centralized function
-        $system_prompt_instructions = $this->get_system_instructions($bot_id);
+        $system_prompt_instructions = $this->get_system_instructions($bot_id, $session_id);
         
         // Create a new array for the formatted conversation
         $formatted_conversation = array();
@@ -8619,7 +8721,7 @@ private function mxchat_generate_response_gemini($selected_model, $gemini_api_ke
         $bot_id = $this->get_current_bot_id($session_id);
         
         // Get system prompt instructions using centralized function
-        $system_prompt_instructions = $this->get_system_instructions($bot_id);
+        $system_prompt_instructions = $this->get_system_instructions($bot_id, $session_id);
         
     // Add system prompt to relevant content
     $content_with_instructions = $system_prompt_instructions . " " . $relevant_content;
@@ -8763,7 +8865,7 @@ private function mxchat_generate_response_gemini($selected_model, $gemini_api_ke
 
 public function test_streaming_request() {
     $options = get_option('mxchat_options', []);
-    $model = $options['model'] ?? 'gpt-4o';
+    $model = $options['model'] ?? 'gpt-5.1-chat-latest';
 
     // Detect provider from model prefix
     $provider = strtolower(explode('-', $model)[0]);
@@ -8977,7 +9079,7 @@ public function mxchat_enqueue_scripts_styles() {
     $style_settings = array(
         'ajax_url' => admin_url('admin-ajax.php'),
         'nonce' => wp_create_nonce('mxchat_chat_nonce'),
-        'model' => isset($this->options['model']) ? $this->options['model'] : 'gpt-4o',
+        'model' => isset($this->options['model']) ? $this->options['model'] : 'gpt-5.1-chat-latest',
         'enable_streaming_toggle' => isset($this->options['enable_streaming_toggle']) ? $this->options['enable_streaming_toggle'] : 'on',
         'contextual_awareness_toggle' => isset($this->options['contextual_awareness_toggle']) ? $this->options['contextual_awareness_toggle'] : 'off',
         'link_target_toggle' => $this->options['link_target_toggle'] ?? 'off',
@@ -9573,7 +9675,7 @@ public function mxchat_get_system_info() {
         : 'No system prompt configured';
     
     // Get selected model
-    $selected_model = isset($this->options['model']) ? $this->options['model'] : 'gpt-4o';
+    $selected_model = isset($this->options['model']) ? $this->options['model'] : 'gpt-5.1-chat-latest';
     
     // Check if OpenRouter is being used
     $is_openrouter = ($selected_model === 'openrouter');

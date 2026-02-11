@@ -409,7 +409,16 @@ jQuery(document).ready(function($) {
         // Handle real-time range slider value updates
         $autosaveSections.find('input[type="range"]').on('input', function() {
             const value = $(this).val();
-            $('#threshold_value').text(value);
+            const $slider = $(this);
+            const sliderId = $slider.attr('id');
+            // Find the corresponding value display span (convention: id_value)
+            const $valueSpan = $('#' + sliderId + '_value');
+            if ($valueSpan.length) {
+                $valueSpan.text(value);
+            } else {
+                // Fallback for similarity_threshold which uses threshold_value
+                $('#threshold_value').text(value);
+            }
         });
 
         // Handle all input changes (including range slider)
@@ -1007,27 +1016,20 @@ function setupMxChatModelSelector() {
             ],
             openai: [
                 { value: 'gpt-5.2', label: 'GPT-5.2', description: 'Best general-purpose & agentic model with fast responses' },
+                { value: 'gpt-5.1-chat-latest', label: 'GPT-5.1 Chat Latest', description: 'Recommended for most use cases' },
                 { value: 'gpt-5.1-2025-11-13', label: 'GPT-5.1', description: 'Flagship for coding & agentic tasks with low reasoning (400K context)' },
                 { value: 'gpt-5', label: 'GPT-5', description: 'Flagship for coding, reasoning, and agentic tasks across domains' },
-                { value: 'gpt-5-mini', label: 'GPT-5 Mini', description: 'Faster, more cost-efficient for well-defined tasks and precise prompts' },
+                { value: 'gpt-5-mini', label: 'GPT-5 Mini', description: 'Fast and lightweight' },
                 { value: 'gpt-5-nano', label: 'GPT-5 Nano', description: 'Fastest and cheapest; ideal for summarization and classification' },
-                { value: 'gpt-4.1-2025-04-14', label: 'GPT-4.1', description: 'Flagship model for complex tasks' },
-                { value: 'gpt-4o', label: 'GPT-4o', description: 'Recommended for most use cases' },
-                { value: 'gpt-4o-mini', label: 'GPT-4o Mini', description: 'Fast and lightweight' },
-                { value: 'gpt-4-turbo', label: 'GPT-4 Turbo', description: 'High-performance model' },
-                { value: 'gpt-4', label: 'GPT-4', description: 'High intelligence model' },
-                { value: 'gpt-3.5-turbo', label: 'GPT-3.5 Turbo', description: 'Affordable and fast' },
             ],
             claude: [
+                { value: 'claude-opus-4-6', label: 'Claude Opus 4.6', description: 'Most capable Claude model - recommended' },
+                { value: 'claude-opus-4-5', label: 'Claude Opus 4.5', description: 'Highly capable for complex tasks' },
                 { value: 'claude-sonnet-4-5-20250929', label: 'Claude Sonnet 4.5', description: 'Best for complex agents and coding' },
                 { value: 'claude-opus-4-1-20250805', label: 'Claude Opus 4.1', description: 'Exceptional for specialized complex tasks' },
                 { value: 'claude-haiku-4-5-20251001', label: 'Claude Haiku 4.5', description: 'Fastest and most intelligent Haiku' },
-                { value: 'claude-opus-4-20250514', label: 'Claude 4 Opus', description: 'Most capable Claude model' },
+                { value: 'claude-opus-4-20250514', label: 'Claude 4 Opus', description: 'Complex tasks' },
                 { value: 'claude-sonnet-4-20250514', label: 'Claude 4 Sonnet', description: 'High performance' },
-                { value: 'claude-3-7-sonnet-20250219', label: 'Claude 3.7 Sonnet', description: 'High intelligence' },
-                { value: 'claude-3-opus-20240229', label: 'Claude 3 Opus', description: 'Highly complex tasks' },
-                { value: 'claude-3-sonnet-20240229', label: 'Claude 3 Sonnet', description: 'Balanced performance' },
-                { value: 'claude-3-haiku-20240307', label: 'Claude 3 Haiku', description: 'Fastest Claude model' },
             ],
             xai: [
                 { value: 'grok-4-1-fast-reasoning', label: 'Grok 4.1 Fast (Reasoning)', description: '2M context window and reasoning' },
