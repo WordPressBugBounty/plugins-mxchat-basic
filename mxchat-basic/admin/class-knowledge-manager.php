@@ -1030,104 +1030,14 @@ public function mxchat_extract_main_content($html) {
                 return $content;
             }
         }
-
-        // Generic container selectors for non-CMS sites (like .asp pages)
-        $debug("Trying generic container selectors");
-        $generic_selectors = [
-            '//div[@id="main"]',
-            '//div[@id="wrapper"]',
-            '//div[@id="page"]',
-            '//div[@id="site-content"]',
-            '//div[contains(@class, "main-content")]',
-            '//div[contains(@class, "page-content")]',
-            '//div[contains(@class, "site-content")]',
-        ];
-
-        foreach ($generic_selectors as $selector) {
-            $debug("Trying generic selector: " . $selector);
-            $nodes = $xpath->query($selector);
-            if ($nodes && $nodes->length > 0) {
-                $content = $dom->saveHTML($nodes->item(0));
-                if (!empty($content)) {
-                    $debug("Returning content from generic selector: " . $selector);
-                    return $content;
-                }
-            }
-        }
-
-        // Paragraph-based content detection - find regions with substantial text
-        $debug("Trying paragraph-based content detection");
-        $paragraphs = $xpath->query('//p[string-length(normalize-space()) > 50]');
-        if ($paragraphs && $paragraphs->length >= 3) {
-            $debug("Found " . $paragraphs->length . " substantial paragraphs");
-            // Collect all substantial paragraphs and their content
-            $paragraph_content = '';
-            foreach ($paragraphs as $p) {
-                $paragraph_content .= $dom->saveHTML($p) . "\n";
-            }
-            if (!empty($paragraph_content)) {
-                $debug("Returning paragraph-based content");
-                return $paragraph_content;
-            }
-        }
-
-        // Improved body fallback - strip nav/header/footer elements first
-        $debug("Using improved body fallback");
+        
+        // Fallback: Return the body content if no specific selector matches
+        $debug("Using body fallback");
         $body = $dom->getElementsByTagName('body');
         if ($body->length > 0) {
-            // Clone the body to avoid modifying the original DOM
-            $body_clone = $body->item(0)->cloneNode(true);
-
-            // Remove common non-content elements by tag name
-            $remove_tags = ['nav', 'header', 'footer', 'aside', 'script', 'style', 'noscript'];
-            foreach ($remove_tags as $tag) {
-                $elements = $body_clone->getElementsByTagName($tag);
-                // Iterate backwards to safely remove elements
-                for ($i = $elements->length - 1; $i >= 0; $i--) {
-                    $el = $elements->item($i);
-                    if ($el && $el->parentNode) {
-                        $el->parentNode->removeChild($el);
-                    }
-                }
-            }
-
-            // Remove elements with common non-content class names using XPath on the cloned body
-            $temp_dom = new DOMDocument();
-            @$temp_dom->appendChild($temp_dom->importNode($body_clone, true));
-            $temp_xpath = new DOMXPath($temp_dom);
-
-            $remove_class_patterns = [
-                '//*[contains(@class, "nav")]',
-                '//*[contains(@class, "menu")]',
-                '//*[contains(@class, "sidebar")]',
-                '//*[contains(@class, "footer")]',
-                '//*[contains(@class, "header")]',
-                '//*[contains(@id, "nav")]',
-                '//*[contains(@id, "menu")]',
-                '//*[contains(@id, "sidebar")]',
-                '//*[contains(@id, "footer")]',
-                '//*[contains(@id, "header")]',
-            ];
-
-            foreach ($remove_class_patterns as $pattern) {
-                $elements = $temp_xpath->query($pattern);
-                if ($elements) {
-                    for ($i = $elements->length - 1; $i >= 0; $i--) {
-                        $el = $elements->item($i);
-                        if ($el && $el->parentNode) {
-                            $el->parentNode->removeChild($el);
-                        }
-                    }
-                }
-            }
-
-            $cleaned_content = $temp_dom->saveHTML();
-            if (!empty($cleaned_content)) {
-                $debug("Returning cleaned body content");
-                return $cleaned_content;
-            }
+            return $dom->saveHTML($body->item(0));
         }
-
+        
         // Last resort: return the original HTML
         $debug("Returning original HTML");
         return $html;

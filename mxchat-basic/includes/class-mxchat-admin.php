@@ -127,7 +127,7 @@ private function initialize_default_options() {
         - NEVER invent or hallucinate URLs, links, product specs, procedures, dates, statistics, names, contacts, or company information
         - When knowledge base information is unclear or contradictory, acknowledge the limitation rather than guessing
         - Better to admit insufficient information than provide inaccurate answers',
-        'model' => esc_html__('gpt-5.1-chat-latest', 'mxchat'),
+        'model' => esc_html__('gpt-4o', 'mxchat'),
         'rate_limit_logged_out' => esc_html__('100', 'mxchat'),
         'role_rate_limits' => array(),
         'rate_limit_message' => esc_html__('Rate limit exceeded. Please try again later.', 'mxchat'),
@@ -306,7 +306,7 @@ public function mxchat_handle_test_streaming_actual() {
 
     // Get user's selected model and API key
     $options = get_option('mxchat_options', []);
-    $selected_model = $options['model'] ?? 'gpt-5.1-chat-latest';
+    $selected_model = $options['model'] ?? 'gpt-4o';
 
     // Get the provider from the model
     $model_parts = explode('-', $selected_model);
@@ -1552,7 +1552,7 @@ public function mxchat_translate_messages() {
 
     // Get user's selected model and determine provider
     $options = get_option('mxchat_options', []);
-    $selected_model = $options['model'] ?? 'gpt-5.1-chat-latest';
+    $selected_model = $options['model'] ?? 'gpt-4o';
 
     // Check if using OpenRouter
     if ($selected_model === 'openrouter') {
@@ -4574,15 +4574,6 @@ public function mxchat_page_init() {
         'mxchat_chatbot_section' // Section
     );
 
-    // RAG Sources Limit Slider
-    add_settings_field(
-        'rag_sources_limit', // Field ID
-        esc_html__('RAG Sources Limit', 'mxchat'), // Field title
-        array($this, 'mxchat_rag_sources_limit_callback'), // Callback function
-        'mxchat-chatbot', // Page
-        'mxchat_chatbot_section' // Section
-    );
-
     add_settings_field(
         'append_to_body',
         esc_html__('Auto-Display Chatbot', 'mxchat'),
@@ -5582,11 +5573,6 @@ public function system_prompt_instructions_callback() {
         '<textarea id="system_prompt_instructions" name="system_prompt_instructions" rows="5" cols="50">%s</textarea>',
         $instructions
     );
-    // Personalization hint
-    echo '<p class="description" style="margin-top: 8px;">';
-    echo esc_html__('Use {visitor_name} to personalize AI responses when lead capture is enabled.', 'mxchat') . '<br>';
-    echo '<code style="font-size: 12px;">' . esc_html__('Example: The visitor\'s name is {visitor_name}. Address them by name.', 'mxchat') . '</code>';
-    echo '</p>';
     // Sample instructions button
     echo '<div class="mxchat-instructions-container">';
     echo '<button type="button" class="mxchat-instructions-btn" id="mxchatViewSampleBtn">';
@@ -5694,26 +5680,36 @@ public function mxchat_model_callback() {
             'deepseek-chat' => esc_html__('DeepSeek-V3', 'mxchat'),
         ),
         esc_html__('Claude Models', 'mxchat') => array(
-            'claude-opus-4-6' => esc_html__('Claude Opus 4.6 (Most Capable - Recommended)', 'mxchat'),
-            'claude-opus-4-5' => esc_html__('Claude Opus 4.5 (Highly Capable)', 'mxchat'),
             'claude-sonnet-4-5-20250929' => esc_html__('Claude Sonnet 4.5 (Best for Agents & Coding)', 'mxchat'),
             'claude-opus-4-1-20250805' => esc_html__('Claude Opus 4.1 (Exceptional for Complex Tasks)', 'mxchat'),
             'claude-haiku-4-5-20251001' => esc_html__('Claude Haiku 4.5 (Fastest & Most Intelligent)', 'mxchat'),
-            'claude-opus-4-20250514' => esc_html__('Claude 4 Opus (Complex Tasks)', 'mxchat'),
+            'claude-opus-4-20250514' => esc_html__('Claude 4 Opus (Most Capable)', 'mxchat'),
             'claude-sonnet-4-20250514' => esc_html__('Claude 4 Sonnet (High Performance)', 'mxchat'),
+            'claude-3-7-sonnet-20250219' => esc_html__('Claude 3.7 Sonnet (High Intelligence)', 'mxchat'),
+            'claude-3-opus-20240229' => esc_html__('Claude 3 Opus (Complex Tasks)', 'mxchat'),
+            'claude-3-sonnet-20240229' => esc_html__('Claude 3 Sonnet (Balanced)', 'mxchat'),
+            'claude-3-haiku-20240307' => esc_html__('Claude 3 Haiku (Fastest)', 'mxchat'),
         ),
         esc_html__('OpenAI Models', 'mxchat') => array(
+            //  GPT-5 family
             'gpt-5.2' => esc_html__('GPT-5.2 (Best General-Purpose & Agentic Model)', 'mxchat'),
-            'gpt-5.1-chat-latest' => esc_html__('GPT-5.1 Chat Latest (Recommended)', 'mxchat'),
             'gpt-5.1-2025-11-13' => esc_html__('GPT-5.1 (Flagship for Coding & Agentic Tasks)', 'mxchat'),
             'gpt-5' => esc_html__('GPT-5 (Flagship for Coding, Reasoning & Agents)', 'mxchat'),
-            'gpt-5-mini' => esc_html__('GPT-5 Mini (Fast and Lightweight)', 'mxchat'),
+            'gpt-5-mini' => esc_html__('GPT-5 Mini (Faster, Cost-Efficient for Precise Prompts)', 'mxchat'),
             'gpt-5-nano' => esc_html__('GPT-5 Nano (Fastest & Cheapest for Summarization/Classification)', 'mxchat'),
+
+            // Existing OpenAI models
+            'gpt-4.1-2025-04-14' => esc_html__('GPT-4.1 (Flagship for Complex Tasks)', 'mxchat'),
+            'gpt-4o' => esc_html__('GPT-4o (Recommended)', 'mxchat'),
+            'gpt-4o-mini' => esc_html__('GPT-4o Mini (Fast and Lightweight)', 'mxchat'),
+            'gpt-4-turbo' => esc_html__('GPT-4 Turbo (High-Performance)', 'mxchat'),
+            'gpt-4' => esc_html__('GPT-4 (High Intelligence)', 'mxchat'),
+            'gpt-3.5-turbo' => esc_html__('GPT-3.5 Turbo (Affordable and Fast)', 'mxchat'),
         ),
     );
 
     // Retrieve the currently selected model from saved options
-    $selected_model = isset($this->options['model']) ? esc_attr($this->options['model']) : 'gpt-5.1-chat-latest';
+    $selected_model = isset($this->options['model']) ? esc_attr($this->options['model']) : 'gpt-4o';
 
     // Begin the select dropdown
     echo '<select id="model" name="model">';
@@ -5838,7 +5834,7 @@ public function enable_web_search_toggle_callback() {
     $checked = ($enabled === 'on') ? 'checked' : '';
 
     // Get current model to determine if we should show/enable the toggle
-    $current_model = isset($this->options['model']) ? $this->options['model'] : 'gpt-5.1-chat-latest';
+    $current_model = isset($this->options['model']) ? $this->options['model'] : 'gpt-4o';
 
     // Models that DON'T support web search (per OpenAI docs)
     // gpt-5 with minimal reasoning is handled at API level, gpt-4.1-nano doesn't support it
@@ -5846,7 +5842,8 @@ public function enable_web_search_toggle_callback() {
 
     // Check if current model is an OpenAI model that supports web search
     $openai_models = array(
-        'gpt-5.2', 'gpt-5.1-chat-latest', 'gpt-5.1-2025-11-13', 'gpt-5', 'gpt-5-mini', 'gpt-5-nano'
+        'gpt-5.2', 'gpt-5.1-2025-11-13', 'gpt-5', 'gpt-5-mini', 'gpt-5-nano',
+        'gpt-4.1-2025-04-14', 'gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo', 'gpt-4', 'gpt-3.5-turbo'
     );
 
     $is_openai = in_array($current_model, $openai_models);
@@ -6081,10 +6078,6 @@ public function mxchat_intro_message_callback() {
     // Output the textarea with the saved value without escaping HTML
     ?>
     <textarea id="intro_message" name="intro_message" rows="5" cols="50"><?php echo $saved_message; ?></textarea>
-    <p class="description" style="margin-top: 8px;">
-        <?php esc_html_e('Use {visitor_name} to personalize greetings when lead capture is enabled.', 'mxchat'); ?><br>
-        <code style="font-size: 12px;"><?php esc_html_e('Example: Hello {visitor_name}! How can I help you today?', 'mxchat'); ?></code>
-    </p>
     <?php
 }
 
@@ -7247,7 +7240,7 @@ public function mxchat_similarity_threshold_callback() {
     // Load from mxchat_options array
     $options = get_option('mxchat_options', []);
 
-    // Get value from options array with default of 35
+    // Get value from options array with default of 80
     $threshold = isset($options['similarity_threshold']) ? $options['similarity_threshold'] : 35;
 
     echo '<div class="slider-container">';
@@ -7267,32 +7260,9 @@ public function mxchat_similarity_threshold_callback() {
         esc_html($threshold)
     );
     echo '</div>';
-}
-
-public function mxchat_rag_sources_limit_callback() {
-    // Load from mxchat_options array
-    $options = get_option('mxchat_options', []);
-
-    // Get value from options array with default of 6
-    $rag_sources_limit = isset($options['rag_sources_limit']) ? intval($options['rag_sources_limit']) : 6;
-
-    echo '<div class="slider-container">';
-    echo sprintf(
-        '<input type="range"
-               id="rag_sources_limit"
-               name="rag_sources_limit"
-               min="3"
-               max="10"
-               step="1"
-               value="%s"
-               class="range-slider" />',
-        esc_attr($rag_sources_limit)
-    );
-    echo sprintf(
-        '<span id="rag_sources_limit_value" class="range-value">%s</span>',
-        esc_html($rag_sources_limit)
-    );
-    echo '</div>';
+    echo '<p class="description">';
+    echo esc_html__('Adjust similarity threshold for optimal content matching. Too high may limit knowledge retrieval. We highly recommend using the MxChat Debugger found on the left side of your website when logged in as admin while testing the bot.', 'mxchat');
+    echo '</p>';
 }
 
 public function mxchat_enqueue_admin_assets() {
@@ -7553,11 +7523,6 @@ public function mxchat_sanitize($input) {
         $new_input['similarity_threshold'] = min(max($new_input['similarity_threshold'], 20), 85); // Enforce range
     }
 
-    if (isset($input['rag_sources_limit'])) {
-        $new_input['rag_sources_limit'] = absint($input['rag_sources_limit']); // Ensure it's an integer
-        $new_input['rag_sources_limit'] = min(max($new_input['rag_sources_limit'], 3), 10); // Enforce range 3-10
-    }
-
     if (isset($input['xai_api_key'])) {
         $new_input['xai_api_key'] = sanitize_text_field($input['xai_api_key']);
     }
@@ -7772,26 +7737,34 @@ if (isset($input['model'])) {
             'grok-3-mini-fast-beta',
             'grok-2',
             'deepseek-chat',
-            'claude-opus-4-6',
-            'claude-opus-4-5',
             'claude-sonnet-4-5-20250929',
             'claude-opus-4-1-20250805',
             'claude-haiku-4-5-20251001',
             'claude-opus-4-20250514',
             'claude-sonnet-4-20250514',
+            'claude-3-7-sonnet-20250219',
+            // REMOVED: 'claude-3-5-sonnet-20241022',
+            'claude-3-opus-20240229',
+            'claude-3-sonnet-20240229',
+            'claude-3-haiku-20240307',
             'gpt-5.2',
-            'gpt-5.1-chat-latest',
             'gpt-5.1-2025-11-13',
             'gpt-5',
             'gpt-5-mini',
             'gpt-5-nano',
+            'gpt-4.1-2025-04-14',
+            'gpt-4o',
+            'gpt-4o-mini',
+            'gpt-4-turbo',
+            'gpt-4',
+            'gpt-3.5-turbo',
         );
-
+        
         if (in_array($input['model'], $allowed_models)) {
             $new_input['model'] = sanitize_text_field($input['model']);
         } else {
             // Fallback for any deprecated model
-            $new_input['model'] = 'gpt-5.1-chat-latest';
+            $new_input['model'] = 'claude-3-7-sonnet-20250219';
         }
     }
 }

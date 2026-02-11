@@ -3,7 +3,7 @@
  * Plugin Name: MxChat
  * Plugin URI: https://mxchat.ai/
  * Description: AI chatbot for WordPress with OpenAI, Claude, xAI, DeepSeek, live agent, PDF uploads, WooCommerce, and training on website data.
- * Version: 3.0.6
+ * Version: 3.0.5
  * Author: MxChat
  * Author URI: https://mxchat.ai
  * License: GPLv2 or later
@@ -478,68 +478,20 @@ function mxchat_fix_url_column_size() {
 /**
  * Migrate deprecated AI models to their replacements
  * Version 2.5.1: Migrate Claude 3.5 Sonnet (deprecated) to Claude 3.7 Sonnet
- * Version 3.0.55: Migrate GPT-4 series models (deprecated 2026-02-17) to GPT-5 series
  */
 function mxchat_migrate_deprecated_models() {
     $options = get_option('mxchat_options', array());
-    $migrated = false;
-    $migration_message = '';
-
-    if (!isset($options['model'])) {
-        return;
-    }
-
-    $current_model = $options['model'];
-
-    // Migrate deprecated Claude models to Claude Opus 4.6 (recommended replacement per Anthropic)
-    $deprecated_claude_models = array(
-        'claude-3-5-sonnet-20240620',  // Retired Oct 28, 2025
-        'claude-3-5-sonnet-20241022',  // Retired Oct 28, 2025
-        'claude-3-7-sonnet-20250219',  // Retiring Feb 19, 2026
-        'claude-3-opus-20240229',      // Retired Jan 5, 2026
-        'claude-3-sonnet-20240229',    // Legacy
-        'claude-3-haiku-20240307',     // Legacy
-    );
-    if (in_array($current_model, $deprecated_claude_models, true)) {
-        $options['model'] = 'claude-opus-4-6';
-        $migrated = true;
-        $migration_message = sprintf(
-            __('Your chatbot model has been automatically updated from %s to Claude Opus 4.6 due to Anthropic deprecating older Claude models.', 'mxchat'),
-            $current_model
-        );
-    }
-
-    // Migrate deprecated Claude Haiku 3.5 to Claude Haiku 4.5
-    if ($current_model === 'claude-3-5-haiku-20241022') {
-        $options['model'] = 'claude-haiku-4-5-20251001';
-        $migrated = true;
-        $migration_message = __('Your chatbot model has been automatically updated from Claude Haiku 3.5 to Claude Haiku 4.5 due to Anthropic deprecating the older model.', 'mxchat');
-    }
-
-    // Migrate deprecated GPT-4 series and GPT-3.5 Turbo to GPT-5.1 Chat Latest
-    if (in_array($current_model, array('gpt-4o', 'gpt-4.1-2025-04-14', 'gpt-4-turbo', 'gpt-4', 'gpt-3.5-turbo'), true)) {
-        $options['model'] = 'gpt-5.1-chat-latest';
-        $migrated = true;
-        $migration_message = sprintf(
-            __('Your chatbot model has been automatically updated from %s to GPT-5.1 Chat Latest due to OpenAI deprecating older models.', 'mxchat'),
-            $current_model
-        );
-    }
-
-    // Migrate deprecated GPT-4o Mini and GPT-4.1 Mini to GPT-5 Mini
-    if (in_array($current_model, array('gpt-4o-mini', 'gpt-4.1-mini'), true)) {
-        $options['model'] = 'gpt-5-mini';
-        $migrated = true;
-        $migration_message = sprintf(
-            __('Your chatbot model has been automatically updated from %s to GPT-5 Mini due to OpenAI deprecating GPT-4 series models.', 'mxchat'),
-            $current_model
-        );
-    }
-
-    if ($migrated) {
+    
+    // Check if model is set and is the deprecated Claude 3.5 Sonnet
+    if (isset($options['model']) && $options['model'] === 'claude-3-5-sonnet-20241022') {
+        // Update to Claude 3.7 Sonnet (the replacement model)
+        $options['model'] = 'claude-3-7-sonnet-20250219';
         update_option('mxchat_options', $options);
+        
+        // Set a flag to show admin notice
         update_option('mxchat_model_migrated_notice', true);
-        update_option('mxchat_model_migration_message', $migration_message);
+        
+        //error_log('MxChat: Migrated deprecated Claude 3.5 Sonnet to Claude 3.7 Sonnet');
     }
 }
 
@@ -548,17 +500,15 @@ function mxchat_migrate_deprecated_models() {
  */
 function mxchat_show_migration_notice() {
     if (get_option('mxchat_model_migrated_notice')) {
-        $migration_message = get_option('mxchat_model_migration_message', __('Your chatbot model has been automatically updated due to a model deprecation.', 'mxchat'));
         ?>
         <div class="notice notice-info is-dismissible">
             <p>
                 <strong><?php esc_html_e('MxChat Model Updated', 'mxchat'); ?></strong><br>
-                <?php echo esc_html($migration_message); ?>
+                <?php esc_html_e('Your chatbot model has been automatically updated from Claude 3.5 Sonnet to Claude 3.7 Sonnet due to the deprecation of the previous model by Anthropic. Claude 3.7 Sonnet offers improved performance and capabilities.', 'mxchat'); ?>
             </p>
         </div>
         <?php
         delete_option('mxchat_model_migrated_notice');
-        delete_option('mxchat_model_migration_message');
     }
 }
 
@@ -820,11 +770,6 @@ function mxchat_check_for_update() {
             // 3.0.5: Migrate deprecated Gemini embedding model
             if (version_compare($current_version, '3.0.5', '<')) {
                 mxchat_migrate_gemini_embedding_model();
-            }
-
-            // 3.0.6: Migrate deprecated OpenAI and Claude models
-            if (version_compare($current_version, '3.0.6', '<')) {
-                mxchat_migrate_deprecated_models();
             }
 
             // Run full activation to ensure everything is up to date

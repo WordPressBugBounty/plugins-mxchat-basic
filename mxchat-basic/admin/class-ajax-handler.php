@@ -94,10 +94,12 @@ public function mxchat_save_setting_callback() {
                             'grok-4-0709', 'grok-4-1-fast-reasoning', 'grok-4-1-fast-non-reasoning', 'grok-3-beta', 'grok-3-fast-beta', 'grok-3-mini-beta',
                             'grok-3-mini-fast-beta', 'grok-2',
                             'deepseek-chat',
-                            'claude-opus-4-6', 'claude-opus-4-5',
                             'claude-sonnet-4-5-20250929', 'claude-opus-4-1-20250805', 'claude-haiku-4-5-20251001',
-                            'claude-opus-4-20250514', 'claude-sonnet-4-20250514',
-                            'gpt-5.2', 'gpt-5.1-chat-latest', 'gpt-5.1-2025-11-13', 'gpt-5', 'gpt-5-mini', 'gpt-5-nano',
+                            'claude-opus-4-20250514', 'claude-sonnet-4-20250514', 'claude-3-7-sonnet-20250219',
+                            'claude-3-5-sonnet-20241022', 'claude-3-opus-20240229', 'claude-3-sonnet-20240229',
+                            'claude-3-haiku-20240307',
+                            'gpt-5.2', 'gpt-5.1-2025-11-13', 'gpt-5', 'gpt-5-mini', 'gpt-5-nano', 'gpt-4.1-2025-04-14',
+                            'gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo', 'gpt-4', 'gpt-3.5-turbo',
                         );
                 
                 //error_log('MXChat Save: in_array result: ' . (in_array($value, $allowed_models) ? 'YES' : 'NO'));
@@ -162,19 +164,8 @@ public function mxchat_save_setting_callback() {
             break;
         case 'similarity_threshold':
             //error_log('MXChat Save: Processing similarity_threshold');
-            // Validate and save - enforce min 20, max 85
-            $threshold = intval($value);
-            if ($threshold < 20) $threshold = 20;
-            if ($threshold > 85) $threshold = 85;
-            $options[$name] = $threshold;
-            break;
-        case 'rag_sources_limit':
-            //error_log('MXChat Save: Processing rag_sources_limit');
-            // Validate and save - enforce min 3, max 10, default 6
-            $rag_limit = intval($value);
-            if ($rag_limit < 3) $rag_limit = 3;
-            if ($rag_limit > 10) $rag_limit = 10;
-            $options[$name] = $rag_limit;
+            // Save to the options array
+            $options[$name] = $value;
             break;
         case 'user_message_bg_color':
         case 'user_message_font_color':

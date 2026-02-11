@@ -831,26 +831,18 @@
 
 .mxch-user-info {
     flex: 1;
-    min-width: 0; /* Allow flex item to shrink below content size */
-    overflow: hidden;
 }
 
 .mxch-user-name {
     font-size: 15px;
     font-weight: 600;
     color: #111827;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
 }
 
 .mxch-user-meta {
     font-size: 12px;
     color: #6b7280;
     margin-top: 2px;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
 }
 
 .mxch-details-toggle {

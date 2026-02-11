@@ -267,11 +267,6 @@ function mxchat_render_settings_page($admin_instance) {
                             $admin_instance->mxchat_similarity_threshold_callback();
                         }, __('Adjust threshold for content matching. Lower values = more matches, higher values = stricter matching.', 'mxchat'));
 
-                        // RAG Sources Limit
-                        mxchat_render_field_wrapper('rag_sources_limit', __('RAG Sources Limit', 'mxchat'), function() use ($admin_instance) {
-                            $admin_instance->mxchat_rag_sources_limit_callback();
-                        }, __('Number of knowledge base sources (pages/documents) to include in AI context. Higher values provide more context but use more tokens.', 'mxchat'));
-
                         // Contextual Awareness
                         mxchat_render_field_wrapper('contextual_awareness', __('Contextual Awareness', 'mxchat'), function() use ($admin_instance) {
                             $admin_instance->mxchat_contextual_awareness_callback();

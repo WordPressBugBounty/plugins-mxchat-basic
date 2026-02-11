@@ -11,10 +11,6 @@ jQuery(document).ready(function($) {
         // Initialize an instance for a bot
         init: function(botId) {
             if (!this.instances[botId]) {
-                // When persistence is OFF, track when this session started
-                // so the AI only sees messages from this page load
-                var chatPersistenceEnabled = typeof mxchatChat !== 'undefined' && mxchatChat.chat_persistence_toggle === 'on';
-
                 this.instances[botId] = {
                     botId: botId,
                     sessionId: this.getChatSession(botId),
@@ -25,9 +21,7 @@ jQuery(document).ready(function($) {
                     activePdfFile: null,
                     activeWordFile: null,
                     chatHistoryLoaded: false,
-                    isStreaming: false,
-                    // Fresh context timestamp - only used when persistence is OFF
-                    sessionStartTimestamp: chatPersistenceEnabled ? 0 : Date.now()
+                    isStreaming: false
                 };
             }
             return this.instances[botId];
@@ -403,7 +397,7 @@ function sendMessage(botId) {
         appendThinkingMessage(botId);
         scrollToBottom(botId);
 
-        const currentModel = mxchatChat.model || 'gpt-5.1-chat-latest';
+        const currentModel = mxchatChat.model || 'gpt-4o';
 
         // Check if streaming is enabled AND supported for this model
         if (shouldUseStreaming(currentModel)) {
@@ -438,7 +432,7 @@ function sendMessageToChatbot(message, botId) {
     appendThinkingMessage(botId);
     scrollToBottom(botId);
 
-    const currentModel = mxchatChat.model || 'gpt-5.1-chat-latest';
+    const currentModel = mxchatChat.model || 'gpt-4o';
 
     // Check if streaming is enabled AND supported for this model
     if (shouldUseStreaming(currentModel)) {
@@ -515,9 +509,6 @@ function callMxChat(message, callback, botId) {
     // Get page context if contextual awareness is enabled
     const pageContext = getPageContext();
 
-    // Get instance for session start timestamp (used when persistence is OFF)
-    var instance = MxChatInstances.get(botId);
-
     // Prepare AJAX data
     const ajaxData = {
         action: 'mxchat_handle_chat_request',
@@ -526,9 +517,7 @@ function callMxChat(message, callback, botId) {
         nonce: mxchatChat.nonce,
         current_page_url: window.location.href,
         current_page_title: document.title,
-        bot_id: botId,
-        // Pass session start timestamp so AI context matches what user sees
-        session_start_timestamp: instance.sessionStartTimestamp || 0
+        bot_id: botId
     };
     
     // Add page context if available
@@ -600,7 +589,7 @@ function callMxChat(message, callback, botId) {
                         appendThinkingMessage(botId);
                         scrollToBottom(botId);
                         // Determine whether to use streaming
-                        const currentModel = mxchatChat.model || 'gpt-5.1-chat-latest';
+                        const currentModel = mxchatChat.model || 'gpt-4o';
                         if (shouldUseStreaming(currentModel)) {
                             callMxChatStream(originalMessage, function(response) {
                                 getElement(botId, 'chat-box').find('.bot-message.temporary-message').removeClass('temporary-message');
@@ -746,7 +735,7 @@ function callMxChatStream(message, callback, botId) {
     // Store the message in case we need to retry after session reset
     getElement(botId, 'mxchat-chatbot-wrapper').find('.mxchat-input-holder textarea').data('pending-message', message);
 
-    const currentModel = mxchatChat.model || 'gpt-5.1-chat-latest';
+    const currentModel = mxchatChat.model || 'gpt-4o';
     if (!isStreamingSupported(currentModel)) {
         callMxChat(message, callback, botId);
         return;
@@ -754,9 +743,6 @@ function callMxChatStream(message, callback, botId) {
 
     // Get page context if contextual awareness is enabled
     const pageContext = getPageContext();
-
-    // Get instance for session start timestamp (used when persistence is OFF)
-    var instance = MxChatInstances.get(botId);
 
     const formData = new FormData();
     formData.append('action', 'mxchat_stream_chat');
@@ -766,9 +752,7 @@ function callMxChatStream(message, callback, botId) {
     formData.append('current_page_url', window.location.href);
     formData.append('current_page_title', document.title);
     formData.append('bot_id', botId);
-    // Pass session start timestamp so AI context matches what user sees
-    formData.append('session_start_timestamp', instance.sessionStartTimestamp || 0);
-
+    
     // Add page context if available
     if (pageContext) {
         formData.append('page_context', JSON.stringify(pageContext));
@@ -1019,7 +1003,7 @@ function handleNonStreamResponse(data, callback, botId) {
                 appendThinkingMessage(botId);
                 scrollToBottom(botId);
                 // Determine whether to use streaming
-                const currentModel = mxchatChat.model || 'gpt-5.1-chat-latest';
+                const currentModel = mxchatChat.model || 'gpt-4o';
                 if (shouldUseStreaming(currentModel)) {
                     callMxChatStream(originalMessage, callback, botId);
                 } else {
@@ -2717,39 +2701,6 @@ if (mxchatChat && mxchatChat.email_collection_enabled === 'on') {
         return name && name.trim().length >= 2 && name.trim().length <= 100;
     }
 
-    /**
-     * Replace {visitor_name} placeholder in intro message with actual visitor name
-     * @param {string} botId - The bot instance ID
-     * @param {string} visitorName - The visitor's name to insert
-     */
-    function replaceVisitorNamePlaceholder(botId, visitorName) {
-        var chatBox = getElementDOM(botId, 'chat-box');
-        if (!chatBox) return;
-
-        // Find the first bot message (intro message)
-        var introMessage = chatBox.querySelector('.bot-message');
-        if (!introMessage) return;
-
-        var messageContent = introMessage.querySelector('div[dir="auto"]');
-        if (!messageContent) return;
-
-        var html = messageContent.innerHTML;
-
-        // Replace {visitor_name} placeholder (case-insensitive)
-        if (visitorName && visitorName.trim()) {
-            // Escape HTML to prevent XSS
-            var safeName = $('<div>').text(visitorName.trim()).html();
-            html = html.replace(/\{visitor_name\}/gi, safeName);
-        } else {
-            // Remove placeholder and clean up spacing if no name provided
-            html = html.replace(/\{visitor_name\}/gi, '');
-            // Clean up any double spaces that might result
-            html = html.replace(/\s{2,}/g, ' ').trim();
-        }
-
-        messageContent.innerHTML = html;
-    }
-
     function setEmailSubmissionState(botId, loading) {
         var submitButton = getElementDOM(botId, 'email-submit-button');
         var emailInput = getElementDOM(botId, 'user-email');
@@ -2935,14 +2886,6 @@ if (mxchatChat && mxchatChat.email_collection_enabled === 'on') {
 
             if (data.success) {
                 showChatContainerForBot(botId);
-
-                // Replace {visitor_name} placeholder in intro message with actual name
-                if (userName) {
-                    replaceVisitorNamePlaceholder(botId, userName);
-                } else {
-                    // Remove placeholder if no name provided
-                    replaceVisitorNamePlaceholder(botId, '');
-                }
 
                 if (data.message && typeof appendMessage === 'function') {
                     setTimeout(() => {
