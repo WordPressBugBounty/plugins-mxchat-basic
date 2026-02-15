@@ -73,8 +73,15 @@ public function mxchat_save_setting_callback() {
     $options = get_option('mxchat_options', []);
     //error_log('MXChat Save: Current options array: ' . print_r($options, true));
 
+    // Extract field name from mxchat_options[field_name] format if present
+    // But preserve the full name for special cases like rate_limits that need the full path
+    $field_name = $name;
+    if (preg_match('/^mxchat_options\[([^\[\]]+)\]$/', $name, $matches)) {
+        $field_name = $matches[1];
+    }
+
     // Handle special cases
-    switch ($name) {
+    switch ($field_name) {
         case 'model':
             //error_log('MXChat Save: Processing model selection');
             //error_log('MXChat Save: Model value received: ' . $value);
@@ -94,12 +101,10 @@ public function mxchat_save_setting_callback() {
                             'grok-4-0709', 'grok-4-1-fast-reasoning', 'grok-4-1-fast-non-reasoning', 'grok-3-beta', 'grok-3-fast-beta', 'grok-3-mini-beta',
                             'grok-3-mini-fast-beta', 'grok-2',
                             'deepseek-chat',
+                            'claude-opus-4-6', 'claude-opus-4-5',
                             'claude-sonnet-4-5-20250929', 'claude-opus-4-1-20250805', 'claude-haiku-4-5-20251001',
-                            'claude-opus-4-20250514', 'claude-sonnet-4-20250514', 'claude-3-7-sonnet-20250219',
-                            'claude-3-5-sonnet-20241022', 'claude-3-opus-20240229', 'claude-3-sonnet-20240229',
-                            'claude-3-haiku-20240307',
-                            'gpt-5.2', 'gpt-5.1-2025-11-13', 'gpt-5', 'gpt-5-mini', 'gpt-5-nano', 'gpt-4.1-2025-04-14',
-                            'gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo', 'gpt-4', 'gpt-3.5-turbo',
+                            'claude-opus-4-20250514', 'claude-sonnet-4-20250514',
+                            'gpt-5.2', 'gpt-5.1-chat-latest', 'gpt-5.1-2025-11-13', 'gpt-5', 'gpt-5-mini', 'gpt-5-nano',
                         );
                 
                 //error_log('MXChat Save: in_array result: ' . (in_array($value, $allowed_models) ? 'YES' : 'NO'));
@@ -141,7 +146,7 @@ public function mxchat_save_setting_callback() {
             //error_log('MXChat Save: Processing additional_popular_questions');
             $questions = json_decode($value, true); // No need for stripslashes here
             if (is_array($questions)) {
-                $options[$name] = $questions;
+                $options[$field_name] = $questions;
                 // Also update old option for backwards compatibility
                 update_option('additional_popular_questions', $questions);
                 //error_log('MXChat Save: Saved ' . count($questions) . ' additional questions');
@@ -152,20 +157,31 @@ public function mxchat_save_setting_callback() {
         case 'email_blocker_header_content':
             //error_log('MXChat Save: Processing email_blocker_header_content');
             // Allow HTML content but sanitize it safely
-            $options[$name] = wp_kses_post($value);
+            $options[$field_name] = wp_kses_post($value);
             break;
         case 'email_blocker_button_text':
             //error_log('MXChat Save: Processing email_blocker_button_text');
-            $options[$name] = sanitize_text_field($value);
+            $options[$field_name] = sanitize_text_field($value);
             break;
         case 'name_field_placeholder':
             //error_log('MXChat Save: Processing name_field_placeholder');
-            $options[$name] = sanitize_text_field($value);
+            $options[$field_name] = sanitize_text_field($value);
             break;
         case 'similarity_threshold':
             //error_log('MXChat Save: Processing similarity_threshold');
-            // Save to the options array
-            $options[$name] = $value;
+            // Validate and save - enforce min 20, max 85
+            $threshold = intval($value);
+            if ($threshold < 20) $threshold = 20;
+            if ($threshold > 85) $threshold = 85;
+            $options[$field_name] = $threshold;
+            break;
+        case 'rag_sources_limit':
+            //error_log('MXChat Save: Processing rag_sources_limit');
+            // Validate and save - enforce min 3, max 10, default 6
+            $rag_limit = intval($value);
+            if ($rag_limit < 3) $rag_limit = 3;
+            if ($rag_limit > 10) $rag_limit = 10;
+            $options[$field_name] = $rag_limit;
             break;
         case 'user_message_bg_color':
         case 'user_message_font_color':
@@ -181,39 +197,44 @@ public function mxchat_save_setting_callback() {
         case 'mode_indicator_bg_color':
         case 'mode_indicator_font_color':
         case 'toolbar_icon_color':
-        case 'quick_questions_toggle_color': 
-            //error_log('MXChat Save: Processing color value: ' . $name);
+        case 'quick_questions_toggle_color':
+            //error_log('MXChat Save: Processing color value: ' . $field_name);
             // Store color values directly
-            $options[$name] = $value;
+            $options[$field_name] = $value;
             break;
         case 'live_agent_status':
             //error_log('MXChat Save: Processing live_agent_status');
             // Set the new value
-            $options[$name] = ($value === 'on') ? 'on' : 'off';
+            $options[$field_name] = ($value === 'on') ? 'on' : 'off';
             break;
         case 'enable_web_search':
             //error_log('MXChat Save: Processing enable_web_search');
-            $options[$name] = ($value === 'on') ? 'on' : 'off';
+            $options[$field_name] = ($value === 'on') ? 'on' : 'off';
             break;
         case 'enable_woocommerce_integration':
             //error_log('MXChat Save: Processing enable_woocommerce_integration');
             // Handle values that used to be 1/0
-            $options[$name] = ($value === 'on' || $value === '1') ? 'on' : 'off';
+            $options[$field_name] = ($value === 'on' || $value === '1') ? 'on' : 'off';
             break;
         case 'post_type_visibility_mode':
             // Validate mode value
             $allowed_modes = array('all', 'include', 'exclude');
-            $options[$name] = in_array($value, $allowed_modes) ? $value : 'all';
+            $options[$field_name] = in_array($value, $allowed_modes) ? $value : 'all';
             break;
         case 'post_type_visibility_list':
             // Handle JSON array of post types
             $post_types = json_decode($value, true);
             if (is_array($post_types)) {
                 // Sanitize each post type slug
-                $options[$name] = array_map('sanitize_key', $post_types);
+                $options[$field_name] = array_map('sanitize_key', $post_types);
             } else {
-                $options[$name] = array();
+                $options[$field_name] = array();
             }
+            break;
+        case 'script_loading_strategy':
+            // Validate script loading strategy value
+            $allowed_strategies = array('default', 'defer', 'delay_1s', 'delay_3s', 'delay_5s', 'on_interaction');
+            $options[$field_name] = in_array($value, $allowed_strategies) ? $value : 'default';
             break;
         default:
             // Handle transcripts options
@@ -342,8 +363,8 @@ public function mxchat_save_setting_callback() {
                     //error_log('MXChat Save: Failed to parse role_rate_limits pattern: ' . $name);
                 }
             }
-            // Handle toggles
-            else if (strpos($name, 'toggle') !== false || in_array($name, [
+            // Handle toggles - check both extracted field_name and original name for toggle detection
+            else if (strpos($field_name, 'toggle') !== false || in_array($field_name, [
                 'chat_persistence_toggle',
                 'privacy_toggle',
                 'complianz_toggle',
@@ -357,12 +378,12 @@ public function mxchat_save_setting_callback() {
                 'enable_name_field',
                 'show_frontend_debugger'
             ])) {
-                //error_log('MXChat Save: Processing toggle: ' . $name);
-                $options[$name] = ($value === 'on') ? 'on' : 'off';
+                //error_log('MXChat Save: Processing toggle: ' . $field_name);
+                $options[$field_name] = ($value === 'on') ? 'on' : 'off';
             } else {
-                //error_log('MXChat Save: Processing standard field: ' . $name);
-                // Store all other values directly
-                $options[$name] = $value;
+                //error_log('MXChat Save: Processing standard field: ' . $field_name);
+                // Store all other values directly using the extracted field name
+                $options[$field_name] = $value;
             }
             break;
     }

@@ -1542,7 +1542,7 @@ function mxchat_render_openai_vectorstore_section() {
 
     // Get current chat model to check compatibility
     $mxchat_options = get_option('mxchat_options', array());
-    $current_model = $mxchat_options['model'] ?? 'gpt-4o';
+    $current_model = $mxchat_options['model'] ?? 'gpt-5.1-chat-latest';
     $is_openai_model = preg_match('/^(gpt-|o1-|o3-)/', $current_model);
     ?>
     <div id="openai-vectorstore" class="mxch-section">
@@ -1555,7 +1555,7 @@ function mxchat_render_openai_vectorstore_section() {
             <div class="mxch-card-body">
                 <div class="mxch-notice mxch-notice-info" style="margin-bottom: 20px;">
                     <svg class="mxch-notice-icon" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
-                    <span><strong><?php esc_html_e('Requires OpenAI Chat Model.', 'mxchat'); ?></strong> <?php esc_html_e('Vector Store search only works with OpenAI models (gpt-4o, gpt-4o-mini, etc.). Create Vector Stores in your OpenAI Dashboard.', 'mxchat'); ?></span>
+                    <span><strong><?php esc_html_e('Requires OpenAI Chat Model.', 'mxchat'); ?></strong> <?php esc_html_e('Vector Store search only works with OpenAI models (gpt-5.1-chat-latest, gpt-5-mini, etc.). Create Vector Stores in your OpenAI Dashboard.', 'mxchat'); ?></span>
                 </div>
 
                 <?php if (!$is_openai_model && $use_vectorstore === '1'): ?>

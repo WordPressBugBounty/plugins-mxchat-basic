@@ -64,6 +64,10 @@ function mxchat_render_settings_page($admin_instance) {
                         <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21 2-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0 3 3L22 7l-3-3m-3.5 3.5L19 4"/></svg>
                         <span><?php esc_html_e('API Keys', 'mxchat'); ?></span>
                     </button>
+                    <button class="mxch-mobile-nav-link" data-target="optimization">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
+                        <span><?php esc_html_e('Optimization', 'mxchat'); ?></span>
+                    </button>
                 </div>
                 <!-- Integrations Section -->
                 <div class="mxch-mobile-nav-section">
@@ -141,6 +145,15 @@ function mxchat_render_settings_page($admin_instance) {
                                 <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21 2-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0 3 3L22 7l-3-3m-3.5 3.5L19 4"/></svg>
                             </span>
                             <span class="mxch-nav-link-text"><?php esc_html_e('API Keys', 'mxchat'); ?></span>
+                        </button>
+                    </div>
+
+                    <div class="mxch-nav-item" data-section="optimization">
+                        <button class="mxch-nav-link" data-target="optimization">
+                            <span class="mxch-nav-link-icon">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
+                            </span>
+                            <span class="mxch-nav-link-text"><?php esc_html_e('Optimization', 'mxchat'); ?></span>
                         </button>
                     </div>
                 </div>
@@ -266,6 +279,11 @@ function mxchat_render_settings_page($admin_instance) {
                         mxchat_render_field_wrapper('similarity_threshold', __('Similarity Threshold', 'mxchat'), function() use ($admin_instance) {
                             $admin_instance->mxchat_similarity_threshold_callback();
                         }, __('Adjust threshold for content matching. Lower values = more matches, higher values = stricter matching.', 'mxchat'));
+
+                        // RAG Sources Limit
+                        mxchat_render_field_wrapper('rag_sources_limit', __('RAG Sources Limit', 'mxchat'), function() use ($admin_instance) {
+                            $admin_instance->mxchat_rag_sources_limit_callback();
+                        }, __('Number of knowledge base sources (pages/documents) to include in AI context. Higher values provide more context but use more tokens.', 'mxchat'));
 
                         // Contextual Awareness
                         mxchat_render_field_wrapper('contextual_awareness', __('Contextual Awareness', 'mxchat'), function() use ($admin_instance) {
@@ -515,6 +533,57 @@ function mxchat_render_settings_page($admin_instance) {
                         <table class="form-table">
                             <?php do_settings_fields('mxchat-api-keys', 'mxchat_api_keys_section'); ?>
                         </table>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ========================================
+                 OPTIMIZATION
+                 ======================================== -->
+            <div id="optimization" class="mxch-section">
+                <div class="mxch-content-header">
+                    <h1 class="mxch-content-title"><?php esc_html_e('Optimization', 'mxchat'); ?></h1>
+                    <p class="mxch-content-subtitle"><?php esc_html_e('Optimize chatbot loading for better page performance and Core Web Vitals.', 'mxchat'); ?></p>
+                </div>
+
+                <div class="mxch-card">
+                    <div class="mxch-card-header">
+                        <h3 class="mxch-card-title">
+                            <svg class="mxch-card-title-icon" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
+                            <?php esc_html_e('Script Loading', 'mxchat'); ?>
+                        </h3>
+                    </div>
+                    <div class="mxch-card-body mxchat-autosave-section">
+                        <?php
+                        $script_loading_strategy = isset($options['script_loading_strategy']) ? $options['script_loading_strategy'] : 'default';
+                        ?>
+                        <div class="mxch-field">
+                            <label class="mxch-field-label"><?php esc_html_e('Script Loading Strategy', 'mxchat'); ?></label>
+                            <div class="mxch-field-control">
+                                <select name="mxchat_options[script_loading_strategy]" id="script_loading_strategy" class="mxch-select mxchat-autosave-field">
+                                    <option value="default" <?php selected($script_loading_strategy, 'default'); ?>><?php esc_html_e('Default (Immediate)', 'mxchat'); ?></option>
+                                    <option value="defer" <?php selected($script_loading_strategy, 'defer'); ?>><?php esc_html_e('Deferred', 'mxchat'); ?></option>
+                                    <option value="delay_1s" <?php selected($script_loading_strategy, 'delay_1s'); ?>><?php esc_html_e('Delay 1 Second', 'mxchat'); ?></option>
+                                    <option value="delay_3s" <?php selected($script_loading_strategy, 'delay_3s'); ?>><?php esc_html_e('Delay 3 Seconds', 'mxchat'); ?></option>
+                                    <option value="delay_5s" <?php selected($script_loading_strategy, 'delay_5s'); ?>><?php esc_html_e('Delay 5 Seconds', 'mxchat'); ?></option>
+                                    <option value="on_interaction" <?php selected($script_loading_strategy, 'on_interaction'); ?>><?php esc_html_e('On User Interaction', 'mxchat'); ?></option>
+                                </select>
+                            </div>
+                            <p class="mxch-field-description"><?php esc_html_e('Control when the chatbot script loads to improve page performance.', 'mxchat'); ?></p>
+                        </div>
+
+                        <div class="mxch-notice mxch-notice-info" style="margin-top: 16px;">
+                            <svg class="mxch-notice-icon" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+                            <div>
+                                <strong><?php esc_html_e('Loading Strategies:', 'mxchat'); ?></strong>
+                                <ul style="margin: 8px 0 0 0; padding-left: 20px;">
+                                    <li><strong><?php esc_html_e('Default:', 'mxchat'); ?></strong> <?php esc_html_e('Script loads immediately in the footer. Best for sites where chat is critical.', 'mxchat'); ?></li>
+                                    <li><strong><?php esc_html_e('Deferred:', 'mxchat'); ?></strong> <?php esc_html_e('Script loads after HTML parsing completes. Good balance of performance and availability.', 'mxchat'); ?></li>
+                                    <li><strong><?php esc_html_e('Delay:', 'mxchat'); ?></strong> <?php esc_html_e('Script loads after a set delay. Helps improve LCP scores.', 'mxchat'); ?></li>
+                                    <li><strong><?php esc_html_e('On User Interaction:', 'mxchat'); ?></strong> <?php esc_html_e('Script loads when user scrolls, moves mouse, or touches screen. Best for Core Web Vitals but chat appears with slight delay.', 'mxchat'); ?></li>
+                                </ul>
+                            </div>
+                        </div>
                     </div>
                 </div>
             </div>
