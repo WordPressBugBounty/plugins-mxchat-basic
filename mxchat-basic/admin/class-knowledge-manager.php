@@ -452,9 +452,11 @@ public function mxchat_save_inline_prompt() {
             if ($updated !== false) {
                 wp_send_json_success();
             } else {
+                MxChat_Admin::mxchat_log_debug('knowledge_error', 'Database update failed when saving knowledge entry');
                 wp_send_json_error(esc_html__('Database update failed.', 'mxchat'));
             }
         } else {
+            MxChat_Admin::mxchat_log_debug('embedding_error', 'Embedding generation failed for knowledge entry');
             wp_send_json_error(esc_html__('Embedding generation failed.', 'mxchat'));
         }
     } else {
@@ -3130,6 +3132,7 @@ public function ajax_mxchat_process_selected_content() {
     }
     
     if (empty($api_key)) {
+        MxChat_Admin::mxchat_log_debug('api_error', $provider_name . ' API key not configured for knowledge processing');
         wp_send_json_error($provider_name . ' API key not configured');
         exit;
     }
@@ -3196,6 +3199,7 @@ public function ajax_mxchat_process_selected_content() {
     );
 
     if (is_wp_error($result)) {
+        MxChat_Admin::mxchat_log_debug('storage_error', 'Knowledge storage failed: ' . $result->get_error_message(), array('source_url' => $source_url));
         wp_send_json_error('Storage failed: ' . $result->get_error_message());
         exit;
     }
@@ -5238,6 +5242,7 @@ public function ajax_mxchat_delete_pinecone_prompt() {
             'bot_id' => $bot_id
         ));
     } else {
+        MxChat_Admin::mxchat_log_debug('pinecone_error', 'Failed to delete from Pinecone: ' . $result['message'], array('vector_id' => $vector_id, 'bot_id' => $bot_id));
         wp_send_json_error('Failed to delete from Pinecone: ' . $result['message']);
     }
     
@@ -5359,6 +5364,7 @@ public function ajax_mxchat_delete_chunks_by_url() {
         ));
 
         if (is_wp_error($delete_response)) {
+            MxChat_Admin::mxchat_log_debug('pinecone_error', 'Failed to delete chunks from Pinecone: ' . $delete_response->get_error_message(), array('source_url' => $source_url));
             wp_send_json_error('Failed to delete from Pinecone: ' . $delete_response->get_error_message());
             exit;
         }
@@ -5366,6 +5372,7 @@ public function ajax_mxchat_delete_chunks_by_url() {
         $response_code = wp_remote_retrieve_response_code($delete_response);
 
         if ($response_code !== 200) {
+            MxChat_Admin::mxchat_log_debug('pinecone_error', 'Pinecone API error (HTTP ' . $response_code . ')', array('source_url' => $source_url));
             wp_send_json_error('Pinecone API error (HTTP ' . $response_code . ')');
             exit;
         }
@@ -5388,6 +5395,7 @@ public function ajax_mxchat_delete_chunks_by_url() {
         );
 
         if ($result === false) {
+            MxChat_Admin::mxchat_log_debug('database_error', 'Failed to delete from database: ' . $wpdb->last_error, array('source_url' => $source_url));
             wp_send_json_error('Failed to delete from database: ' . $wpdb->last_error);
             exit;
         }

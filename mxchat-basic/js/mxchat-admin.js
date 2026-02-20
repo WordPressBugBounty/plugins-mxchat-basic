@@ -898,12 +898,25 @@ jQuery(document).ready(function($) {
 function toggleVisibility(selector) {
     $(selector).on('click', function() {
         var inputField = $(this).prev('input');
-        if (inputField.attr('type') === 'password') {
-            inputField.attr('type', 'text');
-            $(this).text('Hide');
+        // Check if this is a CSS-masked field (type="text" with mxchat-api-key-field class)
+        if (inputField.hasClass('mxchat-api-key-field')) {
+            // Use CSS class toggle for CSS-masked fields
+            if (inputField.hasClass('mxchat-show-key')) {
+                inputField.removeClass('mxchat-show-key');
+                $(this).text('Show');
+            } else {
+                inputField.addClass('mxchat-show-key');
+                $(this).text('Hide');
+            }
         } else {
-            inputField.attr('type', 'password');
-            $(this).text('Show');
+            // Legacy type toggle for password fields
+            if (inputField.attr('type') === 'password') {
+                inputField.attr('type', 'text');
+                $(this).text('Hide');
+            } else {
+                inputField.attr('type', 'password');
+                $(this).text('Show');
+            }
         }
     });
 }
@@ -1024,6 +1037,7 @@ function setupMxChatModelSelector() {
             ],
             claude: [
                 { value: 'claude-opus-4-6', label: 'Claude Opus 4.6', description: 'Most capable Claude model - recommended' },
+                { value: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6', description: 'Latest Sonnet - excellent balance of speed and capability' },
                 { value: 'claude-opus-4-5', label: 'Claude Opus 4.5', description: 'Highly capable for complex tasks' },
                 { value: 'claude-sonnet-4-5-20250929', label: 'Claude Sonnet 4.5', description: 'Best for complex agents and coding' },
                 { value: 'claude-opus-4-1-20250805', label: 'Claude Opus 4.1', description: 'Exceptional for specialized complex tasks' },
@@ -3277,4 +3291,252 @@ jQuery(document).ready(function($) {
         div.appendChild(document.createTextNode(text));
         return div.innerHTML;
     }
+
+    // ========================================
+    // DEBUG & OPTIMIZATION TOOLS
+    // ========================================
+
+    // Debug Mode Toggle
+    $('#mxchat_debug_mode').on('change', function() {
+        var $toggle = $(this);
+        var enabled = $toggle.is(':checked') ? 'on' : 'off';
+        var $label = $toggle.closest('label');
+
+        // Add loading indicator next to the toggle label
+        var $indicator = $label.find('.mxchat-save-indicator');
+        if ($indicator.length === 0) {
+            $indicator = $('<span class="mxchat-save-indicator" style="margin-left: 10px;"></span>');
+            $label.append($indicator);
+        }
+        $indicator.html('<span class="mxchat-saving-spinner"></span>').show();
+
+        $.ajax({
+            url: ajaxurl,
+            type: 'POST',
+            data: {
+                action: 'mxchat_toggle_debug_mode',
+                enabled: enabled,
+                _ajax_nonce: mxchatAdmin.setting_nonce
+            },
+            success: function(response) {
+                if (response.success) {
+                    // Show success indicator
+                    $indicator.html('<span class="mxchat-save-success">✓</span>');
+                    setTimeout(function() {
+                        $indicator.fadeOut(300);
+                    }, 2000);
+
+                    // Always refresh the log after toggling
+                    refreshDebugLog();
+                } else {
+                    $indicator.html('<span class="mxchat-save-error">✗</span>');
+                    alert(response.data.message || 'Error toggling debug mode');
+                    $toggle.prop('checked', !$toggle.is(':checked'));
+                }
+            },
+            error: function() {
+                $indicator.html('<span class="mxchat-save-error">✗</span>');
+                alert('Error toggling debug mode');
+                $toggle.prop('checked', !$toggle.is(':checked'));
+            }
+        });
+    });
+
+    // Refresh Debug Log
+    function refreshDebugLog() {
+        var $container = $('#mxchat-debug-log');
+        var $countBadge = $('#mxchat-log-count');
+
+        $.ajax({
+            url: ajaxurl,
+            type: 'POST',
+            data: {
+                action: 'mxchat_get_debug_log',
+                _ajax_nonce: mxchatAdmin.setting_nonce
+            },
+            success: function(response) {
+                if (response.success) {
+                    var log = response.data.log;
+                    var count = response.data.count;
+
+                    if (count > 0) {
+                        $countBadge.text(count + ' entries').show();
+                        var html = '<div class="mxchat-debug-log-entries">';
+                        log.forEach(function(entry) {
+                            var typeClass = 'mxchat-log-type-' + entry.type;
+                            var typeLabel = entry.type.replace(/_/g, ' ').toUpperCase();
+                            html += '<div class="mxchat-debug-log-entry ' + typeClass + '">';
+                            html += '<div class="mxchat-log-header">';
+                            html += '<span class="mxchat-log-type">' + escapeHtml(typeLabel) + '</span>';
+                            html += '<span class="mxchat-log-time">' + escapeHtml(entry.time) + '</span>';
+                            html += '</div>';
+                            html += '<div class="mxchat-log-message">' + escapeHtml(entry.message) + '</div>';
+                            if (entry.data) {
+                                html += '<div class="mxchat-log-data">' + escapeHtml(JSON.stringify(entry.data, null, 2)) + '</div>';
+                            }
+                            html += '</div>';
+                        });
+                        html += '</div>';
+                        $container.html(html);
+                    } else {
+                        $countBadge.hide();
+                        $container.html(
+                            '<div class="mxchat-debug-log-empty">' +
+                            '<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round" style="opacity: 0.3;"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>' +
+                            '<p>No log entries yet. Enable debug mode to start logging.</p>' +
+                            '</div>'
+                        );
+                    }
+                }
+            }
+        });
+    }
+
+    // Load debug log on page load
+    if ($('#mxchat-debug-log').length) {
+        refreshDebugLog();
+    }
+
+    // Refresh Log Button
+    $('#mxchat-refresh-log').on('click', function() {
+        var $btn = $(this);
+        $btn.prop('disabled', true);
+        refreshDebugLog();
+        setTimeout(function() {
+            $btn.prop('disabled', false);
+        }, 500);
+    });
+
+    // Clear Log Button
+    $('#mxchat-clear-log').on('click', function() {
+        if (!confirm('Are you sure you want to clear the debug log?')) {
+            return;
+        }
+
+        var $btn = $(this);
+        $btn.prop('disabled', true);
+
+        $.ajax({
+            url: ajaxurl,
+            type: 'POST',
+            data: {
+                action: 'mxchat_clear_debug_log',
+                _ajax_nonce: mxchatAdmin.setting_nonce
+            },
+            success: function(response) {
+                if (response.success) {
+                    refreshDebugLog();
+                } else {
+                    alert(response.data.message || 'Error clearing log');
+                }
+            },
+            error: function() {
+                alert('Error clearing log');
+            },
+            complete: function() {
+                $btn.prop('disabled', false);
+            }
+        });
+    });
+
+    // Export Settings Button
+    $('#mxchat-export-settings').on('click', function() {
+        var $btn = $(this);
+        var originalHtml = $btn.html();
+        $btn.prop('disabled', true).html(
+            '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="animation: spin 1s linear infinite;"><circle cx="12" cy="12" r="10" stroke-dasharray="32" stroke-dashoffset="12"/></svg> Exporting...'
+        );
+
+        $.ajax({
+            url: ajaxurl,
+            type: 'POST',
+            data: {
+                action: 'mxchat_export_settings',
+                _ajax_nonce: mxchatAdmin.setting_nonce
+            },
+            success: function(response) {
+                if (response.success) {
+                    // Create and download the JSON file
+                    var dataStr = JSON.stringify(response.data.settings, null, 2);
+                    var blob = new Blob([dataStr], { type: 'application/json' });
+                    var url = URL.createObjectURL(blob);
+                    var a = document.createElement('a');
+                    a.href = url;
+                    a.download = response.data.filename;
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                    URL.revokeObjectURL(url);
+                } else {
+                    alert(response.data.message || 'Error exporting settings');
+                }
+            },
+            error: function() {
+                alert('Error exporting settings');
+            },
+            complete: function() {
+                $btn.prop('disabled', false).html(originalHtml);
+            }
+        });
+    });
+
+    // Reset Settings Modal
+    var $resetModal = $('#mxchat-reset-modal');
+    var $resetConfirmInput = $('#mxchat-reset-confirmation');
+    var $resetConfirmBtn = $('#mxchat-reset-confirm');
+
+    $('#mxchat-reset-settings').on('click', function() {
+        $resetModal.fadeIn(200);
+        $resetConfirmInput.val('').focus();
+        $resetConfirmBtn.prop('disabled', true);
+    });
+
+    $('#mxchat-reset-modal-close, #mxchat-reset-cancel, .mxch-modal-backdrop').on('click', function() {
+        $resetModal.fadeOut(200);
+    });
+
+    $resetConfirmInput.on('input', function() {
+        var value = $(this).val().toUpperCase();
+        $resetConfirmBtn.prop('disabled', value !== 'RESET');
+    });
+
+    $resetConfirmBtn.on('click', function() {
+        var $btn = $(this);
+        var confirmation = $resetConfirmInput.val();
+
+        $btn.prop('disabled', true).text('Resetting...');
+
+        $.ajax({
+            url: ajaxurl,
+            type: 'POST',
+            data: {
+                action: 'mxchat_reset_all_settings',
+                confirmation: confirmation,
+                _ajax_nonce: mxchatAdmin.setting_nonce
+            },
+            success: function(response) {
+                if (response.success) {
+                    alert(response.data.message);
+                    window.location.reload();
+                } else {
+                    alert(response.data.message || 'Error resetting settings');
+                    $btn.prop('disabled', false).text('Reset All Settings');
+                }
+            },
+            error: function() {
+                alert('Error resetting settings');
+                $btn.prop('disabled', false).text('Reset All Settings');
+            }
+        });
+    });
+
+    // Load debug log on page load if we're on the optimization section
+    if ($('#optimization').hasClass('active') || window.location.hash === '#optimization') {
+        refreshDebugLog();
+    }
+
+    // Also refresh when switching to optimization tab
+    $(document).on('click', '[data-section="optimization"]', function() {
+        setTimeout(refreshDebugLog, 100);
+    });
 });

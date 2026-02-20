@@ -3,7 +3,7 @@
  * Plugin Name: MxChat
  * Plugin URI: https://mxchat.ai/
  * Description: AI chatbot for WordPress with OpenAI, Claude, xAI, DeepSeek, live agent, PDF uploads, WooCommerce, and training on website data.
- * Version: 3.0.7
+ * Version: 3.0.8
  * Author: MxChat
  * Author URI: https://mxchat.ai
  * License: GPLv2 or later
@@ -38,6 +38,63 @@ function mxchat_load_textdomain() {
     load_plugin_textdomain($domain, false, dirname(plugin_basename(__FILE__)) . '/languages');
 }
 add_action('init', 'mxchat_load_textdomain');
+
+/**
+ * Exclude MxChat assets from caching plugin optimizations
+ *
+ * This prevents issues with WP Rocket, LiteSpeed Cache, Autoptimize, and similar
+ * plugins that may break the chatbot by removing "unused" CSS or deferring JS.
+ */
+
+// WP Rocket - Exclude from Remove Unused CSS (RUCSS)
+add_filter('rocket_rucss_inline_atts_exclusions', function($exclusions) {
+    $exclusions[] = 'mxchat';
+    return $exclusions;
+});
+
+// WP Rocket - Exclude CSS from minification/combination
+add_filter('rocket_exclude_css', function($excluded) {
+    $excluded[] = '/plugins/mxchat-basic/css/chat-style.css';
+    return $excluded;
+});
+
+// WP Rocket - Exclude JS from minification/combination/defer
+add_filter('rocket_exclude_js', function($excluded) {
+    $excluded[] = '/plugins/mxchat-basic/js/chat-script.js';
+    return $excluded;
+});
+
+add_filter('rocket_exclude_defer_js', function($excluded) {
+    $excluded[] = '/plugins/mxchat-basic/js/chat-script.js';
+    return $excluded;
+});
+
+// WP Rocket - Exclude from delay JS execution
+add_filter('rocket_delay_js_exclusions', function($excluded) {
+    $excluded[] = 'mxchat';
+    $excluded[] = 'chat-script';
+    return $excluded;
+});
+
+// LiteSpeed Cache - Exclude from optimization
+add_filter('litespeed_optimize_css_excludes', function($excluded) {
+    $excluded[] = 'chat-style.css';
+    return $excluded;
+});
+
+add_filter('litespeed_optm_js_defer_exc', function($excluded) {
+    $excluded[] = 'chat-script.js';
+    return $excluded;
+});
+
+// Autoptimize - Exclude from optimization
+add_filter('autoptimize_filter_css_exclude', function($excluded) {
+    return $excluded . ', mxchat, chat-style.css';
+});
+
+add_filter('autoptimize_filter_js_exclude', function($excluded) {
+    return $excluded . ', mxchat, chat-script.js';
+});
 
 // Include classes with error handling
 function mxchat_include_classes() {

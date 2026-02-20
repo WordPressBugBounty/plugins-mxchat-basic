@@ -5,7 +5,7 @@ Tags: ai chatbot, chatgpt, woocommerce, customer support, live chat
 Requires at least: 5.0
 Tested up to: 6.9
 Requires PHP: 7.2
-Stable tag: 3.0.7
+Stable tag: 3.0.8
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -20,11 +20,13 @@ The best free AI chatbot plugin for WordPress. Train ChatGPT, Claude, Gemini, or
 ## Why Choose MxChat as Your WordPress AI Chatbot?
 
 ✅ **6 Major AI Providers in One Plugin**: OpenRouter, OpenAI GPT, Claude, Gemini, xAI Grok, and DeepSeek - switch between 100+ models instantly
-✅ **Train on Your Website Data**: Advanced RAG technology learns from sitemaps, PDFs, URLs, or manual input for ultra-relevant responses  
-✅ **Live Agent Handoff via Slack**: Seamlessly escalate from AI to human support when customers need personal assistance  
-✅ **Real-Time Debug Panel**: See exactly what your chatbot retrieves and triggers with our admin testing interface  
-✅ **Boost Sales with WooCommerce**: Product cards, cart management, and AI-powered shopping assistance  
-✅ **Extensive Add-On Ecosystem**: Forms, moderation, recommendations, theme customization, and more  
+✅ **Train on Your Website Data**: Advanced RAG technology learns from sitemaps, PDFs, URLs, or manual input for ultra-relevant responses
+✅ **Live Agent Handoff via Slack**: Seamlessly escalate from AI to human support when customers need personal assistance
+✅ **Real-Time Debug Panel**: See exactly what your chatbot retrieves and triggers with our admin testing interface
+✅ **Boost Sales with WooCommerce**: Product cards, cart management, and AI-powered shopping assistance
+✅ **Extensive Add-On Ecosystem**: Forms, moderation, recommendations, theme customization, and more
+
+🎬 [Quick Setup with MxChat](https://www.youtube.com/watch?v=3BqoiyWaQiM) – Learn how to quickly setup and understand how your chatbot works
 
 ### 📦 Optional Premium Add-Ons  
 Extend the free plugin with these optional premium features:  
@@ -37,14 +39,11 @@ Extend the free plugin with these optional premium features:
 
 👉 [Visit our website to view all add-ons](https://mxchat.ai)
 
-## 🔥 What's New in Version 3.0.6
+## 🔥 What's New in Version 3.0.8
 
-- New: RAG Sources Limit slider - control how many knowledge base sources (3-10) are included in AI responses
-- New: {visitor_name} placeholder support in Intro Message and AI Behavior settings for personalized greetings
-- New: Added Claude Opus 4.6 and Claude Opus 4.5 models
-- Fixed: Chat persistence OFF now correctly starts fresh AI context on page reload
-- Deprecated: Removed all GPT-4 series, GPT-3.5 Turbo, and Claude 3.x models per provider deprecations
-- Updated: Users on deprecated models auto-migrated to GPT-5.1/GPT-5 Mini or Claude Opus 4.6/Haiku 4.5
+- New: Debug & optimization tools with log viewer, settings export, and reset options
+- New: Added Claude Sonnet 4.6 model
+- Improved: Performance optimizations and caching plugin compatibility
 
 ## Core Features That Set MxChat Apart
 
@@ -67,7 +66,7 @@ Access the world's most advanced AI models based on your specific needs:
 **OpenAI**:
 GPT-5.2, GPT-5.1 Chat Latest, GPT-5.1, GPT-5, GPT-5-mini, GPT-5-nano
 **Anthropic Claude**:
-Claude Opus 4.6, Claude Opus 4.5, Claude Sonnet 4.5, Claude Opus 4.1, Claude Haiku 4.5, Claude 4 Sonnet, Claude 4 Opus
+Claude Opus 4.6, Claude Sonnet 4.6, Claude Opus 4.5, Claude Sonnet 4.5, Claude Opus 4.1, Claude Haiku 4.5, Claude 4 Sonnet, Claude 4 Opus
 **X.AI**:  
 Grok-4, Grok-3, Grok-3 Fast, Grok-3 Mini, Grok-3 Mini Fast, Grok-2, **Grok 4.1 Fast (Reasoning)**, **Grok 4.1 Fast (Non-Reasoning)**
 **Google Gemini**:
@@ -159,7 +158,7 @@ Please ensure compliance with applicable terms and data privacy laws.
 
 = What AI models does MxChat support? =
 
-MxChat supports 100+ AI models including OpenAI GPT-5.2, GPT-5.1, GPT-5, GPT-5 Mini, Anthropic Claude Opus 4.6, Claude Opus 4.5, Claude Sonnet 4.5, Claude Haiku 4.5, Google Gemini 2.0 Flash, Gemini 1.5 Pro, xAI Grok 4, Grok 3, DeepSeek Chat, and many more. With OpenRouter integration, you get access to models from OpenAI, Anthropic, Google, Meta, Mistral, and other providers with a single API key.
+MxChat supports 100+ AI models including OpenAI GPT-5.2, GPT-5.1, GPT-5, GPT-5 Mini, Anthropic Claude Opus 4.6, Claude Sonnet 4.6, Claude Opus 4.5, Claude Sonnet 4.5, Claude Haiku 4.5, Google Gemini 2.0 Flash, Gemini 1.5 Pro, xAI Grok 4, Grok 3, DeepSeek Chat, and many more. With OpenRouter integration, you get access to models from OpenAI, Anthropic, Google, Meta, Mistral, and other providers with a single API key.
 
 = How do I get API keys for the AI chatbot? =
 
@@ -261,6 +260,11 @@ Yes. MxChat is available for free on the WordPress plugin repository with full A
 *(Note: Screenshots will be added in future updates)*
 
 == Changelog ==
+
+= 3.0.8 - February 20, 2026 =
+- New: Debug & optimization tools with log viewer, settings export, and reset options
+- New: Added Claude Sonnet 4.6 model
+- Improved: Performance optimizations and caching plugin compatibility
 
 = 3.0.7 - February 15, 2026 =
 - New: Performance optimization
@@ -799,9 +803,8 @@ Yes. MxChat is available for free on the WordPress plugin repository with full A
 
 == Upgrade Notice ==
 
-= 3.0.7 =
-- New: Performance optimization
-- Fixed: GPT-5.1 Chat Latest model returning API error when web search was disabled
+= 3.0.8 - February 20, 2026 =
+New: Debug & optimization tools, Claude Sonnet 4.6 model, performance optimizations and caching plugin compatibility.
 
 == License & Warranty ==
 

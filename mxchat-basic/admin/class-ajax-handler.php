@@ -41,6 +41,13 @@ private function mxchat_init_ajax_hooks() {
 
     add_action('wp_ajax_mxchat_save_selected_bot', array($this, 'mxchat_save_selected_bot'));
     add_action('wp_ajax_mxchat_check_api_keys', array($this, 'mxchat_check_api_keys'));
+
+    // Debug & Optimization AJAX
+    add_action('wp_ajax_mxchat_toggle_debug_mode', array($this, 'mxchat_toggle_debug_mode_callback'));
+    add_action('wp_ajax_mxchat_get_debug_log', array($this, 'mxchat_get_debug_log_callback'));
+    add_action('wp_ajax_mxchat_clear_debug_log', array($this, 'mxchat_clear_debug_log_callback'));
+    add_action('wp_ajax_mxchat_export_settings', array($this, 'mxchat_export_settings_callback'));
+    add_action('wp_ajax_mxchat_reset_all_settings', array($this, 'mxchat_reset_all_settings_callback'));
 }
 
     // ========================================
@@ -101,7 +108,7 @@ public function mxchat_save_setting_callback() {
                             'grok-4-0709', 'grok-4-1-fast-reasoning', 'grok-4-1-fast-non-reasoning', 'grok-3-beta', 'grok-3-fast-beta', 'grok-3-mini-beta',
                             'grok-3-mini-fast-beta', 'grok-2',
                             'deepseek-chat',
-                            'claude-opus-4-6', 'claude-opus-4-5',
+                            'claude-opus-4-6', 'claude-opus-4-5', 'claude-sonnet-4-6',
                             'claude-sonnet-4-5-20250929', 'claude-opus-4-1-20250805', 'claude-haiku-4-5-20251001',
                             'claude-opus-4-20250514', 'claude-sonnet-4-20250514',
                             'gpt-5.2', 'gpt-5.1-chat-latest', 'gpt-5.1-2025-11-13', 'gpt-5', 'gpt-5-mini', 'gpt-5-nano',
@@ -392,6 +399,18 @@ public function mxchat_save_setting_callback() {
     $updated = update_option('mxchat_options', $options);
     //error_log('MXChat Save: Update result: ' . ($updated ? 'success' : 'unchanged') . ' for field: ' . $name);
     //error_log('MXChat Save: Updated options array: ' . print_r($options, true));
+
+    // Log the save action if debug mode is enabled
+    if ( class_exists( 'MxChat_Admin' ) ) {
+        MxChat_Admin::mxchat_log_debug(
+            'settings_save',
+            sprintf( 'Field saved: %s', $field_name ),
+            array(
+                'field'   => $field_name,
+                'updated' => $updated,
+            )
+        );
+    }
 
     // Always return success even if WordPress says nothing changed
     // (which happens when the value is the same as before)
@@ -1128,6 +1147,141 @@ function mxchat_deactivate_license() {
         );
 
         wp_send_json_success($api_key_status);
+    }
+
+    // ========================================
+    // DEBUG & OPTIMIZATION AJAX HANDLERS
+    // ========================================
+
+    /**
+     * Toggle debug mode on/off
+     */
+    public function mxchat_toggle_debug_mode_callback() {
+        // Verify nonce
+        if ( ! check_ajax_referer( 'mxchat_save_setting_nonce', '_ajax_nonce', false ) ) {
+            wp_send_json_error( array( 'message' => esc_html__( 'Security check failed', 'mxchat' ) ) );
+        }
+
+        // Check permissions
+        if ( ! current_user_can( 'manage_options' ) ) {
+            wp_send_json_error( array( 'message' => esc_html__( 'Unauthorized', 'mxchat' ) ) );
+        }
+
+        $enabled = isset( $_POST['enabled'] ) && $_POST['enabled'] === 'on';
+
+        $options = get_option( 'mxchat_options', array() );
+
+        if ( $enabled ) {
+            $options['debug_mode'] = 'on';
+            update_option( 'mxchat_options', $options );
+            MxChat_Admin::mxchat_log_debug( 'debug_mode', 'Debug mode enabled' );
+        } else {
+            // Log before disabling
+            MxChat_Admin::mxchat_log_debug( 'debug_mode', 'Debug mode disabled' );
+            $options['debug_mode'] = 'off';
+            update_option( 'mxchat_options', $options );
+        }
+
+        wp_send_json_success( array(
+            'message' => $enabled ? esc_html__( 'Debug mode enabled', 'mxchat' ) : esc_html__( 'Debug mode disabled', 'mxchat' ),
+            'enabled' => $enabled,
+        ) );
+    }
+
+    /**
+     * Get the debug log entries
+     */
+    public function mxchat_get_debug_log_callback() {
+        // Verify nonce
+        if ( ! check_ajax_referer( 'mxchat_save_setting_nonce', '_ajax_nonce', false ) ) {
+            wp_send_json_error( array( 'message' => esc_html__( 'Security check failed', 'mxchat' ) ) );
+        }
+
+        // Check permissions
+        if ( ! current_user_can( 'manage_options' ) ) {
+            wp_send_json_error( array( 'message' => esc_html__( 'Unauthorized', 'mxchat' ) ) );
+        }
+
+        $log = MxChat_Admin::mxchat_get_debug_log();
+
+        wp_send_json_success( array(
+            'log'   => $log,
+            'count' => count( $log ),
+        ) );
+    }
+
+    /**
+     * Clear the debug log
+     */
+    public function mxchat_clear_debug_log_callback() {
+        // Verify nonce
+        if ( ! check_ajax_referer( 'mxchat_save_setting_nonce', '_ajax_nonce', false ) ) {
+            wp_send_json_error( array( 'message' => esc_html__( 'Security check failed', 'mxchat' ) ) );
+        }
+
+        // Check permissions
+        if ( ! current_user_can( 'manage_options' ) ) {
+            wp_send_json_error( array( 'message' => esc_html__( 'Unauthorized', 'mxchat' ) ) );
+        }
+
+        MxChat_Admin::mxchat_clear_debug_log();
+
+        // Log that the log was cleared (this will be the first entry in the new log)
+        MxChat_Admin::mxchat_log_debug( 'debug_log', 'Debug log cleared by user' );
+
+        wp_send_json_success( array( 'message' => esc_html__( 'Debug log cleared', 'mxchat' ) ) );
+    }
+
+    /**
+     * Export settings as JSON
+     */
+    public function mxchat_export_settings_callback() {
+        // Verify nonce
+        if ( ! check_ajax_referer( 'mxchat_save_setting_nonce', '_ajax_nonce', false ) ) {
+            wp_send_json_error( array( 'message' => esc_html__( 'Security check failed', 'mxchat' ) ) );
+        }
+
+        // Check permissions
+        if ( ! current_user_can( 'manage_options' ) ) {
+            wp_send_json_error( array( 'message' => esc_html__( 'Unauthorized', 'mxchat' ) ) );
+        }
+
+        $export = MxChat_Admin::mxchat_export_settings();
+
+        // Log the export
+        MxChat_Admin::mxchat_log_debug( 'settings_export', 'Settings exported by user' );
+
+        wp_send_json_success( array(
+            'settings' => $export,
+            'filename' => 'mxchat-settings-' . gmdate( 'Y-m-d-His' ) . '.json',
+        ) );
+    }
+
+    /**
+     * Reset all settings to defaults
+     */
+    public function mxchat_reset_all_settings_callback() {
+        // Verify nonce
+        if ( ! check_ajax_referer( 'mxchat_save_setting_nonce', '_ajax_nonce', false ) ) {
+            wp_send_json_error( array( 'message' => esc_html__( 'Security check failed', 'mxchat' ) ) );
+        }
+
+        // Check permissions
+        if ( ! current_user_can( 'manage_options' ) ) {
+            wp_send_json_error( array( 'message' => esc_html__( 'Unauthorized', 'mxchat' ) ) );
+        }
+
+        // Require confirmation code
+        $confirmation = isset( $_POST['confirmation'] ) ? sanitize_text_field( wp_unslash( $_POST['confirmation'] ) ) : '';
+
+        if ( strtoupper( $confirmation ) !== 'RESET' ) {
+            wp_send_json_error( array( 'message' => esc_html__( 'Invalid confirmation code. Please type RESET to confirm.', 'mxchat' ) ) );
+        }
+
+        // Perform the reset
+        MxChat_Admin::mxchat_reset_all_settings();
+
+        wp_send_json_success( array( 'message' => esc_html__( 'All settings have been reset to defaults. The page will reload.', 'mxchat' ) ) );
     }
 
 }

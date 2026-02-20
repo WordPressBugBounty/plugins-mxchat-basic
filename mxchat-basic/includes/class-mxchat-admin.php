@@ -105,7 +105,7 @@ private function initialize_default_options() {
         'deepseek_api_key' => '',
         'voyage_api_key' => '',
         'gemini_api_key' => '',
-        'enable_streaming_toggle' => 'on',
+        'enable_streaming_toggle' => 'off',
         'enable_web_search' => 'off',
         'embedding_model' => 'text-embedding-ada-002',
         'system_prompt_instructions' => 'You are an AI Chatbot assistant for this website. Your main goal is to assist visitors with questions and provide helpful information. Here are your key guidelines:
@@ -198,6 +198,9 @@ private function initialize_default_options() {
 
         // Optimization settings
         'script_loading_strategy' => 'default',
+
+        // Debug settings
+        'debug_mode' => 'off',
     );
 
 
@@ -5387,7 +5390,7 @@ public function api_key_callback() {
     $nonce = wp_create_nonce('mxchat_autosave_nonce');
 
     echo '<div class="api-key-wrapper">';
-    echo '<input type="password" id="api_key" name="api_key" value="' . $apiKey . '" class="regular-text mxchat-autosave-field" autocomplete="off" data-nonce="' . $nonce . '" />';
+    echo '<input type="text" id="api_key" name="api_key" value="' . $apiKey . '" class="regular-text mxchat-autosave-field mxchat-api-key-field" autocomplete="new-password" data-lpignore="true" data-form-type="other" data-nonce="' . $nonce . '" />';
     echo '<button type="button" id="toggleApiKeyVisibility">' . esc_html__('Show', 'mxchat') . '</button>';
     echo '<p class="description">' . esc_html__('Required for OpenAI GPT models and OpenAI embeddings. Get your API key from OpenAI Platform.', 'mxchat') . '</p>';
     echo '</div>';
@@ -5399,7 +5402,7 @@ public function xai_api_key_callback() {
     $nonce = wp_create_nonce('mxchat_autosave_nonce');
 
     echo '<div class="api-key-wrapper">';
-    echo '<input type="password" id="xai_api_key" name="xai_api_key" value="' . $xaiApiKey . '" class="regular-text mxchat-autosave-field" autocomplete="off" data-nonce="' . $nonce . '" />';
+    echo '<input type="text" id="xai_api_key" name="xai_api_key" value="' . $xaiApiKey . '" class="regular-text mxchat-autosave-field mxchat-api-key-field" autocomplete="new-password" data-lpignore="true" data-form-type="other" data-nonce="' . $nonce . '" />';
     echo '<button type="button" id="toggleXaiApiKeyVisibility">' . esc_html__('Show', 'mxchat') . '</button>';
     echo '<p class="description">' . esc_html__('Required for X.AI Grok models. Get your API key from X.AI Console.', 'mxchat') . '</p>';
     echo '</div>';
@@ -5410,7 +5413,7 @@ public function claude_api_key_callback() {
     $nonce = wp_create_nonce('mxchat_autosave_nonce');
 
     echo '<div class="api-key-wrapper">';
-    echo '<input type="password" id="claude_api_key" name="claude_api_key" value="' . $claudeApiKey . '" class="regular-text mxchat-autosave-field" autocomplete="off" data-nonce="' . $nonce . '" />';
+    echo '<input type="text" id="claude_api_key" name="claude_api_key" value="' . $claudeApiKey . '" class="regular-text mxchat-autosave-field mxchat-api-key-field" autocomplete="new-password" data-lpignore="true" data-form-type="other" data-nonce="' . $nonce . '" />';
     echo '<button type="button" id="toggleClaudeApiKeyVisibility">' . esc_html__('Show', 'mxchat') . '</button>';
     echo '<p class="description">' . esc_html__('Required for Anthropic Claude models. Get your API key from Anthropic Console.', 'mxchat') . '</p>';
     echo '</div>';
@@ -5422,7 +5425,7 @@ public function deepseek_api_key_callback() {
     $nonce = wp_create_nonce('mxchat_autosave_nonce');
 
     echo '<div class="api-key-wrapper">';
-    echo '<input type="password" id="deepseek_api_key" name="deepseek_api_key" value="' . $apiKey . '" class="regular-text mxchat-autosave-field" autocomplete="off" data-nonce="' . $nonce . '" />';
+    echo '<input type="text" id="deepseek_api_key" name="deepseek_api_key" value="' . $apiKey . '" class="regular-text mxchat-autosave-field mxchat-api-key-field" autocomplete="new-password" data-lpignore="true" data-form-type="other" data-nonce="' . $nonce . '" />';
     echo '<button type="button" id="toggleDeepSeekApiKeyVisibility">' . esc_html__('Show', 'mxchat') . '</button>';
     echo '<p class="description">' . esc_html__('Required for DeepSeek models. Get your API key from DeepSeek Platform.', 'mxchat') . '</p>';
     echo '</div>';
@@ -5434,7 +5437,7 @@ public function gemini_api_key_callback() {
     $nonce = wp_create_nonce('mxchat_autosave_nonce');
 
     echo '<div class="api-key-wrapper">';
-    echo '<input type="password" id="gemini_api_key" name="gemini_api_key" value="' . $geminiApiKey . '" class="regular-text mxchat-autosave-field" autocomplete="off" data-nonce="' . $nonce . '" />';
+    echo '<input type="text" id="gemini_api_key" name="gemini_api_key" value="' . $geminiApiKey . '" class="regular-text mxchat-autosave-field mxchat-api-key-field" autocomplete="new-password" data-lpignore="true" data-form-type="other" data-nonce="' . $nonce . '" />';
     echo '<button type="button" id="toggleGeminiApiKeyVisibility">' . esc_html__('Show', 'mxchat') . '</button>';
     echo '<p class="description">' . esc_html__('Required for Google Gemini models and embeddings. Get your API key from Google AI Studio.', 'mxchat') . '</p>';
     echo '</div>';
@@ -5447,7 +5450,7 @@ public function openrouter_api_key_callback() {
     $nonce = wp_create_nonce('mxchat_autosave_nonce');
 
     echo '<div class="api-key-wrapper">';
-    echo '<input type="password" id="openrouter_api_key" name="openrouter_api_key" value="' . $openrouterApiKey . '" class="regular-text mxchat-autosave-field" autocomplete="off" data-nonce="' . $nonce . '" />';
+    echo '<input type="text" id="openrouter_api_key" name="openrouter_api_key" value="' . $openrouterApiKey . '" class="regular-text mxchat-autosave-field mxchat-api-key-field" autocomplete="new-password" data-lpignore="true" data-form-type="other" data-nonce="' . $nonce . '" />';
     echo '<button type="button" id="toggleOpenRouterApiKeyVisibility">' . esc_html__('Show', 'mxchat') . '</button>';
     echo '<p class="description">' . esc_html__('Required for OpenRouter models. Get your API key from OpenRouter.ai', 'mxchat') . '</p>';
     echo '</div>';
@@ -5459,7 +5462,7 @@ public function voyage_api_key_callback() {
     $nonce = wp_create_nonce('mxchat_autosave_nonce');
 
     echo '<div class="api-key-wrapper">';
-    echo '<input type="password" id="voyage_api_key" name="voyage_api_key" value="' . $apiKey . '" class="regular-text mxchat-autosave-field" autocomplete="off" data-nonce="' . $nonce . '" />';
+    echo '<input type="text" id="voyage_api_key" name="voyage_api_key" value="' . $apiKey . '" class="regular-text mxchat-autosave-field mxchat-api-key-field" autocomplete="new-password" data-lpignore="true" data-form-type="other" data-nonce="' . $nonce . '" />';
     echo '<button type="button" id="toggleVoyageAPIKeyVisibility">' . esc_html__('Show', 'mxchat') . '</button>';
     echo '<p class="description">' . esc_html__('Required for Voyage AI embedding models. Get your API key from Voyage AI.', 'mxchat') . '</p>';
     echo '</div>';
@@ -5469,13 +5472,9 @@ public function mxchat_loops_api_key_callback() {
     $loops_api_key = isset($this->options['loops_api_key']) ? esc_attr($this->options['loops_api_key']) : '';
     $nonce = wp_create_nonce('mxchat_autosave_nonce');
 
-    // Hidden fields to "trap" autofill
-    echo '<input type="text" style="display:none" autocomplete="username" />';
-    echo '<input type="password" style="display:none" autocomplete="current-password" />';
-
     echo '<div class="api-key-wrapper">';
     echo sprintf(
-        '<input type="password" id="loops_api_key" name="loops_api_key" value="%s" class="regular-text mxchat-autosave-field" autocomplete="new-password" data-nonce="%s" />',
+        '<input type="text" id="loops_api_key" name="loops_api_key" value="%s" class="regular-text mxchat-autosave-field mxchat-api-key-field" autocomplete="new-password" data-lpignore="true" data-form-type="other" data-nonce="%s" />',
         $loops_api_key,
         $nonce
     );
@@ -5698,6 +5697,7 @@ public function mxchat_model_callback() {
         ),
         esc_html__('Claude Models', 'mxchat') => array(
             'claude-opus-4-6' => esc_html__('Claude Opus 4.6 (Most Capable - Recommended)', 'mxchat'),
+            'claude-sonnet-4-6' => esc_html__('Claude Sonnet 4.6 (Latest Sonnet - Fast & Capable)', 'mxchat'),
             'claude-opus-4-5' => esc_html__('Claude Opus 4.5 (Highly Capable)', 'mxchat'),
             'claude-sonnet-4-5-20250929' => esc_html__('Claude Sonnet 4.5 (Best for Agents & Coding)', 'mxchat'),
             'claude-opus-4-1-20250805' => esc_html__('Claude Opus 4.1 (Exceptional for Complex Tasks)', 'mxchat'),
@@ -6842,7 +6842,7 @@ public function mxchat_brave_api_key_callback() {
 
     echo '<div class="api-key-wrapper">';
     echo sprintf(
-        '<input type="password" id="brave_api_key" name="brave_api_key" value="%s" class="regular-text mxchat-autosave-field" data-nonce="%s" />',
+        '<input type="text" id="brave_api_key" name="brave_api_key" value="%s" class="regular-text mxchat-autosave-field mxchat-api-key-field" autocomplete="new-password" data-lpignore="true" data-form-type="other" data-nonce="%s" />',
         $brave_api_key,
         $nonce
     );
@@ -7776,6 +7776,7 @@ if (isset($input['model'])) {
             'grok-2',
             'deepseek-chat',
             'claude-opus-4-6',
+            'claude-sonnet-4-6',
             'claude-opus-4-5',
             'claude-sonnet-4-5-20250929',
             'claude-opus-4-1-20250805',
@@ -8060,9 +8061,159 @@ if (isset($input['openrouter_selected_model_name'])) {
             : 'default';
     }
 
+    // Sanitize debug mode
+    if (isset($input['debug_mode'])) {
+        $new_input['debug_mode'] = ($input['debug_mode'] === 'on') ? 'on' : 'off';
+    }
+
     return $new_input;
 }
 
+/**
+ * Log a debug message if debug mode is enabled
+ *
+ * @param string $type    The type of log entry (settings_save, api_error, activation, etc.)
+ * @param string $message The log message
+ * @param array  $data    Optional additional data to log
+ * @return bool Whether the message was logged
+ */
+public static function mxchat_log_debug( $type, $message, $data = array() ) {
+    $options = get_option( 'mxchat_options', array() );
+
+    // Check if debug mode is enabled
+    if ( ! isset( $options['debug_mode'] ) || $options['debug_mode'] !== 'on' ) {
+        return false;
+    }
+
+    // Get current log
+    $log = get_option( 'mxchat_debug_log', array() );
+    if ( ! is_array( $log ) ) {
+        $log = array();
+    }
+
+    // Add new entry
+    $entry = array(
+        'time'    => current_time( 'Y-m-d H:i:s' ),
+        'type'    => sanitize_key( $type ),
+        'message' => sanitize_text_field( $message ),
+    );
+
+    if ( ! empty( $data ) ) {
+        $entry['data'] = $data;
+    }
+
+    // Add to beginning of array (newest first)
+    array_unshift( $log, $entry );
+
+    // Keep only last 100 entries
+    if ( count( $log ) > 100 ) {
+        $log = array_slice( $log, 0, 100 );
+    }
+
+    // Save log
+    update_option( 'mxchat_debug_log', $log, false );
+
+    return true;
+}
+
+/**
+ * Get the debug log entries
+ *
+ * @return array The debug log entries
+ */
+public static function mxchat_get_debug_log() {
+    $log = get_option( 'mxchat_debug_log', array() );
+    return is_array( $log ) ? $log : array();
+}
+
+/**
+ * Clear the debug log
+ *
+ * @return bool Whether the log was cleared
+ */
+public static function mxchat_clear_debug_log() {
+    return delete_option( 'mxchat_debug_log' );
+}
+
+/**
+ * Export settings as JSON with masked API keys
+ *
+ * @return array The sanitized settings array
+ */
+public static function mxchat_export_settings() {
+    $options = get_option( 'mxchat_options', array() );
+
+    if ( ! is_array( $options ) ) {
+        return array();
+    }
+
+    // List of API key fields to mask
+    $api_key_fields = array(
+        'api_key',
+        'xai_api_key',
+        'claude_api_key',
+        'deepseek_api_key',
+        'voyage_api_key',
+        'gemini_api_key',
+        'openrouter_api_key',
+        'loops_api_key',
+        'brave_api_key',
+        'live_agent_secret_key',
+        'live_agent_bot_token',
+        'telegram_bot_token',
+        'telegram_webhook_secret',
+        'woocommerce_consumer_key',
+        'woocommerce_consumer_secret',
+    );
+
+    // Mask API keys (show only last 4 characters)
+    foreach ( $api_key_fields as $field ) {
+        if ( isset( $options[ $field ] ) && ! empty( $options[ $field ] ) ) {
+            $value = $options[ $field ];
+            if ( strlen( $value ) > 4 ) {
+                $options[ $field ] = str_repeat( '*', strlen( $value ) - 4 ) . substr( $value, -4 );
+            } else {
+                $options[ $field ] = '****';
+            }
+        }
+    }
+
+    // Add metadata
+    $export = array(
+        'plugin_version' => defined( 'MXCHAT_VERSION' ) ? MXCHAT_VERSION : 'unknown',
+        'export_date'    => current_time( 'Y-m-d H:i:s' ),
+        'wordpress_version' => get_bloginfo( 'version' ),
+        'php_version'    => phpversion(),
+        'settings'       => $options,
+    );
+
+    return $export;
+}
+
+/**
+ * Reset all settings to defaults
+ *
+ * @return bool Whether the reset was successful
+ */
+public static function mxchat_reset_all_settings() {
+    // Delete main options
+    $deleted = delete_option( 'mxchat_options' );
+
+    // Also clear the debug log
+    delete_option( 'mxchat_debug_log' );
+
+    // Log the reset (will create new log since we just cleared it)
+    // We need to temporarily enable debug mode to log this
+    $temp_options = array( 'debug_mode' => 'on' );
+    update_option( 'mxchat_options', $temp_options );
+
+    self::mxchat_log_debug( 'reset', 'All settings have been reset to defaults' );
+
+    // Now delete again to trigger re-initialization
+    delete_option( 'mxchat_options' );
+
+    return $deleted;
+}
 
     // Method to append the chatbot to the body
     public function mxchat_append_chatbot_to_body() {

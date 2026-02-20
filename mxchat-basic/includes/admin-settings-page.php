@@ -325,7 +325,7 @@ function mxchat_render_settings_page($admin_instance) {
                         // Auto-Display
                         mxchat_render_field_wrapper('auto_display', __('Auto-Display Chatbot', 'mxchat'), function() use ($admin_instance) {
                             $admin_instance->mxchat_append_to_body_callback();
-                        }, __('Show chatbot automatically on all pages. Disable to use shortcode [mxchat_chatbot] instead.', 'mxchat'));
+                        }, __('Show chatbot automatically on all pages. Disable to use shortcode [mxchat_chatbot floating="yes"] for floating widget or [mxchat_chatbot floating="no"] for embedded chat.', 'mxchat'));
 
                         // Open Links in New Tab
                         mxchat_render_field_wrapper('link_target', __('Open Links in New Tab', 'mxchat'), function() use ($admin_instance) {
@@ -542,10 +542,11 @@ function mxchat_render_settings_page($admin_instance) {
                  ======================================== -->
             <div id="optimization" class="mxch-section">
                 <div class="mxch-content-header">
-                    <h1 class="mxch-content-title"><?php esc_html_e('Optimization', 'mxchat'); ?></h1>
-                    <p class="mxch-content-subtitle"><?php esc_html_e('Optimize chatbot loading for better page performance and Core Web Vitals.', 'mxchat'); ?></p>
+                    <h1 class="mxch-content-title"><?php esc_html_e('Optimization & Diagnostics', 'mxchat'); ?></h1>
+                    <p class="mxch-content-subtitle"><?php esc_html_e('Optimize performance, debug issues, and manage plugin settings.', 'mxchat'); ?></p>
                 </div>
 
+                <!-- Script Loading Card -->
                 <div class="mxch-card">
                     <div class="mxch-card-header">
                         <h3 class="mxch-card-title">
@@ -583,6 +584,130 @@ function mxchat_render_settings_page($admin_instance) {
                                     <li><strong><?php esc_html_e('On User Interaction:', 'mxchat'); ?></strong> <?php esc_html_e('Script loads when user scrolls, moves mouse, or touches screen. Best for Core Web Vitals but chat appears with slight delay.', 'mxchat'); ?></li>
                                 </ul>
                             </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Debug Mode Card -->
+                <?php
+                $debug_mode = isset($options['debug_mode']) ? $options['debug_mode'] : 'off';
+                $debug_active = ($debug_mode === 'on');
+                ?>
+                <div class="mxch-card">
+                    <div class="mxch-card-header">
+                        <h3 class="mxch-card-title">
+                            <svg class="mxch-card-title-icon" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22c5.523 0 10-4.477 10-10S17.523 2 12 2 2 6.477 2 12s4.477 10 10 10z"/><path d="m9 12 2 2 4-4"/></svg>
+                            <?php esc_html_e('Debug Mode', 'mxchat'); ?>
+                        </h3>
+                    </div>
+                    <div class="mxch-card-body">
+                        <div class="mxch-field">
+                            <label class="mxch-toggle">
+                                <input type="checkbox" class="mxch-toggle-input" id="mxchat_debug_mode" name="mxchat_options[debug_mode]" value="on" <?php checked($debug_active); ?>>
+                                <span class="mxch-toggle-switch"></span>
+                                <span class="mxch-toggle-label"><?php esc_html_e('Enable Debug Logging', 'mxchat'); ?></span>
+                            </label>
+                            <p class="mxch-field-description"><?php esc_html_e('Tracks settings changes, knowledge base errors, API issues, and embedding failures. Enable only when troubleshooting. Max 100 entries stored.', 'mxchat'); ?></p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Debug Log Viewer Card -->
+                <div class="mxch-card">
+                    <div class="mxch-card-header" style="display: flex; justify-content: space-between; align-items: center;">
+                        <h3 class="mxch-card-title">
+                            <svg class="mxch-card-title-icon" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
+                            <?php esc_html_e('Debug Log', 'mxchat'); ?>
+                        </h3>
+                        <div style="display: flex; gap: 8px; align-items: center;">
+                            <span id="mxchat-log-count" class="mxch-badge" style="display: none;"></span>
+                            <button type="button" class="mxch-btn mxch-btn-secondary mxch-btn-sm" id="mxchat-refresh-log">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2"/></svg>
+                                <?php esc_html_e('Refresh', 'mxchat'); ?>
+                            </button>
+                            <button type="button" class="mxch-btn mxch-btn-secondary mxch-btn-sm" id="mxchat-clear-log">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+                                <?php esc_html_e('Clear', 'mxchat'); ?>
+                            </button>
+                        </div>
+                    </div>
+                    <div class="mxch-card-body">
+                        <div id="mxchat-debug-log" class="mxchat-debug-log-viewer">
+                            <div class="mxchat-debug-log-empty">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round" style="opacity: 0.3;"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+                                <p><?php esc_html_e('No log entries yet. Enable debug mode to start logging.', 'mxchat'); ?></p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Settings Tools Card -->
+                <div class="mxch-card">
+                    <div class="mxch-card-header">
+                        <h3 class="mxch-card-title">
+                            <svg class="mxch-card-title-icon" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>
+                            <?php esc_html_e('Settings Tools', 'mxchat'); ?>
+                        </h3>
+                    </div>
+                    <div class="mxch-card-body">
+                        <div class="mxch-tools-grid">
+                            <!-- Export Settings -->
+                            <div class="mxch-tool-item">
+                                <div class="mxch-tool-icon">
+                                    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                                </div>
+                                <div class="mxch-tool-content">
+                                    <h4><?php esc_html_e('Export Settings', 'mxchat'); ?></h4>
+                                    <p><?php esc_html_e('Download a JSON file of your current settings for backup or support. API keys are masked for security.', 'mxchat'); ?></p>
+                                    <button type="button" class="mxch-btn mxch-btn-secondary" id="mxchat-export-settings">
+                                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                                        <?php esc_html_e('Export Settings', 'mxchat'); ?>
+                                    </button>
+                                </div>
+                            </div>
+
+                            <!-- Reset All Settings -->
+                            <div class="mxch-tool-item mxch-tool-item-danger">
+                                <div class="mxch-tool-icon">
+                                    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>
+                                </div>
+                                <div class="mxch-tool-content">
+                                    <h4><?php esc_html_e('Reset All Settings', 'mxchat'); ?></h4>
+                                    <p><?php esc_html_e('Reset all MxChat settings to their default values. This action cannot be undone.', 'mxchat'); ?></p>
+                                    <button type="button" class="mxch-btn mxch-btn-danger" id="mxchat-reset-settings">
+                                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/></svg>
+                                        <?php esc_html_e('Reset All Settings', 'mxchat'); ?>
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Reset Confirmation Modal -->
+                <div id="mxchat-reset-modal" class="mxch-modal" style="display: none;">
+                    <div class="mxch-modal-backdrop"></div>
+                    <div class="mxch-modal-content">
+                        <div class="mxch-modal-header">
+                            <h3><?php esc_html_e('Reset All Settings', 'mxchat'); ?></h3>
+                            <button type="button" class="mxch-modal-close" id="mxchat-reset-modal-close">&times;</button>
+                        </div>
+                        <div class="mxch-modal-body">
+                            <div class="mxch-notice mxch-notice-warning">
+                                <svg class="mxch-notice-icon" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+                                <div>
+                                    <strong><?php esc_html_e('Warning: This action cannot be undone!', 'mxchat'); ?></strong>
+                                    <p><?php esc_html_e('All your MxChat settings including API keys, customizations, and configurations will be permanently deleted.', 'mxchat'); ?></p>
+                                </div>
+                            </div>
+                            <div class="mxch-field" style="margin-top: 20px;">
+                                <label class="mxch-field-label"><?php esc_html_e('Type RESET to confirm:', 'mxchat'); ?></label>
+                                <input type="text" id="mxchat-reset-confirmation" class="mxch-input" placeholder="RESET" autocomplete="off">
+                            </div>
+                        </div>
+                        <div class="mxch-modal-footer">
+                            <button type="button" class="mxch-btn mxch-btn-secondary" id="mxchat-reset-cancel"><?php esc_html_e('Cancel', 'mxchat'); ?></button>
+                            <button type="button" class="mxch-btn mxch-btn-danger" id="mxchat-reset-confirm" disabled><?php esc_html_e('Reset All Settings', 'mxchat'); ?></button>
                         </div>
                     </div>
                 </div>
@@ -823,6 +948,11 @@ function mxchat_render_settings_page($admin_instance) {
                     <?php
                     $tutorials = array(
                         array(
+                            'title' => __('Quick Setup with MxChat', 'mxchat'),
+                            'description' => __('Learn how to quickly setup and understand how your chatbot works.', 'mxchat'),
+                            'url' => 'https://www.youtube.com/watch?v=3BqoiyWaQiM&t'
+                        ),
+                        array(
                             'title' => __('AI Theme Generator', 'mxchat'),
                             'description' => __('Learn how to instantly restyle your chatbot using plain English prompts with real-time previews.', 'mxchat'),
                             'url' => 'https://www.youtube.com/watch?v=rSQDW2qbtRU&t'
@@ -836,11 +966,6 @@ function mxchat_render_settings_page($admin_instance) {
                             'title' => __('Admin Assistant Add-on', 'mxchat'),
                             'description' => __('Bring a ChatGPT-like experience directly inside your WordPress dashboard.', 'mxchat'),
                             'url' => 'https://youtu.be/AdEA1k-UCFM'
-                        ),
-                        array(
-                            'title' => __('Intent Tester Guide', 'mxchat'),
-                            'description' => __('Fine-tune your chatbot\'s responses and ensure accurate query understanding.', 'mxchat'),
-                            'url' => 'https://www.youtube.com/watch?v=uTr14tn59Hc'
                         ),
                         array(
                             'title' => __('Theme Customizer', 'mxchat'),

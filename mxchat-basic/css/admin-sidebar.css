@@ -2188,3 +2188,354 @@
         justify-content: center;
     }
 }
+
+/* ==========================================================================
+   API Key Fields - Prevent Browser Autofill
+   ========================================================================== */
+
+/* Mask API key fields like password fields but avoid browser password autofill */
+.mxchat-api-key-field {
+    -webkit-text-security: disc;
+    text-security: disc;
+    font-family: monospace;
+}
+
+/* Show actual text when focused or when show button toggled */
+.mxchat-api-key-field.mxchat-show-key {
+    -webkit-text-security: none;
+    text-security: none;
+}
+
+/* ==========================================================================
+   Debug & Optimization Tools
+   ========================================================================== */
+
+/* Debug Log Viewer */
+.mxchat-debug-log-viewer {
+    max-height: 400px;
+    overflow-y: auto;
+    background: #f8fafc;
+    border: 1px solid var(--mxch-card-border, #e2e4e9);
+    border-radius: 8px;
+    padding: 0;
+}
+
+.mxchat-debug-log-empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 48px 24px;
+    text-align: center;
+    color: #64748b;
+}
+
+.mxchat-debug-log-empty p {
+    margin: 16px 0 0;
+    font-size: 14px;
+}
+
+.mxchat-debug-log-entries {
+    padding: 12px;
+}
+
+.mxchat-debug-log-entry {
+    background: #ffffff;
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    padding: 12px;
+    margin-bottom: 8px;
+    font-size: 13px;
+}
+
+.mxchat-debug-log-entry:last-child {
+    margin-bottom: 0;
+}
+
+.mxchat-log-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 8px;
+}
+
+.mxchat-log-type {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    background: #e2e8f0;
+    color: #475569;
+}
+
+.mxchat-log-type-settings_save .mxchat-log-type {
+    background: #dbeafe;
+    color: #1e40af;
+}
+
+.mxchat-log-type-debug_mode .mxchat-log-type {
+    background: #fef3c7;
+    color: #92400e;
+}
+
+.mxchat-log-type-api_error .mxchat-log-type {
+    background: #fee2e2;
+    color: #991b1b;
+}
+
+.mxchat-log-type-reset .mxchat-log-type {
+    background: #fce7f3;
+    color: #9d174d;
+}
+
+.mxchat-log-type-settings_export .mxchat-log-type {
+    background: #d1fae5;
+    color: #065f46;
+}
+
+.mxchat-log-time {
+    font-size: 11px;
+    color: #94a3b8;
+}
+
+.mxchat-log-message {
+    color: #334155;
+    line-height: 1.5;
+}
+
+.mxchat-log-data {
+    margin-top: 8px;
+    padding: 8px;
+    background: #f1f5f9;
+    border-radius: 4px;
+    font-family: monospace;
+    font-size: 11px;
+    color: #64748b;
+    white-space: pre-wrap;
+    word-break: break-all;
+}
+
+/* Settings Tools Grid */
+.mxch-tools-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 24px;
+}
+
+.mxch-tool-item {
+    display: flex;
+    gap: 16px;
+    padding: 20px;
+    background: #f8fafc;
+    border: 1px solid #e2e8f0;
+    border-radius: 12px;
+    transition: all 0.2s ease;
+}
+
+.mxch-tool-item:hover {
+    border-color: var(--mxch-primary, #7873f5);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
+}
+
+.mxch-tool-item-danger {
+    border-color: #fecaca;
+    background: #fef2f2;
+}
+
+.mxch-tool-item-danger:hover {
+    border-color: #ef4444;
+}
+
+.mxch-tool-icon {
+    flex-shrink: 0;
+    width: 48px;
+    height: 48px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: #ffffff;
+    border-radius: 10px;
+    color: var(--mxch-primary, #7873f5);
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+}
+
+.mxch-tool-item-danger .mxch-tool-icon {
+    color: #ef4444;
+}
+
+.mxch-tool-content h4 {
+    margin: 0 0 6px;
+    font-size: 15px;
+    font-weight: 600;
+    color: #1e293b;
+}
+
+.mxch-tool-content p {
+    margin: 0 0 12px;
+    font-size: 13px;
+    color: #64748b;
+    line-height: 1.5;
+}
+
+/* Danger Button */
+.mxch-btn-danger {
+    background: #ef4444 !important;
+    color: #ffffff !important;
+    border-color: #ef4444 !important;
+}
+
+.mxch-btn-danger:hover {
+    background: #dc2626 !important;
+    border-color: #dc2626 !important;
+}
+
+/* Badge Styles */
+.mxch-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 4px 10px;
+    font-size: 12px;
+    font-weight: 500;
+    border-radius: 20px;
+    background: #e2e8f0;
+    color: #475569;
+}
+
+.mxch-badge-warning {
+    background: #fef3c7;
+    color: #92400e;
+}
+
+.mxch-badge-success {
+    background: #d1fae5;
+    color: #065f46;
+}
+
+.mxch-badge-error {
+    background: #fee2e2;
+    color: #991b1b;
+}
+
+/* Modal Styles */
+.mxch-modal {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 100000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.mxch-modal-backdrop {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.5);
+}
+
+.mxch-modal-content {
+    position: relative;
+    width: 100%;
+    max-width: 480px;
+    background: #ffffff;
+    border-radius: 16px;
+    box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
+    margin: 20px;
+}
+
+.mxch-modal-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 20px 24px;
+    border-bottom: 1px solid #e2e8f0;
+}
+
+.mxch-modal-header h3 {
+    margin: 0;
+    font-size: 18px;
+    font-weight: 600;
+    color: #1e293b;
+}
+
+.mxch-modal-close {
+    width: 32px;
+    height: 32px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: none;
+    border: none;
+    font-size: 24px;
+    color: #64748b;
+    cursor: pointer;
+    border-radius: 8px;
+    transition: all 0.2s ease;
+}
+
+.mxch-modal-close:hover {
+    background: #f1f5f9;
+    color: #1e293b;
+}
+
+.mxch-modal-body {
+    padding: 24px;
+}
+
+.mxch-modal-footer {
+    display: flex;
+    justify-content: flex-end;
+    gap: 12px;
+    padding: 16px 24px;
+    border-top: 1px solid #e2e8f0;
+    background: #f8fafc;
+    border-radius: 0 0 16px 16px;
+}
+
+/* Input in modal */
+.mxch-input {
+    width: 100%;
+    padding: 10px 14px;
+    font-size: 14px;
+    border: 1px solid #d1d5db;
+    border-radius: 8px;
+    transition: all 0.2s ease;
+}
+
+.mxch-input:focus {
+    outline: none;
+    border-color: var(--mxch-primary, #7873f5);
+    box-shadow: 0 0 0 3px rgba(120, 115, 245, 0.1);
+}
+
+/* Responsive adjustments for tools */
+@media screen and (max-width: 768px) {
+    .mxch-tools-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .mxch-tool-item {
+        flex-direction: column;
+        text-align: center;
+    }
+
+    .mxch-tool-icon {
+        margin: 0 auto;
+    }
+
+    .mxchat-debug-log-viewer {
+        max-height: 300px;
+    }
+
+    .mxch-modal-content {
+        margin: 10px;
+    }
+}

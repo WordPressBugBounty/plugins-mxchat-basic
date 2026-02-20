@@ -126,6 +126,7 @@ public function mxchat_fetch_pinecone_records($pinecone_options, $search_query =
 
     } catch (Exception $e) {
         error_log('MxChat Pinecone fetch error: ' . $e->getMessage());
+        MxChat_Admin::mxchat_log_debug('pinecone_error', 'Pinecone fetch error: ' . $e->getMessage());
         return array('data' => array(), 'total' => 0, 'total_in_database' => 0, 'showing_recent_only' => false);
     }
 }
@@ -152,6 +153,7 @@ private function mxchat_fetch_pinecone_page_optimized($pinecone_options, $search
 
     } catch (Exception $e) {
         error_log('MxChat optimized fetch exception: ' . $e->getMessage());
+        MxChat_Admin::mxchat_log_debug('pinecone_error', 'Pinecone optimized fetch error: ' . $e->getMessage());
         return array('data' => array(), 'total' => 0);
     }
 }
@@ -927,6 +929,7 @@ private function mxchat_get_recent_entries_safe($pinecone_options, $bot_id = 'de
 
     } catch (Exception $e) {
         error_log('MxChat safe fetch exception: ' . $e->getMessage());
+        MxChat_Admin::mxchat_log_debug('pinecone_error', 'Pinecone safe fetch error: ' . $e->getMessage());
         return array();
     }
 }
@@ -1501,6 +1504,7 @@ public function mxchat_delete_all_from_pinecone($pinecone_options) {
 
          // Handle WordPress HTTP API errors
          if (is_wp_error($response)) {
+             MxChat_Admin::mxchat_log_debug('pinecone_error', 'Pinecone batch deletion failed: ' . $response->get_error_message());
              return array(
                  'success' => false,
                  'message' => $response->get_error_message()
@@ -1513,7 +1517,7 @@ public function mxchat_delete_all_from_pinecone($pinecone_options) {
 
          // Pinecone returns 200 for successful deletion
          if ($response_code !== 200) {
-             //error_log('Pinecone batch deletion failed: HTTP ' . $response_code . ' - ' . $response_body);
+             MxChat_Admin::mxchat_log_debug('pinecone_error', 'Pinecone batch deletion failed (HTTP ' . $response_code . ')', array('response' => substr($response_body, 0, 200)));
              return array(
                  'success' => false,
                  'message' => sprintf(
