@@ -19,8 +19,47 @@ class MxChat_Addons {
     public function __construct() {
         $this->addons_config = array(
 
+            'mxchat-advanced-content' => array(
+                'title' => __('MxChat Advanced Content Editor', 'mxchat'),
+                'sidebar_title' => __('Content Gen.', 'mxchat'),
+                'description' => __('Supercharge your AI content generation workflow. Add advanced editing tools, image management, SEO meta controls, and internal linking to the MxChat Content Generator—turning simple prompts into publish-ready posts and landing pages.', 'mxchat'),
+                'key_benefits' => array(
+                    __('AI-powered image regeneration & uploads', 'mxchat'),
+                    __('SEO meta title, description & excerpt editor', 'mxchat'),
+                    __('Automatic internal linking between posts', 'mxchat')
+                ),
+                'license' => 'MxChat PRO',
+                'accent' => '#6366f1',
+                'url' => 'https://mxchat.ai/documentation-bot/',
+                'download_url' => 'https://mxchat.ai/advanced-content-editor/',
+                'plugin_file' => 'mxchat-advanced-content/mxchat-advanced-content.php',
+                'config_page' => 'mxchat-advanced-content',
+                'hero_features' => array(
+                    array(
+                        'icon' => '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>',
+                        'title' => __('Image Management', 'mxchat'),
+                        'desc' => __('Regenerate, upload, and swap AI images', 'mxchat'),
+                    ),
+                    array(
+                        'icon' => '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>',
+                        'title' => __('SEO Meta Editor', 'mxchat'),
+                        'desc' => __('Title, description & excerpt controls', 'mxchat'),
+                    ),
+                    array(
+                        'icon' => '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>',
+                        'title' => __('Internal Linking', 'mxchat'),
+                        'desc' => __('Auto-link to related posts & pages', 'mxchat'),
+                    ),
+                    array(
+                        'icon' => '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.375 2.625a1 1 0 0 1 3 3l-9.013 9.014a2 2 0 0 1-.853.505l-2.873.84a.5.5 0 0 1-.62-.62l.84-2.873a2 2 0 0 1 .506-.852z"/></svg>',
+                        'title' => __('Chat-Based Editing', 'mxchat'),
+                        'desc' => __('Refine content through conversation', 'mxchat'),
+                    ),
+                ),
+            ),
+
             'mxchat-theme' => array(
-                'title' => __('MxChat Theme Customizer', 'mxchat'),
+                'title' => __('MxChat Chat Themes', 'mxchat'),
                 'description' => __('Make your chatbot uniquely yours. Generate beautiful themes instantly using simple descriptions or customize manually with precise color controls—zero coding required. Perfect for matching your brand identity.', 'mxchat'),
                 'key_benefits' => array(
                     __('AI-powered theme generator', 'mxchat'),

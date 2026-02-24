@@ -794,19 +794,22 @@ function mxchat_render_knowledge_base_section($admin_instance, $knowledge_manage
                         </span>
                     <?php endif; ?>
                 </h3>
-                <div style="display: flex; gap: 10px; align-items: center;">
-                    <form method="get" id="knowledge-search" style="display: flex; gap: 10px;">
+                <div class="mxch-kb-header-controls">
+                    <form method="get" id="knowledge-search" class="mxch-kb-search-form">
                         <?php wp_nonce_field('mxchat_prompts_search_nonce'); ?>
                         <input type="hidden" name="page" value="mxchat-prompts" />
                         <?php if ($multibot_active && !empty($current_bot_id) && $current_bot_id !== 'default') : ?>
                             <input type="hidden" name="bot_id" value="<?php echo esc_attr($current_bot_id); ?>" />
                         <?php endif; ?>
-                        <input type="text" name="search" class="mxch-input mxch-input-sm" placeholder="<?php esc_attr_e('Search...', 'mxchat'); ?>" value="<?php echo esc_attr($search_query); ?>" style="width: 200px;" />
-                        <select name="content_type" class="mxch-select" style="width: auto;" onchange="this.form.submit()">
+                        <input type="text" name="search" class="mxch-input mxch-input-sm mxch-kb-search-input" placeholder="<?php esc_attr_e('Search...', 'mxchat'); ?>" value="<?php echo esc_attr($search_query); ?>" />
+                        <select name="content_type" class="mxch-select mxch-kb-type-filter" onchange="this.form.submit()">
                             <option value=""><?php esc_html_e('All Types', 'mxchat'); ?></option>
-                            <option value="post" <?php selected($content_type_filter, 'post'); ?>><?php esc_html_e('Posts', 'mxchat'); ?></option>
-                            <option value="page" <?php selected($content_type_filter, 'page'); ?>><?php esc_html_e('Pages', 'mxchat'); ?></option>
-                            <option value="product" <?php selected($content_type_filter, 'product'); ?>><?php esc_html_e('Products', 'mxchat'); ?></option>
+                            <?php
+                            $post_types = get_post_types(array('public' => true), 'objects');
+                            foreach ($post_types as $post_type) {
+                                echo '<option value="' . esc_attr($post_type->name) . '" ' . selected($content_type_filter, $post_type->name, false) . '>' . esc_html($post_type->label) . '</option>';
+                            }
+                            ?>
                             <option value="pdf" <?php selected($content_type_filter, 'pdf'); ?>><?php esc_html_e('PDFs', 'mxchat'); ?></option>
                             <option value="url" <?php selected($content_type_filter, 'url'); ?>><?php esc_html_e('URLs', 'mxchat'); ?></option>
                         </select>

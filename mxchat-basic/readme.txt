@@ -1,19 +1,19 @@
-=== MxChat - AI Chatbot for WordPress with ChatGPT, Claude & Gemini ===
+=== MxChat - AI Chatbot & Content Generation for WordPress  ===
 Contributors: mxchat
 Author: [MxChat](https://mxchat.ai)
-Tags: ai chatbot, chatgpt, woocommerce, customer support, live chat
+Tags: ai chatbot, chatgpt, woocommerce, customer support, content generation
 Requires at least: 5.0
 Tested up to: 6.9
 Requires PHP: 7.2
-Stable tag: 3.0.8
+Stable tag: 3.0.9
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
-The best free AI chatbot plugin for WordPress. Train ChatGPT, Claude, Gemini, or Grok on your website content. WooCommerce ready with RAG knowledge base, live chat handoff, and 100+ AI models.
+The best free AI chatbot and content generation plugin for WordPress. Train ChatGPT, Claude, Gemini, or Grok on your website content. Generate full blog posts and landing pages with AI. WooCommerce ready with RAG knowledge base, live chat handoff, and 100+ AI models.
 
 == Description ==
 
-**MxChat is the most powerful free AI chatbot plugin for WordPress** — connecting your website to ChatGPT, Claude, Gemini, Grok, DeepSeek, and 100+ AI models through a single, easy-to-use interface. Train your AI chatbot on your website content, WooCommerce products, PDFs, and more using advanced RAG (Retrieval-Augmented Generation) technology.
+**MxChat is the most powerful free AI chatbot and content generation plugin for WordPress** — connecting your website to ChatGPT, Claude, Gemini, Grok, DeepSeek, and 100+ AI models through a single, easy-to-use interface. Train your AI chatbot on your website content, WooCommerce products, PDFs, and more using advanced RAG (Retrieval-Augmented Generation) technology. Now with a built-in AI Content Generator to create full blog posts and landing pages complete with images, SEO metadata, and inline AI editing.
 
 [Documentation](https://mxchat.ai/documentation/) | [Demo Videos](https://www.youtube.com/@MxChat/videos)
 
@@ -24,6 +24,7 @@ The best free AI chatbot plugin for WordPress. Train ChatGPT, Claude, Gemini, or
 ✅ **Live Agent Handoff via Slack**: Seamlessly escalate from AI to human support when customers need personal assistance
 ✅ **Real-Time Debug Panel**: See exactly what your chatbot retrieves and triggers with our admin testing interface
 ✅ **Boost Sales with WooCommerce**: Product cards, cart management, and AI-powered shopping assistance
+✅ **AI Content Generator**: Create full blog posts and landing pages with AI-generated images, SEO metadata, and real-time preview editing
 ✅ **Extensive Add-On Ecosystem**: Forms, moderation, recommendations, theme customization, and more
 
 🎬 [Quick Setup with MxChat](https://www.youtube.com/watch?v=3BqoiyWaQiM) – Learn how to quickly setup and understand how your chatbot works
@@ -31,19 +32,21 @@ The best free AI chatbot plugin for WordPress. Train ChatGPT, Claude, Gemini, or
 ### 📦 Optional Premium Add-Ons  
 Extend the free plugin with these optional premium features:  
 
-- [Forms Action Add-On](https://mxchat.ai/forms-action/) – Capture leads and data with custom in-chat forms  
-- [WooCommerce Add-On](https://mxchat.ai/woocommerce/) – AI-powered shopping assistance and product recommendations  
-- [AI Theme Customizer Add-On](https://mxchat.ai/ai-theme-customizer/) – Instantly design chatbot themes with natural language  
-- [Multi-Bot Add-On](https://mxchat.ai/multi-bot/) – Run unlimited AI chatbots with custom knowledge and personalities  
-- [Image Analysis Add-On](https://mxchat.ai/image-analysis/) – Enable AI-powered image analysis and OCR inside chats  
+- [Advanced Content Editor Add-On](https://mxchat.ai/advanced-content-editor/) – Smart internal linking, AI image management with chat-based regeneration, and SEO/meta editing with per-field AI generation
+- [Forms Action Add-On](https://mxchat.ai/forms-action/) – Capture leads and data with custom in-chat forms
+- [WooCommerce Add-On](https://mxchat.ai/woocommerce/) – AI-powered shopping assistance and product recommendations
+- [AI Theme Customizer Add-On](https://mxchat.ai/ai-theme-customizer/) – Instantly design chatbot themes with natural language
+- [Multi-Bot Add-On](https://mxchat.ai/multi-bot/) – Run unlimited AI chatbots with custom knowledge and personalities
+- [Image Analysis Add-On](https://mxchat.ai/image-analysis/) – Enable AI-powered image analysis and OCR inside chats
 
 👉 [Visit our website to view all add-ons](https://mxchat.ai)
 
-## 🔥 What's New in Version 3.0.8
+## 🔥 What's New in Version 3.0.9 — AI Content Generator
 
-- New: Debug & optimization tools with log viewer, settings export, and reset options
-- New: Added Claude Sonnet 4.6 model
-- Improved: Performance optimizations and caching plugin compatibility
+- **AI Content Generator** — Generate full blog posts and landing pages from a single prompt with AI-powered images, SEO metadata, real-time scaled preview, desktop/mobile viewport switching, inline AI editing via chat, and content history.
+- **Advanced Content Editor Add-On** — Optional premium add-on unlocks smart internal linking, AI image management with chat-based regeneration, and per-field AI meta generation with auto-save.
+- **Knowledge Base Improvements** — Dynamic post type filtering in the knowledge database dropdown, pulling in all registered post types automatically.
+- **Compatibility** — Improved compatibility with popular optimization and caching plugins.
 
 ## Core Features That Set MxChat Apart
 
@@ -56,8 +59,9 @@ Extend the free plugin with these optional premium features:
 🟢 **Document Processing** – Let visitors upload and chat with PDFs and Word documents directly on your frontend
 🟢 **Pinecone Vector Storage** – Optional lightning-fast knowledge retrieval for large datasets and enterprise-scale deployments
 🟢 **Web Search Integration** – Brave search provides real-time information beyond your knowledge base
+🟢 **AI Content Generator** – Create full blog posts and landing pages from a prompt with AI images, SEO metadata, real-time preview, and inline AI editing via chat
 🟢 **Image Generation** – DALL-E integration for visual content creation within chat conversations
-🟢 **Streaming Responses** – Real-time response streaming for OpenAI, Claude, and Grok models for the fastest possible chat experience  
+🟢 **Streaming Responses** – Real-time response streaming for OpenAI, Claude, and Grok models for the fastest possible chat experience
 
 ## Choose from 100+ Premium AI Models
 Access the world's most advanced AI models based on your specific needs:
@@ -84,13 +88,36 @@ Transform online shopping with intelligent assistance through direct WooCommerce
 - Convert passive users into paying customers with live support
 - Handle order inquiries and status updates directly through chat
 
+## AI Content Generator — Create Blog Posts & Landing Pages with AI
+
+MxChat includes a built-in AI Content Generator that lets you create full blog posts and landing pages directly from your WordPress dashboard — no external tools or copy-pasting required.
+
+**How It Works:**
+
+1. **Describe Your Content** — Enter a topic, title, or detailed prompt and choose between a blog post or landing page layout
+2. **AI Generates Everything** — The AI produces fully styled HTML with responsive CSS, ready-to-publish content, and optional AI-generated images using DALL-E, Gemini, or Grok
+3. **Real-Time Preview** — See your content exactly as it will appear on your site with a live scaled preview, including desktop and mobile viewport switching
+4. **Edit with AI Chat** — Use the built-in AI chat panel to request changes like "make the heading bigger" or "change the background to blue" — the AI updates your content in real time
+5. **Publish Instantly** — Content is saved as a native WordPress post or page with clean HTML, SEO metadata, and responsive design that works with any theme
+
+**Key Content Generator Features:**
+
+- Choose from multiple AI models for content generation (GPT-5, Claude, Gemini, Grok, and more)
+- AI-generated images placed directly into your content with automatic media library uploads
+- SEO title and meta description generation for search engine optimization
+- Fullwidth and standard layout options with automatic theme compatibility
+- Content history to revisit and manage previously generated posts
+- Works with popular page builders and themes including Elementor, Bricks, Divi, Astra, Kadence, and more
+- Optional [Advanced Content Editor Add-On](https://mxchat.ai/advanced-content-editor/) for smart internal linking, AI image regeneration, and per-field SEO editing
+
 ## Powerful Add-On Ecosystem
 
-**Pro Add-Ons:**  
+**Pro Add-Ons:**
+🟢 **Advanced Content Editor** – Unlock smart internal linking for generated content, AI-powered image management with chat-based regeneration, and per-field SEO/meta generation with debounced auto-save and Yoast/RankMath/AIOSEO sync
 🟢 **Multi-Bot Manager** – Create and manage multiple specialized chatbots with dedicated knowledge databases for different purposes (support, sales, technical, etc.)
 🟢 **Video Generation** – Generate stunning AI videos using Google's Veo 2 and Veo 3 models with audio support and multiple aspect ratios
 🟢 **Admin Assistant** – ChatGPT-like interface in WordPress admin with thread management and image generation
-🟢 **Theme Customizer** – Visual design editor with AI-powered chatbot theme generation from natural language
+🟢 **Chat Themes** – Visual design editor with AI-powered chatbot theme generation from natural language
 🟢 **MxChat Forms** – Create chatbot-triggered forms for lead capture and support tickets
 🟢 **Chat Moderation** – Advanced security with email/IP banning and content filtering
 🟢 **Perplexity Integration** – Real-time web search with authoritative, well-sourced responses
@@ -115,13 +142,14 @@ MxChat is optimized for performance and security. Your AI chatbot runs smoothly,
 
 MxChat offers a fully functional free plan that includes everything you need to get started with AI chatbot and customer support. With no credit card required, you can:
 
-- Access all AI models from 5 major providers  
-- Train chatbot on unlimited website content  
-- Loops email capture for lead generation  
-- Web search and image generation capabilities  
-- Real-time admin debug panel  
-- Chat transcript review and export  
-- RAG support & contextual awareness  
+- Access all AI models from 5 major providers
+- AI Content Generator for blog posts and landing pages
+- Train chatbot on unlimited website content
+- Loops email capture for lead generation
+- Web search and image generation capabilities
+- Real-time admin debug panel
+- Chat transcript review and export
+- RAG support & contextual awareness
 
 Whether you're running a small business or launching a new online store, MxChat’s free plan gives you the tools to offer intelligent customer support and grow your business — without paying a cent.
 
@@ -260,6 +288,12 @@ Yes. MxChat is available for free on the WordPress plugin repository with full A
 *(Note: Screenshots will be added in future updates)*
 
 == Changelog ==
+
+= 3.0.9 - February 24, 2026 =
+- New: AI Content Generator — generate full blog posts and landing pages from a single prompt with AI images, SEO metadata, real-time preview, inline AI editing, and content history
+- New: Advanced Content Editor premium add-on — smart internal linking, AI image management, and per-field AI meta generation
+- New: Dynamic post type filtering in knowledge database dropdown — automatically pulls in all registered post types
+- Improved: Compatibility with popular optimization and caching plugins
 
 = 3.0.8 - February 20, 2026 =
 - New: Debug & optimization tools with log viewer, settings export, and reset options
@@ -803,8 +837,8 @@ Yes. MxChat is available for free on the WordPress plugin repository with full A
 
 == Upgrade Notice ==
 
-= 3.0.8 - February 20, 2026 =
-New: Debug & optimization tools, Claude Sonnet 4.6 model, performance optimizations and caching plugin compatibility.
+= 3.0.9 - February 24, 2026 =
+New: AI Content Generator — create full blog posts and landing pages from a single prompt with AI images, SEO metadata, real-time preview, and inline AI editing. Dynamic knowledge base post type filtering. Improved optimization plugin compatibility.
 
 == License & Warranty ==
 

@@ -1819,6 +1819,22 @@
     .mxch-rate-limit-controls {
         flex-direction: column;
     }
+
+    /* Card headers stack on mobile */
+    .mxch-card-header {
+        flex-direction: column;
+        align-items: stretch;
+        gap: 12px;
+    }
+
+    /* Content header adjustments */
+    .mxch-content-header {
+        margin-bottom: var(--mxch-spacing-md);
+    }
+
+    .mxch-content-title {
+        font-size: 20px;
+    }
 }
 
 @media screen and (max-width: 600px) {

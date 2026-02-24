@@ -3586,3 +3586,149 @@ tr.mxchat-row-error td:first-child::before {
         margin-left: 0;
     }
 }
+
+/* ==========================================================================
+   Knowledge Base - Mobile Responsive
+   ========================================================================== */
+
+/* Desktop defaults for KB header controls */
+.mxch-kb-header-controls {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+}
+
+.mxch-kb-search-form {
+    display: flex;
+    gap: 10px;
+}
+
+.mxch-kb-search-input {
+    width: 200px;
+}
+
+.mxch-kb-type-filter {
+    width: auto;
+}
+
+/* Mobile: Knowledge Base card header stacks vertically */
+@media screen and (max-width: 960px) {
+    /* Stack card header vertically */
+    #knowledge-base .mxch-card-header {
+        flex-direction: column;
+        align-items: stretch;
+        gap: 12px;
+        padding: 12px 16px;
+    }
+
+    /* Title row wraps badges */
+    #knowledge-base .mxch-card-title {
+        flex-wrap: wrap;
+        font-size: 14px;
+    }
+
+    /* Controls stack vertically */
+    .mxch-kb-header-controls {
+        flex-direction: column;
+        align-items: stretch;
+        gap: 8px;
+        width: 100%;
+    }
+
+    /* Search form wraps */
+    .mxch-kb-search-form {
+        flex-wrap: wrap;
+        gap: 8px;
+        width: 100%;
+    }
+
+    /* Search input takes full width */
+    .mxch-kb-search-input {
+        width: 100% !important;
+        flex: 1;
+        min-width: 0;
+    }
+
+    /* Filter dropdown takes full width */
+    .mxch-kb-type-filter {
+        width: 100% !important;
+        flex: 1;
+        min-width: 0;
+    }
+
+    /* Delete container full width */
+    .mxchat-delete-container {
+        width: 100%;
+    }
+
+    .mxchat-delete-container form,
+    .mxchat-delete-container .mxchat-bulk-delete {
+        width: 100%;
+    }
+
+    .mxchat-delete-container .mxch-btn {
+        width: 100%;
+        justify-content: center;
+    }
+
+    /* Table: hide ID and Source columns on mobile to save space */
+    .mxchat-records-table th:nth-child(2),
+    .mxchat-records-table td:nth-child(2) {
+        display: none;
+    }
+
+    .mxchat-records-table th:nth-child(4),
+    .mxchat-records-table td:nth-child(4) {
+        display: none;
+    }
+
+    /* Content column needs more room */
+    .mxchat-content-cell {
+        max-width: none !important;
+    }
+
+    /* Table cells padding */
+    .mxchat-records-table th,
+    .mxchat-records-table td {
+        padding: 10px 8px !important;
+    }
+
+    /* Pagination wraps nicely */
+    .mxchat-ajax-pagination {
+        flex-wrap: wrap;
+        justify-content: center;
+    }
+}
+
+/* Small mobile: further adjustments */
+@media screen and (max-width: 480px) {
+    #knowledge-base .mxch-card-header {
+        padding: 10px 12px;
+    }
+
+    #knowledge-base .mxch-card-title {
+        font-size: 13px;
+    }
+
+    /* Search form items fully stacked */
+    .mxch-kb-search-form {
+        flex-direction: column;
+    }
+
+    /* Smaller table text */
+    .mxchat-records-table {
+        font-size: 12px;
+    }
+
+    .mxchat-records-table th,
+    .mxchat-records-table td {
+        padding: 8px 6px !important;
+    }
+
+    /* Also hide Actions header text but keep the column for delete buttons */
+    .mxchat-records-table th:nth-child(5) {
+        font-size: 0;
+        padding: 8px 4px !important;
+        width: 40px;
+    }
+}

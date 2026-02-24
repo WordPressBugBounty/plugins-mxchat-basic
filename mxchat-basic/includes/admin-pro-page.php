@@ -92,7 +92,7 @@ function mxchat_render_pro_page($admin_instance, $addons_config) {
                     ?>
                     <button class="mxch-mobile-nav-link mxch-addon-nav-link" data-target="addon-<?php echo esc_attr($slug); ?>">
                         <span class="mxch-addon-status-dot <?php echo esc_attr($status['status']); ?>"></span>
-                        <span><?php echo esc_html(str_replace('MxChat ', '', $addon['title'])); ?></span>
+                        <span><?php echo esc_html(!empty($addon['sidebar_title']) ? $addon['sidebar_title'] : str_replace('MxChat ', '', $addon['title'])); ?></span>
                     </button>
                     <?php endforeach; ?>
                 </div>
@@ -144,7 +144,7 @@ function mxchat_render_pro_page($admin_instance, $addons_config) {
                     <div class="mxch-nav-item mxch-addon-item" data-section="addon-<?php echo esc_attr($slug); ?>">
                         <button class="mxch-nav-link mxch-addon-nav-link" data-target="addon-<?php echo esc_attr($slug); ?>">
                             <span class="mxch-addon-status-dot <?php echo esc_attr($status['status']); ?>"></span>
-                            <span class="mxch-nav-link-text"><?php echo esc_html(str_replace('MxChat ', '', $addon['title'])); ?></span>
+                            <span class="mxch-nav-link-text"><?php echo esc_html(!empty($addon['sidebar_title']) ? $addon['sidebar_title'] : str_replace('MxChat ', '', $addon['title'])); ?></span>
                         </button>
                     </div>
                     <?php endforeach; ?>
@@ -350,7 +350,8 @@ function mxchat_render_pro_page($admin_instance, $addons_config) {
                                 </a>
                             <?php elseif ($is_activated): ?>
                                 <!-- Has Pro license but extension not installed - Download -->
-                                <a href="<?php echo esc_url($addon['url']); ?>" target="_blank" class="mxch-btn mxch-btn-primary mxch-btn-lg">
+                                <?php $download_link = !empty($addon['download_url']) ? $addon['download_url'] : $addon['url']; ?>
+                                <a href="<?php echo esc_url($download_link); ?>" target="_blank" class="mxch-btn mxch-btn-primary mxch-btn-lg">
                                     <?php esc_html_e('Download Add-on', 'mxchat'); ?>
                                 </a>
                             <?php else: ?>
@@ -365,9 +366,24 @@ function mxchat_render_pro_page($admin_instance, $addons_config) {
                         </div>
                     </div>
 
-                    <!-- Right: Screenshot -->
+                    <!-- Right: Screenshot or Feature Visual -->
                     <div class="mxch-addon-hero-image">
-                        <img src="<?php echo esc_url($screenshot_url); ?>" alt="<?php echo esc_attr($addon['title']); ?>" onerror="this.parentElement.innerHTML='<div class=\'mxch-addon-image-placeholder\'><svg xmlns=\'http://www.w3.org/2000/svg\' width=\'48\' height=\'48\' viewBox=\'0 0 24 24\' fill=\'none\' stroke=\'currentColor\' stroke-width=\'1.5\'><rect x=\'3\' y=\'3\' width=\'18\' height=\'18\' rx=\'2\' ry=\'2\'/><circle cx=\'8.5\' cy=\'8.5\' r=\'1.5\'/><polyline points=\'21 15 16 10 5 21\'/></svg></div>'">
+                        <?php if (!empty($addon['hero_features'])): ?>
+                            <!-- Styled feature showcase (no screenshot) -->
+                            <div class="mxch-addon-feature-showcase" style="--showcase-accent: <?php echo esc_attr($addon['accent']); ?>">
+                                <?php foreach ($addon['hero_features'] as $hf): ?>
+                                <div class="mxch-addon-showcase-item">
+                                    <div class="mxch-addon-showcase-icon"><?php echo $hf['icon']; ?></div>
+                                    <div class="mxch-addon-showcase-text">
+                                        <strong><?php echo esc_html($hf['title']); ?></strong>
+                                        <span><?php echo esc_html($hf['desc']); ?></span>
+                                    </div>
+                                </div>
+                                <?php endforeach; ?>
+                            </div>
+                        <?php else: ?>
+                            <img src="<?php echo esc_url($screenshot_url); ?>" alt="<?php echo esc_attr($addon['title']); ?>" onerror="this.parentElement.innerHTML='<div class=\'mxch-addon-image-placeholder\'><svg xmlns=\'http://www.w3.org/2000/svg\' width=\'48\' height=\'48\' viewBox=\'0 0 24 24\' fill=\'none\' stroke=\'currentColor\' stroke-width=\'1.5\'><rect x=\'3\' y=\'3\' width=\'18\' height=\'18\' rx=\'2\' ry=\'2\'/><circle cx=\'8.5\' cy=\'8.5\' r=\'1.5\'/><polyline points=\'21 15 16 10 5 21\'/></svg></div>'">
+                        <?php endif; ?>
                     </div>
                 </div>
             </div>

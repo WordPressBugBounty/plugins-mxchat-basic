@@ -3,7 +3,7 @@
  * Plugin Name: MxChat
  * Plugin URI: https://mxchat.ai/
  * Description: AI chatbot for WordPress with OpenAI, Claude, xAI, DeepSeek, live agent, PDF uploads, WooCommerce, and training on website data.
- * Version: 3.0.8
+ * Version: 3.0.9
  * Author: MxChat
  * Author URI: https://mxchat.ai
  * License: GPLv2 or later
@@ -42,58 +42,154 @@ add_action('init', 'mxchat_load_textdomain');
 /**
  * Exclude MxChat assets from caching plugin optimizations
  *
- * This prevents issues with WP Rocket, LiteSpeed Cache, Autoptimize, and similar
- * plugins that may break the chatbot by removing "unused" CSS or deferring JS.
+ * This prevents issues with WP Rocket, LiteSpeed Cache, Autoptimize, WP Super Cache,
+ * W3 Total Cache, SG Optimizer, and similar plugins that may break the chatbot by
+ * removing "unused" CSS, minifying/combining JS, or deferring/delaying jQuery.
+ *
+ * Both chat-script.js and floating-script.js depend on jQuery, so jQuery must also
+ * be excluded from any optimization that changes load order or timing.
  */
 
-// WP Rocket - Exclude from Remove Unused CSS (RUCSS)
+// ── WP Rocket ────────────────────────────────────────────────────────────────
+
+// Exclude from Remove Unused CSS (RUCSS)
 add_filter('rocket_rucss_inline_atts_exclusions', function($exclusions) {
+    if (!is_array($exclusions)) $exclusions = array();
     $exclusions[] = 'mxchat';
     return $exclusions;
 });
 
-// WP Rocket - Exclude CSS from minification/combination
+// Exclude CSS from minification/combination
 add_filter('rocket_exclude_css', function($excluded) {
+    if (!is_array($excluded)) $excluded = array();
     $excluded[] = '/plugins/mxchat-basic/css/chat-style.css';
     return $excluded;
 });
 
-// WP Rocket - Exclude JS from minification/combination/defer
+// Exclude JS from minification/combination
 add_filter('rocket_exclude_js', function($excluded) {
+    if (!is_array($excluded)) $excluded = array();
     $excluded[] = '/plugins/mxchat-basic/js/chat-script.js';
+    $excluded[] = '/plugins/mxchat-basic/js/floating-script.js';
+    $excluded[] = '/jquery-core';
+    $excluded[] = '/jquery.min.js';
+    $excluded[] = '/jquery.js';
+    $excluded[] = '/jquery-migrate';
     return $excluded;
 });
 
+// Exclude JS from defer
 add_filter('rocket_exclude_defer_js', function($excluded) {
+    if (!is_array($excluded)) $excluded = array();
     $excluded[] = '/plugins/mxchat-basic/js/chat-script.js';
+    $excluded[] = '/plugins/mxchat-basic/js/floating-script.js';
+    $excluded[] = '/jquery-core';
+    $excluded[] = '/jquery.min.js';
+    $excluded[] = '/jquery.js';
+    $excluded[] = '/jquery-migrate';
     return $excluded;
 });
 
-// WP Rocket - Exclude from delay JS execution
+// Exclude from delay JS execution
 add_filter('rocket_delay_js_exclusions', function($excluded) {
+    if (!is_array($excluded)) $excluded = array();
     $excluded[] = 'mxchat';
     $excluded[] = 'chat-script';
+    $excluded[] = 'floating-script';
+    $excluded[] = '/jquery-core';
+    $excluded[] = '/jquery.min.js';
+    $excluded[] = '/jquery.js';
+    $excluded[] = '/jquery-migrate';
     return $excluded;
 });
 
-// LiteSpeed Cache - Exclude from optimization
+// ── LiteSpeed Cache ──────────────────────────────────────────────────────────
+
+// Exclude CSS from optimization
 add_filter('litespeed_optimize_css_excludes', function($excluded) {
+    if (!is_array($excluded)) $excluded = array();
     $excluded[] = 'chat-style.css';
     return $excluded;
 });
 
+// Exclude JS from defer
 add_filter('litespeed_optm_js_defer_exc', function($excluded) {
+    if (!is_array($excluded)) $excluded = array();
     $excluded[] = 'chat-script.js';
+    $excluded[] = 'floating-script.js';
+    $excluded[] = 'jquery.min.js';
+    $excluded[] = 'jquery.js';
     return $excluded;
 });
 
-// Autoptimize - Exclude from optimization
+// Exclude JS from combining
+add_filter('litespeed_optm_js_exc', function($excluded) {
+    if (!is_array($excluded)) $excluded = array();
+    $excluded[] = 'chat-script.js';
+    $excluded[] = 'floating-script.js';
+    $excluded[] = 'jquery.min.js';
+    $excluded[] = 'jquery.js';
+    return $excluded;
+});
+
+// ── Autoptimize ──────────────────────────────────────────────────────────────
+
+// Exclude CSS from optimization (comma-separated strings)
 add_filter('autoptimize_filter_css_exclude', function($excluded) {
+    if (!is_string($excluded)) $excluded = '';
     return $excluded . ', mxchat, chat-style.css';
 });
 
+// Exclude JS from optimization (comma-separated strings)
 add_filter('autoptimize_filter_js_exclude', function($excluded) {
-    return $excluded . ', mxchat, chat-script.js';
+    if (!is_string($excluded)) $excluded = '';
+    return $excluded . ', mxchat, chat-script.js, floating-script.js, jquery.min.js, jquery.js';
+});
+
+// ── SG Optimizer (SiteGround) ────────────────────────────────────────────────
+
+add_filter('sgo_js_minify_exclude', function($excluded) {
+    if (!is_array($excluded)) $excluded = array();
+    $excluded[] = 'chat-script.js';
+    $excluded[] = 'floating-script.js';
+    $excluded[] = 'jquery.min.js';
+    return $excluded;
+});
+
+add_filter('sgo_javascript_combine_exclude', function($excluded) {
+    if (!is_array($excluded)) $excluded = array();
+    $excluded[] = 'chat-script.js';
+    $excluded[] = 'floating-script.js';
+    $excluded[] = 'jquery.min.js';
+    return $excluded;
+});
+
+add_filter('sgo_js_async_exclude', function($excluded) {
+    if (!is_array($excluded)) $excluded = array();
+    $excluded[] = 'chat-script.js';
+    $excluded[] = 'floating-script.js';
+    $excluded[] = 'jquery.min.js';
+    return $excluded;
+});
+
+// ── W3 Total Cache ───────────────────────────────────────────────────────────
+
+add_filter('w3tc_minify_js_do_tag_minification', function($do_minify, $script_tag, $file) {
+    if (strpos($file, 'chat-script.js') !== false ||
+        strpos($file, 'floating-script.js') !== false ||
+        strpos($file, 'jquery.min.js') !== false ||
+        strpos($file, 'jquery.js') !== false) {
+        return false;
+    }
+    return $do_minify;
+}, 10, 3);
+
+// ── WP Super Cache ──────────────────────────────────────────────────────────
+
+add_filter('wpsc_rejected_uri', function($rejected) {
+    if (!is_array($rejected)) $rejected = array();
+    $rejected[] = 'wp-admin/admin-ajax.php';
+    return $rejected;
 });
 
 // Include classes with error handling
@@ -108,6 +204,7 @@ function mxchat_include_classes() {
         'includes/class-mxchat-chunker.php',
         'includes/pdf-parser/alt_autoload.php',
         'includes/class-mxchat-word-handler.php',
+        'includes/class-mxchat-content-generator.php',
         'admin/class-ajax-handler.php',
         'admin/class-pinecone-manager.php',
         'admin/class-knowledge-manager.php'
@@ -1101,8 +1198,15 @@ function mxchat_init() {
             if (class_exists('MxChat_Meta_Box')) {
                 new MxChat_Meta_Box();
             }
+
         }
-        
+
+        // Initialize content generator globally — it registers wp_head hook
+        // for frontend CSS injection, plus wp_ajax_ hooks for admin.
+        if (class_exists('MxChat_Content_Generator')) {
+            new MxChat_Content_Generator();
+        }
+
         // Initialize public classes
         if (class_exists('MxChat_Public')) {
             $mxchat_public = new MxChat_Public();

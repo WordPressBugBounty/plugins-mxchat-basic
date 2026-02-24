@@ -275,6 +275,16 @@ public function mxchat_add_plugin_page() {
         array($this, 'mxchat_actions_page_html')
     );
 
+    // Content Generator page
+    add_submenu_page(
+        'mxchat-max',
+        esc_html__('Content', 'mxchat'),
+        esc_html__('Content', 'mxchat'),
+        'manage_options',
+        'mxchat-content',
+        array($this, 'mxchat_create_content_page')
+    );
+
     // Consolidated Pro & Extensions page (replaces separate Add Ons and Pro Upgrade pages)
     add_submenu_page(
         'mxchat-max',
@@ -290,6 +300,14 @@ public function mxchat_create_addons_page() {
     require_once plugin_dir_path(__FILE__) . 'class-mxchat-addons.php';
     $addons_page = new MxChat_Addons();
     $addons_page->render_page();
+}
+
+/**
+ * Render the Content Generator admin page
+ */
+public function mxchat_create_content_page() {
+    require_once plugin_dir_path(__FILE__) . 'admin-content-page.php';
+    mxchat_render_content_page($this);
 }
 
 /**
@@ -7388,6 +7406,15 @@ private function enqueue_page_specific_assets($current_page, $plugin_url, $versi
             // Load activation script for license activation/deactivation
             wp_enqueue_script('mxchat-activation-js', $plugin_url . 'js/activation-script.js', array('jquery'), $version, true);
             break;
+
+        case 'mxchat-content':
+            // Load admin sidebar CSS (shared styles for sidebar navigation)
+            wp_enqueue_style('mxchat-admin-sidebar-css', $plugin_url . 'css/admin-sidebar.css', array(), $version);
+            // Load content page-specific styles
+            wp_enqueue_style('mxchat-content-css', $plugin_url . 'css/admin-content.css', array('mxchat-admin-sidebar-css'), $version);
+            // Load content page JavaScript
+            wp_enqueue_script('mxchat-content-js', $plugin_url . 'js/mxchat-content.js', array('jquery'), $version, true);
+            break;
        default:
             wp_enqueue_script(
                 'mxchat-test-streaming-js',
@@ -7473,6 +7500,26 @@ private function localize_page_specific_scripts($current_page) {
             wp_localize_script('mxchat-activation-js', 'mxchatAdmin', array(
                 'ajax_url' => admin_url('admin-ajax.php'),
                 'license_nonce' => wp_create_nonce('mxchat_activate_license_nonce')
+            ));
+            break;
+
+        case 'mxchat-content':
+            wp_localize_script('mxchat-content-js', 'mxchatContent', array(
+                'ajaxUrl'      => admin_url('admin-ajax.php'),
+                'nonce'        => wp_create_nonce('mxchat_content_nonce'),
+                'settingNonce' => wp_create_nonce('mxchat_save_setting_nonce'),
+                'previewUrl'   => home_url('/?p='),
+                'i18n'         => array(
+                    'generating'    => __('Generating...', 'mxchat'),
+                    'planning'      => __('Planning content structure...', 'mxchat'),
+                    'images'        => __('Generating images...', 'mxchat'),
+                    'writing'       => __('Writing full content...', 'mxchat'),
+                    'creating'      => __('Creating WordPress post...', 'mxchat'),
+                    'done'          => __('Content generated successfully!', 'mxchat'),
+                    'error'         => __('An error occurred. Please try again.', 'mxchat'),
+                    'editSuccess'   => __('Content updated successfully.', 'mxchat'),
+                    'promptEmpty'   => __('Please enter a prompt.', 'mxchat'),
+                )
             ));
             break;
 
@@ -8064,6 +8111,35 @@ if (isset($input['openrouter_selected_model_name'])) {
     // Sanitize debug mode
     if (isset($input['debug_mode'])) {
         $new_input['debug_mode'] = ($input['debug_mode'] === 'on') ? 'on' : 'off';
+    }
+
+    // Content Generator Settings
+    if (isset($input['content_model'])) {
+        $new_input['content_model'] = sanitize_text_field($input['content_model']);
+    }
+    if (isset($input['content_image_model'])) {
+        $new_input['content_image_model'] = sanitize_text_field($input['content_image_model']);
+    }
+    if (isset($input['content_enable_images'])) {
+        $new_input['content_enable_images'] = ($input['content_enable_images'] === 'on') ? 'on' : 'off';
+    }
+    if (isset($input['content_use_placeholders'])) {
+        $new_input['content_use_placeholders'] = ($input['content_use_placeholders'] === 'on') ? 'on' : 'off';
+    }
+    if (isset($input['content_internal_linking'])) {
+        $new_input['content_internal_linking'] = ($input['content_internal_linking'] === 'on') ? 'on' : 'off';
+    }
+    if (isset($input['content_tool_use'])) {
+        $new_input['content_tool_use'] = ($input['content_tool_use'] === 'on') ? 'on' : 'off';
+    }
+
+    // Preserve content generator settings when saving from main settings page
+    // (where content fields are not in the form submission)
+    $existing = get_option('mxchat_options', array());
+    foreach (array('content_model', 'content_image_model', 'content_enable_images', 'content_use_placeholders', 'content_internal_linking', 'content_tool_use') as $key) {
+        if (!isset($new_input[$key]) && isset($existing[$key])) {
+            $new_input[$key] = $existing[$key];
+        }
     }
 
     return $new_input;

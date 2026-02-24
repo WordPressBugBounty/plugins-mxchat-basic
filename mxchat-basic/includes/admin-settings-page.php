@@ -953,6 +953,11 @@ function mxchat_render_settings_page($admin_instance) {
                             'url' => 'https://www.youtube.com/watch?v=3BqoiyWaQiM&t'
                         ),
                         array(
+                            'title' => __('AI Content Generation', 'mxchat'),
+                            'description' => __('Generate full blog posts and landing pages with AI—from prompt to publish in minutes.', 'mxchat'),
+                            'url' => 'https://www.youtube.com/watch?v=n8TeEeHpxs4'
+                        ),
+                        array(
                             'title' => __('AI Theme Generator', 'mxchat'),
                             'description' => __('Learn how to instantly restyle your chatbot using plain English prompts with real-time previews.', 'mxchat'),
                             'url' => 'https://www.youtube.com/watch?v=rSQDW2qbtRU&t'
@@ -968,7 +973,7 @@ function mxchat_render_settings_page($admin_instance) {
                             'url' => 'https://youtu.be/AdEA1k-UCFM'
                         ),
                         array(
-                            'title' => __('Theme Customizer', 'mxchat'),
+                            'title' => __('Chat Themes', 'mxchat'),
                             'description' => __('Customize appearance with real-time previews to match your brand.', 'mxchat'),
                             'url' => 'https://youtu.be/MfbB9mZi6ag'
                         ),
