@@ -390,8 +390,12 @@ function sendMessage(botId) {
     }
 
     if (message) {
-        // Disable input while waiting for response
-        disableChatInput(botId);
+        // Don't disable input in live agent mode - let users chat freely
+        var modeIndicator = getElementDOM(botId, 'chat-mode-indicator');
+        var isAgentMode = modeIndicator && modeIndicator.textContent === 'Live Agent';
+        if (!isAgentMode) {
+            disableChatInput(botId);
+        }
 
         appendMessage("user", message, '', [], false, botId);
         $chatInput.val('');
@@ -427,8 +431,12 @@ function sendMessageToChatbot(message, botId) {
         message = customMxChatFilter(message, "prompt");
     }
 
-    // Disable input while waiting for response
-    disableChatInput(botId);
+    // Don't disable input in live agent mode - let users chat freely
+    var modeIndicator = getElementDOM(botId, 'chat-mode-indicator');
+    var isAgentMode = modeIndicator && modeIndicator.textContent === 'Live Agent';
+    if (!isAgentMode) {
+        disableChatInput(botId);
+    }
 
     var sessionId = getChatSession(botId);
 
@@ -659,7 +667,9 @@ function callMxChat(message, callback, botId) {
 
                 // Check for live agent response
                 if (response.success && response.data && response.data.status === 'waiting_for_agent') {
+                    removeThinkingDots(botId);
                     updateChatModeIndicator('agent', botId);
+                    enableChatInput(botId);
                     return;
                 }
 
@@ -1043,6 +1053,20 @@ function handleNonStreamResponse(data, callback, botId) {
         return; // Exit early for errors
     }
 
+    // Check for live agent response
+    if (data.success && data.data && data.data.status === 'waiting_for_agent') {
+        removeThinkingDots(botId);
+        // Also remove any leftover bot-message that lost its temporary-message class
+        var $chatBox = getElement(botId, 'chat-box');
+        $chatBox.find('.bot-message .thinking-dots').closest('.bot-message').remove();
+        updateChatModeIndicator('agent', botId);
+        enableChatInput(botId);
+        if (callback) {
+            callback('');
+        }
+        return;
+    }
+
     // Handle different response formats
     if (data.text || data.html || data.message) {
 
@@ -1089,17 +1113,13 @@ function handleNonStreamResponse(data, callback, botId) {
 
 // Enhanced updateChatModeIndicator function for immediate DOM updates
 function updateChatModeIndicator(mode, botId) {
-    console.log('[MxChat] updateChatModeIndicator called with mode:', mode, 'botId:', botId);
     botId = botId || 'default';
     const indicator = getElementDOM(botId, 'chat-mode-indicator');
-    console.log('[MxChat] chat-mode-indicator element found:', !!indicator);
     if (indicator) {
         const oldText = indicator.textContent;
-        console.log('[MxChat] Current indicator text:', oldText, '-> changing to mode:', mode);
 
         if (mode === 'agent') {
             indicator.textContent = 'Live Agent';
-            console.log('[MxChat] Mode is agent, calling startPolling...');
             startPolling(botId);
         } else {
             // Everything else is AI mode
@@ -1172,7 +1192,10 @@ function isStreamingSupported(model) {
 // Use class-based selectors for multi-instance support
 $(document).on('click', '.send-button', function() {
     var botId = getBotIdFromElement(this);
-    disableChatInput(botId);
+    var modeIndicator = getElementDOM(botId, 'chat-mode-indicator');
+    if (!(modeIndicator && modeIndicator.textContent === 'Live Agent')) {
+        disableChatInput(botId);
+    }
     sendMessage(botId);
 });
 
@@ -1181,7 +1204,10 @@ $(document).on('keypress', '.chat-input', function(e) {
     if (e.which == 13 && !e.shiftKey) {
         e.preventDefault();
         var botId = getBotIdFromElement(this);
-        disableChatInput(botId);
+        var modeIndicator = getElementDOM(botId, 'chat-mode-indicator');
+        if (!(modeIndicator && modeIndicator.textContent === 'Live Agent')) {
+            disableChatInput(botId);
+        }
         sendMessage(botId);
     }
 });
@@ -1457,6 +1483,13 @@ function replaceLastMessage(sender, responseText, responseHtml = '', images = []
 
     function appendThinkingMessage(botId) {
         botId = botId || 'default';
+
+        // Don't show thinking dots in live agent mode - message is just forwarded to a human
+        var indicator = getElementDOM(botId, 'chat-mode-indicator');
+        if (indicator && indicator.textContent === 'Live Agent') {
+            return;
+        }
+
         var $chatBox = getElement(botId, 'chat-box');
 
         // Remove any existing thinking dots in this bot's chat first
@@ -1480,7 +1513,7 @@ function replaceLastMessage(sender, responseText, responseHtml = '', images = []
                            '</div>';
 
         // Append the thinking dots to this bot's chat container - skip inline colors if AI theme is active
-        var messageStyle = skipColors ? '' : ' style="background-color: ' + botMessageBgColor + ';"';
+        var messageStyle = skipColors ? '' : ' style="background-color: ' + botMessageBgColor + '; color: ' + botMessageFontColor + ';"';
         $chatBox.append('<div class="bot-message temporary-message"' + messageStyle + '>' + thinkingHtml + '</div>');
         scrollToBottom(botId);
     }
@@ -1488,7 +1521,9 @@ function replaceLastMessage(sender, responseText, responseHtml = '', images = []
     function removeThinkingDots(botId) {
         botId = botId || 'default';
         var $chatBox = getElement(botId, 'chat-box');
+        // Remove by temporary-message class first, then fall back to any bot-message containing thinking dots
         $chatBox.find('.thinking-dots').closest('.temporary-message').remove();
+        $chatBox.find('.bot-message .thinking-dots').closest('.bot-message').remove();
     }
 
     // ====================================
@@ -1944,31 +1979,25 @@ function convertNewlinesToBreaks(text) {
 // ====================================
 
 function startPolling(botId) {
-    console.log('[MxChat] startPolling called for botId:', botId);
     botId = botId || 'default';
     var instance = MxChatInstances.get(botId);
     // Clear any existing interval first
     stopPolling(botId);
-    // Start new polling interval
-    console.log('[MxChat] Starting polling interval (5s) for botId:', botId);
     instance.pollingInterval = setInterval(function() {
         checkForAgentMessages(botId);
     }, 5000);
 }
 
 function stopPolling(botId) {
-    console.log('[MxChat] stopPolling called for botId:', botId);
     botId = botId || 'default';
     var instance = MxChatInstances.get(botId);
     if (instance.pollingInterval) {
         clearInterval(instance.pollingInterval);
         instance.pollingInterval = null;
-        console.log('[MxChat] Polling stopped for botId:', botId);
     }
 }
 
 function checkForAgentMessages(botId) {
-    console.log('[MxChat] checkForAgentMessages called for botId:', botId);
     botId = botId || 'default';
     var instance = MxChatInstances.get(botId);
     const sessionId = getChatSession(botId);
@@ -1995,6 +2024,10 @@ function checkForAgentMessages(botId) {
                         instance.processedMessageIds.add(message.id);
                     }
                 });
+
+                if (hasNewMessage) {
+                    enableChatInput(botId);
+                }
 
                 var $floatingChatbot = getElement(botId, 'floating-chatbot');
                 if (hasNewMessage && $floatingChatbot.hasClass('hidden')) {

@@ -1481,7 +1481,7 @@ public function mxchat_delete_all_from_pinecone($pinecone_options) {
     /**
      * Deletes batch of vectors from Pinecone database
      */
-     private function mxchat_delete_pinecone_batch($vector_ids, $api_key, $host) {
+     public function mxchat_delete_pinecone_batch($vector_ids, $api_key, $host) {
          // Build the API endpoint
          $api_endpoint = "https://{$host}/vectors/delete";
 

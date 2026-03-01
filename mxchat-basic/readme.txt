@@ -5,7 +5,7 @@ Tags: ai chatbot, chatgpt, woocommerce, customer support, content generation
 Requires at least: 5.0
 Tested up to: 6.9
 Requires PHP: 7.2
-Stable tag: 3.0.9
+Stable tag: 3.1.0
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -35,18 +35,18 @@ Extend the free plugin with these optional premium features:
 - [Advanced Content Editor Add-On](https://mxchat.ai/advanced-content-editor/) – Smart internal linking, AI image management with chat-based regeneration, and SEO/meta editing with per-field AI generation
 - [Forms Action Add-On](https://mxchat.ai/forms-action/) – Capture leads and data with custom in-chat forms
 - [WooCommerce Add-On](https://mxchat.ai/woocommerce/) – AI-powered shopping assistance and product recommendations
-- [AI Theme Customizer Add-On](https://mxchat.ai/ai-theme-customizer/) – Instantly design chatbot themes with natural language
+- [AI Chatbot Theme Customizer Add-On](https://mxchat.ai/ai-theme-customizer/) – Instantly design chatbot themes with natural language
 - [Multi-Bot Add-On](https://mxchat.ai/multi-bot/) – Run unlimited AI chatbots with custom knowledge and personalities
 - [Image Analysis Add-On](https://mxchat.ai/image-analysis/) – Enable AI-powered image analysis and OCR inside chats
 
 👉 [Visit our website to view all add-ons](https://mxchat.ai)
 
-## 🔥 What's New in Version 3.0.9 — AI Content Generator
+## 🔥 What's New in Version 3.1.0
 
-- **AI Content Generator** — Generate full blog posts and landing pages from a single prompt with AI-powered images, SEO metadata, real-time scaled preview, desktop/mobile viewport switching, inline AI editing via chat, and content history.
-- **Advanced Content Editor Add-On** — Optional premium add-on unlocks smart internal linking, AI image management with chat-based regeneration, and per-field AI meta generation with auto-save.
-- **Knowledge Base Improvements** — Dynamic post type filtering in the knowledge database dropdown, pulling in all registered post types automatically.
-- **Compatibility** — Improved compatibility with popular optimization and caching plugins.
+- **Knowledge Base Fixes** — Fixed bulk deletion timeouts with Pinecone chunked content, manually entered content not matching despite high similarity scores, and Pinecone scan failures with text-embedding-3-large (TE3 Large).
+- **Live Agent Fix** — Chat input no longer remains blocked after Slack/Telegram live agent handoff.
+- **Shortcode Processing Fix** — Resolved an issue where pages with large or deeply nested shortcodes (e.g. WPBakery/Visual Composer) could silently lose all content during knowledge base processing.
+- **Developer Hooks** — New `mxchat_before_process_post` filter to modify post data before KB processing. New `mxchat_system_instructions` filter and shortcode support in system prompts for dynamic data injection.
 
 ## Core Features That Set MxChat Apart
 
@@ -152,6 +152,18 @@ MxChat offers a fully functional free plan that includes everything you need to 
 - RAG support & contextual awareness
 
 Whether you're running a small business or launching a new online store, MxChat’s free plan gives you the tools to offer intelligent customer support and grow your business — without paying a cent.
+
+== Developer Hooks & Filters ==
+
+MxChat provides WordPress filter hooks so developers can extend and customize chatbot behavior without modifying core plugin files. [View full documentation with code examples](https://mxchat.ai/mxchat-developer-hooks-filters/).
+
+= mxchat_before_process_post =
+
+Runs during knowledge base indexing and lets you modify a post's data before MxChat processes it. Use this to include custom field data (e.g. product specifications or ACF fields), strip internal content you don't want the chatbot to learn, or transform posts based on bot ID. Receives the WP_Post object and the bot ID.
+
+= mxchat_system_instructions =
+
+Dynamically modify the system prompt before every AI response. Use this to inject live data such as business hours, inventory status, or user-specific context into the prompt at runtime. Receives the instructions text, bot ID, and session ID. MxChat also supports WordPress shortcodes directly in the system prompt field — any registered shortcodes are automatically expanded before being sent to the AI.
 
 ## ✅ Get Started with MxChat AI Chatbot Today
 
@@ -288,6 +300,15 @@ Yes. MxChat is available for free on the WordPress plugin repository with full A
 *(Note: Screenshots will be added in future updates)*
 
 == Changelog ==
+
+= 3.1.0 - March 1, 2026 =
+- Fixed: Bulk deleting selected knowledge base entries with chunked content causing network timeout error when using Pinecone
+- Fixed: Manually entered knowledge base content not being used for AI context despite having high similarity scores
+- Fixed: Chat input remaining blocked after live agent handoff (Slack/Telegram)
+- Fixed: Pinecone knowledge base scan returning "Not In Knowledge Base" when using text-embedding-3-large (TE3 Large) due to hardcoded 1536 dimension instead of 3072
+- Fixed: Shortcode stripping silently losing all content on pages with large or deeply nested shortcodes (e.g. WPBakery/Visual Composer) due to regex backtracking
+- New: Added `mxchat_before_process_post` filter hook to allow developers to modify post data before knowledge base processing
+- New: Added `mxchat_system_instructions` filter hook and shortcode support in system prompt for dynamic data injection
 
 = 3.0.9 - February 24, 2026 =
 - New: AI Content Generator — generate full blog posts and landing pages from a single prompt with AI images, SEO metadata, real-time preview, inline AI editing, and content history
@@ -837,8 +858,8 @@ Yes. MxChat is available for free on the WordPress plugin repository with full A
 
 == Upgrade Notice ==
 
-= 3.0.9 - February 24, 2026 =
-New: AI Content Generator — create full blog posts and landing pages from a single prompt with AI images, SEO metadata, real-time preview, and inline AI editing. Dynamic knowledge base post type filtering. Improved optimization plugin compatibility.
+= 3.1.0 - March 1, 2026 =
+Fixed: Pinecone bulk deletion timeouts, manual KB content not matching, chat input blocked after live agent handoff, Pinecone TE3 Large dimension mismatch, shortcode stripping losing content on WPBakery pages. New: Developer filter hooks for post processing and system prompt customization.
 
 == License & Warranty ==
 

@@ -1301,6 +1301,7 @@ function checkForActiveQueues() {
         $.ajax({
             url: ajaxurl,
             type: 'POST',
+            timeout: 120000, // 120 seconds — matches server-side set_time_limit
             data: {
                 action: 'mxchat_bulk_delete_knowledge',
                 entries: entries,
@@ -1370,8 +1371,16 @@ function checkForActiveQueues() {
                     $('tr.mxchat-row-deleting').removeClass('mxchat-row-deleting');
                 }
             },
-            error: function() {
-                alert('Network error occurred');
+            error: function(jqXHR, textStatus) {
+                var message = 'An error occurred while deleting entries.';
+                if (textStatus === 'timeout') {
+                    message = 'The deletion request timed out. Please refresh the page to check which entries were deleted, then try again for any remaining.';
+                } else if (textStatus === 'error' && jqXHR.status === 0) {
+                    message = 'Network error: The server took too long to respond. Please refresh and try deleting fewer entries at a time.';
+                } else if (jqXHR.responseJSON && jqXHR.responseJSON.data) {
+                    message = 'Error: ' + jqXHR.responseJSON.data;
+                }
+                alert(message);
                 $('tr.mxchat-row-deleting').removeClass('mxchat-row-deleting');
             },
             complete: function() {

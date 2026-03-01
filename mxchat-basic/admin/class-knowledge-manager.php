@@ -779,22 +779,10 @@ public function mxchat_handle_sitemap_for_knowledge_base($xml, $sitemap_url, $bo
  * @return string Content with shortcode tags removed but inner content preserved
  */
 private function strip_shortcode_tags_preserve_content($content) {
-    // Handle nested shortcodes by running multiple passes
-    $prev_content = '';
-    $max_iterations = 10; // Prevent infinite loops
-    $iteration = 0;
-    while ($prev_content !== $content && $iteration < $max_iterations) {
-        $prev_content = $content;
-        // Replace paired shortcodes [tag]content[/tag] with just the content
-        $content = preg_replace('/\[([a-zA-Z0-9_-]+)[^\]]*\](.*?)\[\/\1\]/s', '$2', $content);
-        $iteration++;
-    }
-    // Remove self-closing shortcodes [tag /] or [tag attr="val" /]
-    $content = preg_replace('/\[[a-zA-Z0-9_-]+[^\]]*\/\]/', '', $content);
-    // Remove any remaining opening shortcode tags [tag] or [tag attr="val"]
-    $content = preg_replace('/\[[a-zA-Z0-9_-]+[^\]]*\]/', '', $content);
-
-    return $content;
+    // Single-pass regex removes all shortcode brackets: [tag], [tag attr="val"], [/tag], [tag /]
+    // Content between tags is inherently preserved since only brackets are targeted
+    $result = preg_replace('/\[\/?\w[\w-]*[^\]]*\]/', '', $content);
+    return ($result !== null) ? $result : $content;
 }
 
 public function mxchat_sanitize_content_for_api($content) {
@@ -1551,7 +1539,9 @@ public function ajax_mxchat_refresh_pinecone_entries() {
 
     $bot_id = isset($_POST['bot_id']) ? sanitize_text_field($_POST['bot_id']) : 'default';
     $page = isset($_POST['page']) ? absint($_POST['page']) : 1;
-    $per_page = 10;
+    $per_page = 25;
+    $search_query = isset($_POST['search']) ? sanitize_text_field($_POST['search']) : '';
+    $content_type_filter = isset($_POST['content_type']) ? sanitize_key($_POST['content_type']) : '';
 
     // Get Pinecone manager and options
     $pinecone_manager = $this->mxchat_get_pinecone_manager();
@@ -1570,9 +1560,26 @@ public function ajax_mxchat_refresh_pinecone_entries() {
     }
 
     // Fetch records from Pinecone
-    $records = $pinecone_manager->mxchat_fetch_pinecone_records($pinecone_options, '', $page, $per_page, $bot_id, '');
+    $records = $pinecone_manager->mxchat_fetch_pinecone_records($pinecone_options, $search_query, $page, $per_page, $bot_id, $content_type_filter);
     $prompts = $records['data'] ?? array();
     $total_records = $records['total'] ?? 0;
+
+    // Preprocess Pinecone records — set chunk_metadata and display_content
+    // (matches admin-knowledge-page.php preprocessing)
+    foreach ($prompts as $prompt) {
+        if (isset($prompt->chunk_index) && $prompt->chunk_index !== null) {
+            $prompt->chunk_metadata = array(
+                'chunk_index' => intval($prompt->chunk_index),
+                'total_chunks' => isset($prompt->total_chunks) ? intval($prompt->total_chunks) : null,
+                'is_chunked' => isset($prompt->is_chunked) ? (bool) $prompt->is_chunked : true,
+                'source_url' => $prompt->source_url ?? ''
+            );
+            $prompt->display_content = $prompt->article_content;
+        } else {
+            $prompt->chunk_metadata = array();
+            $prompt->display_content = $prompt->article_content ?? '';
+        }
+    }
 
     // Group prompts by source_url
     $grouped_prompts = array();
@@ -1631,6 +1638,15 @@ public function ajax_mxchat_refresh_pinecone_entries() {
                     data-source="<?php echo esc_attr($data_source); ?>"
                     data-group-id="<?php echo esc_attr($group_id); ?>"
                     style="border-bottom: 1px solid var(--mxch-card-border); background: rgba(33, 150, 243, 0.02);">
+                    <td style="padding: 12px 16px; text-align: center;">
+                        <input type="checkbox"
+                               class="mxchat-entry-checkbox"
+                               data-entry-id="<?php echo esc_attr($first_prompt->id); ?>"
+                               data-source="<?php echo esc_attr($data_source); ?>"
+                               data-source-url="<?php echo esc_attr($source_url); ?>"
+                               data-is-group="true"
+                               data-chunk-count="<?php echo esc_attr($chunk_count); ?>">
+                    </td>
                     <td style="padding: 12px 16px; font-size: 13px;">
                         <?php echo esc_html($display_index + (($current_page - 1) * $per_page)); ?>
                     </td>
@@ -1741,6 +1757,15 @@ public function ajax_mxchat_refresh_pinecone_entries() {
                 <tr id="prompt-<?php echo esc_attr($prompt->id); ?>"
                     data-source="<?php echo esc_attr($data_source); ?>"
                     style="border-bottom: 1px solid var(--mxch-card-border); background: rgba(33, 150, 243, 0.02);">
+                    <td style="padding: 12px 16px; text-align: center;">
+                        <input type="checkbox"
+                               class="mxchat-entry-checkbox"
+                               data-entry-id="<?php echo esc_attr($prompt->id); ?>"
+                               data-source="<?php echo esc_attr($data_source); ?>"
+                               data-source-url="<?php echo esc_attr($prompt->source_url ?? ''); ?>"
+                               data-is-group="false"
+                               data-chunk-count="1">
+                    </td>
                     <td style="padding: 12px 16px; font-size: 13px;">
                         <?php echo esc_html($display_index + (($current_page - 1) * $per_page)); ?>
                     </td>
@@ -1800,7 +1825,7 @@ public function ajax_mxchat_refresh_pinecone_entries() {
     $total_pages = ceil($total_records / $per_page);
     $pagination_html = '';
     if ($total_pages > 1) {
-        $pagination_html = '<div class="mxchat-ajax-pagination" data-current-page="' . esc_attr($page) . '" data-total-pages="' . esc_attr($total_pages) . '">';
+        $pagination_html = '<div class="mxchat-ajax-pagination" data-current-page="' . esc_attr($page) . '" data-total-pages="' . esc_attr($total_pages) . '" data-search="' . esc_attr($search_query) . '" data-content-type="' . esc_attr($content_type_filter) . '">';
 
         // Previous button
         if ($page > 1) {
@@ -2978,7 +3003,10 @@ public function ajax_mxchat_process_selected_content() {
         wp_send_json_error('Post not found');
         exit;
     }
-    
+
+    // Allow developers to modify post data before processing into knowledge base
+    $post = apply_filters('mxchat_before_process_post', $post, $bot_id);
+
     // Get content including title, short description (for WooCommerce), and main content
     $content = $post->post_title . "\n\n";
 
@@ -3465,6 +3493,36 @@ public function mxchat_fetch_pinecone_vectors_by_ids($pinecone_options, $vector_
 }
 
 /**
+ * Get embedding dimensions based on the selected model.
+ */
+private function mxchat_get_embedding_dimensions() {
+    $options = get_option('mxchat_options', array());
+    $selected_model = $options['embedding_model'] ?? 'text-embedding-ada-002';
+
+    $model_dimensions = array(
+        'text-embedding-ada-002' => 1536,
+        'text-embedding-3-small' => 1536,
+        'text-embedding-3-large' => 3072,
+        'voyage-2' => 1024,
+        'voyage-large-2' => 1536,
+        'voyage-3-large' => 2048,
+        'gemini-embedding-001' => 1536,
+    );
+
+    if (strpos($selected_model, 'voyage-3-large') === 0) {
+        $custom_dimensions = $options['voyage_output_dimension'] ?? 2048;
+        return intval($custom_dimensions);
+    }
+
+    if (strpos($selected_model, 'gemini-embedding') === 0) {
+        $custom_dimensions = $options['gemini_output_dimension'] ?? 1536;
+        return intval($custom_dimensions);
+    }
+
+    return $model_dimensions[$selected_model] ?? 1536;
+}
+
+/**
  * Scan Pinecone for processed content
  */
 public function mxchat_scan_pinecone_for_processed_content($pinecone_options) {
@@ -3480,13 +3538,16 @@ public function mxchat_scan_pinecone_for_processed_content($pinecone_options) {
         $all_matches = array();
         $seen_ids = array();
 
+        // Get correct dimensions for the configured embedding model
+        $dimensions = $this->mxchat_get_embedding_dimensions();
+
         // Try 3 different random vectors to get better coverage
         for ($i = 0; $i < 3; $i++) {
             $query_url = "https://{$host}/query";
 
             // Generate a random unit vector instead of zeros
             $random_vector = array();
-            for ($j = 0; $j < 1536; $j++) {
+            for ($j = 0; $j < $dimensions; $j++) {
                 $random_vector[] = (rand(-1000, 1000) / 1000.0);
             }
 
@@ -5482,6 +5543,11 @@ public function ajax_mxchat_bulk_delete_knowledge() {
         exit;
     }
 
+    // Extend execution time — bulk Pinecone operations can take a while
+    if (function_exists('set_time_limit')) {
+        set_time_limit(120);
+    }
+
     $success_ids = array();
     $failed_ids = array();
     $errors = array();
@@ -5494,6 +5560,17 @@ public function ajax_mxchat_bulk_delete_knowledge() {
     $pinecone_options = $pinecone_manager->mxchat_get_bot_pinecone_options($bot_id);
     $use_pinecone = ($pinecone_options['mxchat_use_pinecone'] ?? '0') === '1';
 
+    $api_key = $pinecone_options['mxchat_pinecone_api_key'] ?? '';
+    $host = $pinecone_options['mxchat_pinecone_host'] ?? '';
+
+    // =============================================
+    // PHASE 1: Collect all Pinecone vector IDs
+    // and separate WordPress entries
+    // =============================================
+    $pinecone_entry_ids = array();  // entry IDs that are pinecone-sourced
+    $wordpress_entries = array();   // entries for WordPress DB deletion
+    $all_vector_ids = array();      // all pinecone vector IDs to delete in one batch
+
     foreach ($entries as $entry) {
         $entry_id = sanitize_text_field($entry['id'] ?? '');
         $source = sanitize_text_field($entry['source'] ?? 'wordpress');
@@ -5504,97 +5581,125 @@ public function ajax_mxchat_bulk_delete_knowledge() {
             continue;
         }
 
-        try {
-            if ($source === 'pinecone') {
-                // Handle Pinecone deletion
-                if (!$use_pinecone || empty($pinecone_options['mxchat_pinecone_api_key'])) {
-                    $failed_ids[] = $entry_id;
-                    $errors[] = "Pinecone not configured for entry: $entry_id";
-                    continue;
-                }
+        if ($source === 'pinecone') {
+            if (!$use_pinecone || empty($api_key)) {
+                $failed_ids[] = $entry_id;
+                $errors[] = "Pinecone not configured for entry: $entry_id";
+                continue;
+            }
 
-                if ($is_group && !empty($source_url)) {
-                    // Delete all chunks for this URL
-                    $base_vector_id = md5($source_url);
-                    $api_key = $pinecone_options['mxchat_pinecone_api_key'];
-                    $host = $pinecone_options['mxchat_pinecone_host'];
+            $pinecone_entry_ids[] = $entry_id;
 
-                    // List all vectors with this prefix
-                    $list_url = 'https://' . $host . '/vectors/list?prefix=' . urlencode($base_vector_id . '_chunk_') . '&limit=100';
-                    $list_response = wp_remote_get($list_url, array(
-                        'headers' => array(
-                            'Api-Key' => $api_key,
-                            'Content-Type' => 'application/json'
-                        ),
-                        'timeout' => 30
-                    ));
+            if ($is_group && !empty($source_url)) {
+                // Grouped/chunked entry: collect base ID + chunk IDs via List API
+                $base_vector_id = md5($source_url);
+                $all_vector_ids[] = $base_vector_id;
 
-                    $vector_ids = array($base_vector_id); // Include base ID
+                $list_url = 'https://' . $host . '/vectors/list?prefix=' . urlencode($base_vector_id . '_chunk_') . '&limit=100';
+                $list_response = wp_remote_get($list_url, array(
+                    'headers' => array(
+                        'Api-Key' => $api_key,
+                        'accept' => 'application/json'
+                    ),
+                    'timeout' => 30
+                ));
 
-                    if (!is_wp_error($list_response)) {
-                        $list_body = json_decode(wp_remote_retrieve_body($list_response), true);
-                        if (isset($list_body['vectors']) && is_array($list_body['vectors'])) {
-                            foreach ($list_body['vectors'] as $vector) {
-                                if (isset($vector['id'])) {
-                                    $vector_ids[] = $vector['id'];
-                                }
+                if (!is_wp_error($list_response)) {
+                    $list_body = json_decode(wp_remote_retrieve_body($list_response), true);
+                    if (!empty($list_body['vectors']) && is_array($list_body['vectors'])) {
+                        foreach ($list_body['vectors'] as $vector) {
+                            if (isset($vector['id'])) {
+                                $all_vector_ids[] = $vector['id'];
                             }
                         }
                     }
-
-                    // Delete all vectors
-                    $delete_result = $pinecone_manager->mxchat_delete_pinecone_batch(
-                        $vector_ids,
-                        $api_key,
-                        $host
-                    );
-
-                    if ($delete_result['success']) {
-                        $success_ids[] = $entry_id;
-                    } else {
-                        $failed_ids[] = $entry_id;
-                        $errors[] = $delete_result['message'] ?? "Failed to delete group: $entry_id";
-                    }
-                } else {
-                    // Delete single vector
-                    $result = $pinecone_manager->mxchat_delete_from_pinecone_by_vector_id(
-                        $entry_id,
-                        $pinecone_options['mxchat_pinecone_api_key'],
-                        $pinecone_options['mxchat_pinecone_host']
-                    );
-
-                    if ($result['success']) {
-                        $success_ids[] = $entry_id;
-                    } else {
-                        $failed_ids[] = $entry_id;
-                        $errors[] = $result['message'] ?? "Failed to delete: $entry_id";
-                    }
                 }
             } else {
-                // Handle WordPress database deletion
-                if ($is_group && !empty($source_url)) {
-                    // Delete all entries with this source URL
-                    $result = $wpdb->delete(
-                        $table_name,
-                        array('source_url' => $source_url),
-                        array('%s')
-                    );
-                } else {
-                    // Delete single entry
-                    wp_cache_delete('prompt_' . $entry_id, 'mxchat_prompts');
-                    $result = $wpdb->delete(
-                        $table_name,
-                        array('id' => intval($entry_id)),
-                        array('%d')
-                    );
-                }
+                // Single entry: the entry_id IS the vector ID
+                $all_vector_ids[] = $entry_id;
+            }
+        } else {
+            $wordpress_entries[] = $entry;
+        }
+    }
 
-                if ($result !== false) {
-                    $success_ids[] = $entry_id;
-                } else {
-                    $failed_ids[] = $entry_id;
-                    $errors[] = "Database error for entry: $entry_id";
+    // =============================================
+    // PHASE 2: Single batch delete to Pinecone
+    // =============================================
+    if (!empty($all_vector_ids)) {
+        $all_vector_ids = array_values(array_unique($all_vector_ids));
+        $pinecone_success = true;
+        $batches = array_chunk($all_vector_ids, 100);
+
+        foreach ($batches as $batch) {
+            $delete_response = wp_remote_post("https://{$host}/vectors/delete", array(
+                'headers' => array(
+                    'Api-Key' => $api_key,
+                    'accept' => 'application/json',
+                    'content-type' => 'application/json'
+                ),
+                'body' => wp_json_encode(array('ids' => $batch)),
+                'timeout' => 60
+            ));
+
+            if (is_wp_error($delete_response)) {
+                $pinecone_success = false;
+                $errors[] = 'Pinecone batch deletion failed: ' . $delete_response->get_error_message();
+                MxChat_Admin::mxchat_log_debug('pinecone_error', 'Bulk delete batch failed: ' . $delete_response->get_error_message());
+            } else {
+                $response_code = wp_remote_retrieve_response_code($delete_response);
+                if ($response_code !== 200) {
+                    $pinecone_success = false;
+                    $response_body = wp_remote_retrieve_body($delete_response);
+                    $errors[] = "Pinecone API error (HTTP $response_code)";
+                    MxChat_Admin::mxchat_log_debug('pinecone_error', 'Bulk delete batch failed (HTTP ' . $response_code . ')', array('response' => substr($response_body, 0, 200)));
                 }
+            }
+        }
+
+        // Mark all pinecone entries based on batch result
+        foreach ($pinecone_entry_ids as $eid) {
+            if ($pinecone_success) {
+                $success_ids[] = $eid;
+            } else {
+                $failed_ids[] = $eid;
+            }
+        }
+    }
+
+    // =============================================
+    // PHASE 3: WordPress database deletions
+    // =============================================
+    foreach ($wordpress_entries as $entry) {
+        $entry_id = sanitize_text_field($entry['id'] ?? '');
+        $source_url = isset($entry['sourceUrl']) ? esc_url_raw($entry['sourceUrl']) : '';
+        $is_group = isset($entry['isGroup']) && ($entry['isGroup'] === true || $entry['isGroup'] === 'true');
+
+        if (empty($entry_id)) {
+            continue;
+        }
+
+        try {
+            if ($is_group && !empty($source_url)) {
+                $result = $wpdb->delete(
+                    $table_name,
+                    array('source_url' => $source_url),
+                    array('%s')
+                );
+            } else {
+                wp_cache_delete('prompt_' . $entry_id, 'mxchat_prompts');
+                $result = $wpdb->delete(
+                    $table_name,
+                    array('id' => intval($entry_id)),
+                    array('%d')
+                );
+            }
+
+            if ($result !== false) {
+                $success_ids[] = $entry_id;
+            } else {
+                $failed_ids[] = $entry_id;
+                $errors[] = "Database error for entry: $entry_id";
             }
         } catch (Exception $e) {
             $failed_ids[] = $entry_id;

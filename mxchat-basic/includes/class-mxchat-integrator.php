@@ -348,8 +348,9 @@ public function verify_slack_request($request) {
         return false;
     }
 
-    // Get raw request body
-    $request_body = file_get_contents('php://input');
+    // Get raw request body from the WP_REST_Request object
+    // (php://input may already be consumed by WordPress at this point)
+    $request_body = $request->get_body();
 
     // Create the signature base string
     $sig_basestring = "v0:{$timestamp}:{$request_body}";
@@ -1563,12 +1564,12 @@ public function mxchat_handle_chat_request() {
             } else if ($intent_result === true && (!empty($this->fallbackResponse['text']) || !empty($this->fallbackResponse['html']))) {
                 // Intent returned true and set fallbackResponse
 
-                // SAVE TO TRANSCRIPT FIRST
+                // SAVE TO TRANSCRIPT - only save text, NOT html
+                // The html field contains rendered HTML/scripts meant for the browser,
+                // not chat content. Saving it to transcript causes raw code to appear
+                // as visible chat messages when history is loaded.
                 if (!empty($this->fallbackResponse['text'])) {
                     $this->mxchat_save_chat_message($session_id, 'bot', $this->fallbackResponse['text']);
-                }
-                if (!empty($this->fallbackResponse['html'])) {
-                    $this->mxchat_save_chat_message($session_id, 'bot', $this->fallbackResponse['html']);
                 }
 
                 $response_data = [
@@ -3926,6 +3927,13 @@ public function handle_telegram_webhook(WP_REST_Request $request) {
 }
 
 public function mxchat_send_user_message_to_agent($message, $user_id, $session_id) {
+    // Check if this is a Telegram agent session
+    $telegram_topic_id = get_option("mxchat_telegram_topic_{$session_id}", '');
+    if (!empty($telegram_topic_id)) {
+        return $this->mxchat_send_user_message_to_telegram_agent($message, $user_id, $session_id);
+    }
+
+    // Otherwise, try Slack
     $slack_bot_token = $this->options['live_agent_bot_token'] ?? '';
     $channel_id = get_option("mxchat_channel_{$session_id}", '');
 
@@ -4615,7 +4623,7 @@ private function find_relevant_content_wordpress($user_embedding, $bot_id = 'def
             ];
 
             // Only consider results above threshold AND with access for content retrieval
-            if ($similarity >= $similarity_threshold && $has_access && !empty($source_url)) {
+            if ($similarity >= $similarity_threshold && $has_access) {
                 // Parse chunk metadata if present
                 $article_content = $embedding->article_content ?? '';
                 $parsed = MxChat_Chunker::parse_stored_chunk($article_content);
@@ -4623,9 +4631,12 @@ private function find_relevant_content_wordpress($user_embedding, $bot_id = 'def
                 $chunk_index = $parsed['metadata']['chunk_index'] ?? 0;
                 $text_content = $parsed['text'];
 
-                // Group by source URL
-                if (!isset($url_groups[$source_url])) {
-                    $url_groups[$source_url] = array(
+                // Use a unique key for manual entries without a source URL
+                $group_key = !empty($source_url) ? $source_url : '_manual_' . $embedding->id;
+
+                // Group by source URL (or unique key for manual entries)
+                if (!isset($url_groups[$group_key])) {
+                    $url_groups[$group_key] = array(
                         'source_url' => $source_url,
                         'best_score' => 0,
                         'is_chunked' => $is_chunked,
@@ -4635,23 +4646,23 @@ private function find_relevant_content_wordpress($user_embedding, $bot_id = 'def
                     );
                 }
 
-                // Track best score for this URL
-                if ($similarity > $url_groups[$source_url]['best_score']) {
-                    $url_groups[$source_url]['best_score'] = $similarity;
+                // Track best score for this group
+                if ($similarity > $url_groups[$group_key]['best_score']) {
+                    $url_groups[$group_key]['best_score'] = $similarity;
                 }
 
                 // Store chunk info or single text
                 if ($is_chunked) {
-                    $url_groups[$source_url]['is_chunked'] = true;
-                    $url_groups[$source_url]['chunks'][] = array(
+                    $url_groups[$group_key]['is_chunked'] = true;
+                    $url_groups[$group_key]['chunks'][] = array(
                         'id' => $embedding->id,
                         'score' => $similarity,
                         'chunk_index' => $chunk_index,
                         'text' => $text_content
                     );
                 } else {
-                    $url_groups[$source_url]['single_text'] = $text_content;
-                    $url_groups[$source_url]['single_id'] = $embedding->id;
+                    $url_groups[$group_key]['single_text'] = $text_content;
+                    $url_groups[$group_key]['single_id'] = $embedding->id;
                 }
             }
         }
@@ -4709,8 +4720,10 @@ private function find_relevant_content_wordpress($user_embedding, $bot_id = 'def
     $fresh_options = get_option('mxchat_options', []);
     $citation_links_enabled = isset($fresh_options['citation_links_toggle']) ? ($fresh_options['citation_links_toggle'] === 'on') : true;
 
-    // Build content from top URLs
-    foreach ($top_urls as $source_url => $group) {
+    // Build content from top sources
+    foreach ($top_urls as $group_key => $group) {
+        $source_url = $group['source_url']; // Use actual source_url, not the group key
+
         // Stop if we've hit the total chunk limit
         if ($total_chunks_used >= $max_total_chunks) {
             break;
@@ -4756,13 +4769,21 @@ private function find_relevant_content_wordpress($user_embedding, $bot_id = 'def
                 $full_text = preg_replace('/\s+/', ' ', trim($full_text)); // Clean up extra spaces
             }
 
-            $content .= "## Reference " . ($matches_used + 1) . " ##\n";
-            $content .= $full_text . "\n\n";
+            // Use numbered reference for URL-based entries, plain info label for manual entries
+            if (!empty($source_url) && $source_url !== '#') {
+                $matches_used++;
+                $content .= "## Reference " . $matches_used . " ##\n";
+                $content .= $full_text . "\n\n";
 
-            // Only include citation URLs if citation links are enabled
-            if ($citation_links_enabled && !empty($source_url) && $source_url !== '#') {
-                $valid_urls[] = $source_url;
-                $content .= "URL: " . $source_url . "\n\n";
+                // Only include citation URLs if citation links are enabled
+                if ($citation_links_enabled) {
+                    $valid_urls[] = $source_url;
+                    $content .= "URL: " . $source_url . "\n\n";
+                }
+            } else {
+                // Manual entry — no reference number, no citation
+                $content .= "## Information ##\n";
+                $content .= $full_text . "\n\n";
             }
 
             // Extract any URLs from the text content itself (only if citation links enabled)
@@ -4777,7 +4798,6 @@ private function find_relevant_content_wordpress($user_embedding, $bot_id = 'def
                 }
             }
 
-            $matches_used++;
             $total_chunks_used += $chunks_in_this_source;
         }
     }
@@ -4800,7 +4820,8 @@ private function find_relevant_content_wordpress($user_embedding, $bot_id = 'def
         // Only add hyperlink instructions if citation links are enabled
         if ($citation_links_enabled) {
             $content .= "CRITICAL: When creating hyperlinks, always use proper markdown format with descriptive text: " .
-                       "[descriptive text](url). NEVER use empty brackets like [](url). The text in brackets must describe what the link is about.";
+                       "[descriptive text](url). NEVER use empty brackets like [](url). The text in brackets must describe what the link is about. " .
+                       "Only cite references that have a URL. Do not cite or add source labels to Information sections that have no URL.";
         } else {
             $content .= "IMPORTANT: Do not include any citation links, source URLs, or hyperlinks in your responses. " .
                        "Simply provide helpful answers based on the reference information without citing sources.";
@@ -5030,13 +5051,9 @@ private function find_relevant_content_pinecone($user_embedding, $bot_id = 'defa
 
         $metadata = $match['metadata'] ?? array();
         $source_url = $metadata['source_url'] ?? '';
-
-        if (empty($source_url)) {
-            continue;
-        }
+        $match_id = $match['id'] ?? '';
 
         // LAZY ROLE CHECK: Only check role for content we're actually considering
-        $match_id = $match['id'] ?? '';
         $role_restriction = $this->get_single_vector_role($match_id, $metadata);
         $has_access = $knowledge_manager->mxchat_user_has_content_access($role_restriction);
 
@@ -5045,9 +5062,12 @@ private function find_relevant_content_pinecone($user_embedding, $bot_id = 'defa
             continue;
         }
 
-        // Group by source URL
-        if (!isset($url_groups[$source_url])) {
-            $url_groups[$source_url] = array(
+        // Use a unique key for manual entries without a source URL
+        $group_key = !empty($source_url) ? $source_url : '_manual_' . $match_id;
+
+        // Group by source URL (or unique key for manual entries)
+        if (!isset($url_groups[$group_key])) {
+            $url_groups[$group_key] = array(
                 'source_url' => $source_url,
                 'best_score' => 0,
                 'is_chunked' => isset($metadata['is_chunked']) && $metadata['is_chunked'],
@@ -5056,14 +5076,14 @@ private function find_relevant_content_pinecone($user_embedding, $bot_id = 'defa
             );
         }
 
-        // Track best score for this URL
-        if ($match['score'] > $url_groups[$source_url]['best_score']) {
-            $url_groups[$source_url]['best_score'] = $match['score'];
+        // Track best score for this group
+        if ($match['score'] > $url_groups[$group_key]['best_score']) {
+            $url_groups[$group_key]['best_score'] = $match['score'];
         }
 
         // Store chunk info or single text
-        if ($url_groups[$source_url]['is_chunked']) {
-            $url_groups[$source_url]['chunks'][] = array(
+        if ($url_groups[$group_key]['is_chunked']) {
+            $url_groups[$group_key]['chunks'][] = array(
                 'id' => $match_id,
                 'score' => $match['score'],
                 'chunk_index' => $metadata['chunk_index'] ?? 0,
@@ -5071,8 +5091,8 @@ private function find_relevant_content_pinecone($user_embedding, $bot_id = 'defa
             );
         } else {
             // Non-chunked content - just store the text
-            $url_groups[$source_url]['single_text'] = $metadata['text'] ?? '';
-            $url_groups[$source_url]['single_id'] = $match_id;
+            $url_groups[$group_key]['single_text'] = $metadata['text'] ?? '';
+            $url_groups[$group_key]['single_id'] = $match_id;
         }
     }
 
@@ -5100,8 +5120,10 @@ private function find_relevant_content_pinecone($user_embedding, $bot_id = 'defa
         }
     }
 
-    // Build content from top URLs
-    foreach ($top_urls as $source_url => $group) {
+    // Build content from top sources
+    foreach ($top_urls as $group_key => $group) {
+        $source_url = $group['source_url']; // Use actual source_url, not the group key
+
         // Stop if we've hit the total chunk limit
         if ($total_chunks_used >= $max_total_chunks) {
             break;
@@ -5147,13 +5169,21 @@ private function find_relevant_content_pinecone($user_embedding, $bot_id = 'defa
                 $full_text = preg_replace('/\s+/', ' ', trim($full_text)); // Clean up extra spaces
             }
 
-            $content .= "## Reference " . ($matches_used + 1) . " ##\n";
-            $content .= $full_text . "\n\n";
+            // Use numbered reference for URL-based entries, plain info label for manual entries
+            if (!empty($source_url) && $source_url !== '#') {
+                $matches_used++;
+                $content .= "## Reference " . $matches_used . " ##\n";
+                $content .= $full_text . "\n\n";
 
-            // Only include citation URLs if citation links are enabled
-            if ($citation_links_enabled && !empty($source_url) && $source_url !== '#') {
-                $valid_urls[] = $source_url;
-                $content .= "URL: " . $source_url . "\n\n";
+                // Only include citation URLs if citation links are enabled
+                if ($citation_links_enabled) {
+                    $valid_urls[] = $source_url;
+                    $content .= "URL: " . $source_url . "\n\n";
+                }
+            } else {
+                // Manual entry — no reference number, no citation
+                $content .= "## Information ##\n";
+                $content .= $full_text . "\n\n";
             }
 
             // Extract any URLs from the text content itself (only if citation links enabled)
@@ -5168,7 +5198,6 @@ private function find_relevant_content_pinecone($user_embedding, $bot_id = 'defa
                 }
             }
 
-            $matches_used++;
             $total_chunks_used += $chunks_in_this_source;
         }
     }
@@ -5244,7 +5273,8 @@ private function find_relevant_content_pinecone($user_embedding, $bot_id = 'defa
         // Only add hyperlink instructions if citation links are enabled
         if ($citation_links_enabled) {
             $content .= "CRITICAL: When creating hyperlinks, always use proper markdown format with descriptive text: " .
-                       "[descriptive text](url). NEVER use empty brackets like [](url). The text in brackets must describe what the link is about.";
+                       "[descriptive text](url). NEVER use empty brackets like [](url). The text in brackets must describe what the link is about. " .
+                       "Only cite references that have a URL. Do not cite or add source labels to Information sections that have no URL.";
         } else {
             $content .= "IMPORTANT: Do not include any citation links, source URLs, or hyperlinks in your responses. " .
                        "Simply provide helpful answers based on the reference information without citing sources.";
@@ -6029,6 +6059,10 @@ private function get_system_instructions($bot_id = 'default', $session_id = '') 
             $instructions = preg_replace('/\s{2,}/', ' ', trim($instructions)); // Clean up extra spaces
         }
     }
+
+    // Allow developers to filter system instructions and process shortcodes
+    $instructions = apply_filters('mxchat_system_instructions', $instructions, $bot_id, $session_id);
+    $instructions = do_shortcode($instructions);
 
     return $instructions;
 }
