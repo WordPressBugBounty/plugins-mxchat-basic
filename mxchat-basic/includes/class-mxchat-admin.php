@@ -7509,6 +7509,18 @@ private function localize_page_specific_scripts($current_page) {
                 'nonce'        => wp_create_nonce('mxchat_content_nonce'),
                 'settingNonce' => wp_create_nonce('mxchat_save_setting_nonce'),
                 'previewUrl'   => home_url('/?p='),
+                'isActivated'  => $this->is_activated(),
+                'hasAdvancedContent' => apply_filters('mxchat_content_pro_feature', false, 'seo_readability'),
+                'hasGSC'             => apply_filters('mxchat_content_pro_feature', false, 'gsc_integration'),
+                'seoOptimize'  => array(
+                    'meta_description' => ($options['seo_optimize_meta_desc'] ?? 'on') === 'on',
+                    'seo_title'        => ($options['seo_optimize_seo_title'] ?? 'on') === 'on',
+                    'slug'             => ($options['seo_optimize_slug'] ?? 'on') === 'on',
+                    'readability'      => ($options['seo_optimize_readability'] ?? 'on') === 'on',
+                    'internal_links'   => ($options['seo_optimize_internal_links'] ?? 'on') === 'on',
+                    'img_alt'          => ($options['seo_optimize_img_alt'] ?? 'on') === 'on',
+                    'featured_img'     => ($options['seo_optimize_featured_img'] ?? 'on') === 'on',
+                ),
                 'i18n'         => array(
                     'generating'    => __('Generating...', 'mxchat'),
                     'planning'      => __('Planning content structure...', 'mxchat'),
@@ -8133,10 +8145,17 @@ if (isset($input['openrouter_selected_model_name'])) {
         $new_input['content_tool_use'] = ($input['content_tool_use'] === 'on') ? 'on' : 'off';
     }
 
+    // SEO Optimize toggle fields
+    foreach (array('seo_optimize_meta_desc', 'seo_optimize_seo_title', 'seo_optimize_slug', 'seo_optimize_readability', 'seo_optimize_internal_links', 'seo_optimize_img_alt', 'seo_optimize_featured_img') as $seo_key) {
+        if (isset($input[$seo_key])) {
+            $new_input[$seo_key] = ($input[$seo_key] === 'on') ? 'on' : 'off';
+        }
+    }
+
     // Preserve content generator settings when saving from main settings page
     // (where content fields are not in the form submission)
     $existing = get_option('mxchat_options', array());
-    foreach (array('content_model', 'content_image_model', 'content_enable_images', 'content_use_placeholders', 'content_internal_linking', 'content_tool_use') as $key) {
+    foreach (array('content_model', 'content_image_model', 'content_enable_images', 'content_use_placeholders', 'content_internal_linking', 'content_tool_use', 'seo_optimize_meta_desc', 'seo_optimize_seo_title', 'seo_optimize_slug', 'seo_optimize_readability', 'seo_optimize_internal_links', 'seo_optimize_img_alt', 'seo_optimize_featured_img') as $key) {
         if (!isset($new_input[$key]) && isset($existing[$key])) {
             $new_input[$key] = $existing[$key];
         }

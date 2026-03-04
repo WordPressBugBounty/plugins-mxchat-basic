@@ -1,5 +1,14 @@
 jQuery(document).ready(function($) {
 
+    // Refresh nonce on load — fixes stale nonces from page-cache plugins
+    if (typeof mxchatChat !== 'undefined' && mxchatChat.ajax_url) {
+        $.post(mxchatChat.ajax_url, { action: 'mxchat_refresh_nonce' }, function(res) {
+            if (res && res.success && res.data && res.data.nonce) {
+                mxchatChat.nonce = res.data.nonce;
+            }
+        });
+    }
+
     // ====================================
     // MULTI-INSTANCE MANAGEMENT SYSTEM
     // ====================================
@@ -2035,6 +2044,11 @@ function checkForAgentMessages(botId) {
                 }
 
                 scrollToBottom(botId, true);
+            }
+
+            // Handle chat mode transitions (e.g. agent ended chat via !endchat)
+            if (response.success && response.data?.chat_mode) {
+                updateChatModeIndicator(response.data.chat_mode, botId);
             }
         },
         error: function (xhr, status, error) {

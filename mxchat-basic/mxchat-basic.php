@@ -3,7 +3,7 @@
  * Plugin Name: MxChat
  * Plugin URI: https://mxchat.ai/
  * Description: AI chatbot for WordPress with OpenAI, Claude, xAI, DeepSeek, live agent, PDF uploads, WooCommerce, and training on website data.
- * Version: 3.1.0
+ * Version: 3.1.1
  * Author: MxChat
  * Author URI: https://mxchat.ai
  * License: GPLv2 or later
@@ -109,6 +109,37 @@ add_filter('rocket_delay_js_exclusions', function($excluded) {
 add_filter('litespeed_optimize_css_excludes', function($excluded) {
     if (!is_array($excluded)) $excluded = array();
     $excluded[] = 'chat-style.css';
+    $excluded[] = 'mxchat';
+    return $excluded;
+});
+
+// Exclude from UCSS (Unique CSS) - prevents LiteSpeed from stripping "unused" MxChat CSS
+add_filter('litespeed_ucss_whitelist', function($whitelist) {
+    if (!is_array($whitelist)) $whitelist = array();
+    $whitelist[] = '.mxchat-chatbot-wrapper';
+    $whitelist[] = '.floating-chatbot';
+    $whitelist[] = '.floating-chatbot-button';
+    $whitelist[] = '.chatbot-top-bar';
+    $whitelist[] = '.mxchat-chatbot';
+    $whitelist[] = '.chat-container';
+    $whitelist[] = '.chat-box';
+    $whitelist[] = '.bot-message';
+    $whitelist[] = '.input-container';
+    $whitelist[] = '.chat-input';
+    $whitelist[] = '.send-button';
+    $whitelist[] = '.pre-chat-message';
+    $whitelist[] = '.mxchat-popular-questions';
+    $whitelist[] = '.chat-toolbar';
+    $whitelist[] = '.exit-chat';
+    $whitelist[] = '.email-blocker';
+    return $whitelist;
+});
+
+// Exclude CSS from CCSS (Critical CSS) generation
+add_filter('litespeed_optm_ccss_exc', function($excluded) {
+    if (!is_array($excluded)) $excluded = array();
+    $excluded[] = 'chat-style.css';
+    $excluded[] = 'mxchat';
     return $excluded;
 });
 
@@ -117,6 +148,7 @@ add_filter('litespeed_optm_js_defer_exc', function($excluded) {
     if (!is_array($excluded)) $excluded = array();
     $excluded[] = 'chat-script.js';
     $excluded[] = 'floating-script.js';
+    $excluded[] = 'mxchat';
     $excluded[] = 'jquery.min.js';
     $excluded[] = 'jquery.js';
     return $excluded;
@@ -127,8 +159,28 @@ add_filter('litespeed_optm_js_exc', function($excluded) {
     if (!is_array($excluded)) $excluded = array();
     $excluded[] = 'chat-script.js';
     $excluded[] = 'floating-script.js';
+    $excluded[] = 'mxchat';
     $excluded[] = 'jquery.min.js';
     $excluded[] = 'jquery.js';
+    return $excluded;
+});
+
+// Exclude JS from delayed execution
+add_filter('litespeed_optm_js_delay_exc', function($excluded) {
+    if (!is_array($excluded)) $excluded = array();
+    $excluded[] = 'chat-script.js';
+    $excluded[] = 'floating-script.js';
+    $excluded[] = 'mxchat';
+    return $excluded;
+});
+
+// Exclude from Guest Mode optimization
+add_filter('litespeed_guest_optm_exc', function($excluded) {
+    if (!is_array($excluded)) $excluded = array();
+    $excluded[] = 'mxchat';
+    $excluded[] = 'chat-style';
+    $excluded[] = 'chat-script';
+    $excluded[] = 'floating-script';
     return $excluded;
 });
 
@@ -202,7 +254,6 @@ function mxchat_include_classes() {
         'includes/class-mxchat-user.php',
         'includes/class-mxchat-meta-box.php',
         'includes/class-mxchat-chunker.php',
-        'includes/pdf-parser/alt_autoload.php',
         'includes/class-mxchat-word-handler.php',
         'includes/class-mxchat-content-generator.php',
         'admin/class-ajax-handler.php',
@@ -218,6 +269,22 @@ function mxchat_include_classes() {
             //error_log('MxChat: Missing class file - ' . $file);
         }
     }
+}
+
+/**
+ * Lazy-load the PDF parser library only when needed.
+ * Avoids loading 44 files on every page request.
+ */
+function mxchat_load_pdf_parser() {
+    if (class_exists('\Smalot\PdfParser\Parser')) {
+        return true;
+    }
+    $autoload_path = plugin_dir_path(__FILE__) . 'includes/pdf-parser/alt_autoload.php';
+    if (file_exists($autoload_path)) {
+        require_once $autoload_path;
+        return true;
+    }
+    return false;
 }
 
 /**

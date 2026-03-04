@@ -150,6 +150,7 @@
 
         closeChatPanel();
         closeStatusDropdown();
+        resetSeoPanel();
         $('#mxch-cg-prompt').val('');
         showInlineForm();
     }
@@ -302,6 +303,10 @@
 
         // Populate meta panel with SEO data
         populateMetaPanel(data);
+
+        // Auto-run SEO analysis
+        resetSeoPanel();
+        setTimeout(function() { runSeoAnalysis(); }, 500);
 
         // Pre-populate chat
         $('#mxch-cg-chat-messages').empty();
@@ -746,6 +751,20 @@
             }
 
             saveContentSetting(field, value, $field);
+
+            // Keep seoOptimize prefs in sync without page reload
+            var seoMap = {
+                seo_optimize_meta_desc: 'meta_description',
+                seo_optimize_seo_title: 'seo_title',
+                seo_optimize_slug: 'slug',
+                seo_optimize_readability: 'readability',
+                seo_optimize_internal_links: 'internal_links',
+                seo_optimize_img_alt: 'img_alt',
+                seo_optimize_featured_img: 'featured_img'
+            };
+            if (seoMap[field] && mxchatContent.seoOptimize) {
+                mxchatContent.seoOptimize[seoMap[field]] = (value === 'on');
+            }
         });
     }
 
@@ -831,6 +850,171 @@
 
     function escapeAttr(str) {
         return String(str).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/'/g, '&#39;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    }
+
+    // ─── SEO Tab ────────────────────────────────────────────────────
+
+    var seoState = { analyzed: false, analyzing: false, fixing: false, score: null, checks: null };
+
+    function initSeo() {
+        $('#mxch-seo-analyze').on('click', function() {
+            if (state.postId && !seoState.analyzing) runSeoAnalysis();
+        });
+        $('#mxch-seo-ai-optimize').on('click', function() {
+            if (state.postId && !seoState.fixing) runAiOptimize();
+        });
+        // Auto-analyze when switching to SEO tab if content exists
+        $(document).on('click', '.mxch-cg-left-tab[data-tab="seo"]', function() {
+            if (state.postId && !seoState.analyzed && !seoState.analyzing) runSeoAnalysis();
+        });
+    }
+
+    function runSeoAnalysis() {
+        if (!state.postId) return;
+        seoState.analyzing = true;
+        $('#mxch-seo-analyze').addClass('mxch-spinning');
+        $.post(ajaxurl, {
+            action: 'mxchat_seo_analyze',
+            nonce: mxchatContent.nonce,
+            post_id: state.postId,
+        }).done(function(res) {
+            if (res.success) {
+                seoState.analyzed = true;
+                seoState.score = res.data.score;
+                seoState.checks = res.data.checks;
+                renderSeoResults(res.data);
+            } else {
+                renderSeoError(res.data || 'Analysis failed');
+            }
+        }).fail(function() {
+            renderSeoError('Connection error');
+        }).always(function() {
+            seoState.analyzing = false;
+            $('#mxch-seo-analyze').removeClass('mxch-spinning');
+        });
+    }
+
+    function renderSeoResults(data) {
+        var score = data.score, checks = data.checks, summary = data.summary;
+        // Score ring
+        var offset = 163.36 - (score / 100) * 163.36;
+        var $ring = $('#mxch-seo-ring');
+        $ring.css('stroke-dashoffset', offset).removeClass('mxch-seo-good mxch-seo-ok mxch-seo-bad');
+        if (score >= 80) $ring.addClass('mxch-seo-good');
+        else if (score >= 50) $ring.addClass('mxch-seo-ok');
+        else $ring.addClass('mxch-seo-bad');
+        $('#mxch-seo-score').text(score);
+        $('#mxch-seo-score-label').text(score >= 80 ? 'Great' : score >= 60 ? 'Good' : score >= 40 ? 'Needs Work' : 'Poor');
+        var parts = [];
+        if (summary.pass) parts.push(summary.pass + ' passed');
+        if (summary.warn) parts.push(summary.warn + ' warnings');
+        if (summary.fail) parts.push(summary.fail + ' issues');
+        $('#mxch-seo-score-summary').text(parts.join(' \u00b7 '));
+        // Checklist
+        var $list = $('#mxch-seo-checklist').empty();
+        var icons = {
+            pass: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>',
+            warn: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>',
+            fail: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>',
+        };
+        // Checks that require the Advanced Content Editor add-on to fix
+        var addonChecks = { readability: true, internal_links: true, img_alt: true, featured_img: true };
+        var sorted = Object.keys(checks).sort(function(a, b) {
+            var o = { fail: 0, warn: 1, pass: 2 };
+            return (o[checks[a].status] || 2) - (o[checks[b].status] || 2);
+        });
+        var last = null;
+        sorted.forEach(function(key) {
+            var c = checks[key];
+            if (last && last !== 'pass' && c.status === 'pass') {
+                $list.append('<div class="mxch-seo-separator"></div>');
+            }
+            last = c.status;
+
+            // Show addon/pro badge for gated checks that aren't passing
+            var badge = '';
+            if (addonChecks[key] && c.status !== 'pass' && !mxchatContent.hasAdvancedContent) {
+                if (mxchatContent.isActivated) {
+                    badge = ' <a href="https://mxchat.ai/advanced-content-editor/" target="_blank" class="mxch-seod-addon-badge">ADD-ON</a>';
+                } else {
+                    badge = ' <a href="https://mxchat.ai/" target="_blank" class="mxch-seod-addon-badge mxch-seod-pro-badge">PRO</a>';
+                }
+            }
+
+            $list.append(
+                '<div class="mxch-seo-check" data-check="' + key + '">' +
+                    '<div class="mxch-seo-check-icon mxch-seo-' + c.status + '">' + icons[c.status] + '</div>' +
+                    '<div class="mxch-seo-check-content">' +
+                        '<span class="mxch-seo-check-label">' + escapeHtml(c.label) + badge + '</span>' +
+                        '<span class="mxch-seo-check-detail">' + escapeHtml(c.detail) + '</span>' +
+                    '</div>' +
+                '</div>'
+            );
+        });
+        $('#mxch-seo-actions').toggle(summary.fail > 0 || summary.warn > 0);
+    }
+
+    function renderSeoError(msg) {
+        $('#mxch-seo-checklist').html('<div class="mxch-seo-empty"><span style="color:#ef4444;">' + escapeHtml(msg) + '</span></div>');
+    }
+
+    function runAiOptimize() {
+        if (!state.postId || seoState.fixing) return;
+        seoState.fixing = true;
+        var $btn = $('#mxch-seo-ai-optimize'), origHtml = $btn.html();
+        $btn.addClass('mxch-seo-fixing').prop('disabled', true)
+            .html('<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3-1.9 5.8a2 2 0 0 1-1.287 1.288L3 12l5.8 1.9a2 2 0 0 1 1.288 1.287L12 21l1.9-5.8a2 2 0 0 1 1.287-1.288L21 12l-5.8-1.9a2 2 0 0 1-1.288-1.287Z"/></svg> Optimizing\u2026');
+        var prefs = mxchatContent.seoOptimize || {};
+        var fields = [];
+        if (seoState.checks) {
+            if (prefs.meta_description !== false && seoState.checks.meta_desc && seoState.checks.meta_desc.status !== 'pass') fields.push('meta_description');
+            if (prefs.seo_title !== false && seoState.checks.title_length && seoState.checks.title_length.status !== 'pass') fields.push('seo_title');
+            if (prefs.slug !== false && seoState.checks.slug && seoState.checks.slug.status !== 'pass') fields.push('slug');
+        }
+        if (!fields.length) fields.push('meta_description');
+        var done = 0;
+        fields.forEach(function(field) {
+            $.post(ajaxurl, {
+                action: 'mxchat_seo_suggest',
+                nonce: mxchatContent.nonce,
+                post_id: state.postId,
+                field: field,
+            }).done(function(res) {
+                if (res.success) {
+                    if (field === 'meta_description') $('#mxch-cg-meta-description').val(res.data.suggestion).trigger('input');
+                    else if (field === 'seo_title') $('#mxch-cg-meta-title').val(res.data.suggestion);
+                    else if (field === 'excerpt') $('#mxch-cg-meta-excerpt').val(res.data.suggestion);
+                    $('.mxch-cg-left-tab[data-tab="meta"]').addClass('mxch-cg-tab-flash');
+                    setTimeout(function() { $('.mxch-cg-left-tab[data-tab="meta"]').removeClass('mxch-cg-tab-flash'); }, 2000);
+                }
+            }).always(function() {
+                if (++done >= fields.length) {
+                    seoState.fixing = false;
+                    $btn.removeClass('mxch-seo-fixing').prop('disabled', false).html(origHtml);
+                    runSeoAnalysis();
+                }
+            });
+        });
+    }
+
+    function resetSeoPanel() {
+        seoState = { analyzed: false, analyzing: false, fixing: false, score: null, checks: null };
+        $('#mxch-seo-score').text('\u2014');
+        $('#mxch-seo-score-label').text('SEO Score');
+        $('#mxch-seo-score-summary').text('Generate content to analyze');
+        $('#mxch-seo-ring').css('stroke-dashoffset', '163.36').removeClass('mxch-seo-good mxch-seo-ok mxch-seo-bad');
+        $('#mxch-seo-checklist').html(
+            '<div class="mxch-seo-empty" id="mxch-seo-empty">' +
+            '<svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>' +
+            '<span>SEO analysis will appear here after content is generated</span></div>'
+        );
+        $('#mxch-seo-actions').hide();
+    }
+
+    function escapeHtml(s) {
+        var d = document.createElement('div');
+        d.appendChild(document.createTextNode(s));
+        return d.innerHTML;
     }
 
     // ─── Left Column Tabs ──────────────────────────────────────────────
@@ -1243,6 +1427,560 @@
         return div.innerHTML;
     }
 
+    // ─── SEO Dashboard (Site-wide) ─────────────────────────────────────
+
+    var seodState = {
+        loaded: false,
+        loading: false,
+        page: 1,
+        pages: 1,
+        total: 0,
+        filter: 'all',
+        postType: 'any',
+        search: '',
+        searchTimer: null,
+        scanning: false,
+        expandedId: null,
+        expandAnalyzing: false,
+        sortBy: 'date',
+        sortOrder: 'DESC',
+    };
+
+    function initSeoSection() {
+        // Lazy-load: fetch posts when user first visits SEO section
+        $(document).on('click', '.mxch-nav-link[data-target="content-seo"], .mxch-nav-sub-link[data-target="content-seo"], .mxch-mobile-nav-link[data-target="content-seo"]', function() {
+            if (!seodState.loaded && !seodState.loading) {
+                loadSeoPosts();
+            }
+        });
+
+        // Filter pills
+        $(document).on('click', '.mxch-seod-pill', function() {
+            $('.mxch-seod-pill').removeClass('active');
+            $(this).addClass('active');
+            seodState.filter = $(this).data('filter');
+            seodState.page = 1;
+            loadSeoPosts();
+        });
+
+        // Post type dropdown
+        $(document).on('change', '#mxch-seod-post-type', function() {
+            seodState.postType = $(this).val();
+            seodState.page = 1;
+            loadSeoPosts();
+        });
+
+        // Search with debounce
+        $(document).on('input', '#mxch-seod-search', function() {
+            var val = $(this).val();
+            clearTimeout(seodState.searchTimer);
+            seodState.searchTimer = setTimeout(function() {
+                seodState.search = val;
+                seodState.page = 1;
+                loadSeoPosts();
+            }, 400);
+        });
+
+        // Pagination
+        $(document).on('click', '.mxch-seod-page-btn', function() {
+            var p = $(this).data('page');
+            if (p && p !== seodState.page) {
+                seodState.page = p;
+                loadSeoPosts();
+            }
+        });
+
+        // Open detail modal on row click
+        $(document).on('click', '.mxch-seod-row', function() {
+            var postId = $(this).data('post-id');
+            openSeoModal(postId);
+        });
+
+        // Close modal
+        $(document).on('click', '.mxch-seod-modal-overlay', function(e) {
+            if ($(e.target).hasClass('mxch-seod-modal-overlay')) closeSeoModal();
+        });
+        $(document).on('click', '.mxch-seod-modal-close', function() {
+            closeSeoModal();
+        });
+        $(document).on('keydown', function(e) {
+            if (e.key === 'Escape' && seodState.expandedId) closeSeoModal();
+        });
+
+        // Scan Unscored button
+        $(document).on('click', '#mxch-seod-scan-all', function() {
+            if (!seodState.scanning) bulkSeoScan();
+        });
+        // Stop scan button
+        $(document).on('click', '#mxch-seod-scan-stop', function() {
+            seodState.scanAborted = true;
+            $(this).prop('disabled', true).find('span').text('Stopping...');
+        });
+
+        // Sortable column headers (all columns sort server-side)
+        $(document).on('click', '.mxch-seod-header-cell[data-sort]', function() {
+            var col = $(this).data('sort');
+            if (seodState.sortBy === col) {
+                seodState.sortOrder = seodState.sortOrder === 'DESC' ? 'ASC' : 'DESC';
+            } else {
+                seodState.sortBy = col;
+                seodState.sortOrder = col === 'title' ? 'ASC' : 'DESC';
+            }
+            seodState.page = 1;
+            loadSeoPosts();
+        });
+
+        // AI Optimize within detail modal
+        $(document).on('click', '.mxch-seod-optimize-btn', function(e) {
+            e.stopPropagation();
+            var postId = $(this).closest('.mxch-seod-detail').data('post-id');
+            runSeodOptimize(postId, $(this));
+        });
+    }
+
+    function loadSeoPosts() {
+        seodState.loading = true;
+        $('#mxch-seod-loading').show();
+        $('#mxch-seod-empty').hide();
+        $('#mxch-seod-table').empty();
+
+        $.post(ajaxurl, {
+            action: 'mxchat_seo_list_posts',
+            nonce: mxchatContent.nonce,
+            page: seodState.page,
+            post_type: seodState.postType,
+            filter: seodState.filter,
+            search: seodState.search,
+            sort_by: seodState.sortBy,
+            sort_order: seodState.sortOrder,
+        }).done(function(res) {
+            if (res.success) {
+                seodState.loaded = true;
+                seodState.page = res.data.page;
+                seodState.pages = res.data.pages;
+                seodState.total = res.data.total;
+                renderSeodTable(res.data.posts);
+                renderSeodPagination();
+                updateSeodScanBtn(res.data.unscored_count);
+                $('#mxch-seod-footer').show();
+                if (!res.data.posts.length) {
+                    $('#mxch-seod-empty').show();
+                }
+            }
+        }).fail(function() {
+            $('#mxch-seod-table').html('<div class="mxch-seod-error">Failed to load posts. Please try again.</div>');
+        }).always(function() {
+            seodState.loading = false;
+            $('#mxch-seod-loading').hide();
+        });
+    }
+
+    function seodFormatNum(n) {
+        if (n >= 1000000) return (n / 1000000).toFixed(1) + 'M';
+        if (n >= 1000) return (n / 1000).toFixed(1) + 'K';
+        return n;
+    }
+
+    function seodSortArrow(col) {
+        if (seodState.sortBy !== col) return '';
+        return ' <span class="mxch-seod-sort-arrow">' + (seodState.sortOrder === 'ASC' ? '&#9650;' : '&#9660;') + '</span>';
+    }
+
+    function renderSeodTable(posts) {
+        var $table = $('#mxch-seod-table');
+        $table.empty();
+        seodState.expandedId = null;
+
+        // Column headers
+        var activeClass = function(col) { return seodState.sortBy === col ? ' mxch-seod-header-active' : ''; };
+        $table.append(
+            '<div class="mxch-seod-header">' +
+                '<div class="mxch-seod-header-cell mxch-seod-header-title' + activeClass('title') + '" data-sort="title">Title' + seodSortArrow('title') + '</div>' +
+                '<div class="mxch-seod-header-cell mxch-seod-header-date' + activeClass('date') + '" data-sort="date">Date' + seodSortArrow('date') + '</div>' +
+                '<div class="mxch-seod-header-cell mxch-seod-header-score' + activeClass('score') + '" data-sort="score">Score' + seodSortArrow('score') + '</div>' +
+                '<div class="mxch-seod-header-cell mxch-seod-header-clicks' + (!mxchatContent.hasGSC ? ' mxch-seod-header-locked' : '') + '"' + (mxchatContent.hasGSC ? ' data-sort="clicks"' : '') + '>Clicks' + (mxchatContent.hasGSC ? seodSortArrow('clicks') : ' <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>') + '</div>' +
+                '<div class="mxch-seod-header-cell mxch-seod-header-impressions' + (!mxchatContent.hasGSC ? ' mxch-seod-header-locked' : '') + '"' + (mxchatContent.hasGSC ? ' data-sort="impressions"' : '') + '>Impr.' + (mxchatContent.hasGSC ? seodSortArrow('impressions') : ' <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>') + '</div>' +
+            '</div>'
+        );
+
+        posts.forEach(function(p) {
+            var scoreHtml;
+            if (p.score !== null) {
+                var cls = p.score >= 80 ? 'mxch-seod-good' : p.score >= 50 ? 'mxch-seod-ok' : 'mxch-seod-bad';
+                scoreHtml = '<div class="mxch-seod-score-badge ' + cls + '">' + p.score + '</div>';
+            } else {
+                scoreHtml = '<div class="mxch-seod-score-badge mxch-seod-unscored">&mdash;</div>';
+            }
+
+            var typeLabel = p.type === 'page' ? 'Page' : 'Post';
+
+            $table.append(
+                '<div class="mxch-seod-row" data-post-id="' + p.id + '" data-score="' + (p.score !== null ? p.score : -1) + '">' +
+                    '<div class="mxch-seod-row-main">' +
+                        '<div class="mxch-seod-cell mxch-seod-cell-title">' +
+                            '<span class="mxch-seod-title">' + escapeHtml(p.title) + '</span>' +
+                            '<span class="mxch-seod-meta">' + typeLabel + '</span>' +
+                        '</div>' +
+                        '<div class="mxch-seod-cell mxch-seod-cell-date">' +
+                            '<span class="mxch-seod-date">' + escapeHtml(p.date) + '</span>' +
+                        '</div>' +
+                        '<div class="mxch-seod-cell mxch-seod-cell-score">' + scoreHtml + '</div>' +
+                        '<div class="mxch-seod-cell mxch-seod-cell-clicks' + (!mxchatContent.hasGSC ? ' mxch-seod-cell-locked' : '') + '" data-clicks="' + (p.clicks !== null ? p.clicks : 0) + '">' + (!mxchatContent.hasGSC ? '—' : (p.clicks !== null ? p.clicks : '—')) + '</div>' +
+                        '<div class="mxch-seod-cell mxch-seod-cell-impressions' + (!mxchatContent.hasGSC ? ' mxch-seod-cell-locked' : '') + '" data-impressions="' + (p.impressions !== null ? p.impressions : 0) + '">' + (!mxchatContent.hasGSC ? '—' : (p.impressions !== null ? seodFormatNum(p.impressions) : '—')) + '</div>' +
+                    '</div>' +
+                '</div>'
+            );
+        });
+    }
+
+    function renderSeodPagination() {
+        var $pag = $('#mxch-seod-pagination');
+        $pag.empty();
+
+        if (seodState.pages <= 1) return;
+
+        var p = seodState.page, total = seodState.pages;
+
+        if (p > 1) {
+            $pag.append('<button type="button" class="mxch-seod-page-btn" data-page="' + (p - 1) + '">&larr; Prev</button>');
+        }
+        $pag.append('<span class="mxch-seod-page-info">Page ' + p + ' of ' + total + '</span>');
+        if (p < total) {
+            $pag.append('<button type="button" class="mxch-seod-page-btn" data-page="' + (p + 1) + '">Next &rarr;</button>');
+        }
+    }
+
+    function updateSeodScanBtn(unscoredCount) {
+        var $btn = $('#mxch-seod-scan-all');
+        if (unscoredCount > 0) {
+            $btn.show().text('Scan Unscored (' + unscoredCount + ')');
+        } else {
+            $btn.hide();
+        }
+        $('#mxch-seod-scan-status').text('');
+    }
+
+    function openSeoModal(postId) {
+        closeSeoModal(); // close any existing modal
+        seodState.expandedId = postId;
+
+        var $row = $('.mxch-seod-row[data-post-id="' + postId + '"]');
+        var title = $row.find('.mxch-seod-title').text() || 'Post #' + postId;
+
+        var $overlay = $(
+            '<div class="mxch-seod-modal-overlay">' +
+                '<div class="mxch-seod-modal">' +
+                    '<div class="mxch-seod-modal-header">' +
+                        '<h3 class="mxch-seod-modal-title">' + escapeHtml(title) + '</h3>' +
+                        '<button type="button" class="mxch-seod-modal-close" title="Close">' +
+                            '<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>' +
+                        '</button>' +
+                    '</div>' +
+                    '<div class="mxch-seod-modal-body">' +
+                        '<div class="mxch-seod-detail" data-post-id="' + postId + '">' +
+                            '<div class="mxch-seod-detail-loading">' +
+                                '<div class="mxch-seod-spinner"></div>' +
+                                '<span>Analyzing&hellip;</span>' +
+                            '</div>' +
+                        '</div>' +
+                    '</div>' +
+                '</div>' +
+            '</div>'
+        );
+
+        $('body').append($overlay);
+        // Trigger reflow then add visible class for animation
+        $overlay[0].offsetHeight;
+        $overlay.addClass('mxch-seod-modal-visible');
+
+        var $detail = $overlay.find('.mxch-seod-detail');
+
+        // Run analysis
+        seodState.expandAnalyzing = true;
+        $.post(ajaxurl, {
+            action: 'mxchat_seo_analyze',
+            nonce: mxchatContent.nonce,
+            post_id: postId,
+        }).done(function(res) {
+            if (res.success) {
+                renderSeodDetail($detail, res.data, postId);
+                // Update the row's score badge in the table too
+                var score = res.data.score;
+                var cls = score >= 80 ? 'mxch-seod-good' : score >= 50 ? 'mxch-seod-ok' : 'mxch-seod-bad';
+                $row.find('.mxch-seod-score-badge')
+                    .removeClass('mxch-seod-good mxch-seod-ok mxch-seod-bad mxch-seod-unscored')
+                    .addClass(cls).text(score);
+            } else {
+                $detail.html('<div class="mxch-seod-detail-error">Analysis failed. Please try again.</div>');
+            }
+        }).fail(function() {
+            $detail.html('<div class="mxch-seod-detail-error">Connection error. Please try again.</div>');
+        }).always(function() {
+            seodState.expandAnalyzing = false;
+        });
+    }
+
+    function renderSeodDetail($detail, data, postId) {
+        var checks = data.checks, score = data.score, summary = data.summary;
+        var icons = {
+            pass: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>',
+            warn: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>',
+            fail: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>',
+        };
+
+        // Checks that require the Advanced Content Editor add-on to fix
+        var addonChecks = { readability: true, internal_links: true, img_alt: true, featured_img: true };
+
+        var sorted = Object.keys(checks).sort(function(a, b) {
+            var o = { fail: 0, warn: 1, pass: 2 };
+            return (o[checks[a].status] || 2) - (o[checks[b].status] || 2);
+        });
+
+        var html = '<div class="mxch-seod-checks">';
+        var last = null;
+        sorted.forEach(function(key) {
+            var c = checks[key];
+            if (last && last !== 'pass' && c.status === 'pass') {
+                html += '<div class="mxch-seod-check-sep"></div>';
+            }
+            last = c.status;
+
+            // Show addon/pro badge for gated checks that aren't passing
+            var badge = '';
+            if (addonChecks[key] && c.status !== 'pass' && !mxchatContent.hasAdvancedContent) {
+                if (mxchatContent.isActivated) {
+                    badge = ' <a href="https://mxchat.ai/advanced-content-editor/" target="_blank" class="mxch-seod-addon-badge">ADD-ON</a>';
+                } else {
+                    badge = ' <a href="https://mxchat.ai/" target="_blank" class="mxch-seod-addon-badge mxch-seod-pro-badge">PRO</a>';
+                }
+            }
+
+            html += '<div class="mxch-seod-check mxch-seod-check-' + c.status + '">' +
+                '<div class="mxch-seod-check-icon">' + icons[c.status] + '</div>' +
+                '<div class="mxch-seod-check-text">' +
+                    '<span class="mxch-seod-check-label">' + escapeHtml(c.label) + badge + '</span>' +
+                    '<span class="mxch-seod-check-detail">' + escapeHtml(c.detail) + '</span>' +
+                '</div>' +
+            '</div>';
+        });
+        html += '</div>';
+
+        // AI Optimize button (only if there are issues)
+        if (summary.fail > 0 || summary.warn > 0) {
+            html += '<div class="mxch-seod-detail-actions">' +
+                '<button type="button" class="mxch-seod-optimize-btn">' +
+                    '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3-1.9 5.8a2 2 0 0 1-1.287 1.288L3 12l5.8 1.9a2 2 0 0 1 1.288 1.287L12 21l1.9-5.8a2 2 0 0 1 1.287-1.288L21 12l-5.8-1.9a2 2 0 0 1-1.288-1.287Z"/></svg>' +
+                    ' AI Optimize' +
+                '</button>' +
+            '</div>';
+        }
+
+        $detail.html(html);
+
+        // GSC placeholder for free/non-addon users
+        if (!mxchatContent.hasGSC) {
+            var badgeLabel = mxchatContent.isActivated ? 'ADD-ON' : 'PRO';
+            var badgeClass = mxchatContent.isActivated ? '' : ' mxch-seod-pro-badge';
+            var upgradeText = mxchatContent.isActivated ? 'Install Add-on' : 'Upgrade to Pro';
+            var gscHtml =
+                '<div class="mxch-gsc-placeholder">' +
+                    '<h4 class="mxch-gsc-placeholder-title">' +
+                        '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>' +
+                        ' Search Performance' +
+                    '</h4>' +
+                    '<div class="mxch-gsc-placeholder-content">' +
+                        '<div class="mxch-gsc-stats">' +
+                            '<div class="mxch-gsc-stat"><span class="mxch-gsc-stat-value">42</span><span class="mxch-gsc-stat-label">Clicks</span></div>' +
+                            '<div class="mxch-gsc-stat"><span class="mxch-gsc-stat-value">1.2K</span><span class="mxch-gsc-stat-label">Impressions</span></div>' +
+                            '<div class="mxch-gsc-stat"><span class="mxch-gsc-stat-value">3.5%</span><span class="mxch-gsc-stat-label">CTR</span></div>' +
+                            '<div class="mxch-gsc-stat"><span class="mxch-gsc-stat-value">8.2</span><span class="mxch-gsc-stat-label">Avg Position</span></div>' +
+                        '</div>' +
+                        '<table class="mxch-gsc-table">' +
+                            '<thead><tr><th>Keyword</th><th>Clicks</th><th>Impr.</th><th>Position</th></tr></thead>' +
+                            '<tbody>' +
+                                '<tr><td>example keyword one</td><td>18</td><td>420</td><td>5.3</td></tr>' +
+                                '<tr><td>sample search term</td><td>14</td><td>380</td><td>7.1</td></tr>' +
+                                '<tr><td>another query phrase</td><td>10</td><td>290</td><td>12.4</td></tr>' +
+                            '</tbody>' +
+                        '</table>' +
+                    '</div>' +
+                    '<div class="mxch-gsc-placeholder-overlay">' +
+                        '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>' +
+                        '<a href="https://mxchat.ai/" target="_blank" class="mxch-seod-addon-badge' + badgeClass + '">' + badgeLabel + '</a>' +
+                        '<a href="https://mxchat.ai/" target="_blank" class="mxch-cg-pro-upgrade-link">' + upgradeText + '</a>' +
+                    '</div>' +
+                '</div>';
+            $detail.append(gscHtml);
+        }
+    }
+
+    function closeSeoModal() {
+        seodState.expandedId = null;
+        var $overlay = $('.mxch-seod-modal-overlay');
+        if ($overlay.length) {
+            $overlay.removeClass('mxch-seod-modal-visible');
+            setTimeout(function() { $overlay.remove(); }, 200);
+        }
+    }
+
+    function bulkSeoScan() {
+        seodState.scanning = true;
+        seodState.scanAborted = false;
+        var $btn = $('#mxch-seod-scan-all');
+        var $status = $('#mxch-seod-scan-status');
+        $btn.hide();
+
+        // Show stop button
+        if (!$('#mxch-seod-scan-stop').length) {
+            $btn.after('<button type="button" class="mxch-seod-scan-btn mxch-seod-scan-stop-btn" id="mxch-seod-scan-stop"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="6" width="12" height="12" rx="2"/></svg> <span>Stop</span></button>');
+        }
+        $('#mxch-seod-scan-stop').show();
+        $status.text('Loading unscored posts...');
+
+        // Fetch ALL unscored post IDs across all pages
+        var allIds = [];
+        function fetchPage(page) {
+            $.post(ajaxurl, {
+                action: 'mxchat_seo_list_posts',
+                nonce: mxchatContent.nonce,
+                page: page,
+                post_type: 'any',
+                filter: 'unscored',
+                search: '',
+            }).done(function(res) {
+                if (!res.success || !res.data.posts.length) {
+                    if (allIds.length === 0) {
+                        finishScan('All posts have been scanned.');
+                        return;
+                    }
+                    startScanning(allIds);
+                    return;
+                }
+                res.data.posts.forEach(function(p) { allIds.push(p.id); });
+                if (page < res.data.pages) {
+                    $status.text('Loading unscored posts... (' + allIds.length + ' found)');
+                    fetchPage(page + 1);
+                } else {
+                    startScanning(allIds);
+                }
+            }).fail(function() {
+                finishScan('Error loading posts.');
+            });
+        }
+
+        function startScanning(ids) {
+            var total = ids.length;
+            var scanned = 0;
+            var batchSize = 10;
+            $status.html('<span class="mxch-seod-scan-progress">0 / ' + total + '</span>');
+
+            function updateRows(results) {
+                $.each(results, function(pid, data) {
+                    var $row = $('.mxch-seod-row[data-post-id="' + pid + '"]');
+                    if ($row.length) {
+                        var score = data.score;
+                        var cls = score >= 80 ? 'mxch-seod-good' : score >= 50 ? 'mxch-seod-ok' : 'mxch-seod-bad';
+                        $row.find('.mxch-seod-score-badge')
+                            .removeClass('mxch-seod-unscored').addClass(cls).text(score);
+                    }
+                });
+            }
+
+            function scanNextBatch() {
+                if (seodState.scanAborted) {
+                    finishScan('Stopped — ' + scanned + ' of ' + total + ' scanned.');
+                    loadSeoPosts();
+                    return;
+                }
+                if (scanned >= total) {
+                    finishScan('Done! ' + total + ' posts scanned.');
+                    loadSeoPosts();
+                    return;
+                }
+                var batch = ids.slice(scanned, scanned + batchSize);
+                $status.html('<span class="mxch-seod-scan-progress">' + (scanned + 1) + ' / ' + total + '</span>');
+                $.post(ajaxurl, {
+                    action: 'mxchat_seo_analyze_batch',
+                    nonce: mxchatContent.nonce,
+                    'post_ids[]': batch,
+                }).done(function(res) {
+                    if (res.success && res.data.results) {
+                        updateRows(res.data.results);
+                    }
+                }).always(function() {
+                    scanned += batch.length;
+                    $status.html('<span class="mxch-seod-scan-progress">' + scanned + ' / ' + total + '</span>');
+                    scanNextBatch();
+                });
+            }
+            scanNextBatch();
+        }
+
+        function finishScan(msg) {
+            seodState.scanning = false;
+            seodState.scanAborted = false;
+            $('#mxch-seod-scan-stop').hide();
+            $btn.show().prop('disabled', false);
+            $status.text(msg);
+        }
+
+        fetchPage(1);
+    }
+
+    function runSeodOptimize(postId, $btn) {
+        var origHtml = $btn.html();
+        $btn.prop('disabled', true).html(
+            '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3-1.9 5.8a2 2 0 0 1-1.287 1.288L3 12l5.8 1.9a2 2 0 0 1 1.288 1.287L12 21l1.9-5.8a2 2 0 0 1 1.287-1.288L21 12l-5.8-1.9a2 2 0 0 1-1.288-1.287Z"/></svg>' +
+            ' Optimizing&hellip;'
+        );
+
+        // Get the current checks to find what needs fixing
+        $.post(ajaxurl, {
+            action: 'mxchat_seo_analyze',
+            nonce: mxchatContent.nonce,
+            post_id: postId,
+        }).done(function(res) {
+            if (!res.success) {
+                $btn.prop('disabled', false).html(origHtml);
+                return;
+            }
+            var checks = res.data.checks;
+            var prefs = mxchatContent.seoOptimize || {};
+            var fields = [];
+            if (prefs.meta_description !== false && checks.meta_desc && checks.meta_desc.status !== 'pass') fields.push('meta_description');
+            if (prefs.seo_title !== false && checks.title_length && checks.title_length.status !== 'pass') fields.push('seo_title');
+            if (prefs.slug !== false && checks.slug && checks.slug.status !== 'pass') fields.push('slug');
+            // Readability, internal links, images require Advanced Content Editor add-on
+            if (mxchatContent.hasAdvancedContent) {
+                if (prefs.readability !== false && checks.readability && checks.readability.status !== 'pass') fields.push('readability');
+                if (prefs.internal_links !== false && checks.internal_links && checks.internal_links.status !== 'pass') fields.push('internal_links');
+                if (prefs.img_alt !== false && checks.img_alt && checks.img_alt.status !== 'pass') fields.push('img_alt');
+                if (prefs.featured_img !== false && checks.featured_img && checks.featured_img.status !== 'pass') fields.push('featured_img');
+            }
+            if (!fields.length) fields.push('meta_description');
+
+            var done = 0;
+            fields.forEach(function(field) {
+                $.post(ajaxurl, {
+                    action: 'mxchat_seo_suggest',
+                    nonce: mxchatContent.nonce,
+                    post_id: postId,
+                    field: field,
+                }).always(function() {
+                    if (++done >= fields.length) {
+                        // Re-analyze and re-render in modal
+                        if (seodState.expandedId === postId) {
+                            openSeoModal(postId);
+                        }
+                        $btn.prop('disabled', false).html(origHtml);
+                    }
+                });
+            });
+        }).fail(function() {
+            $btn.prop('disabled', false).html(origHtml);
+        });
+    }
+
     function showNotice(message, type) {
         $('.mxch-cg-notice').remove();
         var typeClass = type === 'error' ? 'mxch-cg-notice-error' : 'mxch-cg-notice-success';
@@ -1261,6 +1999,8 @@
         initChat();
         initSettingsAutoSave();
         initLeftTabs();
+        initSeo();
+        initSeoSection();
         initHistory();
         initStatusDropdown();
 

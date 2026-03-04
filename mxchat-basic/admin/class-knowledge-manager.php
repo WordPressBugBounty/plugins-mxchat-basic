@@ -31,6 +31,7 @@ private function mxchat_init_hooks() {
     // Admin post handlers for form submissions
     add_action('admin_post_mxchat_submit_content', array($this, 'mxchat_handle_content_submission'));
     add_action('admin_post_mxchat_submit_sitemap', array($this, 'mxchat_handle_sitemap_submission'));
+    add_action('admin_post_mxchat_submit_pdf_file', array($this, 'mxchat_handle_pdf_file_submission'));
     add_action('admin_post_mxchat_stop_processing', array($this, 'mxchat_stop_processing'));
     
     // AJAX handlers for real-time processing and status updates
@@ -247,11 +248,165 @@ public function mxchat_handle_pdf_for_knowledge_base($pdf_url, $response, $bot_i
 }
 
 /**
+ * Handle direct PDF file upload from the knowledge base page
+ */
+public function mxchat_handle_pdf_file_submission() {
+    if (!isset($_POST['submit_pdf_file']) || !current_user_can('manage_options')) {
+        wp_die(esc_html__('Unauthorized access', 'mxchat'));
+    }
+
+    check_admin_referer('mxchat_submit_pdf_file_action', 'mxchat_submit_pdf_file_nonce');
+
+    $redirect_url = admin_url('admin.php?page=mxchat-prompts');
+
+    // Validate file upload
+    if (empty($_FILES['pdf_file']) || $_FILES['pdf_file']['error'] !== UPLOAD_ERR_OK) {
+        $error_code = isset($_FILES['pdf_file']['error']) ? $_FILES['pdf_file']['error'] : UPLOAD_ERR_NO_FILE;
+        $error_messages = array(
+            UPLOAD_ERR_INI_SIZE   => __('The uploaded file exceeds the server upload_max_filesize limit.', 'mxchat'),
+            UPLOAD_ERR_FORM_SIZE  => __('The uploaded file exceeds the form MAX_FILE_SIZE limit.', 'mxchat'),
+            UPLOAD_ERR_PARTIAL    => __('The file was only partially uploaded.', 'mxchat'),
+            UPLOAD_ERR_NO_FILE    => __('No file was uploaded. Please select a PDF file.', 'mxchat'),
+            UPLOAD_ERR_NO_TMP_DIR => __('Server missing temporary folder.', 'mxchat'),
+            UPLOAD_ERR_CANT_WRITE => __('Server failed to write file to disk.', 'mxchat'),
+        );
+        $error_msg = isset($error_messages[$error_code]) ? $error_messages[$error_code] : __('Unknown upload error.', 'mxchat');
+        set_transient('mxchat_admin_notice_error', $error_msg, 30);
+        wp_safe_redirect(esc_url($redirect_url));
+        exit;
+    }
+
+    $file = $_FILES['pdf_file'];
+
+    // Validate MIME type
+    $finfo = finfo_open(FILEINFO_MIME_TYPE);
+    $mime_type = finfo_file($finfo, $file['tmp_name']);
+    finfo_close($finfo);
+
+    if ($mime_type !== 'application/pdf') {
+        set_transient('mxchat_admin_notice_error',
+            esc_html__('Invalid file type. Only PDF files are accepted.', 'mxchat'),
+            30
+        );
+        wp_safe_redirect(esc_url($redirect_url));
+        exit;
+    }
+
+    // Validate extension
+    $ext = strtolower(pathinfo($file['name'], PATHINFO_EXTENSION));
+    if ($ext !== 'pdf') {
+        set_transient('mxchat_admin_notice_error',
+            esc_html__('Invalid file extension. Only .pdf files are accepted.', 'mxchat'),
+            30
+        );
+        wp_safe_redirect(esc_url($redirect_url));
+        exit;
+    }
+
+    $bot_id = isset($_POST['bot_id']) ? sanitize_key($_POST['bot_id']) : 'default';
+    $original_filename = sanitize_file_name($file['name']);
+
+    $upload_dir = wp_upload_dir();
+    if (isset($upload_dir['error']) && $upload_dir['error'] !== false) {
+        set_transient('mxchat_admin_notice_error',
+            esc_html__('WordPress upload directory is not writable.', 'mxchat'),
+            30
+        );
+        wp_safe_redirect(esc_url($redirect_url));
+        exit;
+    }
+
+    $pdf_filename = sanitize_file_name('mxchat_kb_' . time() . '.pdf');
+    $pdf_path = trailingslashit($upload_dir['path']) . $pdf_filename;
+
+    if (!wp_mkdir_p(dirname($pdf_path))) {
+        set_transient('mxchat_admin_notice_error',
+            esc_html__('Failed to create upload directory.', 'mxchat'),
+            30
+        );
+        wp_safe_redirect(esc_url($redirect_url));
+        exit;
+    }
+
+    // Move uploaded file
+    if (!move_uploaded_file($file['tmp_name'], $pdf_path)) {
+        set_transient('mxchat_admin_notice_error',
+            esc_html__('Failed to save uploaded PDF file.', 'mxchat'),
+            30
+        );
+        wp_safe_redirect(esc_url($redirect_url));
+        exit;
+    }
+
+    try {
+        $total_pages = $this->mxchat_validate_and_count_pdf_pages($pdf_path);
+
+        if ($total_pages === false || $total_pages < 1) {
+            throw new Exception(__('Invalid PDF: Unable to parse or no pages found', 'mxchat'));
+        }
+
+        // Use original filename as the source identifier
+        $source_label = 'upload://' . $original_filename;
+
+        $queue_id = 'pdf_' . md5($source_label . time());
+
+        $pages = array();
+        for ($i = 1; $i <= $total_pages; $i++) {
+            $pages[] = array(
+                'pdf_path'    => $pdf_path,
+                'pdf_url'     => $source_label,
+                'page_number' => $i,
+                'total_pages' => $total_pages,
+            );
+        }
+
+        $queued_count = $this->mxchat_add_to_queue($queue_id, 'pdf_page', $pages, $bot_id);
+
+        if ($queued_count === 0) {
+            wp_delete_file($pdf_path);
+            throw new Exception(__('Failed to add PDF pages to processing queue', 'mxchat'));
+        }
+
+        $this->mxchat_set_queue_meta($queue_id, 'source_url', $source_label);
+        $this->mxchat_set_queue_meta($queue_id, 'queue_type', 'pdf');
+        $this->mxchat_set_queue_meta($queue_id, 'total_items', $total_pages);
+        $this->mxchat_set_queue_meta($queue_id, 'bot_id', $bot_id);
+        $this->mxchat_set_queue_meta($queue_id, 'pdf_path', $pdf_path);
+        $this->mxchat_set_queue_meta($queue_id, 'created_at', current_time('mysql'));
+
+        set_transient('mxchat_active_queue_pdf', $queue_id, DAY_IN_SECONDS);
+        set_transient('mxchat_last_pdf_url', $source_label, DAY_IN_SECONDS);
+
+        set_transient('mxchat_admin_notice_success',
+            sprintf(
+                esc_html__('PDF "%s" (%d pages) queued for processing. Processing will start automatically.', 'mxchat'),
+                esc_html($original_filename),
+                $total_pages
+            ),
+            30
+        );
+
+    } catch (Exception $e) {
+        if (file_exists($pdf_path)) {
+            wp_delete_file($pdf_path);
+        }
+        set_transient('mxchat_admin_notice_error',
+            esc_html__('Failed to process uploaded PDF: ', 'mxchat') . esc_html($e->getMessage()),
+            30
+        );
+    }
+
+    wp_safe_redirect(esc_url($redirect_url));
+    exit;
+}
+
+/**
  *   Validate PDF and count pages with multiple parser attempts
  */
 private function mxchat_validate_and_count_pdf_pages($pdf_path) {
     // Method 1: Try with Smalot PDF Parser (your current method)
     try {
+        mxchat_load_pdf_parser();
         $parser = new \Smalot\PdfParser\Parser();
         $pdf = $parser->parseFile($pdf_path);
         $pages = $pdf->getPages();
@@ -287,6 +442,7 @@ private function mxchat_validate_and_count_pdf_pages($pdf_path) {
     try {
         $repaired_path = $this->mxchat_attempt_pdf_repair($pdf_path);
         if ($repaired_path && $repaired_path !== $pdf_path) {
+            mxchat_load_pdf_parser();
             $parser = new \Smalot\PdfParser\Parser();
             $pdf = $parser->parseFile($repaired_path);
             $pages = $pdf->getPages();
@@ -6933,10 +7089,11 @@ private function mxchat_process_queue_pdf_page($item_data, $bot_id = 'default') 
     }
     
     try {
+        mxchat_load_pdf_parser();
         $parser = new \Smalot\PdfParser\Parser();
         $pdf = $parser->parseFile($pdf_path);
         $pages = $pdf->getPages();
-        
+
         if (!isset($pages[$page_number - 1])) {
             return new WP_Error('page_not_found', 'Page ' . $page_number . ' not found in PDF');
         }

@@ -70,7 +70,29 @@ class MxChat_Addons {
                 'accent' => '#fa73e6',
                 'url' => 'https://mxchat.ai/ai-theme-customizer/',
                 'plugin_file' => 'mxchat-theme/mxchat-theme.php',
-                'config_page' => 'mxchat-theme-settings'
+                'config_page' => 'mxchat-theme-settings',
+                'hero_features' => array(
+                    array(
+                        'icon' => '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="13.5" cy="6.5" r="2.5"/><path d="M17.5 10.5l4-4"/><circle cx="6" cy="12" r="2"/><path d="M2 14l2-2"/><circle cx="10.5" cy="17.5" r="2.5"/><path d="M14 21l-1-3"/></svg>',
+                        'title' => __('AI Theme Generator', 'mxchat'),
+                        'desc' => __('Describe your style, AI creates it', 'mxchat'),
+                    ),
+                    array(
+                        'icon' => '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18"/><path d="M9 21V9"/></svg>',
+                        'title' => __('Live Preview', 'mxchat'),
+                        'desc' => __('See changes in real-time', 'mxchat'),
+                    ),
+                    array(
+                        'icon' => '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v4"/><path d="m16.2 7.8 2.9-2.9"/><path d="M18 12h4"/><path d="m16.2 16.2 2.9 2.9"/><path d="M12 18v4"/><path d="m4.9 19.1 2.9-2.9"/><path d="M2 12h4"/><path d="m4.9 4.9 2.9 2.9"/></svg>',
+                        'title' => __('Color Controls', 'mxchat'),
+                        'desc' => __('Fine-tune every color precisely', 'mxchat'),
+                    ),
+                    array(
+                        'icon' => '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>',
+                        'title' => __('One-Click Apply', 'mxchat'),
+                        'desc' => __('Apply themes instantly', 'mxchat'),
+                    ),
+                ),
             ),
 
             'mxchat-admin-assistant' => array(
@@ -85,7 +107,29 @@ class MxChat_Addons {
                 'accent' => '#fa73e6',
                 'url' => 'https://mxchat.ai/ai-admin-assistant/',
                 'plugin_file' => 'mxchat-admin-chat/mxchat-admin-chat.php',
-                'config_page' => 'mxchat-admin-chat'
+                'config_page' => 'mxchat-admin-chat',
+                'hero_features' => array(
+                    array(
+                        'icon' => '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>',
+                        'title' => __('Admin Chat UI', 'mxchat'),
+                        'desc' => __('ChatGPT-like dashboard interface', 'mxchat'),
+                    ),
+                    array(
+                        'icon' => '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>',
+                        'title' => __('Image Generation', 'mxchat'),
+                        'desc' => __('Create images with AI prompts', 'mxchat'),
+                    ),
+                    array(
+                        'icon' => '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>',
+                        'title' => __('Web Research', 'mxchat'),
+                        'desc' => __('Search the web from your dashboard', 'mxchat'),
+                    ),
+                    array(
+                        'icon' => '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 16 12 14 15 10 9 8 12 2 12"/></svg>',
+                        'title' => __('Chat History', 'mxchat'),
+                        'desc' => __('Searchable conversation archive', 'mxchat'),
+                    ),
+                ),
             ),
 
             'mxchat-veo' => array(
@@ -100,7 +144,29 @@ class MxChat_Addons {
                 'accent' => '#ff6b35',
                 'url' => 'https://mxchat.ai/mxchat-veo-video-generation/',
                 'plugin_file' => 'mxchat-veo/mxchat-veo.php',
-                'config_page' => 'mxchat-veo'
+                'config_page' => 'mxchat-veo',
+                'hero_features' => array(
+                    array(
+                        'icon' => '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg>',
+                        'title' => __('AI Video Creation', 'mxchat'),
+                        'desc' => __('Generate videos from text prompts', 'mxchat'),
+                    ),
+                    array(
+                        'icon' => '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>',
+                        'title' => __('Native Audio', 'mxchat'),
+                        'desc' => __('Videos with built-in audio tracks', 'mxchat'),
+                    ),
+                    array(
+                        'icon' => '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3h7a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-7m0-18H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h7m0-18v18"/></svg>',
+                        'title' => __('Aspect Ratios', 'mxchat'),
+                        'desc' => __('Multiple size options available', 'mxchat'),
+                    ),
+                    array(
+                        'icon' => '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>',
+                        'title' => __('Media Library', 'mxchat'),
+                        'desc' => __('Save directly to WordPress media', 'mxchat'),
+                    ),
+                ),
             ),
 
             'mxchat-image-analysis' => array(
@@ -115,7 +181,29 @@ class MxChat_Addons {
                 'accent' => '#fa73e6',
                 'url' => 'https://mxchat.ai/image-analysis/',
                 'plugin_file' => 'mxchat-vision/mxchat-vision.php',
-                'config_page' => 'mxchat-vision'
+                'config_page' => 'mxchat-vision',
+                'hero_features' => array(
+                    array(
+                        'icon' => '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>',
+                        'title' => __('Vision AI Models', 'mxchat'),
+                        'desc' => __('OpenAI Vision & Grok analysis', 'mxchat'),
+                    ),
+                    array(
+                        'icon' => '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 16 12 12 8 16"/><line x1="12" y1="12" x2="12" y2="21"/><path d="M20.39 18.39A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3"/></svg>',
+                        'title' => __('Drag & Drop', 'mxchat'),
+                        'desc' => __('Easy image upload in chat', 'mxchat'),
+                    ),
+                    array(
+                        'icon' => '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>',
+                        'title' => __('OCR Extraction', 'mxchat'),
+                        'desc' => __('Extract text from images', 'mxchat'),
+                    ),
+                    array(
+                        'icon' => '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></svg>',
+                        'title' => __('Custom Prompts', 'mxchat'),
+                        'desc' => __('Tailor analysis instructions', 'mxchat'),
+                    ),
+                ),
             ),
 
             'mxchat-forms' => array(
@@ -130,7 +218,29 @@ class MxChat_Addons {
                 'accent' => '#fa73e6',
                 'url' => 'https://mxchat.ai/forms-action/',
                 'plugin_file' => 'mxchat-forms/mxchat-forms.php',
-                'config_page' => 'mxchat-forms'
+                'config_page' => 'mxchat-forms',
+                'hero_features' => array(
+                    array(
+                        'icon' => '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><line x1="9" y1="9" x2="15" y2="9"/><line x1="9" y1="13" x2="15" y2="13"/><line x1="9" y1="17" x2="12" y2="17"/></svg>',
+                        'title' => __('Form Builder', 'mxchat'),
+                        'desc' => __('No-code drag & drop builder', 'mxchat'),
+                    ),
+                    array(
+                        'icon' => '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>',
+                        'title' => __('Smart Triggers', 'mxchat'),
+                        'desc' => __('Show forms based on intent', 'mxchat'),
+                    ),
+                    array(
+                        'icon' => '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>',
+                        'title' => __('Lead Capture', 'mxchat'),
+                        'desc' => __('Turn visitors into contacts', 'mxchat'),
+                    ),
+                    array(
+                        'icon' => '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>',
+                        'title' => __('Data Export', 'mxchat'),
+                        'desc' => __('Export leads to CSV easily', 'mxchat'),
+                    ),
+                ),
             ),
             
             'mxchat-multi-bot' => array(
@@ -145,7 +255,29 @@ class MxChat_Addons {
                 'accent' => '#8b5cf6',
                 'url' => 'https://mxchat.ai/multi-bot/',
                 'plugin_file' => 'mxchat-multi-bot/mxchat-multi-bot.php',
-                'config_page' => 'mxchat-multi-bot'
+                'config_page' => 'mxchat-multi-bot',
+                'hero_features' => array(
+                    array(
+                        'icon' => '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>',
+                        'title' => __('Unlimited Bots', 'mxchat'),
+                        'desc' => __('Create specialized chatbots', 'mxchat'),
+                    ),
+                    array(
+                        'icon' => '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>',
+                        'title' => __('Separate Knowledge', 'mxchat'),
+                        'desc' => __('Unique knowledge per bot', 'mxchat'),
+                    ),
+                    array(
+                        'icon' => '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>',
+                        'title' => __('Page Assignments', 'mxchat'),
+                        'desc' => __('Assign bots to specific pages', 'mxchat'),
+                    ),
+                    array(
+                        'icon' => '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>',
+                        'title' => __('Custom Personas', 'mxchat'),
+                        'desc' => __('Unique personality per bot', 'mxchat'),
+                    ),
+                ),
             ),
 
             'mxchat-trigger' => array(
@@ -160,7 +292,68 @@ class MxChat_Addons {
                 'accent' => '#3ac9d1',
                 'url' => 'https://mxchat.ai/triggers/',
                 'plugin_file' => 'mxchat-trigger/mxchat-trigger.php',
-                'config_page' => 'mxchat-triggers'
+                'config_page' => 'mxchat-triggers',
+                'hero_features' => array(
+                    array(
+                        'icon' => '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg>',
+                        'title' => __('Element Triggers', 'mxchat'),
+                        'desc' => __('Turn any element into a trigger', 'mxchat'),
+                    ),
+                    array(
+                        'icon' => '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>',
+                        'title' => __('Preset Messages', 'mxchat'),
+                        'desc' => __('Auto-send predefined prompts', 'mxchat'),
+                    ),
+                    array(
+                        'icon' => '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>',
+                        'title' => __('Multi-Bot Targeting', 'mxchat'),
+                        'desc' => __('Route to specific bots', 'mxchat'),
+                    ),
+                    array(
+                        'icon' => '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><path d="M12 8v8"/><path d="M8 12h8"/></svg>',
+                        'title' => __('Button Styles', 'mxchat'),
+                        'desc' => __('Built-in styles & animations', 'mxchat'),
+                    ),
+                ),
+            ),
+
+            'mxchat-anywhere' => array(
+                'title' => __('MxChat Anywhere', 'mxchat'),
+                'sidebar_title' => __('Anywhere', 'mxchat'),
+                'description' => __('Deploy your AI chatbot on any website with a single script tag. Works on static HTML, Shopify, Squarespace, Wix, and custom web apps — no WordPress required on the target site. Full feature parity with Shadow DOM style isolation.', 'mxchat'),
+                'key_benefits' => array(
+                    __('One script tag — works on any website', 'mxchat'),
+                    __('Shadow DOM prevents CSS conflicts', 'mxchat'),
+                    __('Domain-validated security keys', 'mxchat')
+                ),
+                'license' => 'MxChat PRO',
+                'accent' => '#10b981',
+                'url' => 'https://mxchat.ai/mxchat-anywhere-deploy-your-ai-chatbot-on-any-website-with-one-script-tag/',
+                'download_url' => 'https://mxchat.ai/mxchat-anywhere-deploy-your-ai-chatbot-on-any-website-with-one-script-tag/',
+                'plugin_file' => 'mxchat-anywhere/mxchat-anywhere.php',
+                'config_page' => 'mxchat-anywhere',
+                'hero_features' => array(
+                    array(
+                        'icon' => '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>',
+                        'title' => __('Universal Embed', 'mxchat'),
+                        'desc' => __('One script tag on any website', 'mxchat'),
+                    ),
+                    array(
+                        'icon' => '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>',
+                        'title' => __('Style Isolation', 'mxchat'),
+                        'desc' => __('Shadow DOM prevents CSS conflicts', 'mxchat'),
+                    ),
+                    array(
+                        'icon' => '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>',
+                        'title' => __('Domain Security', 'mxchat'),
+                        'desc' => __('Validated keys per domain', 'mxchat'),
+                    ),
+                    array(
+                        'icon' => '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>',
+                        'title' => __('Zero Dependencies', 'mxchat'),
+                        'desc' => __('Vanilla JS, no impact on Core Web Vitals', 'mxchat'),
+                    ),
+                ),
             ),
 
             'mxchat-woo' => array(
@@ -175,7 +368,29 @@ class MxChat_Addons {
                 'accent' => '#fa73e6',
                 'url' => 'https://mxchat.ai/woocommerce/',
                 'plugin_file' => 'mxchat-woo/mxchat-woo.php',
-                'config_page' => 'mxchat-woo'
+                'config_page' => 'mxchat-woo',
+                'hero_features' => array(
+                    array(
+                        'icon' => '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="21" r="1"/><circle cx="20" cy="21" r="1"/><path d="M1 1h4l2.68 13.39a2 2 0 0 0 2 1.61h9.72a2 2 0 0 0 2-1.61L23 6H6"/></svg>',
+                        'title' => __('Cart Assistant', 'mxchat'),
+                        'desc' => __('Manage cart through conversation', 'mxchat'),
+                    ),
+                    array(
+                        'icon' => '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>',
+                        'title' => __('Product Search', 'mxchat'),
+                        'desc' => __('Smart product recommendations', 'mxchat'),
+                    ),
+                    array(
+                        'icon' => '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="4" width="22" height="16" rx="2" ry="2"/><line x1="1" y1="10" x2="23" y2="10"/></svg>',
+                        'title' => __('Checkout Help', 'mxchat'),
+                        'desc' => __('Guide customers to purchase', 'mxchat'),
+                    ),
+                    array(
+                        'icon' => '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>',
+                        'title' => __('Order History', 'mxchat'),
+                        'desc' => __('Look up past orders in chat', 'mxchat'),
+                    ),
+                ),
             ),
 
             'mxchat-assistant-api' => array(
@@ -190,7 +405,29 @@ class MxChat_Addons {
                 'accent' => '#00d4aa',
                 'url' => 'https://mxchat.ai/openai-assistants-api/',
                 'plugin_file' => 'mxchat-assistant-api/mxchat-assistant-api.php',
-                'config_page' => 'mxchat-assistant-api'
+                'config_page' => 'mxchat-assistant-api',
+                'hero_features' => array(
+                    array(
+                        'icon' => '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>',
+                        'title' => __('OpenAI Assistants', 'mxchat'),
+                        'desc' => __('Connect your custom Assistant', 'mxchat'),
+                    ),
+                    array(
+                        'icon' => '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>',
+                        'title' => __('Advanced AI', 'mxchat'),
+                        'desc' => __('Full Assistant API capabilities', 'mxchat'),
+                    ),
+                    array(
+                        'icon' => '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>',
+                        'title' => __('24hr Persistence', 'mxchat'),
+                        'desc' => __('Conversations persist all day', 'mxchat'),
+                    ),
+                    array(
+                        'icon' => '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>',
+                        'title' => __('Direct Connect', 'mxchat'),
+                        'desc' => __('Bypass MxChat knowledge base', 'mxchat'),
+                    ),
+                ),
             ),
 
             'mxchat-perplexity' => array(
@@ -205,7 +442,29 @@ class MxChat_Addons {
                 'accent' => '#fa73e6',
                 'url' => 'https://quickdeploywp.com/plugin/mxchat-perplexity/',
                 'plugin_file' => 'mxchat-perplexity/mxchat-perplexity.php',
-                'config_page' => 'mxchat-perplexity'
+                'config_page' => 'mxchat-perplexity',
+                'hero_features' => array(
+                    array(
+                        'icon' => '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>',
+                        'title' => __('Web Search', 'mxchat'),
+                        'desc' => __('Real-time internet searching', 'mxchat'),
+                    ),
+                    array(
+                        'icon' => '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>',
+                        'title' => __('Intent Triggers', 'mxchat'),
+                        'desc' => __('Auto-search when needed', 'mxchat'),
+                    ),
+                    array(
+                        'icon' => '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>',
+                        'title' => __('Live Data', 'mxchat'),
+                        'desc' => __('Up-to-date information always', 'mxchat'),
+                    ),
+                    array(
+                        'icon' => '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>',
+                        'title' => __('Seamless Chat', 'mxchat'),
+                        'desc' => __('Results blend into conversation', 'mxchat'),
+                    ),
+                ),
             ),
 
             'mxchat-moderation' => array(
@@ -220,7 +479,29 @@ class MxChat_Addons {
                 'accent' => '#fa73e6',
                 'url' => 'https://quickdeploywp.com/plugin/mxchat-moderation/',
                 'plugin_file' => 'mxchat-moderation/mx-chat-moderation.php',
-                'config_page' => 'mx-chat-moderation'
+                'config_page' => 'mx-chat-moderation',
+                'hero_features' => array(
+                    array(
+                        'icon' => '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>',
+                        'title' => __('Content Filter', 'mxchat'),
+                        'desc' => __('Block inappropriate content', 'mxchat'),
+                    ),
+                    array(
+                        'icon' => '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/></svg>',
+                        'title' => __('User Blocking', 'mxchat'),
+                        'desc' => __('IP & email-based bans', 'mxchat'),
+                    ),
+                    array(
+                        'icon' => '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>',
+                        'title' => __('Spam Protection', 'mxchat'),
+                        'desc' => __('Detect and prevent spam', 'mxchat'),
+                    ),
+                    array(
+                        'icon' => '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="8.5" cy="7" r="4"/><line x1="20" y1="8" x2="20" y2="14"/><line x1="23" y1="11" x2="17" y2="11"/></svg>',
+                        'title' => __('Brand Safety', 'mxchat'),
+                        'desc' => __('Keep chat professional', 'mxchat'),
+                    ),
+                ),
             ),
 
         );

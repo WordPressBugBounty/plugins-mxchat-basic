@@ -49,7 +49,7 @@ $('.mxchat-import-box').on('click', function() {
     $box.addClass('active');
 
     // Hide all input areas
-    $('#mxchat-url-input-area, #mxchat-content-input-area').hide();
+    $('#mxchat-url-input-area, #mxchat-content-input-area, #mxchat-pdf-upload-area').hide();
 
     // Hide sitemap-specific sections (but NOT for sitemap option - let detection logic handle it)
     if (option !== 'sitemap') {
@@ -58,20 +58,20 @@ $('.mxchat-import-box').on('click', function() {
 
     // Handle different import options
     switch (option) {
-        case 'pdf':
+        case 'pdf-url':
         case 'sitemap':
         case 'url':
             // Show URL input area with appropriate placeholder
             $('#mxchat-url-input-area').show();
             $('#sitemap_url').attr('placeholder', $box.data('placeholder'));
-            $('#import_type').val(option);
+            $('#import_type').val(option === 'pdf-url' ? 'pdf' : option);
 
             // UPDATED: Add or update bot_id hidden field for URL forms
             updateBotIdInForm('#mxchat-url-form');
 
             // Update the description text based on the import type
             let descriptionText = '';
-            if (option === 'pdf') {
+            if (option === 'pdf-url') {
                 descriptionText = 'Import a PDF document by entering its URL above. PDFs are processed via cron job. If processing does not start, you can manually process batch 5 pages at a time.';
             } else if (option === 'sitemap') {
                 descriptionText = 'Enter a content-specific sub-sitemap URL, not the sitemap index. Sitemaps are processed via cron job. If processing does not start, you can manually process batch 5 pages at a time.';
@@ -97,6 +97,14 @@ $('.mxchat-import-box').on('click', function() {
 
             // UPDATED: Add or update bot_id hidden field for content forms
             updateBotIdInForm('#mxchat-content-form');
+            break;
+
+        case 'pdf-upload':
+            // Show PDF file upload area
+            $('#mxchat-pdf-upload-area').show();
+
+            // Add or update bot_id hidden field for PDF upload form
+            updateBotIdInForm('#mxchat-pdf-upload-form');
             break;
     }
 });

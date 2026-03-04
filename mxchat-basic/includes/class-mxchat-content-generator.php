@@ -29,6 +29,10 @@ class MxChat_Content_Generator {
         add_action('wp_ajax_mxchat_load_post_for_edit', array($this, 'handle_load_post_for_edit'));
         add_action('wp_ajax_mxchat_delete_content', array($this, 'handle_delete_content'));
         add_action('wp_ajax_mxchat_update_post_status', array($this, 'handle_update_post_status'));
+        add_action('wp_ajax_mxchat_seo_analyze', array($this, 'handle_seo_analyze'));
+        add_action('wp_ajax_mxchat_seo_analyze_batch', array($this, 'handle_seo_analyze_batch'));
+        add_action('wp_ajax_mxchat_seo_suggest', array($this, 'handle_seo_suggest'));
+        add_action('wp_ajax_mxchat_seo_list_posts', array($this, 'handle_seo_list_posts'));
 
         // Background generation via loopback (nopriv because loopback doesn't carry cookies — auth via secret token)
         add_action('wp_ajax_nopriv_mxchat_generate_content_background', array($this, 'handle_generate_content_background'));
@@ -337,7 +341,7 @@ class MxChat_Content_Generator {
         $this->update_progress($progress_key, 'starting', __('Starting generation...', 'mxchat'), 5);
 
         // Store generation parameters for the background worker
-        set_transient($progress_key . '_params', array(
+        $params = array(
             'secret'        => $secret,
             'user_id'       => get_current_user_id(),
             'prompt'        => $prompt,
@@ -346,24 +350,60 @@ class MxChat_Content_Generator {
             'schedule_date' => $schedule_date,
             'layout'        => $layout,
             'title_display' => $title_display,
-        ), 600); // 10 minute TTL
+        );
+        set_transient($progress_key . '_params', $params, 600);
 
-        // Spawn background generation via non-blocking loopback request.
-        // This lets the current request end immediately so the browser gets
-        // the progress_key back in <1 second, avoiding Cloudflare 524 timeouts.
-        wp_remote_post(admin_url('admin-ajax.php'), array(
-            'timeout'   => 0.01,
-            'blocking'  => false,
-            'sslverify' => apply_filters('https_local_ssl_verify', false),
-            'body'      => array(
-                'action'       => 'mxchat_generate_content_background',
-                'progress_key' => $progress_key,
-                'secret'       => $secret,
-            ),
-        ));
+        // Send JSON response to the browser immediately, then continue
+        // generation in the same PHP process. This avoids loopback requests
+        // which fail behind Cloudflare, CDNs, and on shared hosting.
+        //
+        // Strategy (works on all hosting environments):
+        // 1. litespeed_finish_request() — LiteSpeed servers (HostGator, etc.)
+        // 2. fastcgi_finish_request() — Nginx + PHP-FPM (most VPS/cloud hosts)
+        // 3. Connection: close + output buffer flush — Apache mod_php, CGI, any other SAPI
+        //
+        // All three approaches send the response to the client and allow PHP
+        // to continue executing in the background.
 
-        // Return immediately — the browser starts polling for progress
-        wp_send_json_success(array('progress_key' => $progress_key));
+        ignore_user_abort(true);
+        if (function_exists('set_time_limit')) {
+            set_time_limit(300);
+        }
+
+        $response_json = wp_json_encode(array('success' => true, 'data' => array('progress_key' => $progress_key)));
+
+        if (function_exists('litespeed_finish_request')) {
+            header('Content-Type: application/json; charset=utf-8');
+            echo $response_json;
+            litespeed_finish_request();
+        } elseif (function_exists('fastcgi_finish_request')) {
+            header('Content-Type: application/json; charset=utf-8');
+            echo $response_json;
+            fastcgi_finish_request();
+        } else {
+            // Universal fallback: close the connection via headers + output buffer flush.
+            // Works on Apache mod_php, CGI, and any SAPI that doesn't have a finish function.
+            header('Content-Type: application/json; charset=utf-8');
+            header('Connection: close');
+            header('Content-Encoding: none');
+
+            // Clear any existing output buffers
+            while (ob_get_level() > 0) {
+                ob_end_clean();
+            }
+
+            ob_start();
+            echo $response_json;
+            $size = ob_get_length();
+            header('Content-Length: ' . $size);
+            ob_end_flush();
+            flush();
+        }
+
+        // Client has received the response and is now polling for progress.
+        // Run generation inline in this same PHP process.
+        $this->run_background_generation($progress_key, $params);
+        die();
     }
 
     /**
@@ -397,6 +437,14 @@ class MxChat_Content_Generator {
         // Restore the original user context
         wp_set_current_user($params['user_id']);
 
+        $this->run_background_generation($progress_key, $params);
+        die();
+    }
+
+    /**
+     * Core generation logic — used by both loopback and inline execution paths.
+     */
+    private function run_background_generation($progress_key, $params) {
         $prompt        = $params['prompt'];
         $content_type  = $params['content_type'];
         $post_status   = $params['post_status'];
@@ -410,7 +458,7 @@ class MxChat_Content_Generator {
         $plan = $this->plan_content($prompt, $content_type);
         if (is_wp_error($plan)) {
             $this->update_progress($progress_key, 'error', $plan->get_error_message(), 0);
-            die();
+            return;
         }
 
         $this->update_progress($progress_key, 'images', __('Generating images...', 'mxchat'), 30);
@@ -424,7 +472,7 @@ class MxChat_Content_Generator {
         $html_content = $this->generate_html_content($plan, $image_urls, $content_type, $prompt);
         if (is_wp_error($html_content)) {
             $this->update_progress($progress_key, 'error', $html_content->get_error_message(), 0);
-            die();
+            return;
         }
 
         $this->update_progress($progress_key, 'creating', __('Creating WordPress post...', 'mxchat'), 85);
@@ -459,7 +507,7 @@ class MxChat_Content_Generator {
 
         if (is_wp_error($post_id)) {
             $this->update_progress($progress_key, 'error', $post_id->get_error_message(), 0);
-            die();
+            return;
         }
 
         // Set featured image if we have one
@@ -522,7 +570,6 @@ class MxChat_Content_Generator {
 
         // Store the result in the progress transient so polling can retrieve it
         $this->update_progress($progress_key, 'done', __('Content generated successfully!', 'mxchat'), 100, $result);
-        die();
     }
 
     /**
@@ -639,7 +686,7 @@ class MxChat_Content_Generator {
             'message'     => __('Content updated successfully.', 'mxchat'),
             'images'      => $images,
             'meta'        => array(
-                'description' => get_post_meta($post_id, '_mxchat_meta_description', true),
+                'description' => $this->get_meta_description($post_id),
                 'keyword'     => $this->get_focus_keyword($post_id),
                 'excerpt'     => get_post($post_id)->post_excerpt,
             ),
@@ -1962,27 +2009,8 @@ article .entry-content,
         $focus_keyword    = !empty($keywords) ? $keywords[0] : '';
         $keywords_string  = implode(', ', $keywords);
 
-        // Always store in custom meta as fallback
-        update_post_meta($post_id, '_mxchat_meta_description', sanitize_text_field($meta_description));
-        update_post_meta($post_id, '_mxchat_keywords', sanitize_text_field($keywords_string));
-
-        // Yoast SEO
-        if (defined('WPSEO_VERSION')) {
-            update_post_meta($post_id, '_yoast_wpseo_metadesc', sanitize_text_field($meta_description));
-            update_post_meta($post_id, '_yoast_wpseo_focuskw', sanitize_text_field($focus_keyword));
-        }
-
-        // RankMath
-        if (class_exists('RankMath')) {
-            update_post_meta($post_id, 'rank_math_description', sanitize_text_field($meta_description));
-            update_post_meta($post_id, 'rank_math_focus_keyword', sanitize_text_field($focus_keyword));
-        }
-
-        // All in One SEO
-        if (function_exists('aioseo')) {
-            update_post_meta($post_id, '_aioseo_description', sanitize_text_field($meta_description));
-            update_post_meta($post_id, '_aioseo_keywords', sanitize_text_field($keywords_string));
-        }
+        $this->set_meta_description($post_id, $meta_description);
+        $this->set_focus_keyword($post_id, !empty($focus_keyword) ? $focus_keyword : $keywords_string);
     }
 
     // ─── AI Model Caller ────────────────────────────────────────────────
@@ -2245,13 +2273,13 @@ article .entry-content,
         $field = sanitize_text_field($_POST['field'] ?? '');
         $value = sanitize_text_field($_POST['value'] ?? '');
 
-        $allowed_fields = array('content_model', 'content_image_model', 'content_enable_images', 'content_use_placeholders', 'content_internal_linking', 'content_tool_use');
+        $allowed_fields = array('content_model', 'content_image_model', 'content_enable_images', 'content_use_placeholders', 'content_internal_linking', 'content_tool_use', 'seo_optimize_meta_desc', 'seo_optimize_seo_title', 'seo_optimize_slug', 'seo_optimize_readability', 'seo_optimize_internal_links', 'seo_optimize_img_alt', 'seo_optimize_featured_img');
         if (!in_array($field, $allowed_fields, true)) {
             wp_send_json_error(array('message' => __('Invalid field.', 'mxchat')));
         }
 
         // Toggle fields
-        if (in_array($field, array('content_enable_images', 'content_use_placeholders', 'content_internal_linking', 'content_tool_use'), true)) {
+        if (in_array($field, array('content_enable_images', 'content_use_placeholders', 'content_internal_linking', 'content_tool_use', 'seo_optimize_meta_desc', 'seo_optimize_seo_title', 'seo_optimize_slug', 'seo_optimize_readability', 'seo_optimize_internal_links', 'seo_optimize_img_alt', 'seo_optimize_featured_img'), true)) {
             $value = ($value === 'on') ? 'on' : 'off';
         }
 
@@ -2525,7 +2553,7 @@ article .entry-content,
             'status'      => $post->post_status,
             'images'      => $images,
             'meta'        => array(
-                'description' => get_post_meta($post_id, '_mxchat_meta_description', true),
+                'description' => $this->get_meta_description($post_id),
                 'keyword'     => $this->get_focus_keyword($post_id),
                 'excerpt'     => $post->post_excerpt,
             ),
@@ -2598,12 +2626,483 @@ article .entry-content,
     /**
      * Get the focus keyword (first keyword from comma-separated list).
      */
+    private function get_seo_plugin() {
+        if (class_exists('RankMath'))      return 'rankmath';
+        if (defined('WPSEO_VERSION'))      return 'yoast';
+        if (function_exists('aioseo'))     return 'aioseo';
+        return 'none';
+    }
+
+    private function get_meta_description($post_id) {
+        $plugin = $this->get_seo_plugin();
+        $keys = array(
+            'rankmath' => 'rank_math_description',
+            'yoast'    => '_yoast_wpseo_metadesc',
+            'aioseo'   => '_aioseo_description',
+        );
+        if (isset($keys[$plugin])) {
+            $val = get_post_meta($post_id, $keys[$plugin], true);
+            if (!empty($val)) return $val;
+        }
+        return get_post_meta($post_id, '_mxchat_meta_description', true);
+    }
+
+    private function set_meta_description($post_id, $value) {
+        $value = sanitize_text_field($value);
+        $plugin = $this->get_seo_plugin();
+        $keys = array(
+            'rankmath' => 'rank_math_description',
+            'yoast'    => '_yoast_wpseo_metadesc',
+            'aioseo'   => '_aioseo_description',
+        );
+        if (isset($keys[$plugin])) {
+            update_post_meta($post_id, $keys[$plugin], $value);
+        } else {
+            update_post_meta($post_id, '_mxchat_meta_description', $value);
+        }
+    }
+
     private function get_focus_keyword($post_id) {
+        $plugin = $this->get_seo_plugin();
+        $keys = array(
+            'rankmath' => 'rank_math_focus_keyword',
+            'yoast'    => '_yoast_wpseo_focuskw',
+        );
+        if (isset($keys[$plugin])) {
+            $val = get_post_meta($post_id, $keys[$plugin], true);
+            if (!empty($val)) {
+                $parts = explode(',', $val);
+                return trim($parts[0]);
+            }
+        }
         $keywords = get_post_meta($post_id, '_mxchat_keywords', true);
         if (!empty($keywords)) {
             $parts = explode(',', $keywords);
             return trim($parts[0]);
         }
         return '';
+    }
+
+    private function set_focus_keyword($post_id, $value) {
+        $value = sanitize_text_field($value);
+        $plugin = $this->get_seo_plugin();
+        $keys = array(
+            'rankmath' => 'rank_math_focus_keyword',
+            'yoast'    => '_yoast_wpseo_focuskw',
+        );
+        if (isset($keys[$plugin])) {
+            update_post_meta($post_id, $keys[$plugin], $value);
+        } else {
+            update_post_meta($post_id, '_mxchat_keywords', $value);
+        }
+    }
+
+    // ─── SEO Analysis ──────────────────────────────────────────────
+
+    /**
+     * Analyze a generated post for SEO quality.
+     * Returns a 0-100 score with individual check results.
+     */
+    public function handle_seo_analyze() {
+        check_ajax_referer('mxchat_content_nonce', 'nonce');
+
+        if (!current_user_can('edit_posts')) {
+            wp_send_json_error('Unauthorized');
+        }
+
+        $post_id = intval($_POST['post_id'] ?? 0);
+        if (!$post_id || !get_post($post_id)) {
+            wp_send_json_error('Post not found');
+        }
+
+        $result = $this->seo_score_post($post_id);
+        wp_send_json_success($result);
+    }
+
+    public function handle_seo_analyze_batch() {
+        check_ajax_referer('mxchat_content_nonce', 'nonce');
+
+        if (!current_user_can('edit_posts')) {
+            wp_send_json_error('Unauthorized');
+        }
+
+        $post_ids = array_map('intval', (array) ($_POST['post_ids'] ?? array()));
+        $post_ids = array_filter($post_ids);
+        if (empty($post_ids) || count($post_ids) > 50) {
+            wp_send_json_error('Invalid post IDs (1-50 allowed)');
+        }
+
+        $results = array();
+        foreach ($post_ids as $pid) {
+            if (get_post($pid)) {
+                $results[$pid] = $this->seo_score_post($pid);
+            }
+        }
+
+        wp_send_json_success(array('results' => $results));
+    }
+
+    private function seo_score_post($post_id) {
+        $post = get_post($post_id);
+
+        $title     = $post->post_title;
+        $content   = $post->post_content;
+        $slug      = $post->post_name;
+        $meta_desc = $this->get_meta_description($post_id);
+        $focus_kw  = $this->get_focus_keyword($post_id);
+        $text      = wp_strip_all_tags($content);
+        $word_count = str_word_count($text);
+
+        // Parse images
+        preg_match_all('/<img[^>]*>/i', $content, $img_matches);
+        $total_images = count($img_matches[0]);
+        $images_with_alt = 0;
+        foreach ($img_matches[0] as $img) {
+            if (preg_match('/alt\s*=\s*["\']([^"\']+)["\']/i', $img, $alt_m) && trim($alt_m[1]) !== '') {
+                $images_with_alt++;
+            }
+        }
+
+        // Parse links
+        preg_match_all('/<a[^>]+href\s*=\s*["\']([^"\']+)["\']/i', $content, $link_matches);
+        $site_url = home_url();
+        $internal_links = 0;
+        if (!empty($link_matches[1])) {
+            foreach ($link_matches[1] as $href) {
+                if (strpos($href, $site_url) === 0 || (strpos($href, '/') === 0 && strpos($href, '//') !== 0)) {
+                    $internal_links++;
+                }
+            }
+        }
+
+        // Parse headings
+        preg_match_all('/<h([1-6])[^>]*>/i', $content, $h_matches);
+        $heading_count = count($h_matches[0]);
+        $has_subheadings = false;
+        foreach ($h_matches[1] as $lvl) {
+            if ($lvl >= 2) { $has_subheadings = true; break; }
+        }
+
+        $checks = array();
+        $score = 100;
+
+        // 1. Title length
+        $tl = mb_strlen($title);
+        if ($tl === 0)       $checks['title_length'] = array('status' => 'fail', 'label' => 'Page Title', 'detail' => 'Missing', 'penalty' => 20);
+        elseif ($tl < 30)    $checks['title_length'] = array('status' => 'warn', 'label' => 'Page Title', 'detail' => $tl . ' chars — too short (aim for 50–60)', 'penalty' => 5);
+        elseif ($tl > 70)    $checks['title_length'] = array('status' => 'warn', 'label' => 'Page Title', 'detail' => $tl . ' chars — may truncate in search', 'penalty' => 3);
+        else                 $checks['title_length'] = array('status' => 'pass', 'label' => 'Page Title', 'detail' => $tl . ' chars — good length', 'penalty' => 0);
+
+        // 2. Meta description
+        $ml = mb_strlen($meta_desc);
+        if ($ml === 0)       $checks['meta_desc'] = array('status' => 'fail', 'label' => 'Meta Description', 'detail' => 'Missing — engines will auto-generate one', 'penalty' => 15);
+        elseif ($ml < 120)   $checks['meta_desc'] = array('status' => 'warn', 'label' => 'Meta Description', 'detail' => $ml . ' chars — could be longer (150–160)', 'penalty' => 3);
+        elseif ($ml > 160)   $checks['meta_desc'] = array('status' => 'warn', 'label' => 'Meta Description', 'detail' => $ml . ' chars — may truncate (150–160)', 'penalty' => 3);
+        else                 $checks['meta_desc'] = array('status' => 'pass', 'label' => 'Meta Description', 'detail' => $ml . ' chars — good length', 'penalty' => 0);
+
+        // 3. Focus keyword placement
+        if (empty($focus_kw)) {
+            $checks['focus_kw'] = array('status' => 'warn', 'label' => 'Focus Keyword', 'detail' => 'Not set — helps guide optimization', 'penalty' => 5);
+        } else {
+            $places = array();
+            if (mb_stripos($title, $focus_kw) !== false) $places[] = 'title';
+            if (mb_stripos($meta_desc, $focus_kw) !== false) $places[] = 'meta';
+            if (mb_stripos($text, $focus_kw) !== false) $places[] = 'content';
+            if (stripos($slug, str_replace(' ', '-', strtolower($focus_kw))) !== false) $places[] = 'slug';
+
+            if (count($places) >= 3)     $checks['focus_kw'] = array('status' => 'pass', 'label' => 'Focus Keyword', 'detail' => 'Found in ' . implode(', ', $places), 'penalty' => 0);
+            elseif (count($places) >= 1) {
+                $miss = array_diff(array('title', 'meta', 'content', 'slug'), $places);
+                $checks['focus_kw'] = array('status' => 'warn', 'label' => 'Focus Keyword', 'detail' => 'In ' . implode(', ', $places) . ' — missing from ' . implode(', ', array_slice($miss, 0, 2)), 'penalty' => 5);
+            } else $checks['focus_kw'] = array('status' => 'fail', 'label' => 'Focus Keyword', 'detail' => '"' . esc_html($focus_kw) . '" not found in content', 'penalty' => 10);
+        }
+
+        // 4. Content depth
+        if ($word_count < 300)      $checks['content_depth'] = array('status' => 'fail', 'label' => 'Content Depth', 'detail' => $word_count . ' words — thin (aim for 800+)', 'penalty' => 12);
+        elseif ($word_count < 600)  $checks['content_depth'] = array('status' => 'warn', 'label' => 'Content Depth', 'detail' => $word_count . ' words — light (800+ ideal)', 'penalty' => 5);
+        else                        $checks['content_depth'] = array('status' => 'pass', 'label' => 'Content Depth', 'detail' => number_format($word_count) . ' words', 'penalty' => 0);
+
+        // 5. Heading structure
+        if ($heading_count === 0)        $checks['headings'] = array('status' => 'fail', 'label' => 'Heading Structure', 'detail' => 'No headings — add H2s to organize content', 'penalty' => 10);
+        elseif (!$has_subheadings)       $checks['headings'] = array('status' => 'warn', 'label' => 'Heading Structure', 'detail' => 'Missing subheadings (H2/H3)', 'penalty' => 5);
+        else                             $checks['headings'] = array('status' => 'pass', 'label' => 'Heading Structure', 'detail' => $heading_count . ' headings — well structured', 'penalty' => 0);
+
+        // 6. Image ALT text
+        if ($total_images === 0) {
+            $checks['img_alt'] = array('status' => 'warn', 'label' => 'Image ALT Text', 'detail' => 'No images found', 'penalty' => 2);
+        } else {
+            $missing = $total_images - $images_with_alt;
+            $checks['img_alt'] = $missing === 0
+                ? array('status' => 'pass', 'label' => 'Image ALT Text', 'detail' => 'All ' . $total_images . ' images have ALT text', 'penalty' => 0)
+                : array('status' => 'fail', 'label' => 'Image ALT Text', 'detail' => $missing . '/' . $total_images . ' missing ALT text', 'penalty' => min($missing * 3, 12));
+        }
+
+        // 7. Internal links
+        if ($internal_links === 0 && $word_count >= 300)
+            $checks['internal_links'] = array('status' => 'fail', 'label' => 'Internal Links', 'detail' => 'None — link to related content', 'penalty' => 8);
+        else
+            $checks['internal_links'] = array('status' => 'pass', 'label' => 'Internal Links', 'detail' => $internal_links ? $internal_links . ' found' : 'Short content — optional', 'penalty' => 0);
+
+        // 8. Slug quality
+        $sw = count(explode('-', $slug));
+        if (strlen($slug) > 75)   $checks['slug'] = array('status' => 'warn', 'label' => 'URL Slug', 'detail' => 'Too long — shorten to 3–5 words', 'penalty' => 3);
+        elseif ($sw > 8)          $checks['slug'] = array('status' => 'warn', 'label' => 'URL Slug', 'detail' => $sw . ' words — keep to 3–5', 'penalty' => 2);
+        else                      $checks['slug'] = array('status' => 'pass', 'label' => 'URL Slug', 'detail' => '/' . esc_html($slug), 'penalty' => 0);
+
+        // 9. Readability (Flesch-Kincaid)
+        $sents = max(count(preg_split('/[.!?]+/', $text, -1, PREG_SPLIT_NO_EMPTY)), 1);
+        $syls = $this->seo_count_syllables($text);
+        $fk = max(0, min(100, round(206.835 - 1.015 * ($word_count / $sents) - 84.6 * ($syls / max($word_count, 1)))));
+        if ($fk >= 60)      $checks['readability'] = array('status' => 'pass', 'label' => 'Readability', 'detail' => 'Score ' . $fk . ' — easy to read', 'penalty' => 0);
+        elseif ($fk >= 40)  $checks['readability'] = array('status' => 'warn', 'label' => 'Readability', 'detail' => 'Score ' . $fk . ' — somewhat complex', 'penalty' => 3);
+        else                $checks['readability'] = array('status' => 'fail', 'label' => 'Readability', 'detail' => 'Score ' . $fk . ' — hard to read, simplify', 'penalty' => 7);
+
+        // 10. Featured image
+        $checks['featured_img'] = has_post_thumbnail($post_id)
+            ? array('status' => 'pass', 'label' => 'Featured Image', 'detail' => 'Set', 'penalty' => 0)
+            : array('status' => 'warn', 'label' => 'Featured Image', 'detail' => 'Missing — important for social sharing', 'penalty' => 4);
+
+        // Calculate score
+        foreach ($checks as $c) { $score -= $c['penalty']; }
+        $score = max(0, min(100, $score));
+
+        $pass = $warn = $fail = 0;
+        foreach ($checks as $c) {
+            if ($c['status'] === 'pass') $pass++;
+            elseif ($c['status'] === 'warn') $warn++;
+            else $fail++;
+        }
+
+        // Cache results to post meta for the SEO dashboard list view
+        update_post_meta($post_id, '_mxchat_seo_score', $score);
+        update_post_meta($post_id, '_mxchat_seo_checks', $checks);
+        update_post_meta($post_id, '_mxchat_seo_analyzed', time());
+
+        return array(
+            'score'   => $score,
+            'checks'  => $checks,
+            'summary' => array('pass' => $pass, 'warn' => $warn, 'fail' => $fail),
+        );
+    }
+
+    /**
+     * AI-powered SEO suggestion for a specific field.
+     */
+    public function handle_seo_suggest() {
+        check_ajax_referer('mxchat_content_nonce', 'nonce');
+        if (!current_user_can('edit_posts')) { wp_send_json_error('Unauthorized'); }
+
+        $post_id = intval($_POST['post_id'] ?? 0);
+        $field   = sanitize_text_field($_POST['field'] ?? '');
+        if (!$post_id || !$field || !($post = get_post($post_id))) {
+            wp_send_json_error('Missing parameters');
+        }
+
+        $title    = $post->post_title;
+        $content  = wp_strip_all_tags($post->post_content);
+        $focus_kw = $this->get_focus_keyword($post_id);
+
+        // Sample content to manage token usage
+        $sample = mb_strlen($content) > 1200
+            ? mb_substr($content, 0, 800) . "\n...\n" . mb_substr($content, -400)
+            : $content;
+
+        $kw = !empty($focus_kw) ? ' Incorporate the focus keyword "' . $focus_kw . '" naturally.' : '';
+
+        $prompts = array(
+            'meta_description' => 'Write a compelling meta description for this blog post. 150-160 characters, include the main topic, entice clicks. Return ONLY the text.' . $kw . "\n\nTitle: " . $title . "\n\nContent:\n" . $sample,
+            'seo_title'        => 'Write an SEO-optimized page title. 50-60 characters, keyword near the beginning. Return ONLY the title.' . $kw . "\n\nOriginal: " . $title . "\n\nContent:\n" . $sample,
+            'slug'             => 'Generate an SEO-friendly URL slug. 3-5 lowercase words with hyphens, no stop words. Return ONLY the slug.' . $kw . "\n\nTitle: " . $title,
+            'excerpt'          => 'Write a concise excerpt in 1-2 sentences, under 200 characters. Return ONLY the text.' . $kw . "\n\nTitle: " . $title . "\n\nContent:\n" . $sample,
+            'readability'      => true, // Handled by Advanced Content Editor add-on
+            'internal_links'   => true, // Handled by Advanced Content Editor add-on
+            'img_alt'          => true, // Handled by Advanced Content Editor add-on
+            'featured_img'     => true, // Handled by Advanced Content Editor add-on
+        );
+
+        if (!isset($prompts[$field])) { wp_send_json_error('Invalid field'); }
+
+        // These fields are handled by the Advanced Content Editor add-on
+        $addon_fields = array('readability', 'internal_links', 'img_alt', 'featured_img');
+        if (in_array($field, $addon_fields, true)) {
+            $feature_key = 'seo_' . $field;
+            $has_addon = apply_filters('mxchat_content_pro_feature', false, $feature_key);
+            if (!$has_addon) {
+                wp_send_json_error('This feature requires the Advanced Content Editor add-on.');
+                return;
+            }
+            // Delegate to add-on via action hook
+            do_action('mxchat_seo_optimize_' . $field, $post_id, $post, $focus_kw);
+            return;
+        }
+
+        $response = $this->call_content_model(
+            'You are an expert SEO copywriter. Return only what is asked for. No quotes, no explanations, no prefixes.',
+            array(array('role' => 'user', 'content' => $prompts[$field])),
+            256
+        );
+
+        if (is_wp_error($response)) { wp_send_json_error($response->get_error_message()); }
+
+        $suggestion = trim($response);
+
+        // Save suggestion
+        if ($field === 'meta_description') {
+            $this->set_meta_description($post_id, $suggestion);
+        } elseif ($field === 'seo_title') {
+            wp_update_post(array('ID' => $post_id, 'post_title' => sanitize_text_field($suggestion)));
+        } elseif ($field === 'slug') {
+            wp_update_post(array('ID' => $post_id, 'post_name' => sanitize_title($suggestion)));
+        } elseif ($field === 'excerpt') {
+            wp_update_post(array('ID' => $post_id, 'post_excerpt' => sanitize_text_field($suggestion)));
+        }
+
+        wp_send_json_success(array('field' => $field, 'suggestion' => $suggestion));
+    }
+
+    /**
+     * List published posts/pages with cached SEO scores for the dashboard.
+     */
+    public function handle_seo_list_posts() {
+        check_ajax_referer('mxchat_content_nonce', 'nonce');
+
+        $page      = max(1, intval($_POST['page'] ?? 1));
+        $per_page  = 50;
+        $post_type = sanitize_text_field($_POST['post_type'] ?? 'any');
+        $filter    = sanitize_text_field($_POST['filter'] ?? 'all');
+        $search    = sanitize_text_field($_POST['search'] ?? '');
+        $sort_by   = sanitize_text_field($_POST['sort_by'] ?? 'date');
+        $sort_order = strtoupper(sanitize_text_field($_POST['sort_order'] ?? 'DESC')) === 'ASC' ? 'ASC' : 'DESC';
+
+        // Map sort_by to WP_Query orderby
+        $orderby = 'date';
+        $sort_meta_key = '';
+        switch ($sort_by) {
+            case 'title':
+                $orderby = 'title';
+                break;
+            case 'score':
+                $orderby = 'meta_value_num';
+                $sort_meta_key = '_mxchat_seo_score';
+                break;
+            case 'clicks':
+                $orderby = 'meta_value_num';
+                $sort_meta_key = '_mxchat_gsc_clicks';
+                break;
+            case 'impressions':
+                $orderby = 'meta_value_num';
+                $sort_meta_key = '_mxchat_gsc_impressions';
+                break;
+            default:
+                $orderby = 'date';
+                break;
+        }
+
+        $args = array(
+            'post_status'    => 'publish',
+            'posts_per_page' => -1,
+            'post_type'      => $post_type === 'any' ? array('post', 'page') : $post_type,
+            'orderby'        => $orderby,
+            'order'          => $sort_order,
+            'fields'         => 'ids',
+        );
+
+        if (!empty($search)) {
+            $args['s'] = $search;
+        }
+
+        // Meta query for score-based filters
+        if ($filter === 'issues') {
+            $args['meta_query'] = array(
+                array('key' => '_mxchat_seo_score', 'value' => 70, 'compare' => '<', 'type' => 'NUMERIC'),
+            );
+        } elseif ($filter === 'good') {
+            $args['meta_query'] = array(
+                array('key' => '_mxchat_seo_score', 'value' => 70, 'compare' => '>=', 'type' => 'NUMERIC'),
+            );
+        } elseif ($filter === 'unscored') {
+            $args['meta_query'] = array(
+                array('key' => '_mxchat_seo_score', 'compare' => 'NOT EXISTS'),
+            );
+        }
+
+        // When sorting by a meta field, ensure meta_key is set for ordering.
+        // For 'all' filter, include posts without the meta key via OR clause.
+        if ($sort_meta_key) {
+            $args['meta_key'] = $sort_meta_key;
+            if ($filter === 'all') {
+                $args['meta_query'] = array(
+                    'relation' => 'OR',
+                    array('key' => $sort_meta_key, 'compare' => 'EXISTS'),
+                    array('key' => $sort_meta_key, 'compare' => 'NOT EXISTS'),
+                );
+            }
+        }
+
+        $query    = new \WP_Query($args);
+        $all_ids  = $query->posts;
+        $total    = count($all_ids);
+        $pages    = max(1, ceil($total / $per_page));
+        $page     = min($page, $pages);
+        $offset   = ($page - 1) * $per_page;
+        $page_ids = array_slice($all_ids, $offset, $per_page);
+
+        $posts = array();
+        foreach ($page_ids as $pid) {
+            $p     = get_post($pid);
+            $score = get_post_meta($pid, '_mxchat_seo_score', true);
+
+            $gsc_clicks = get_post_meta($pid, '_mxchat_gsc_clicks', true);
+            $gsc_impr   = get_post_meta($pid, '_mxchat_gsc_impressions', true);
+
+            $posts[] = array(
+                'id'          => $pid,
+                'title'       => $p->post_title,
+                'type'        => $p->post_type,
+                'date'        => get_the_date('M j, Y', $pid),
+                'edit_url'    => get_edit_post_link($pid, 'raw'),
+                'permalink'   => get_permalink($pid),
+                'score'       => $score !== '' ? intval($score) : null,
+                'analyzed'    => (bool) get_post_meta($pid, '_mxchat_seo_analyzed', true),
+                'clicks'      => $gsc_clicks !== '' ? intval($gsc_clicks) : null,
+                'impressions' => $gsc_impr !== '' ? intval($gsc_impr) : null,
+            );
+        }
+
+        // Count unscored for the Scan button
+        $unscored_q = new \WP_Query(array(
+            'post_status'    => 'publish',
+            'posts_per_page' => -1,
+            'post_type'      => array('post', 'page'),
+            'fields'         => 'ids',
+            'meta_query'     => array(
+                array('key' => '_mxchat_seo_score', 'compare' => 'NOT EXISTS'),
+            ),
+        ));
+        $unscored_count = count($unscored_q->posts);
+
+        wp_send_json_success(array(
+            'posts'          => $posts,
+            'page'           => $page,
+            'pages'          => $pages,
+            'total'          => $total,
+            'unscored_count' => $unscored_count,
+        ));
+    }
+
+    /**
+     * Count syllables in text (Flesch-Kincaid helper).
+     */
+    private function seo_count_syllables($text) {
+        $words = preg_split('/\s+/', strtolower($text), -1, PREG_SPLIT_NO_EMPTY);
+        $total = 0;
+        foreach ($words as $w) {
+            $w = preg_replace('/[^a-z]/', '', $w);
+            if (strlen($w) <= 3) { $total++; continue; }
+            $w = preg_replace('/(?:[^laeiouy]es|ed|[^laeiouy]e)$/', '', $w);
+            preg_match_all('/[aeiouy]{1,2}/', $w, $m);
+            $total += max(1, count($m[0]));
+        }
+        return $total;
     }
 }

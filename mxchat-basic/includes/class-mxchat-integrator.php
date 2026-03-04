@@ -111,12 +111,23 @@ public function __construct() {
         add_action('wp_ajax_mxchat_get_current_chat_mode', array($this, 'mxchat_get_current_chat_mode'));
         add_action('wp_ajax_nopriv_mxchat_get_current_chat_mode', array($this, 'mxchat_get_current_chat_mode'));
     
+    // Nonce refresh for page-cache compatibility (WP Rocket, LiteSpeed, etc.)
+    add_action('wp_ajax_mxchat_refresh_nonce', array($this, 'mxchat_refresh_nonce'));
+    add_action('wp_ajax_nopriv_mxchat_refresh_nonce', array($this, 'mxchat_refresh_nonce'));
+
     // Auto-email transcript action
     add_action('mxchat_send_delayed_transcript', array($this, 'mxchat_send_delayed_transcript'), 10, 1);
-    
+
     add_filter('mxchat_check_actions_only', array($this, 'check_actions_for_addons'), 10, 4);
 
 
+}
+
+/**
+ * Return a fresh nonce so cached pages can replace the stale one.
+ */
+public function mxchat_refresh_nonce() {
+    wp_send_json_success(array('nonce' => wp_create_nonce('mxchat_chat_nonce')));
 }
 
 // In your core plugin's check_actions_for_addons method:
@@ -830,10 +841,15 @@ public function mxchat_send_delayed_transcript($session_id) {
         $transcript_content .= $msg->message . "\n\n";
     }
     
-    // Create temporary file for attachment
+    // Create temporary file for attachment using WP_Filesystem
     $upload_dir = wp_upload_dir();
     $temp_file = $upload_dir['basedir'] . '/mxchat-transcript-' . $session_id . '.txt';
-    file_put_contents($temp_file, $transcript_content);
+    global $wp_filesystem;
+    if (empty($wp_filesystem)) {
+        require_once ABSPATH . 'wp-admin/includes/file.php';
+        WP_Filesystem();
+    }
+    $wp_filesystem->put_contents($temp_file, $transcript_content, FS_CHMOD_FILE);
     
     // Prepare email
     $subject = sprintf('[%s] Chat Transcript - Session %s', get_bloginfo('name'), substr($session_id, 0, 8));
@@ -2955,7 +2971,12 @@ private function fetch_and_split_pdf_pages($pdf_source, $max_pages) {
                 return false;
             }
             
-            file_put_contents($temp_file, wp_remote_retrieve_body($response));
+            global $wp_filesystem;
+            if (empty($wp_filesystem)) {
+                require_once ABSPATH . 'wp-admin/includes/file.php';
+                WP_Filesystem();
+            }
+            $wp_filesystem->put_contents($temp_file, wp_remote_retrieve_body($response), FS_CHMOD_FILE);
             //error_log("✅ PDF downloaded successfully");
         } else {
             $temp_file = $pdf_source;
@@ -2964,6 +2985,7 @@ private function fetch_and_split_pdf_pages($pdf_source, $max_pages) {
         
         // Parse PDF
         //error_log("Parsing PDF with basic parser...");
+        mxchat_load_pdf_parser();
         $parser = new \Smalot\PdfParser\Parser();
         $pdf = $parser->parseFile($temp_file);
         $pages = $pdf->getPages();
@@ -3261,8 +3283,12 @@ function mxchat_fetch_new_messages() {
 
     error_log("MxChat WhatsApp DEBUG: Filtered messages count = " . count($new_messages));
 
+    // Include current chat mode so frontend can detect agent→AI transitions
+    $chat_mode = get_option("mxchat_mode_{$session_id}", 'ai');
+
     wp_send_json_success([
-        'new_messages' => array_values($new_messages)
+        'new_messages' => array_values($new_messages),
+        'chat_mode' => $chat_mode
     ]);
     wp_die();
 }
@@ -4161,31 +4187,31 @@ public function handle_slack_messages(WP_REST_Request $request) {
         $channel_id = $event['channel'];
         $message_text = $event['text'] ?? '';
         $message_ts = $event['ts'] ?? '';
-        
+
         // Find session ID by looking for matching channel
         global $wpdb;
         $session_option = $wpdb->get_var(
             $wpdb->prepare(
-                "SELECT option_name FROM {$wpdb->options} 
-                 WHERE option_name LIKE 'mxchat_channel_%' 
+                "SELECT option_name FROM {$wpdb->options}
+                 WHERE option_name LIKE 'mxchat_channel_%'
                  AND option_value = %s",
                 $channel_id
             )
         );
-        
+
         if ($session_option) {
             $session_id = str_replace('mxchat_channel_', '', $session_option);
-            
+
             // Create a unique key for this specific message
             $message_key = md5($session_id . $message_ts . $message_text);
             $processed_messages = get_transient('mxchat_processed_messages_' . $session_id) ?: [];
-            
+
             // Check if we've already processed this exact message
             if (in_array($message_key, $processed_messages)) {
                 //error_log("Duplicate message detected for session $session_id");
                 return new WP_REST_Response(['ok' => true]);
             }
-            
+
             // Add to processed messages
             $processed_messages[] = $message_key;
             // Keep only last 50 messages per session
@@ -4193,12 +4219,44 @@ public function handle_slack_messages(WP_REST_Request $request) {
                 $processed_messages = array_slice($processed_messages, -50);
             }
             set_transient('mxchat_processed_messages_' . $session_id, $processed_messages, HOUR_IN_SECONDS);
-            
+
+            $slack_bot_token = $this->options['live_agent_bot_token'] ?? '';
+
+            // Handle agent ending the chat — transfer back to AI
+            // Format: "!endchat" or "!endchat <custom message to user>"
+            if (preg_match('/^!endchat\b/i', trim($message_text))) {
+                update_option("mxchat_mode_{$session_id}", 'ai');
+
+                // Extract custom message after !endchat, or use empty string
+                $custom_message = trim(preg_replace('/^!endchat\s*/i', '', trim($message_text)));
+
+                // Send the agent's custom farewell message if provided
+                if (!empty($custom_message)) {
+                    $this->mxchat_save_chat_message($session_id, 'agent', $custom_message);
+                }
+
+                // Confirm in Slack channel
+                if (!empty($slack_bot_token)) {
+                    wp_remote_post('https://slack.com/api/chat.postMessage', [
+                        'headers' => [
+                            'Content-Type' => 'application/json',
+                            'Authorization' => 'Bearer ' . $slack_bot_token
+                        ],
+                        'body' => json_encode([
+                            'channel' => $channel_id,
+                            'text' => "✅ *Chat ended.* User has been transferred back to AI mode.",
+                            'mrkdwn' => true
+                        ])
+                    ]);
+                }
+
+                return new WP_REST_Response(['ok' => true]);
+            }
+
             // Save the agent message
             $this->mxchat_save_chat_message($session_id, 'agent', $message_text);
-            
+
             // Send confirmation back to Slack (only once)
-            $slack_bot_token = $this->options['live_agent_bot_token'] ?? '';
             if (!empty($slack_bot_token)) {
                 // Use a transient to prevent duplicate confirmations
                 $confirm_key = 'mxchat_confirm_' . $message_key;
@@ -4210,7 +4268,7 @@ public function handle_slack_messages(WP_REST_Request $request) {
                         ],
                         'body' => json_encode([
                             'channel' => $channel_id,
-                            'text' => "âœ… _Message sent to user_",
+                            'text' => "✅ _Message sent to user_",
                             'thread_ts' => $event['ts'] // Reply in thread
                         ])
                     ]);
@@ -9098,6 +9156,15 @@ public function mxchat_enqueue_scripts_styles() {
         MXCHAT_VERSION
     );
 
+    // Protect MxChat CSS from LiteSpeed UCSS/CCSS stripping via data-no-optimize attribute
+    add_filter('style_loader_tag', function($tag, $handle) {
+        if ($handle === 'mxchat-chat-css' || strpos($handle, 'mxchat') !== false) {
+            $tag = str_replace("rel='stylesheet'", "rel='stylesheet' data-no-optimize='1'", $tag);
+            $tag = str_replace('rel="stylesheet"', 'rel="stylesheet" data-no-optimize="1"', $tag);
+        }
+        return $tag;
+    }, 10, 2);
+
     // Handle script loading based on strategy
     if ($loading_strategy === 'default' || $loading_strategy === 'defer') {
         // Enqueue the script normally
@@ -9118,6 +9185,14 @@ public function mxchat_enqueue_scripts_styles() {
         // Don't enqueue the main script - we'll load it dynamically
         add_action('wp_footer', array($this, 'mxchat_output_delayed_script_loader'), 99);
     }
+
+    // Protect MxChat JS from LiteSpeed optimization stripping via data-no-optimize attribute
+    add_filter('script_loader_tag', function($tag, $handle) {
+        if ($handle === 'mxchat-chat-js' || strpos($handle, 'mxchat') !== false) {
+            $tag = str_replace('<script ', '<script data-no-optimize="1" ', $tag);
+        }
+        return $tag;
+    }, 10, 2);
     $prompts_options = get_option('mxchat_prompts_options', array());
 
     // Check if AI theme is active - if so, skip inline colors in JavaScript
@@ -9251,10 +9326,21 @@ public function mxchat_output_delayed_script_loader() {
             if (mxchatLoaded) return;
             mxchatLoaded = true;
 
-            var script = document.createElement('script');
-            script.src = <?php echo wp_json_encode($script_url); ?>;
-            script.type = 'text/javascript';
-            document.body.appendChild(script);
+            function appendChatScript() {
+                var script = document.createElement('script');
+                script.src = <?php echo wp_json_encode($script_url); ?>;
+                script.type = 'text/javascript';
+                document.body.appendChild(script);
+            }
+
+            if (typeof jQuery !== 'undefined') {
+                appendChatScript();
+            } else {
+                var jq = document.createElement('script');
+                jq.src = <?php echo wp_json_encode(includes_url('js/jquery/jquery.min.js')); ?>;
+                jq.onload = appendChatScript;
+                document.body.appendChild(jq);
+            }
         }
 
         <?php if ($loading_strategy === 'on_interaction'): ?>

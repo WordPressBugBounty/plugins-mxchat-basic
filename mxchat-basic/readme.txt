@@ -5,7 +5,7 @@ Tags: ai chatbot, chatgpt, woocommerce, customer support, content generation
 Requires at least: 5.0
 Tested up to: 6.9
 Requires PHP: 7.2
-Stable tag: 3.1.0
+Stable tag: 3.1.1
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -32,8 +32,9 @@ The best free AI chatbot and content generation plugin for WordPress. Train Chat
 ### 📦 Optional Premium Add-Ons  
 Extend the free plugin with these optional premium features:  
 
-- [Advanced Content Editor Add-On](https://mxchat.ai/advanced-content-editor/) – Smart internal linking, AI image management with chat-based regeneration, and SEO/meta editing with per-field AI generation
+- [Advanced Content Editor Add-On](https://mxchat.ai/advanced-content-editor/) – Smart internal linking, AI image management, readability analysis, Google Search Console integration with per-page analytics, and advanced SEO optimization
 - [Forms Action Add-On](https://mxchat.ai/forms-action/) – Capture leads and data with custom in-chat forms
+- [MxChat Anywhere Add-On](https://mxchat.ai/mxchat-anywhere-deploy-your-ai-chatbot-on-any-website-with-one-script-tag/) – Deploy your chatbot on any website with one script tag — Shopify, Squarespace, Wix, static HTML, and more
 - [WooCommerce Add-On](https://mxchat.ai/woocommerce/) – AI-powered shopping assistance and product recommendations
 - [AI Chatbot Theme Customizer Add-On](https://mxchat.ai/ai-theme-customizer/) – Instantly design chatbot themes with natural language
 - [Multi-Bot Add-On](https://mxchat.ai/multi-bot/) – Run unlimited AI chatbots with custom knowledge and personalities
@@ -41,12 +42,12 @@ Extend the free plugin with these optional premium features:
 
 👉 [Visit our website to view all add-ons](https://mxchat.ai)
 
-## 🔥 What's New in Version 3.1.0
+## 🔥 What's New in Version 3.1.1
 
-- **Knowledge Base Fixes** — Fixed bulk deletion timeouts with Pinecone chunked content, manually entered content not matching despite high similarity scores, and Pinecone scan failures with text-embedding-3-large (TE3 Large).
-- **Live Agent Fix** — Chat input no longer remains blocked after Slack/Telegram live agent handoff.
-- **Shortcode Processing Fix** — Resolved an issue where pages with large or deeply nested shortcodes (e.g. WPBakery/Visual Composer) could silently lose all content during knowledge base processing.
-- **Developer Hooks** — New `mxchat_before_process_post` filter to modify post data before KB processing. New `mxchat_system_instructions` filter and shortcode support in system prompts for dynamic data injection.
+- **SEO Analysis & Scoring** — The Content section now includes a full SEO panel with real-time scoring for every post and page. See exactly what needs improvement at a glance.
+- **AI Auto-Optimize** — One-click AI optimization for meta descriptions, SEO titles, and URL slugs. Choose which checks AI Optimize will fix from the Content settings.
+- **Google Search Console Integration (Pro)** — Pro members can connect their Google Search Console account to see detailed per-page analytics including impressions, clicks, CTR, and top search queries — all directly inside the Content editor.
+- **Stability & Caching Fixes** — Resolved stale nonce errors on cached pages, eliminated security scanner false-positives, and lazy-loaded the PDF parser for faster page loads.
 
 ## Core Features That Set MxChat Apart
 
@@ -105,21 +106,38 @@ MxChat includes a built-in AI Content Generator that lets you create full blog p
 - Choose from multiple AI models for content generation (GPT-5, Claude, Gemini, Grok, and more)
 - AI-generated images placed directly into your content with automatic media library uploads
 - SEO title and meta description generation for search engine optimization
+- Built-in SEO analysis with real-time scoring and one-click AI auto-optimization
 - Fullwidth and standard layout options with automatic theme compatibility
 - Content history to revisit and manage previously generated posts
 - Works with popular page builders and themes including Elementor, Bricks, Divi, Astra, Kadence, and more
-- Optional [Advanced Content Editor Add-On](https://mxchat.ai/advanced-content-editor/) for smart internal linking, AI image regeneration, and per-field SEO editing
+- Optional [Advanced Content Editor Add-On](https://mxchat.ai/advanced-content-editor/) for Google Search Console analytics, smart internal linking, readability analysis, and advanced SEO optimization
+
+## MxChat Anywhere — Deploy Your Chatbot on Any Website
+
+Your WordPress site powers the AI, but your chatbot doesn't have to live there. The [MxChat Anywhere Add-On](https://mxchat.ai/mxchat-anywhere-deploy-your-ai-chatbot-on-any-website-with-one-script-tag/) lets you deploy your fully configured chatbot on any website with a single script tag — Shopify, Squarespace, Wix, static HTML, SaaS apps, documentation sites, or anything with an HTML page.
+
+**Key Features:**
+
+- One script tag to add your chatbot to any site — no coding or framework required
+- Full style isolation via Shadow DOM so host page CSS never breaks your chatbot
+- All your MxChat settings carry over automatically — colors, themes, quick questions, email collection, streaming, and more
+- Multi-bot support lets you deploy different chatbot configurations on different sites
+- Secure domain whitelisting and API key authentication prevent unauthorized usage
+- Lightweight vanilla JS widget with zero dependencies — no jQuery needed on the target site
+
+**Ideal for** SaaS products with a WordPress blog but a separate web app, e-commerce brands on Shopify, documentation sites, or any business that needs their chatbot beyond WordPress.
 
 ## Powerful Add-On Ecosystem
 
 **Pro Add-Ons:**
-🟢 **Advanced Content Editor** – Unlock smart internal linking for generated content, AI-powered image management with chat-based regeneration, and per-field SEO/meta generation with debounced auto-save and Yoast/RankMath/AIOSEO sync
+🟢 **Advanced Content Editor** – Google Search Console integration with per-page impressions, clicks, and search queries. Smart internal linking, AI readability optimization, image ALT text generation, and advanced SEO checks
 🟢 **Multi-Bot Manager** – Create and manage multiple specialized chatbots with dedicated knowledge databases for different purposes (support, sales, technical, etc.)
 🟢 **Video Generation** – Generate stunning AI videos using Google's Veo 2 and Veo 3 models with audio support and multiple aspect ratios
 🟢 **Admin Assistant** – ChatGPT-like interface in WordPress admin with thread management and image generation
 🟢 **Chat Themes** – Visual design editor with AI-powered chatbot theme generation from natural language
 🟢 **MxChat Forms** – Create chatbot-triggered forms for lead capture and support tickets
 🟢 **Chat Moderation** – Advanced security with email/IP banning and content filtering
+🟢 **MxChat Anywhere** – Deploy your chatbot on any website with one script tag — Shopify, Squarespace, Wix, static HTML, and custom web apps with Shadow DOM style isolation
 🟢 **Perplexity Integration** – Real-time web search with authoritative, well-sourced responses
 🟢 **Migration Tool** – Seamlessly switch embedding models and vector databases without losing data, with batch processing and real-time progress tracking
 
@@ -143,7 +161,7 @@ MxChat is optimized for performance and security. Your AI chatbot runs smoothly,
 MxChat offers a fully functional free plan that includes everything you need to get started with AI chatbot and customer support. With no credit card required, you can:
 
 - Access all AI models from 5 major providers
-- AI Content Generator for blog posts and landing pages
+- AI Content Generator for blog posts and landing pages with SEO scoring and AI auto-optimization
 - Train chatbot on unlimited website content
 - Loops email capture for lead generation
 - Web search and image generation capabilities
@@ -300,6 +318,18 @@ Yes. MxChat is available for free on the WordPress plugin repository with full A
 *(Note: Screenshots will be added in future updates)*
 
 == Changelog ==
+
+= 3.1.1 - March 4, 2026 =
+- New: Slack agents can now transfer users back to AI mode by typing `!endchat` in the channel
+- New: Agents can include a custom farewell message (e.g. `!endchat Thanks, have a nice day!`) — the message is delivered to the user before the handoff
+- New: SEO analysis panel with real-time scoring for posts and pages in the Content section
+- New: AI Auto-Optimize — one-click AI fixes for meta descriptions, SEO titles, and URL slugs with configurable check selection
+- New: Google Search Console integration (Pro) — per-page impressions, clicks, CTR, and top search queries directly in the Content editor
+- New: SEO optimize settings — choose which checks AI Optimize will run from Content > Settings
+- Fixed: Stale nonce causing "Invalid nonce" errors on sites with full-page caching (WP Rocket, LiteSpeed, W3 Total Cache) — nonce is now refreshed via AJAX on page load
+- Fixed: Security scanner false-positives flagging `file_put_contents` as malware — replaced with `WP_Filesystem` API for transcript and PDF temp files
+- Improved: PDF parser library now lazy-loaded on demand instead of on every page request
+
 
 = 3.1.0 - March 1, 2026 =
 - Fixed: Bulk deleting selected knowledge base entries with chunked content causing network timeout error when using Pinecone
@@ -858,8 +888,8 @@ Yes. MxChat is available for free on the WordPress plugin repository with full A
 
 == Upgrade Notice ==
 
-= 3.1.0 - March 1, 2026 =
-Fixed: Pinecone bulk deletion timeouts, manual KB content not matching, chat input blocked after live agent handoff, Pinecone TE3 Large dimension mismatch, shortcode stripping losing content on WPBakery pages. New: Developer filter hooks for post processing and system prompt customization.
+= 3.1.1 - March 4, 2026 =
+New: SEO analysis panel with real-time scoring and AI Auto-Optimize for meta titles, descriptions, and slugs. Google Search Console integration with per-page clicks, impressions, and top queries (PRO). Slack agents can now transfer users back to AI with !endchat. Fixed: Stale nonce errors on cached sites (WP Rocket, LiteSpeed) and security scanner false-positives.
 
 == License & Warranty ==
 

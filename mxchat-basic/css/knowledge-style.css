@@ -267,6 +267,11 @@ div.mxchat-hero h1.mxchat-main-title {
     text-align: center;
 }
 
+/* PDF Upload Area */
+#mxchat-pdf-upload-area input[type="file"] {
+    margin-bottom: 12px;
+}
+
 .mxchat-url-input-group {
     display: flex;
     gap: 12px;

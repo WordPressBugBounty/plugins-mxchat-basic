@@ -529,14 +529,25 @@ function mxchat_render_import_options_section($admin_instance, $knowledge_manage
                         </div>
                     </button>
 
-                    <!-- PDF Import Option -->
-                    <button type="button" class="mxchat-import-box" data-option="pdf" data-placeholder="<?php esc_attr_e('Enter PDF URL here', 'mxchat'); ?>" data-type="pdf">
+                    <!-- PDF Import Option (URL) -->
+                    <button type="button" class="mxchat-import-box" data-option="pdf-url" data-placeholder="<?php esc_attr_e('Enter PDF URL here', 'mxchat'); ?>" data-type="pdf">
                         <div class="mxchat-import-icon">
                             <span class="dashicons dashicons-media-document"></span>
                         </div>
                         <div class="mxchat-import-content">
                             <h4><?php esc_html_e('PDF Import', 'mxchat'); ?></h4>
-                            <p><?php esc_html_e('Import knowledge from PDF documents.', 'mxchat'); ?></p>
+                            <p><?php esc_html_e('Import knowledge from PDF URL.', 'mxchat'); ?></p>
+                        </div>
+                    </button>
+
+                    <!-- PDF File Upload Option -->
+                    <button type="button" class="mxchat-import-box" data-option="pdf-upload" data-type="pdf-upload">
+                        <div class="mxchat-import-icon">
+                            <span class="dashicons dashicons-upload"></span>
+                        </div>
+                        <div class="mxchat-import-content">
+                            <h4><?php esc_html_e('PDF Upload', 'mxchat'); ?></h4>
+                            <p><?php esc_html_e('Upload a PDF file from your computer.', 'mxchat'); ?></p>
                         </div>
                     </button>
                 </div>
@@ -621,6 +632,24 @@ function mxchat_render_import_options_section($admin_instance, $knowledge_manage
                         </div>
                         <button type="submit" name="submit_content" class="mxch-btn mxch-btn-primary">
                             <?php esc_html_e('Import Content', 'mxchat'); ?>
+                        </button>
+                    </form>
+                </div>
+
+                <div class="mxchat-import-input-area" id="mxchat-pdf-upload-area" style="display: none; margin-top: 20px;">
+                    <form id="mxchat-pdf-upload-form" method="post" action="<?php echo esc_url(admin_url('admin-post.php?action=mxchat_submit_pdf_file')); ?>" enctype="multipart/form-data">
+                        <?php wp_nonce_field('mxchat_submit_pdf_file_action', 'mxchat_submit_pdf_file_nonce'); ?>
+                        <?php if ($multibot_active && $current_bot_id !== 'default') : ?>
+                            <input type="hidden" name="bot_id" value="<?php echo esc_attr($current_bot_id); ?>">
+                        <?php endif; ?>
+                        <div class="mxch-field">
+                            <input type="file" name="pdf_file" id="mxchat-pdf-file-input" accept=".pdf" required>
+                        </div>
+                        <p class="mxch-field-description">
+                            <?php esc_html_e('Select a PDF file from your computer to import into the knowledge base. Maximum file size depends on your server settings.', 'mxchat'); ?>
+                        </p>
+                        <button type="submit" name="submit_pdf_file" class="mxch-btn mxch-btn-primary">
+                            <?php esc_html_e('Import PDF', 'mxchat'); ?>
                         </button>
                     </form>
                 </div>

@@ -306,7 +306,7 @@ function mxchat_render_pro_page($admin_instance, $addons_config) {
             <!-- Individual Addon Detail Sections (Hero Style) -->
             <?php foreach ($addons_config as $slug => $addon):
                 $status = mxchat_get_addon_status_info($addon['plugin_file'], $addon['config_page']);
-                $screenshot_url = $plugin_url . 'images/addons/' . $slug . '.png';
+                // Hero features are rendered via SVG showcase (no image files needed)
             ?>
             <div id="addon-<?php echo esc_attr($slug); ?>" class="mxch-section mxch-addon-detail">
                 <!-- Back Link -->
@@ -366,24 +366,19 @@ function mxchat_render_pro_page($admin_instance, $addons_config) {
                         </div>
                     </div>
 
-                    <!-- Right: Screenshot or Feature Visual -->
+                    <!-- Right: Feature Visual -->
                     <div class="mxch-addon-hero-image">
-                        <?php if (!empty($addon['hero_features'])): ?>
-                            <!-- Styled feature showcase (no screenshot) -->
-                            <div class="mxch-addon-feature-showcase" style="--showcase-accent: <?php echo esc_attr($addon['accent']); ?>">
-                                <?php foreach ($addon['hero_features'] as $hf): ?>
-                                <div class="mxch-addon-showcase-item">
-                                    <div class="mxch-addon-showcase-icon"><?php echo $hf['icon']; ?></div>
-                                    <div class="mxch-addon-showcase-text">
-                                        <strong><?php echo esc_html($hf['title']); ?></strong>
-                                        <span><?php echo esc_html($hf['desc']); ?></span>
-                                    </div>
+                        <div class="mxch-addon-feature-showcase" style="--showcase-accent: <?php echo esc_attr($addon['accent']); ?>">
+                            <?php foreach ($addon['hero_features'] as $hf): ?>
+                            <div class="mxch-addon-showcase-item">
+                                <div class="mxch-addon-showcase-icon"><?php echo $hf['icon']; ?></div>
+                                <div class="mxch-addon-showcase-text">
+                                    <strong><?php echo esc_html($hf['title']); ?></strong>
+                                    <span><?php echo esc_html($hf['desc']); ?></span>
                                 </div>
-                                <?php endforeach; ?>
                             </div>
-                        <?php else: ?>
-                            <img src="<?php echo esc_url($screenshot_url); ?>" alt="<?php echo esc_attr($addon['title']); ?>" onerror="this.parentElement.innerHTML='<div class=\'mxch-addon-image-placeholder\'><svg xmlns=\'http://www.w3.org/2000/svg\' width=\'48\' height=\'48\' viewBox=\'0 0 24 24\' fill=\'none\' stroke=\'currentColor\' stroke-width=\'1.5\'><rect x=\'3\' y=\'3\' width=\'18\' height=\'18\' rx=\'2\' ry=\'2\'/><circle cx=\'8.5\' cy=\'8.5\' r=\'1.5\'/><polyline points=\'21 15 16 10 5 21\'/></svg></div>'">
-                        <?php endif; ?>
+                            <?php endforeach; ?>
+                        </div>
                     </div>
                 </div>
             </div>

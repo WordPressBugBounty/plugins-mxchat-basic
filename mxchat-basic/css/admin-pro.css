@@ -453,30 +453,11 @@
     background: rgba(120, 115, 245, 0.05);
 }
 
-/* Right Column - Screenshot */
+/* Right Column - Feature Showcase */
 .mxch-addon-hero-image {
     display: flex;
     align-items: center;
     justify-content: center;
-}
-
-.mxch-addon-hero-image img {
-    max-width: 100%;
-    height: auto;
-    border-radius: var(--mxch-radius-lg);
-    box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
-}
-
-/* Image Placeholder (when no screenshot) */
-.mxch-addon-image-placeholder {
-    width: 100%;
-    aspect-ratio: 16/10;
-    background: linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%);
-    border-radius: var(--mxch-radius-lg);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    color: #94a3b8;
 }
 
 /* ==========================================================================
