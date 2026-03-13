@@ -3,7 +3,7 @@
  * Plugin Name: MxChat
  * Plugin URI: https://mxchat.ai/
  * Description: AI chatbot for WordPress with OpenAI, Claude, xAI, DeepSeek, live agent, PDF uploads, WooCommerce, and training on website data.
- * Version: 3.1.1
+ * Version: 3.1.2
  * Author: MxChat
  * Author URI: https://mxchat.ai
  * License: GPLv2 or later
@@ -699,6 +699,16 @@ function mxchat_fix_url_column_size() {
 /**
  * Migrate deprecated AI models to their replacements
  * Version 2.5.1: Migrate Claude 3.5 Sonnet (deprecated) to Claude 3.7 Sonnet
+ * Version 3.1.2: Convert chat transcripts table to utf8mb4 for emoji support
+ * Without utf8mb4, any bot response containing emojis silently fails to insert.
+ */
+function mxchat_migrate_transcripts_charset() {
+    global $wpdb;
+    $table_name = $wpdb->prefix . 'mxchat_chat_transcripts';
+    $wpdb->query("ALTER TABLE $table_name CONVERT TO CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci");
+}
+
+/**
  * Version 3.0.55: Migrate GPT-4 series models (deprecated 2026-02-17) to GPT-5 series
  */
 function mxchat_migrate_deprecated_models() {
@@ -1046,6 +1056,11 @@ function mxchat_check_for_update() {
             // 3.0.6: Migrate deprecated OpenAI and Claude models
             if (version_compare($current_version, '3.0.6', '<')) {
                 mxchat_migrate_deprecated_models();
+            }
+
+            // 3.1.2: Convert chat transcripts table to utf8mb4 for emoji support
+            if (version_compare($current_version, '3.1.2', '<')) {
+                mxchat_migrate_transcripts_charset();
             }
 
             // Run full activation to ensure everything is up to date

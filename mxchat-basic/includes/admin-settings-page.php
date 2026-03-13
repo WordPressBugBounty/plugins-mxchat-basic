@@ -958,6 +958,11 @@ function mxchat_render_settings_page($admin_instance) {
                             'url' => 'https://www.youtube.com/watch?v=n8TeEeHpxs4'
                         ),
                         array(
+                            'title' => __('Chat With Your GSC Data', 'mxchat'),
+                            'description' => __('Find content gaps, quick win keywords, and SEO opportunities by chatting with your Google Search Console data using the Admin Assistant add-on.', 'mxchat'),
+                            'url' => 'https://www.youtube.com/watch?v=ytgMou_7SZA&t=2s'
+                        ),
+                        array(
                             'title' => __('AI Theme Generator', 'mxchat'),
                             'description' => __('Learn how to instantly restyle your chatbot using plain English prompts with real-time previews.', 'mxchat'),
                             'url' => 'https://www.youtube.com/watch?v=rSQDW2qbtRU&t'

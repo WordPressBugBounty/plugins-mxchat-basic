@@ -1580,12 +1580,13 @@ public function mxchat_handle_chat_request() {
             } else if ($intent_result === true && (!empty($this->fallbackResponse['text']) || !empty($this->fallbackResponse['html']))) {
                 // Intent returned true and set fallbackResponse
 
-                // SAVE TO TRANSCRIPT - only save text, NOT html
-                // The html field contains rendered HTML/scripts meant for the browser,
-                // not chat content. Saving it to transcript causes raw code to appear
-                // as visible chat messages when history is loaded.
+                // SAVE TO TRANSCRIPT
                 if (!empty($this->fallbackResponse['text'])) {
                     $this->mxchat_save_chat_message($session_id, 'bot', $this->fallbackResponse['text']);
+                }
+                // Save product card HTML separately so it renders in transcripts
+                if (!empty($this->fallbackResponse['html']) && strpos($this->fallbackResponse['html'], 'mxchat-product-card') !== false) {
+                    $this->mxchat_save_chat_message($session_id, 'bot', $this->fallbackResponse['html']);
                 }
 
                 $response_data = [
@@ -2211,14 +2212,14 @@ public function mxchat_handle_email_capture($message, $user_id, $session_id) {
 public function mxchat_generate_image($message, $user_id, $session_id) {
     //error_log("Starting image generation for message: " . $message);
     
-    // Prepare a prompt for DALL-E
+    // Prepare a prompt for OpenAI image generation
     $prompt = esc_html__('Create an image of ', 'mxchat') . sanitize_text_field($message);
-    
+
     // Use the existing OpenAI API key
     $openai_api_key = sanitize_text_field($this->options['api_key']);
-    
-    // Call DALL-E to generate an image
-    $image_response = $this->mxchat_generate_dalle_image($prompt, $openai_api_key);
+
+    // Call OpenAI GPT Image to generate an image
+    $image_response = $this->mxchat_generate_openai_image($prompt, $openai_api_key);
     
     // Check if the response contains an image URL
     if (isset($image_response['imageUrl'])) {
@@ -2264,38 +2265,162 @@ public function mxchat_generate_image($message, $user_id, $session_id) {
         return $this->fallbackResponse;
     }
 }
-private function mxchat_generate_dalle_image($prompt, $api_key, $model = 'dall-e-3', $timeout = 60) {
+
+public function mxchat_generate_gemini_image($message, $user_id, $session_id) {
+    $prompt = esc_html__('Create an image of ', 'mxchat') . sanitize_text_field($message);
+
+    $gemini_api_key = sanitize_text_field($this->options['gemini_api_key'] ?? '');
+    if (empty($gemini_api_key)) {
+        $response_text = esc_html__("Gemini API key is not configured.", 'mxchat');
+        $this->mxchat_save_chat_message($session_id, 'bot', $response_text);
+        return ['text' => $response_text, 'html' => '', 'images' => []];
+    }
+
+    $image_response = $this->mxchat_generate_imagen_image($prompt, $gemini_api_key);
+
+    if (isset($image_response['imageUrl'])) {
+        $image_url = esc_url_raw($image_response['imageUrl']);
+
+        $response_html = '<img src="' . esc_url($image_url) . '" alt="' . esc_attr__('Generated Image', 'mxchat') . '" class="mxchat-generated-image" />';
+        $response_text = esc_html__('Here is the image I generated:', 'mxchat');
+
+        $this->mxchat_save_chat_message($session_id, 'bot', $response_text);
+        $this->mxchat_save_chat_message($session_id, 'bot', $response_html);
+
+        $this->fallbackResponse = [
+            'text'   => $response_text,
+            'html'   => $response_html,
+            'images' => [$image_url]
+        ];
+
+        return $this->fallbackResponse;
+    } else {
+        $response_text = esc_html__("I'm sorry, but I couldn't generate an image based on your request.", 'mxchat');
+
+        $this->mxchat_save_chat_message($session_id, 'bot', $response_text);
+
+        $this->fallbackResponse = [
+            'text'   => $response_text,
+            'html'   => '',
+            'images' => []
+        ];
+
+        return $this->fallbackResponse;
+    }
+}
+
+private function mxchat_save_generated_image($base64_data, $mime_type = 'image/png', $prefix = 'mxchat-generated') {
+    $extension = ($mime_type === 'image/jpeg') ? 'jpg' : 'png';
+    $filename = sanitize_file_name($prefix . '-' . wp_generate_uuid4() . '.' . $extension);
+    $decoded = base64_decode($base64_data);
+
+    if ($decoded === false) {
+        return new \WP_Error('decode_failed', esc_html__('Failed to decode image data.', 'mxchat'));
+    }
+
+    $upload = wp_upload_bits($filename, null, $decoded);
+
+    if (!empty($upload['error'])) {
+        return new \WP_Error('upload_failed', $upload['error']);
+    }
+
+    $attach_id = wp_insert_attachment([
+        'post_mime_type' => $mime_type,
+        'post_title'     => $prefix,
+        'post_content'   => '',
+        'post_status'    => 'inherit',
+    ], $upload['file']);
+
+    if (is_wp_error($attach_id)) {
+        return $attach_id;
+    }
+
+    require_once ABSPATH . 'wp-admin/includes/image.php';
+    $metadata = wp_generate_attachment_metadata($attach_id, $upload['file']);
+    wp_update_attachment_metadata($attach_id, $metadata);
+
+    return esc_url_raw(wp_get_attachment_url($attach_id));
+}
+
+private function mxchat_generate_openai_image($prompt, $api_key, $model = 'gpt-image-1', $timeout = 60) {
     $api_url = 'https://api.openai.com/v1/images/generations';
     $body = json_encode([
-        'prompt' => sanitize_text_field($prompt),
-        'n' => 1,
-        'size' => '1024x1024',
-        'model' => sanitize_text_field($model),
+        'prompt'        => sanitize_text_field($prompt),
+        'n'             => 1,
+        'size'          => '1024x1024',
+        'quality'       => 'medium',
+        'output_format' => 'png',
+        'model'         => sanitize_text_field($model),
     ]);
 
     $args = [
-        'body' => $body,
+        'body'    => $body,
         'headers' => [
-            'Content-Type' => 'application/json',
+            'Content-Type'  => 'application/json',
             'Authorization' => 'Bearer ' . sanitize_text_field($api_key),
         ],
-        'method' => 'POST',
+        'method'  => 'POST',
         'timeout' => absint($timeout),
     ];
 
     $response = wp_remote_post($api_url, $args);
 
     if (is_wp_error($response)) {
-        //error_log("DALL-E request failed: " . $response->get_error_message());
         return ['error' => esc_html__('Error generating image: ', 'mxchat') . $response->get_error_message()];
     }
 
     $response_body = json_decode(wp_remote_retrieve_body($response), true);
 
-    if (isset($response_body['data'][0]['url'])) {
-        return ['imageUrl' => esc_url_raw($response_body['data'][0]['url'])];
+    $b64 = $response_body['data'][0]['b64_json'] ?? $response_body['data'][0]['b64'] ?? null;
+    if ($b64) {
+        $saved_url = $this->mxchat_save_generated_image($b64, 'image/png', 'mxchat-openai');
+        if (is_wp_error($saved_url)) {
+            return ['error' => $saved_url->get_error_message()];
+        }
+        return ['imageUrl' => $saved_url];
     } else {
-        //error_log("DALL-E response error: " . wp_remote_retrieve_body($response));
+        return ['error' => esc_html__('Failed to generate image.', 'mxchat')];
+    }
+}
+
+private function mxchat_generate_imagen_image($prompt, $api_key, $timeout = 60) {
+    $api_url = 'https://generativelanguage.googleapis.com/v1beta/models/imagen-4.0-generate-001:predict';
+
+    $body = json_encode([
+        'instances'  => [['prompt' => sanitize_text_field($prompt)]],
+        'parameters' => [
+            'sampleCount' => 1,
+            'aspectRatio'  => '1:1',
+        ],
+    ]);
+
+    $args = [
+        'body'    => $body,
+        'headers' => [
+            'Content-Type'   => 'application/json',
+            'x-goog-api-key' => sanitize_text_field($api_key),
+        ],
+        'method'  => 'POST',
+        'timeout' => absint($timeout),
+    ];
+
+    $response = wp_remote_post($api_url, $args);
+
+    if (is_wp_error($response)) {
+        return ['error' => esc_html__('Error generating image: ', 'mxchat') . $response->get_error_message()];
+    }
+
+    $response_body = json_decode(wp_remote_retrieve_body($response), true);
+
+    $b64 = $response_body['predictions'][0]['bytesBase64Encoded'] ?? $response_body['predictions'][0]['imageBytes'] ?? null;
+    if ($b64) {
+        $mime = $response_body['predictions'][0]['mimeType'] ?? 'image/png';
+        $saved_url = $this->mxchat_save_generated_image($b64, $mime, 'mxchat-gemini');
+        if (is_wp_error($saved_url)) {
+            return ['error' => $saved_url->get_error_message()];
+        }
+        return ['imageUrl' => $saved_url];
+    } else {
         return ['error' => esc_html__('Failed to generate image.', 'mxchat')];
     }
 }

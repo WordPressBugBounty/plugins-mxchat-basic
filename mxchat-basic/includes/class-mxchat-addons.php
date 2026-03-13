@@ -319,7 +319,7 @@ class MxChat_Addons {
 
             'mxchat-anywhere' => array(
                 'title' => __('MxChat Anywhere', 'mxchat'),
-                'sidebar_title' => __('Anywhere', 'mxchat'),
+                'sidebar_title' => __('MxChat Anywhere', 'mxchat'),
                 'description' => __('Deploy your AI chatbot on any website with a single script tag. Works on static HTML, Shopify, Squarespace, Wix, and custom web apps — no WordPress required on the target site. Full feature parity with Shadow DOM style isolation.', 'mxchat'),
                 'key_benefits' => array(
                     __('One script tag — works on any website', 'mxchat'),

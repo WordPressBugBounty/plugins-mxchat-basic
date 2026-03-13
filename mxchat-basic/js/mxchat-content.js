@@ -863,6 +863,13 @@
         $('#mxch-seo-ai-optimize').on('click', function() {
             if (state.postId && !seoState.fixing) runAiOptimize();
         });
+        // Per-check AI fix buttons (content editor panel only, not dashboard modal)
+        $(document).on('click', '.mxch-seo-check-fix:not(.mxch-seod-check-fix-btn)', function(e) {
+            e.stopPropagation();
+            var $btn = $(this);
+            if ($btn.hasClass('mxch-seo-check-fixing') || !state.postId) return;
+            runSeoFixSingle($btn.data('field'), $btn);
+        });
         // Auto-analyze when switching to SEO tab if content exists
         $(document).on('click', '.mxch-cg-left-tab[data-tab="seo"]', function() {
             if (state.postId && !seoState.analyzed && !seoState.analyzing) runSeoAnalysis();
@@ -919,6 +926,9 @@
         };
         // Checks that require the Advanced Content Editor add-on to fix
         var addonChecks = { readability: true, internal_links: true, img_alt: true, featured_img: true };
+        // Map check key → optimize field name for per-check fix buttons
+        var fixableMap = { meta_desc: 'meta_description', title_length: 'seo_title', slug: 'slug', readability: 'readability', internal_links: 'internal_links', img_alt: 'img_alt', featured_img: 'featured_img' };
+        var sparkleIcon = '<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3-1.9 5.8a2 2 0 0 1-1.287 1.288L3 12l5.8 1.9a2 2 0 0 1 1.288 1.287L12 21l1.9-5.8a2 2 0 0 1 1.287-1.288L21 12l-5.8-1.9a2 2 0 0 1-1.288-1.287Z"/></svg>';
         var sorted = Object.keys(checks).sort(function(a, b) {
             var o = { fail: 0, warn: 1, pass: 2 };
             return (o[checks[a].status] || 2) - (o[checks[b].status] || 2);
@@ -941,6 +951,15 @@
                 }
             }
 
+            // Per-check AI fix button for non-passing, fixable checks
+            var fixBtn = '';
+            if (c.status !== 'pass' && fixableMap[key]) {
+                var canFix = !addonChecks[key] || mxchatContent.hasAdvancedContent;
+                if (canFix) {
+                    fixBtn = '<button type="button" class="mxch-seo-check-fix" data-field="' + fixableMap[key] + '" title="AI Fix">' + sparkleIcon + '</button>';
+                }
+            }
+
             $list.append(
                 '<div class="mxch-seo-check" data-check="' + key + '">' +
                     '<div class="mxch-seo-check-icon mxch-seo-' + c.status + '">' + icons[c.status] + '</div>' +
@@ -948,6 +967,7 @@
                         '<span class="mxch-seo-check-label">' + escapeHtml(c.label) + badge + '</span>' +
                         '<span class="mxch-seo-check-detail">' + escapeHtml(c.detail) + '</span>' +
                     '</div>' +
+                    fixBtn +
                 '</div>'
             );
         });
@@ -956,6 +976,26 @@
 
     function renderSeoError(msg) {
         $('#mxch-seo-checklist').html('<div class="mxch-seo-empty"><span style="color:#ef4444;">' + escapeHtml(msg) + '</span></div>');
+    }
+
+    function runSeoFixSingle(field, $btn) {
+        $btn.addClass('mxch-seo-check-fixing').prop('disabled', true);
+        $.post(ajaxurl, {
+            action: 'mxchat_seo_suggest',
+            nonce: mxchatContent.nonce,
+            post_id: state.postId,
+            field: field,
+        }).done(function(res) {
+            if (res.success) {
+                if (field === 'meta_description') $('#mxch-cg-meta-description').val(res.data.suggestion).trigger('input');
+                else if (field === 'seo_title') $('#mxch-cg-meta-title').val(res.data.suggestion);
+                $('.mxch-cg-left-tab[data-tab="meta"]').addClass('mxch-cg-tab-flash');
+                setTimeout(function() { $('.mxch-cg-left-tab[data-tab="meta"]').removeClass('mxch-cg-tab-flash'); }, 2000);
+            }
+        }).always(function() {
+            $btn.removeClass('mxch-seo-check-fixing').prop('disabled', false);
+            runSeoAnalysis();
+        });
     }
 
     function runAiOptimize() {
@@ -970,10 +1010,26 @@
             if (prefs.meta_description !== false && seoState.checks.meta_desc && seoState.checks.meta_desc.status !== 'pass') fields.push('meta_description');
             if (prefs.seo_title !== false && seoState.checks.title_length && seoState.checks.title_length.status !== 'pass') fields.push('seo_title');
             if (prefs.slug !== false && seoState.checks.slug && seoState.checks.slug.status !== 'pass') fields.push('slug');
+            // Readability, internal links, images require Advanced Content Editor add-on
+            if (mxchatContent.hasAdvancedContent) {
+                if (prefs.readability !== false && seoState.checks.readability && seoState.checks.readability.status !== 'pass') fields.push('readability');
+                if (prefs.internal_links !== false && seoState.checks.internal_links && seoState.checks.internal_links.status !== 'pass') fields.push('internal_links');
+                if (prefs.img_alt !== false && seoState.checks.img_alt && seoState.checks.img_alt.status !== 'pass') fields.push('img_alt');
+                if (prefs.featured_img !== false && seoState.checks.featured_img && seoState.checks.featured_img.status !== 'pass') fields.push('featured_img');
+            }
         }
         if (!fields.length) fields.push('meta_description');
-        var done = 0;
-        fields.forEach(function(field) {
+        // Run fields sequentially to avoid race conditions
+        // (multiple optimizers read/write post_content)
+        var idx = 0;
+        function runNext() {
+            if (idx >= fields.length) {
+                seoState.fixing = false;
+                $btn.removeClass('mxch-seo-fixing').prop('disabled', false).html(origHtml);
+                runSeoAnalysis();
+                return;
+            }
+            var field = fields[idx];
             $.post(ajaxurl, {
                 action: 'mxchat_seo_suggest',
                 nonce: mxchatContent.nonce,
@@ -988,13 +1044,11 @@
                     setTimeout(function() { $('.mxch-cg-left-tab[data-tab="meta"]').removeClass('mxch-cg-tab-flash'); }, 2000);
                 }
             }).always(function() {
-                if (++done >= fields.length) {
-                    seoState.fixing = false;
-                    $btn.removeClass('mxch-seo-fixing').prop('disabled', false).html(origHtml);
-                    runSeoAnalysis();
-                }
+                idx++;
+                runNext();
             });
-        });
+        }
+        runNext();
     }
 
     function resetSeoPanel() {
@@ -1536,6 +1590,61 @@
             var postId = $(this).closest('.mxch-seod-detail').data('post-id');
             runSeodOptimize(postId, $(this));
         });
+
+        // Per-check AI fix buttons in detail modal
+        $(document).on('click', '.mxch-seod-check-fix-btn', function(e) {
+            e.stopPropagation();
+            var $btn = $(this);
+            if ($btn.hasClass('mxch-seo-check-fixing')) return;
+            var field = $btn.data('field');
+            var postId = $btn.data('post-id');
+            $btn.addClass('mxch-seo-check-fixing').prop('disabled', true);
+            $.post(ajaxurl, {
+                action: 'mxchat_seo_suggest',
+                nonce: mxchatContent.nonce,
+                post_id: postId,
+                field: field,
+            }).always(function() {
+                $btn.removeClass('mxch-seo-check-fixing').prop('disabled', false);
+                if (seodState.expandedId === postId) {
+                    openSeoModal(postId);
+                }
+            });
+        });
+
+        // Checkbox: prevent row click when clicking checkbox
+        $(document).on('click', '.mxch-seod-cell-check, .mxch-seod-header-check', function(e) {
+            e.stopPropagation();
+        });
+
+        // Select all checkbox
+        $(document).on('change', '.mxch-seod-check-all', function() {
+            var checked = $(this).prop('checked');
+            $('.mxch-seod-row-check').prop('checked', checked);
+            updateOptimizeSelectedBtn();
+        });
+
+        // Individual row checkbox
+        $(document).on('change', '.mxch-seod-row-check', function() {
+            var allChecked = $('.mxch-seod-row-check').length === $('.mxch-seod-row-check:checked').length;
+            $('.mxch-seod-check-all').prop('checked', allChecked);
+            updateOptimizeSelectedBtn();
+        });
+    }
+
+    function updateOptimizeSelectedBtn() {
+        var count = $('.mxch-seod-row-check:checked').length;
+        var $btn = $('#mxch-seod-optimize-selected');
+        var $note = $('#mxch-seod-bulk-note');
+        var isLocked = $btn.hasClass('mxch-seod-bulk-locked');
+        if (count > 0) {
+            $btn.find('span').first().text(isLocked ? 'Bulk Optimize' : 'Optimize Selected (' + count + ')');
+            $btn.show();
+            if (isLocked) $note.show();
+        } else {
+            $btn.hide();
+            $note.hide();
+        }
     }
 
     function loadSeoPosts() {
@@ -1595,6 +1704,7 @@
         var activeClass = function(col) { return seodState.sortBy === col ? ' mxch-seod-header-active' : ''; };
         $table.append(
             '<div class="mxch-seod-header">' +
+                '<div class="mxch-seod-header-cell mxch-seod-header-check"><input type="checkbox" class="mxch-seod-check-all" title="Select all"></div>' +
                 '<div class="mxch-seod-header-cell mxch-seod-header-title' + activeClass('title') + '" data-sort="title">Title' + seodSortArrow('title') + '</div>' +
                 '<div class="mxch-seod-header-cell mxch-seod-header-date' + activeClass('date') + '" data-sort="date">Date' + seodSortArrow('date') + '</div>' +
                 '<div class="mxch-seod-header-cell mxch-seod-header-score' + activeClass('score') + '" data-sort="score">Score' + seodSortArrow('score') + '</div>' +
@@ -1612,11 +1722,12 @@
                 scoreHtml = '<div class="mxch-seod-score-badge mxch-seod-unscored">&mdash;</div>';
             }
 
-            var typeLabel = p.type === 'page' ? 'Page' : 'Post';
+            var typeLabel = p.type.charAt(0).toUpperCase() + p.type.slice(1);
 
             $table.append(
-                '<div class="mxch-seod-row" data-post-id="' + p.id + '" data-score="' + (p.score !== null ? p.score : -1) + '">' +
+                '<div class="mxch-seod-row" data-post-id="' + p.id + '" data-score="' + (p.score !== null ? p.score : -1) + '" data-permalink="' + escapeAttr(p.permalink) + '">' +
                     '<div class="mxch-seod-row-main">' +
+                        '<div class="mxch-seod-cell mxch-seod-cell-check"><input type="checkbox" class="mxch-seod-row-check" data-post-id="' + p.id + '"></div>' +
                         '<div class="mxch-seod-cell mxch-seod-cell-title">' +
                             '<span class="mxch-seod-title">' + escapeHtml(p.title) + '</span>' +
                             '<span class="mxch-seod-meta">' + typeLabel + '</span>' +
@@ -1666,12 +1777,16 @@
 
         var $row = $('.mxch-seod-row[data-post-id="' + postId + '"]');
         var title = $row.find('.mxch-seod-title').text() || 'Post #' + postId;
+        var permalink = $row.attr('data-permalink') || '';
 
         var $overlay = $(
             '<div class="mxch-seod-modal-overlay">' +
                 '<div class="mxch-seod-modal">' +
                     '<div class="mxch-seod-modal-header">' +
                         '<h3 class="mxch-seod-modal-title">' + escapeHtml(title) + '</h3>' +
+                        (permalink ? '<a href="' + escapeAttr(permalink) + '" target="_blank" class="mxch-seod-modal-view-page" title="View Page">' +
+                            '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>' +
+                            ' View Page</a>' : '') +
                         '<button type="button" class="mxch-seod-modal-close" title="Close">' +
                             '<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>' +
                         '</button>' +
@@ -1730,6 +1845,8 @@
 
         // Checks that require the Advanced Content Editor add-on to fix
         var addonChecks = { readability: true, internal_links: true, img_alt: true, featured_img: true };
+        var fixableMap = { meta_desc: 'meta_description', title_length: 'seo_title', slug: 'slug', readability: 'readability', internal_links: 'internal_links', img_alt: 'img_alt', featured_img: 'featured_img' };
+        var sparkleIcon = '<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3-1.9 5.8a2 2 0 0 1-1.287 1.288L3 12l5.8 1.9a2 2 0 0 1 1.288 1.287L12 21l1.9-5.8a2 2 0 0 1 1.287-1.288L21 12l-5.8-1.9a2 2 0 0 1-1.288-1.287Z"/></svg>';
 
         var sorted = Object.keys(checks).sort(function(a, b) {
             var o = { fail: 0, warn: 1, pass: 2 };
@@ -1755,22 +1872,32 @@
                 }
             }
 
+            // Per-check AI fix button
+            var fixBtn = '';
+            if (c.status !== 'pass' && fixableMap[key]) {
+                var canFix = !addonChecks[key] || mxchatContent.hasAdvancedContent;
+                if (canFix) {
+                    fixBtn = '<button type="button" class="mxch-seo-check-fix mxch-seod-check-fix-btn" data-field="' + fixableMap[key] + '" data-post-id="' + postId + '" title="AI Fix">' + sparkleIcon + '</button>';
+                }
+            }
+
             html += '<div class="mxch-seod-check mxch-seod-check-' + c.status + '">' +
                 '<div class="mxch-seod-check-icon">' + icons[c.status] + '</div>' +
                 '<div class="mxch-seod-check-text">' +
                     '<span class="mxch-seod-check-label">' + escapeHtml(c.label) + badge + '</span>' +
                     '<span class="mxch-seod-check-detail">' + escapeHtml(c.detail) + '</span>' +
                 '</div>' +
+                fixBtn +
             '</div>';
         });
         html += '</div>';
 
-        // AI Optimize button (only if there are issues)
+        // Optimize All button (only if there are issues)
         if (summary.fail > 0 || summary.warn > 0) {
             html += '<div class="mxch-seod-detail-actions">' +
                 '<button type="button" class="mxch-seod-optimize-btn">' +
                     '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3-1.9 5.8a2 2 0 0 1-1.287 1.288L3 12l5.8 1.9a2 2 0 0 1 1.288 1.287L12 21l1.9-5.8a2 2 0 0 1 1.287-1.288L21 12l-5.8-1.9a2 2 0 0 1-1.288-1.287Z"/></svg>' +
-                    ' AI Optimize' +
+                    ' Optimize All' +
                 '</button>' +
             '</div>';
         }
@@ -1959,23 +2086,28 @@
             }
             if (!fields.length) fields.push('meta_description');
 
-            var done = 0;
-            fields.forEach(function(field) {
+            // Run fields sequentially to avoid race conditions
+            // (multiple optimizers read/write post_content)
+            var idx = 0;
+            function runNext() {
+                if (idx >= fields.length) {
+                    if (seodState.expandedId === postId) {
+                        openSeoModal(postId);
+                    }
+                    $btn.prop('disabled', false).html(origHtml);
+                    return;
+                }
                 $.post(ajaxurl, {
                     action: 'mxchat_seo_suggest',
                     nonce: mxchatContent.nonce,
                     post_id: postId,
-                    field: field,
+                    field: fields[idx],
                 }).always(function() {
-                    if (++done >= fields.length) {
-                        // Re-analyze and re-render in modal
-                        if (seodState.expandedId === postId) {
-                            openSeoModal(postId);
-                        }
-                        $btn.prop('disabled', false).html(origHtml);
-                    }
+                    idx++;
+                    runNext();
                 });
-            });
+            }
+            runNext();
         }).fail(function() {
             $btn.prop('disabled', false).html(origHtml);
         });

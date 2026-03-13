@@ -177,7 +177,7 @@ function mxchat_render_pro_page($admin_instance, $addons_config) {
             <div id="overview" class="mxch-section active">
                 <div class="mxch-content-header">
                     <h1 class="mxch-content-title"><?php esc_html_e('Pro & Extensions', 'mxchat'); ?></h1>
-                    <p class="mxch-content-subtitle"><?php esc_html_e('Manage your license and extend MxChat with powerful add-ons.', 'mxchat'); ?></p>
+                    <p class="mxch-content-subtitle"><?php esc_html_e('Manage your license and extend MxChat with powerful add-ons. All add-ons are available for download from the Downloads page in your MxChat account.', 'mxchat'); ?></p>
                 </div>
 
                 <!-- License Management Card -->

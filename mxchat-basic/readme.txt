@@ -5,7 +5,7 @@ Tags: ai chatbot, chatgpt, woocommerce, customer support, content generation
 Requires at least: 5.0
 Tested up to: 6.9
 Requires PHP: 7.2
-Stable tag: 3.1.1
+Stable tag: 3.1.2
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -42,12 +42,15 @@ Extend the free plugin with these optional premium features:
 
 👉 [Visit our website to view all add-ons](https://mxchat.ai)
 
-## 🔥 What's New in Version 3.1.1
+## 🔥 What's New in Version 3.1.2
 
-- **SEO Analysis & Scoring** — The Content section now includes a full SEO panel with real-time scoring for every post and page. See exactly what needs improvement at a glance.
-- **AI Auto-Optimize** — One-click AI optimization for meta descriptions, SEO titles, and URL slugs. Choose which checks AI Optimize will fix from the Content settings.
-- **Google Search Console Integration (Pro)** — Pro members can connect their Google Search Console account to see detailed per-page analytics including impressions, clicks, CTR, and top search queries — all directly inside the Content editor.
-- **Stability & Caching Fixes** — Resolved stale nonce errors on cached pages, eliminated security scanner false-positives, and lazy-loaded the PDF parser for faster page loads.
+- **Per-Check AI Fix Buttons** — Hover any failing SEO check to see a sparkle icon that fixes just that item individually — no need to run a full optimize pass for a single issue.
+- **Batch Optimize from SEO Dashboard** — The SEO dashboard now supports row checkboxes with an "Optimize Selected" button to batch-optimize multiple posts at once (requires Advanced Content Editor add-on).
+- **Smarter AI Optimize** — AI Optimize now runs all addon checks including readability, internal links, image ALT, and featured image — previously only meta description, title, and slug were included.
+- **"Optimize All" & UI Improvements** — The AI Optimize button is now labeled "Optimize All" for clarity, the SEO modal includes a "View Page" link, and per-check fix buttons are always visible.
+- **Custom Post Type Support** — The post type dropdown now dynamically includes custom post types like WooCommerce Products.
+- **Emoji & Transcript Fixes** — Chat transcripts now correctly save and display bot responses containing emojis, and WooCommerce product cards render properly with image, price, and button in transcripts.
+- **Image Generation Upgraded** — Replaced deprecated DALL-E 3 with GPT Image (OpenAI) and added Gemini Imagen 4 as a new image generation action.
 
 ## Core Features That Set MxChat Apart
 
@@ -61,7 +64,7 @@ Extend the free plugin with these optional premium features:
 🟢 **Pinecone Vector Storage** – Optional lightning-fast knowledge retrieval for large datasets and enterprise-scale deployments
 🟢 **Web Search Integration** – Brave search provides real-time information beyond your knowledge base
 🟢 **AI Content Generator** – Create full blog posts and landing pages from a prompt with AI images, SEO metadata, real-time preview, and inline AI editing via chat
-🟢 **Image Generation** – DALL-E integration for visual content creation within chat conversations
+🟢 **Image Generation** – OpenAI GPT Image and Google Imagen for visual content creation within chat conversations
 🟢 **Streaming Responses** – Real-time response streaming for OpenAI, Claude, and Grok models for the fastest possible chat experience
 
 ## Choose from 100+ Premium AI Models
@@ -318,6 +321,18 @@ Yes. MxChat is available for free on the WordPress plugin repository with full A
 *(Note: Screenshots will be added in future updates)*
 
 == Changelog ==
+
+= 3.1.2 - March 13, 2026 =
+- New: Per-check AI fix buttons — hover any failing SEO check to see a sparkle icon that fixes just that item individually
+- New: SEO dashboard now has row checkboxes with "Optimize Selected" to batch-optimize posts (requires Advanced Content Editor add-on)
+- Improved: "AI Optimize" button renamed to "Optimize All" for clarity
+- Improved: SEO modal now includes a "View Page" link and per-check AI fix buttons are always visible
+- Improved: Post type dropdown now dynamically includes custom post types like WooCommerce Products
+- Fixed: AI Optimize now runs all addon checks (readability, internal links, image ALT, featured image) in the content editor — previously only meta description, title, and slug were included
+- Fixed: Chat transcripts not saving bot responses containing emojis due to database table using utf8mb3 charset — upgraded to utf8mb4
+- Fixed: WooCommerce product cards now display with image, price, and button in chat transcripts
+- Fixed: "Optimize All" now runs SEO fixes sequentially to prevent race conditions — previously internal links and other content-modifying fixes could overwrite each other
+- Upgraded: Image generation replaced deprecated DALL-E 3 with GPT Image (OpenAI) and added Gemini Imagen 4 action
 
 = 3.1.1 - March 4, 2026 =
 - New: Slack agents can now transfer users back to AI mode by typing `!endchat` in the channel
@@ -888,8 +903,8 @@ Yes. MxChat is available for free on the WordPress plugin repository with full A
 
 == Upgrade Notice ==
 
-= 3.1.1 - March 4, 2026 =
-New: SEO analysis panel with real-time scoring and AI Auto-Optimize for meta titles, descriptions, and slugs. Google Search Console integration with per-page clicks, impressions, and top queries (PRO). Slack agents can now transfer users back to AI with !endchat. Fixed: Stale nonce errors on cached sites (WP Rocket, LiteSpeed) and security scanner false-positives.
+= 3.1.2 =
+New: Per-check AI fix buttons, batch SEO optimize from dashboard, and Gemini Imagen 4 image generation action. Upgraded: Image generation now uses GPT Image (OpenAI) replacing deprecated DALL-E 3. Improved: AI Optimize runs all addon checks, sequential fix execution prevents race conditions, custom post type support in SEO dashboard. Fixed: Emoji support in chat transcripts, WooCommerce product card rendering in transcripts.
 
 == License & Warranty ==
 

@@ -2223,7 +2223,16 @@ public function mxchat_fetch_conversation() {
             [
                 'b' => [], 'strong' => [], 'i' => [], 'em' => [], 'u' => [],
                 'br' => [], 'p' => [], 'ul' => [], 'ol' => [], 'li' => [],
-                'a' => ['href' => [], 'title' => [], 'target' => []]
+                'a' => ['href' => [], 'title' => [], 'target' => [], 'class' => []],
+                'div' => ['class' => [], 'id' => [], 'data-nonce' => []],
+                'img' => ['src' => [], 'alt' => [], 'class' => []],
+                'h3' => ['class' => []],
+                'h4' => ['class' => []],
+                'button' => ['type' => [], 'class' => [], 'data-product-id' => [], 'data-nonce' => [], 'data-product-type' => [], 'data-original-text' => [], 'data-mxchat-action' => []],
+                'select' => ['class' => [], 'data-attribute' => []],
+                'option' => ['value' => []],
+                'span' => ['class' => []],
+                'del' => [], 'ins' => [],
             ]
         );
         $formatted_content = $this->format_transcript_message($content);
@@ -2823,9 +2832,9 @@ private function format_transcript_message($text) {
         return "<a href=\"{$url}\" target=\"_blank\" rel=\"noopener\">{$url}</a>";
     }, $text);
 
-    // Process standalone URLs (not already in links)
+    // Process standalone URLs (not already in links or img src)
     $text = preg_replace_callback(
-        '/(?<!href="|">)(https?:\/\/[^\s<>"]+)(?![^<]*<\/a>)/',
+        '/(?<!href="|src="|">)(https?:\/\/[^\s<>"]+)(?![^<]*<\/a>)/',
         function($matches) {
             $url = esc_url($matches[1]);
             // Truncate display URL if too long
@@ -4236,11 +4245,20 @@ private function mxchat_get_available_callbacks($grouped = false, $include_all =
         ),
         // Pro core features - check is_activated property
         'mxchat_generate_image' => array(
-            'label'       => __('Generate Image', 'mxchat'),
+            'label'       => __('Generate Image (OpenAI)', 'mxchat'),
             'pro_only'    => false,
             'group'       => __('Other Features', 'mxchat'),
             'icon'        => 'art',
-            'description' => __('Create images with DALL-E 3 from OpenAI (requires OpenAI API key)', 'mxchat'),
+            'description' => __('Create images with GPT Image from OpenAI (requires OpenAI API key)', 'mxchat'),
+            'addon'       => false,
+            'installed'   => true
+        ),
+        'mxchat_generate_gemini_image' => array(
+            'label'       => __('Generate Image (Gemini)', 'mxchat'),
+            'pro_only'    => false,
+            'group'       => __('Other Features', 'mxchat'),
+            'icon'        => 'art',
+            'description' => __('Create images with Imagen from Google (requires Gemini API key)', 'mxchat'),
             'addon'       => false,
             'installed'   => true
         ),

@@ -3001,7 +3001,7 @@ article .entry-content,
         $args = array(
             'post_status'    => 'publish',
             'posts_per_page' => -1,
-            'post_type'      => $post_type === 'any' ? array('post', 'page') : $post_type,
+            'post_type'      => $post_type === 'any' ? array_values(array_diff(get_post_types(array('public' => true), 'names'), array('attachment'))) : $post_type,
             'orderby'        => $orderby,
             'order'          => $sort_order,
             'fields'         => 'ids',

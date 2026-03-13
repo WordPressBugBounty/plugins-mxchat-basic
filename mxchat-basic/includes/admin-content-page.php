@@ -371,9 +371,9 @@ function mxchat_render_content_page($admin_instance) {
                                 </div>
                                 <!-- AI Optimize -->
                                 <div class="mxch-seo-actions" id="mxch-seo-actions" style="display:none;">
-                                    <button type="button" class="mxch-seo-fix-btn" id="mxch-seo-ai-optimize" title="<?php esc_attr_e('AI generates optimized meta description, title, and slug', 'mxchat'); ?>">
+                                    <button type="button" class="mxch-seo-fix-btn" id="mxch-seo-ai-optimize" title="<?php esc_attr_e('AI optimizes all failing SEO checks', 'mxchat'); ?>">
                                         <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3-1.9 5.8a2 2 0 0 1-1.287 1.288L3 12l5.8 1.9a2 2 0 0 1 1.288 1.287L12 21l1.9-5.8a2 2 0 0 1 1.287-1.288L21 12l-5.8-1.9a2 2 0 0 1-1.288-1.287Z"/></svg>
-                                        <?php esc_html_e('AI Optimize', 'mxchat'); ?>
+                                        <?php esc_html_e('Optimize All', 'mxchat'); ?>
                                     </button>
                                 </div>
                             </div>
@@ -586,7 +586,7 @@ function mxchat_render_content_page($admin_instance) {
                                 <span><?php esc_html_e('Google Search Console', 'mxchat'); ?></span>
                                 <span class="mxch-cg-pro-badge"><?php echo $is_activated ? esc_html__('ADD-ON', 'mxchat') : esc_html__('PRO', 'mxchat'); ?></span>
                             </div>
-                            <p class="mxch-field-description"><?php esc_html_e('Connect Google Search Console to see real search performance data — clicks, impressions, CTR, and keyword rankings — directly in your SEO dashboard.', 'mxchat'); ?></p>
+                            <p class="mxch-field-description"><?php esc_html_e('Connect Google Search Console to see real search performance data — clicks, impressions, CTR, and keyword rankings — directly in your SEO dashboard. Chat with your GSC data using the AI Admin Assistant add-on.', 'mxchat'); ?></p>
                             <button type="button" class="mxch-gsc-connect-btn" disabled>
                                 <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
                                 <?php esc_html_e('Connect Google Search Console', 'mxchat'); ?>
@@ -679,6 +679,13 @@ function mxchat_render_content_page($admin_instance) {
                                     <option value="any"><?php esc_html_e('All Types', 'mxchat'); ?></option>
                                     <option value="post"><?php esc_html_e('Posts', 'mxchat'); ?></option>
                                     <option value="page"><?php esc_html_e('Pages', 'mxchat'); ?></option>
+                                    <?php
+                                    $extra_types = get_post_types(array('public' => true, '_builtin' => false), 'objects');
+                                    foreach ($extra_types as $pt) {
+                                        if (in_array($pt->name, array('attachment', 'elementor_library', 'e-landing-page'), true)) continue;
+                                        printf('<option value="%s">%s</option>', esc_attr($pt->name), esc_html($pt->labels->name));
+                                    }
+                                    ?>
                                 </select>
                                 <div class="mxch-seod-filter-pills">
                                     <button type="button" class="mxch-seod-pill active" data-filter="all"><?php esc_html_e('All', 'mxchat'); ?></button>
@@ -688,6 +695,20 @@ function mxchat_render_content_page($admin_instance) {
                                 </div>
                             </div>
                             <div class="mxch-seod-filters-right">
+                                <?php if (!$has_addon): ?>
+                                    <span class="mxch-seod-bulk-note" id="mxch-seod-bulk-note" style="display:none;"><?php echo $is_activated ? esc_html__('Bulk optimize requires the Advanced Content Editor add-on', 'mxchat') : esc_html__('Bulk optimize requires MxChat Pro', 'mxchat'); ?></span>
+                                <?php endif; ?>
+                                <button type="button" class="mxch-seod-scan-btn mxch-seod-optimize-selected-btn<?php echo $has_addon ? '' : ' mxch-seod-bulk-locked'; ?>" id="mxch-seod-optimize-selected" style="display:none;"<?php echo $has_addon ? '' : ' disabled title="' . esc_attr__('Pro required for bulk optimization', 'mxchat') . '"'; ?>>
+                                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3-1.9 5.8a2 2 0 0 1-1.287 1.288L3 12l5.8 1.9a2 2 0 0 1 1.288 1.287L12 21l1.9-5.8a2 2 0 0 1 1.287-1.288L21 12l-5.8-1.9a2 2 0 0 1-1.288-1.287Z"/></svg>
+                                    <span><?php esc_html_e('Optimize Selected', 'mxchat'); ?></span>
+                                    <?php if (!$has_addon): ?>
+                                        <span class="mxch-cg-pro-badge"><?php echo $is_activated ? esc_html__('ADD-ON', 'mxchat') : esc_html__('PRO', 'mxchat'); ?></span>
+                                    <?php endif; ?>
+                                </button>
+                                <button type="button" class="mxch-seod-scan-btn mxch-seod-scan-stop-btn" id="mxch-seod-optimize-stop" style="display:none;">
+                                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
+                                    <span><?php esc_html_e('Stop', 'mxchat'); ?></span>
+                                </button>
                                 <div class="mxch-seod-search-wrap">
                                     <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
                                     <input type="text" id="mxch-seod-search" class="mxch-seod-search" placeholder="<?php esc_attr_e('Search posts...', 'mxchat'); ?>">
