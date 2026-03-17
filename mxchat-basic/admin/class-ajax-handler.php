@@ -190,25 +190,6 @@ public function mxchat_save_setting_callback() {
             if ($rag_limit > 10) $rag_limit = 10;
             $options[$field_name] = $rag_limit;
             break;
-        case 'user_message_bg_color':
-        case 'user_message_font_color':
-        case 'bot_message_bg_color':
-        case 'bot_message_font_color':
-        case 'top_bar_bg_color':
-        case 'send_button_font_color':
-        case 'chatbot_background_color':
-        case 'icon_color':
-        case 'chat_input_font_color':
-        case 'live_agent_message_bg_color':
-        case 'live_agent_message_font_color':
-        case 'mode_indicator_bg_color':
-        case 'mode_indicator_font_color':
-        case 'toolbar_icon_color':
-        case 'quick_questions_toggle_color':
-            //error_log('MXChat Save: Processing color value: ' . $field_name);
-            // Store color values directly
-            $options[$field_name] = $value;
-            break;
         case 'live_agent_status':
             //error_log('MXChat Save: Processing live_agent_status');
             // Set the new value

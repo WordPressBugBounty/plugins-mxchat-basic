@@ -290,6 +290,35 @@
 /* ========================================
    CODE BLOCKS & INLINE CODE
    ======================================== */
+.mxchat-table-wrapper {
+    overflow-x: auto;
+    margin: 12px 0;
+    -webkit-overflow-scrolling: touch;
+}
+
+.mxchat-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.9em;
+    line-height: 1.4;
+}
+
+.mxchat-table th,
+.mxchat-table td {
+    padding: 8px 12px;
+    border: 1px solid rgba(128, 128, 128, 0.3);
+    word-break: break-word;
+}
+
+.mxchat-table thead th {
+    font-weight: 600;
+    background: rgba(128, 128, 128, 0.15);
+}
+
+.mxchat-table tbody tr:nth-child(even) {
+    background: rgba(128, 128, 128, 0.05);
+}
+
 .mxchat-code-block-container {
     margin: 16px 0;
     border-radius: 8px;
@@ -1322,6 +1351,10 @@
         top: 0;
         left: 0;
         right: 0;
+        border-radius: 0;
+    }
+
+    .floating-chatbot .mxchat-chatbot-wrapper {
         border-radius: 0;
     }
 

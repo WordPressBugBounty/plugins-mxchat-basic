@@ -225,7 +225,7 @@ public function render_chatbot_shortcode($atts) {
     $chat_input_font_color = $current_options['chat_input_font_color'] ?? '#212121';
     $close_button_color = $current_options['close_button_color'] ?? '#fff';
     $chatbot_bg_color = $current_options['chatbot_bg_color'] ?? '#fff';
-    $pre_chat_message = isset($current_options['pre_chat_message']) ? sanitize_text_field(trim($current_options['pre_chat_message'])) : '';
+    $pre_chat_message = isset($current_options['pre_chat_message']) ? sanitize_textarea_field(trim($current_options['pre_chat_message'])) : '';
     $user_id = sanitize_key($this->mxchat_get_user_identifier());
     $email_state = $this->determine_email_collection_state();
     $show_email_form = $email_state['show_email_form'];
@@ -477,7 +477,7 @@ public function render_chatbot_shortcode($atts) {
     
                 if (!empty($pre_chat_message) && !get_transient($transient_key)) {
                     echo '<div id="pre-chat-message-' . esc_attr($bot_id) . '" class="pre-chat-message">';
-                    echo esc_html($pre_chat_message);
+                    echo nl2br(esc_html($pre_chat_message));
                     echo '<button class="close-pre-chat-message" aria-label="' . esc_attr__('Close', 'mxchat') . '">&times;</button>';
                     echo '</div>';
                 }

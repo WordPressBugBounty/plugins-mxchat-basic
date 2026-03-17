@@ -247,12 +247,12 @@ private static function store_in_wordpress_db($safe_content, $source_url, $embed
             }
             
         if ($result === false) {
-            error_log('[MXCHAT-DB] Database operation failed (Attempt ' . $attempt . ')');
-            error_log('[MXCHAT-DB] MySQL Error: ' . $wpdb->last_error);
-            error_log('[MXCHAT-DB] MySQL Error Number: ' . $wpdb->last_errno);
-            error_log('[MXCHAT-DB] Last Query: ' . substr($wpdb->last_query, 0, 500));
-            error_log('[MXCHAT-DB] Content length: ' . strlen($current_content) . ' bytes');
-            error_log('[MXCHAT-DB] Embedding vector length: ' . strlen($embedding_vector_serialized) . ' bytes');
+            //error_log('[MXCHAT-DB] Database operation failed (Attempt ' . $attempt . ')');
+            //error_log('[MXCHAT-DB] MySQL Error: ' . $wpdb->last_error);
+            //error_log('[MXCHAT-DB] MySQL Error Number: ' . $wpdb->last_errno);
+            //error_log('[MXCHAT-DB] Last Query: ' . substr($wpdb->last_query, 0, 500));
+            //error_log('[MXCHAT-DB] Content length: ' . strlen($current_content) . ' bytes');
+            //error_log('[MXCHAT-DB] Embedding vector length: ' . strlen($embedding_vector_serialized) . ' bytes');
                 
                 // Progressively apply more aggressive sanitization on failure
                 if ($attempt === 1) {
@@ -274,8 +274,8 @@ private static function store_in_wordpress_db($safe_content, $source_url, $embed
     }
     
 if ($result === false) {
-    error_log('[MXCHAT-DB] All database operation attempts failed');
-    error_log('[MXCHAT-DB] Final MySQL Error: ' . $wpdb->last_error);
+    //error_log('[MXCHAT-DB] All database operation attempts failed');
+    //error_log('[MXCHAT-DB] Final MySQL Error: ' . $wpdb->last_error);
     
     $detailed_error = sprintf(
         'Failed to store content in WordPress database after %d attempts. MySQL Error: %s (Error #%d). Content size: %d bytes, Embedding size: %d bytes',
@@ -550,13 +550,13 @@ private static function submit_chunked_content($content, $source_url, $api_key, 
     global $wpdb;
     $table_name = $wpdb->prefix . 'mxchat_system_prompt_content';
 
-    error_log('[MXCHAT-CHUNK-DEBUG] Starting chunked submission for: ' . $source_url);
-    error_log('[MXCHAT-CHUNK-DEBUG] Content length: ' . strlen($content) . ' chars');
+    //error_log('[MXCHAT-CHUNK-DEBUG] Starting chunked submission for: ' . $source_url);
+    //error_log('[MXCHAT-CHUNK-DEBUG] Content length: ' . strlen($content) . ' chars');
 
     // First, delete any existing chunks for this URL (clean slate)
     $delete_result = self::delete_chunks_for_url($source_url, $bot_id);
     if (is_wp_error($delete_result)) {
-        error_log('[MXCHAT-CHUNK-DEBUG] Warning: Failed to delete existing chunks: ' . $delete_result->get_error_message());
+        //error_log('[MXCHAT-CHUNK-DEBUG] Warning: Failed to delete existing chunks: ' . $delete_result->get_error_message());
         // Continue anyway - we'll overwrite with upsert
     }
 
@@ -564,9 +564,9 @@ private static function submit_chunked_content($content, $source_url, $api_key, 
     $chunks = $chunker->chunk_text($content);
     $total_chunks = count($chunks);
 
-    error_log('[MXCHAT-CHUNK-DEBUG] Created ' . $total_chunks . ' chunks');
+    //error_log('[MXCHAT-CHUNK-DEBUG] Created ' . $total_chunks . ' chunks');
     foreach ($chunks as $i => $chunk) {
-        error_log('[MXCHAT-CHUNK-DEBUG] Chunk ' . $i . ' length: ' . strlen($chunk) . ' chars, preview: ' . substr($chunk, 0, 100));
+        //error_log('[MXCHAT-CHUNK-DEBUG] Chunk ' . $i . ' length: ' . strlen($chunk) . ' chars, preview: ' . substr($chunk, 0, 100));
     }
 
     //error_log('[MXCHAT-CHUNK] Split content into ' . $total_chunks . ' chunks');

@@ -3383,6 +3383,29 @@ tr.mxchat-setting-row.highlighted {
     box-shadow: 0 4px 12px rgba(255, 140, 0, 0.1);
 }
 
+.mxchat-action-type-card.mxchat-promo-card {
+    cursor: default;
+    opacity: 0.7;
+    border-style: dashed;
+    background: rgba(255, 255, 255, 0.6);
+}
+
+.mxchat-action-type-card.mxchat-promo-card:hover {
+    cursor: pointer;
+    opacity: 0.9;
+    border-color: #FF8C00;
+}
+
+.mxchat-addon-info a {
+    color: #FF8C00;
+    text-decoration: none;
+    font-weight: 600;
+}
+
+.mxchat-addon-info a:hover {
+    text-decoration: underline;
+}
+
 /* Add-on Notice */
 .mxchat-addon-notice {
     position: fixed;

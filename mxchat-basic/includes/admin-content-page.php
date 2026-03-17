@@ -23,6 +23,7 @@ function mxchat_render_content_page($admin_instance) {
     $pro_image_management  = apply_filters('mxchat_content_pro_feature', false, 'image_management');
     $pro_meta_management   = apply_filters('mxchat_content_pro_feature', false, 'meta_management');
     $pro_gsc_integration   = apply_filters('mxchat_content_pro_feature', false, 'gsc_integration');
+    $pro_content_calendar  = apply_filters('mxchat_content_pro_feature', false, 'content_calendar');
     ?>
     <div class="mxch-admin-wrapper">
         <!-- Mobile Header -->
@@ -67,6 +68,10 @@ function mxchat_render_content_page($admin_instance) {
                     <button class="mxch-mobile-nav-link" data-target="content-seo">
                         <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20V10"/><path d="M18 20V4"/><path d="M6 20v-4"/></svg>
                         <span><?php esc_html_e('SEO', 'mxchat'); ?></span>
+                    </button>
+                    <button class="mxch-mobile-nav-link" data-target="content-calendar">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+                        <span><?php esc_html_e('Calendar', 'mxchat'); ?></span>
                     </button>
                 </div>
             </nav>
@@ -121,6 +126,15 @@ function mxchat_render_content_page($admin_instance) {
                                 <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20V10"/><path d="M18 20V4"/><path d="M6 20v-4"/></svg>
                             </span>
                             <span class="mxch-nav-link-text"><?php esc_html_e('SEO', 'mxchat'); ?></span>
+                        </button>
+                    </div>
+
+                    <div class="mxch-nav-item" data-section="content-calendar">
+                        <button class="mxch-nav-link" data-target="content-calendar">
+                            <span class="mxch-nav-link-icon">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+                            </span>
+                            <span class="mxch-nav-link-text"><?php esc_html_e('Calendar', 'mxchat'); ?></span>
                         </button>
                     </div>
                 </div>
@@ -746,6 +760,154 @@ function mxchat_render_content_page($admin_instance) {
                         </div>
                     </div>
                 </div>
+            </div>
+
+            <!-- ========================================
+                 CALENDAR
+                 ======================================== -->
+            <div id="content-calendar" class="mxch-section">
+                <?php if ($pro_content_calendar) : ?>
+                    <!-- Add-on is active — container for calendar JS to populate -->
+                    <div class="mxcal-container" id="mxcal-container"></div>
+                <?php else : ?>
+                    <!-- Add-on not installed — show blurred demo calendar -->
+                    <style>
+                        .mxcal-demo-wrap { position: relative; }
+                        .mxcal-demo-blur { filter: blur(3px); pointer-events: none; user-select: none; opacity: 0.7; }
+                        .mxcal-demo-overlay {
+                            position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+                            z-index: 10; text-align: center; background: rgba(255,255,255,0.95);
+                            border-radius: 16px; padding: 40px 48px; box-shadow: 0 8px 40px rgba(120,115,245,0.15);
+                            border: 1px solid rgba(120,115,245,0.12); max-width: 460px; width: 90%;
+                        }
+                        .mxcal-demo-overlay h2 {
+                            font-size: 22px; font-weight: 700; margin: 0 0 8px; color: #1A202C;
+                        }
+                        .mxcal-demo-overlay p { font-size: 14px; color: #718096; line-height: 1.6; margin: 0 0 20px; }
+                        .mxcal-demo-overlay .mxcal-demo-badge {
+                            display: inline-block; background: linear-gradient(135deg, #fa73e6, #7873f5);
+                            color: #fff; font-size: 11px; font-weight: 700; padding: 4px 12px;
+                            border-radius: 20px; margin-bottom: 16px; letter-spacing: 0.5px;
+                        }
+                        .mxcal-demo-overlay a.mxcal-demo-btn {
+                            display: inline-block; background: linear-gradient(135deg, #fa73e6, #7873f5);
+                            color: #fff; font-size: 14px; font-weight: 600; padding: 12px 28px;
+                            border-radius: 10px; text-decoration: none; transition: all 0.2s;
+                            box-shadow: 0 4px 14px rgba(120,115,245,0.25);
+                        }
+                        .mxcal-demo-overlay a.mxcal-demo-btn:hover {
+                            box-shadow: 0 6px 20px rgba(120,115,245,0.35); transform: translateY(-1px);
+                        }
+                        .mxcal-demo-grid {
+                            display: grid; grid-template-columns: repeat(7, 1fr);
+                            border: 1px solid #E2E8F0; border-radius: 12px; overflow: hidden; background: #fff;
+                        }
+                        .mxcal-demo-hdr {
+                            background: #F7FAFC; padding: 10px 6px; text-align: center;
+                            font-size: 11px; font-weight: 600; color: #A0AEC0; text-transform: uppercase;
+                            border-bottom: 1px solid #E2E8F0;
+                        }
+                        .mxcal-demo-day {
+                            min-height: 90px; padding: 8px; border-right: 1px solid #F0F0F5;
+                            border-bottom: 1px solid #F0F0F5; display: flex; flex-direction: column; gap: 4px;
+                        }
+                        .mxcal-demo-day:nth-child(7n) { border-right: none; }
+                        .mxcal-demo-num { font-size: 12px; font-weight: 600; color: #A0AEC0; }
+                        .mxcal-demo-kw { font-size: 10px; font-weight: 600; color: #2D3748; line-height: 1.2; }
+                        .mxcal-demo-stats { display: flex; gap: 4px; margin-top: auto; }
+                        .mxcal-demo-vol { font-size: 9px; background: #EDF2F7; padding: 1px 5px; border-radius: 3px; color: #718096; }
+                        .mxcal-demo-kd { font-size: 9px; padding: 1px 5px; border-radius: 3px; font-weight: 700; }
+                        .mxcal-demo-easy { background: rgba(16,185,129,0.1); color: #059669; }
+                        .mxcal-demo-med { background: rgba(245,158,11,0.1); color: #d97706; }
+                        .mxcal-demo-hard { background: rgba(239,68,68,0.1); color: #dc2626; }
+                        .mxcal-demo-planned { border-left: 3px solid #CBD5E0; }
+                        .mxcal-demo-done { border-left: 3px solid #10b981; }
+                        .mxcal-demo-empty { background: #FAFAFA; }
+                        .mxcal-demo-header {
+                            display: flex; justify-content: space-between; align-items: center;
+                            margin-bottom: 16px; flex-wrap: wrap; gap: 12px;
+                        }
+                        .mxcal-demo-header h3 { font-size: 18px; font-weight: 700; color: #1A202C; margin: 0; }
+                        .mxcal-demo-month {
+                            display: flex; align-items: center; gap: 16px; justify-content: center; margin-bottom: 14px;
+                        }
+                        .mxcal-demo-month span { font-size: 16px; font-weight: 700; color: #2D3748; }
+                        .mxcal-demo-month-btn {
+                            background: none; border: 1px solid #E2E8F0; border-radius: 6px;
+                            padding: 4px 12px; font-size: 12px; color: #718096;
+                        }
+                    </style>
+                    <div class="mxcal-demo-wrap">
+                        <div class="mxcal-demo-blur">
+                            <div class="mxcal-demo-header">
+                                <h3>Content Calendar</h3>
+                                <div style="display:flex;gap:8px;">
+                                    <span style="background:#EDF2F7;padding:4px 12px;border-radius:20px;font-size:12px;color:#4A5568;">mxchat.ai</span>
+                                    <span style="background:linear-gradient(135deg,#fa73e6,#7873f5);padding:4px 12px;border-radius:20px;font-size:11px;color:#fff;font-weight:600;">AI Chatbot Plugin</span>
+                                </div>
+                            </div>
+                            <div class="mxcal-demo-month">
+                                <button class="mxcal-demo-month-btn">&larr;</button>
+                                <span><?php echo esc_html(wp_date('F Y')); ?></span>
+                                <button class="mxcal-demo-month-btn">&rarr;</button>
+                            </div>
+                            <div class="mxcal-demo-grid">
+                                <?php
+                                $days = array('Sun','Mon','Tue','Wed','Thu','Fri','Sat');
+                                foreach ($days as $d) echo '<div class="mxcal-demo-hdr">' . $d . '</div>';
+
+                                $demo_posts = array(
+                                    array('kw' => 'wordpress chatbot plugin', 'vol' => '2,400', 'kd' => 'KD 28', 'cls' => 'easy', 'st' => 'done'),
+                                    array('kw' => 'ai customer support', 'vol' => '1,900', 'kd' => 'KD 35', 'cls' => 'med', 'st' => 'done'),
+                                    array('kw' => 'chatbot for ecommerce', 'vol' => '1,600', 'kd' => 'KD 22', 'cls' => 'easy', 'st' => 'done'),
+                                    array('kw' => 'gpt wordpress integration', 'vol' => '1,100', 'kd' => 'KD 41', 'cls' => 'med', 'st' => 'planned'),
+                                    array('kw' => 'live chat vs chatbot', 'vol' => '3,200', 'kd' => 'KD 18', 'cls' => 'easy', 'st' => 'planned'),
+                                    array('kw' => 'ai lead generation', 'vol' => '2,800', 'kd' => 'KD 52', 'cls' => 'med', 'st' => 'planned'),
+                                    array('kw' => 'reduce support tickets ai', 'vol' => '880', 'kd' => 'KD 15', 'cls' => 'easy', 'st' => 'planned'),
+                                    array('kw' => 'best chatbot plugins 2026', 'vol' => '4,100', 'kd' => 'KD 62', 'cls' => 'hard', 'st' => 'planned'),
+                                    array('kw' => 'woocommerce chatbot', 'vol' => '1,400', 'kd' => 'KD 30', 'cls' => 'med', 'st' => 'planned'),
+                                    array('kw' => 'automate faq wordpress', 'vol' => '720', 'kd' => 'KD 12', 'cls' => 'easy', 'st' => 'planned'),
+                                    array('kw' => 'claude vs chatgpt wordpress', 'vol' => '2,100', 'kd' => 'KD 38', 'cls' => 'med', 'st' => 'planned'),
+                                    array('kw' => 'ai content generation', 'vol' => '5,400', 'kd' => 'KD 68', 'cls' => 'hard', 'st' => 'planned'),
+                                );
+
+                                $first_day = (int) wp_date('w', strtotime('first day of this month'));
+                                $days_in_month = (int) wp_date('t');
+                                $post_idx = 0;
+
+                                for ($i = 0; $i < $first_day; $i++) echo '<div class="mxcal-demo-day mxcal-demo-empty"></div>';
+
+                                for ($d = 1; $d <= $days_in_month; $d++) {
+                                    if ($post_idx < count($demo_posts)) {
+                                        $p = $demo_posts[$post_idx];
+                                        $st_cls = $p['st'] === 'done' ? 'mxcal-demo-done' : 'mxcal-demo-planned';
+                                        echo '<div class="mxcal-demo-day ' . $st_cls . '">';
+                                        echo '<span class="mxcal-demo-num">' . $d . '</span>';
+                                        echo '<span class="mxcal-demo-kw">' . esc_html($p['kw']) . '</span>';
+                                        echo '<div class="mxcal-demo-stats">';
+                                        echo '<span class="mxcal-demo-vol">' . $p['vol'] . '</span>';
+                                        echo '<span class="mxcal-demo-kd mxcal-demo-' . $p['cls'] . '">' . $p['kd'] . '</span>';
+                                        echo '</div></div>';
+                                        $post_idx++;
+                                    } else {
+                                        echo '<div class="mxcal-demo-day mxcal-demo-empty"><span class="mxcal-demo-num">' . $d . '</span></div>';
+                                    }
+                                }
+
+                                $total = $first_day + $days_in_month;
+                                $remaining = $total % 7 === 0 ? 0 : 7 - ($total % 7);
+                                for ($i = 0; $i < $remaining; $i++) echo '<div class="mxcal-demo-day mxcal-demo-empty"></div>';
+                                ?>
+                            </div>
+                        </div>
+                        <div class="mxcal-demo-overlay">
+                            <span class="mxcal-demo-badge">PRO ADD-ON</span>
+                            <h2>AI Content Calendar</h2>
+                            <p>Import SEO data and let AI generate a 30-day blog plan with targeted keywords, difficulty scores, and automated post scheduling.</p>
+                            <a href="https://mxchat.ai/advanced-content-editor/" target="_blank" class="mxcal-demo-btn">Get Advanced Content Editor</a>
+                        </div>
+                    </div>
+                <?php endif; ?>
             </div>
 
         </main>

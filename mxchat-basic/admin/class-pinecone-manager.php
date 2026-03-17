@@ -125,7 +125,7 @@ public function mxchat_fetch_pinecone_records($pinecone_options, $search_query =
         );
 
     } catch (Exception $e) {
-        error_log('MxChat Pinecone fetch error: ' . $e->getMessage());
+        //error_log('MxChat Pinecone fetch error: ' . $e->getMessage());
         MxChat_Admin::mxchat_log_debug('pinecone_error', 'Pinecone fetch error: ' . $e->getMessage());
         return array('data' => array(), 'total' => 0, 'total_in_database' => 0, 'showing_recent_only' => false);
     }
@@ -152,7 +152,7 @@ private function mxchat_fetch_pinecone_page_optimized($pinecone_options, $search
         return $this->mxchat_list_pinecone_records($pinecone_options, $page, $per_page, $bot_id, $content_type);
 
     } catch (Exception $e) {
-        error_log('MxChat optimized fetch exception: ' . $e->getMessage());
+        //error_log('MxChat optimized fetch exception: ' . $e->getMessage());
         MxChat_Admin::mxchat_log_debug('pinecone_error', 'Pinecone optimized fetch error: ' . $e->getMessage());
         return array('data' => array(), 'total' => 0);
     }
@@ -928,7 +928,7 @@ private function mxchat_get_recent_entries_safe($pinecone_options, $bot_id = 'de
         return $limited_records;
 
     } catch (Exception $e) {
-        error_log('MxChat safe fetch exception: ' . $e->getMessage());
+        //error_log('MxChat safe fetch exception: ' . $e->getMessage());
         MxChat_Admin::mxchat_log_debug('pinecone_error', 'Pinecone safe fetch error: ' . $e->getMessage());
         return array();
     }

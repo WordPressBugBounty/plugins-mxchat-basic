@@ -1441,7 +1441,7 @@ public function cleanup_old_transcripts() {
 
     // Log the cleanup action
     if ($deleted !== false && $deleted > 0) {
-        error_log(sprintf('MXChat: Auto-deleted %d transcripts older than %d days', $deleted, $days));
+        //error_log(sprintf('MXChat: Auto-deleted %d transcripts older than %d days', $deleted, $days));
     }
 }
 
@@ -3327,25 +3327,23 @@ function mxchat_actions_page_legacy_html() {
 
                             foreach ($group_callbacks as $function => $data) :
                                 $label = $data['label'];
-                                $pro_only = $data['pro_only'];
                                 $icon = isset($data['icon']) ? $data['icon'] : 'admin-generic';
                                 $description = isset($data['description']) ? $data['description'] : '';
                                 $is_addon = isset($data['addon']) && $data['addon'] !== false;
                                 $addon_name = isset($data['addon_name']) ? $data['addon_name'] : '';
                                 $is_installed = isset($data['installed']) ? $data['installed'] : true;
+                                $is_promo = !empty($data['addon_promo']) && !$is_installed;
 
                                 // Determine card status and styling
                                 $card_class = 'mxchat-action-type-card';
                                 $icon_class = 'mxchat-action-type-icon';
                                 $status_badge = '';
 
-                                if ($pro_only && !$this->is_activated) {
-                                    // Pro feature but no Pro license
-                                    $icon_class .= ' pro-feature';
-                                    $status_badge = '<span class="mxchat-pro-badge">' . esc_html__('Pro', 'mxchat') . '</span>';
-                                }
-
-                                if ($is_addon && !$is_installed) {
+                                if ($is_promo) {
+                                    // Promotional card — not selectable, just informational
+                                    $card_class .= ' not-installed mxchat-promo-card';
+                                    $status_badge = '<span class="mxchat-addon-badge">' . esc_html__('Add-on Required', 'mxchat') . '</span>';
+                                } elseif ($is_addon && !$is_installed) {
                                     // Add-on not installed
                                     $card_class .= ' not-installed';
                                     $status_badge .= '<span class="mxchat-addon-badge">' . esc_html__('Add-on Required', 'mxchat') . '</span>';
@@ -3361,11 +3359,14 @@ function mxchat_actions_page_legacy_html() {
                                 ?>
                                 <div class="<?php echo esc_attr($card_class); ?>"
                                      data-category="<?php echo esc_attr($category_slug); ?>"
+                                     <?php if (!$is_promo) : ?>
                                      data-value="<?php echo esc_attr($function); ?>"
                                      data-label="<?php echo esc_attr($label); ?>"
-                                     data-pro="<?php echo $pro_only ? 'true' : 'false'; ?>"
+                                     <?php endif; ?>
+                                     data-pro="false"
                                      data-addon="<?php echo esc_attr($is_addon ? $data['addon'] : ''); ?>"
-                                     data-installed="<?php echo $is_installed ? 'true' : 'false'; ?>">
+                                     data-installed="<?php echo $is_installed ? 'true' : 'false'; ?>"
+                                     <?php if ($is_promo) : ?>data-promo="true"<?php endif; ?>>
                                     <div class="<?php echo esc_attr($icon_class); ?>">
                                         <span class="dashicons dashicons-<?php echo esc_attr($icon); ?>"></span>
                                     </div>
@@ -3376,12 +3377,13 @@ function mxchat_actions_page_legacy_html() {
                                             <?php echo $status_badge; ?>
                                         <?php endif; ?>
 
-                                        <?php if ($is_addon && !$is_installed) : ?>
+                                        <?php if ($is_promo || ($is_addon && !$is_installed)) : ?>
                                             <div class="mxchat-addon-info">
                                                 <?php echo esc_html(sprintf(
                                                     __('Requires %s', 'mxchat'),
                                                     $addon_name
                                                 )); ?>
+                                                — <a href="https://mxchat.ai/" target="_blank"><?php esc_html_e('Get Add-on', 'mxchat'); ?></a>
                                             </div>
                                         <?php endif; ?>
                                     </div>
@@ -3710,10 +3712,13 @@ public function mxchat_handle_add_intent() {
         return;
     }
     
-    // Check Pro requirements
-    $is_pro_only = $available_callbacks[$callback_function]['pro_only'];
-    if ($is_pro_only && !$this->is_activated) {
-        $this->handle_embedding_error(__('This callback function is available in the Pro version only.', 'mxchat'));
+    // Check if this is an add-on promotional placeholder (not a real action)
+    if (!empty($available_callbacks[$callback_function]['addon_promo'])) {
+        $addon_name = isset($available_callbacks[$callback_function]['addon_name']) ? $available_callbacks[$callback_function]['addon_name'] : __('an add-on', 'mxchat');
+        $this->handle_embedding_error(sprintf(
+            __('This action requires the %s to be installed and activated.', 'mxchat'),
+            $addon_name
+        ));
         return;
     }
     
@@ -4301,39 +4306,45 @@ private function mxchat_get_available_callbacks($grouped = false, $include_all =
     );
 
     // Add-on callbacks with placeholders - only include if the add-on is NOT active
+    // These are promotional/informational only — not selectable as real actions
     $addon_callbacks = array(
         // WooCommerce Add-on
         'mxchat_handle_product_recommendations' => array(
             'label'       => __('Product Recommendations', 'mxchat'),
-            'pro_only'    => true,
+            'pro_only'    => false,
+            'addon_promo' => true,
             'group'       => __('WooCommerce Features', 'mxchat'),
             'icon'        => 'cart',
             'description' => __('Suggest products based on customer preferences', 'mxchat'),
         ),
         'mxchat_handle_order_history' => array(
             'label'       => __('Order History', 'mxchat'),
-            'pro_only'    => true,
+            'pro_only'    => false,
+            'addon_promo' => true,
             'group'       => __('WooCommerce Features', 'mxchat'),
             'icon'        => 'clipboard',
             'description' => __('Allow customers to check their order status', 'mxchat'),
         ),
         'mxchat_show_product_card' => array(
             'label'       => __('Show Product Card', 'mxchat'),
-            'pro_only'    => true,
+            'pro_only'    => false,
+            'addon_promo' => true,
             'group'       => __('WooCommerce Features', 'mxchat'),
             'icon'        => 'products',
             'description' => __('Display product information in the chat', 'mxchat'),
         ),
         'mxchat_add_to_cart' => array(
             'label'       => __('Add to Cart', 'mxchat'),
-            'pro_only'    => true,
+            'pro_only'    => false,
+            'addon_promo' => true,
             'group'       => __('WooCommerce Features', 'mxchat'),
             'icon'        => 'plus-alt',
             'description' => __('Add products to cart directly from chat', 'mxchat'),
         ),
         'mxchat_checkout_redirect' => array(
             'label'       => __('Proceed to Checkout', 'mxchat'),
-            'pro_only'    => true,
+            'pro_only'    => false,
+            'addon_promo' => true,
             'group'       => __('WooCommerce Features', 'mxchat'),
             'icon'        => 'arrow-right-alt',
             'description' => __('Redirect customer to checkout page', 'mxchat'),
@@ -4342,16 +4353,18 @@ private function mxchat_get_available_callbacks($grouped = false, $include_all =
         // Perplexity Add-on
         'mxchat_perplexity_research' => array(
             'label'       => __('Perplexity Research', 'mxchat'),
-            'pro_only'    => true,
+            'pro_only'    => false,
+            'addon_promo' => true,
             'group'       => __('Search Features', 'mxchat'),
             'icon'        => 'book-alt',
             'description' => __('Allows the chatbot to search the web for accurate, up-to-date answers', 'mxchat'),
         ),
 
-        // Forms Add-on (only shown when Pro is not activated)
+        // Forms Add-on
         'mxchat_handle_form_collection' => array(
             'label'       => __('Form Collection', 'mxchat'),
-            'pro_only'    => true,
+            'pro_only'    => false,
+            'addon_promo' => true,
             'group'       => __('Form Features', 'mxchat'),
             'icon'        => 'feedback',
             'description' => __('Collect user information through custom forms in chat', 'mxchat'),
@@ -6144,435 +6157,6 @@ public function mxchat_input_copy_callback() {
 }
 
 
-
-public function mxchat_user_message_font_color_callback() {
-    $disabled = $this->is_activated ? '' : 'disabled';
-    $class = $this->is_activated ? 'pro-feature-wrapper active' : 'pro-feature-wrapper inactive';
-
-    echo '<div class="' . esc_attr($class) . '">';
-    echo sprintf(
-        '<input type="text"
-               id="user_message_font_color"
-               name="user_message_font_color"
-               value="%s"
-               class="my-color-field"
-               data-default-color="#ffffff"
-               %s />',
-        isset($this->options['user_message_font_color']) ? esc_attr($this->options['user_message_font_color']) : '#ffffff',
-        esc_attr($disabled)
-    );
-
-    if (!$this->is_activated) {
-        echo '<div class="pro-feature-overlay">';
-        echo '<a href="https://mxchat.ai/" target="_blank">';
-        echo '<img src="' . esc_url(plugin_dir_url(__FILE__) . '../images/pro-only-dark.png') . '" alt="' . esc_attr__('Pro Only', 'mxchat') . '" />';
-        echo '</a>';
-        echo '</div>';
-    }
-    echo '</div>';
-}
-
-public function mxchat_bot_message_bg_color_callback() {
-    $disabled = $this->is_activated ? '' : 'disabled';
-    $class = $this->is_activated ? 'pro-feature-wrapper active' : 'pro-feature-wrapper inactive';
-
-    echo '<div class="' . esc_attr($class) . '">';
-    echo sprintf(
-        '<input type="text"
-               id="bot_message_bg_color"
-               name="bot_message_bg_color"
-               value="%s"
-               class="my-color-field"
-               data-default-color="#e1e1e1"
-               %s />',
-        isset($this->options['bot_message_bg_color']) ? esc_attr($this->options['bot_message_bg_color']) : '#e1e1e1',
-        esc_attr($disabled)
-    );
-
-    if (!$this->is_activated) {
-        echo '<div class="pro-feature-overlay">';
-        echo '<a href="https://mxchat.ai/" target="_blank">';
-        echo '<img src="' . esc_url(plugin_dir_url(__FILE__) . '../images/pro-only-dark.png') . '" alt="' . esc_attr__('Pro Only', 'mxchat') . '" />';
-        echo '</a>';
-        echo '</div>';
-    }
-    echo '</div>';
-}
-
-public function mxchat_bot_message_font_color_callback() {
-    $disabled = $this->is_activated ? '' : 'disabled';
-    $class = $this->is_activated ? 'pro-feature-wrapper active' : 'pro-feature-wrapper inactive';
-
-    echo '<div class="' . esc_attr($class) . '">';
-    echo sprintf(
-        '<input type="text"
-               id="bot_message_font_color"
-               name="bot_message_font_color"
-               value="%s"
-               class="my-color-field"
-               data-default-color="#333333"
-               %s />',
-        isset($this->options['bot_message_font_color']) ? esc_attr($this->options['bot_message_font_color']) : '#333333',
-        esc_attr($disabled)
-    );
-
-    if (!$this->is_activated) {
-        echo '<div class="pro-feature-overlay">';
-        echo '<a href="https://mxchat.ai/" target="_blank">';
-        echo '<img src="' . esc_url(plugin_dir_url(__FILE__) . '../images/pro-only-dark.png') . '" alt="' . esc_attr__('Pro Only', 'mxchat') . '" />';
-        echo '</a>';
-        echo '</div>';
-    }
-    echo '</div>';
-}
-
-public function mxchat_live_agent_message_bg_color_callback() {
-    $disabled = $this->is_activated ? '' : 'disabled';
-    $class = $this->is_activated ? 'pro-feature-wrapper active' : 'pro-feature-wrapper inactive';
-
-    echo '<div class="' . esc_attr($class) . '">';
-    echo sprintf(
-        '<input type="text"
-               id="live_agent_message_bg_color"
-               name="live_agent_message_bg_color"
-               value="%s"
-               class="my-color-field"
-               data-default-color="#ffffff"
-               %s />',
-        isset($this->options['live_agent_message_bg_color']) ? esc_attr($this->options['live_agent_message_bg_color']) : '#ffffff',
-        esc_attr($disabled)
-    );
-
-    if (!$this->is_activated) {
-        echo '<div class="pro-feature-overlay">';
-        echo '<a href="https://mxchat.ai/" target="_blank">';
-        echo '<img src="' . esc_url(plugin_dir_url(__FILE__) . '../images/pro-only-dark.png') . '" alt="' . esc_attr__('Pro Only', 'mxchat') . '" />';
-        echo '</a>';
-        echo '</div>';
-    }
-    echo '</div>';
-}
-
-public function mxchat_live_agent_message_font_color_callback() {
-    $disabled = $this->is_activated ? '' : 'disabled';
-    $class = $this->is_activated ? 'pro-feature-wrapper active' : 'pro-feature-wrapper inactive';
-
-    echo '<div class="' . esc_attr($class) . '">';
-    echo sprintf(
-        '<input type="text"
-               id="live_agent_message_font_color"
-               name="live_agent_message_font_color"
-               value="%s"
-               class="my-color-field"
-               data-default-color="#333333"
-               %s />',
-        isset($this->options['live_agent_message_font_color']) ? esc_attr($this->options['live_agent_message_font_color']) : '#333333',
-        esc_attr($disabled)
-    );
-
-    if (!$this->is_activated) {
-        echo '<div class="pro-feature-overlay">';
-        echo '<a href="https://mxchat.ai/" target="_blank">';
-        echo '<img src="' . esc_url(plugin_dir_url(__FILE__) . '../images/pro-only-dark.png') . '" alt="' . esc_attr__('Pro Only', 'mxchat') . '" />';
-        echo '</a>';
-        echo '</div>';
-    }
-    echo '</div>';
-}
-
-public function mxchat_mode_indicator_bg_color_callback() {
-    $disabled = $this->is_activated ? '' : 'disabled';
-    $class = $this->is_activated ? 'pro-feature-wrapper active' : 'pro-feature-wrapper inactive';
-
-    echo '<div class="' . esc_attr($class) . '">';
-    echo sprintf(
-        '<input type="text"
-               id="mode_indicator_bg_color"
-               name="mode_indicator_bg_color"
-               value="%s"
-               class="my-color-field"
-               data-default-color="#767676"
-               %s />',
-        isset($this->options['mode_indicator_bg_color']) ? esc_attr($this->options['mode_indicator_bg_color']) : '#767676',
-        esc_attr($disabled)
-    );
-
-    if (!$this->is_activated) {
-        echo '<div class="pro-feature-overlay">';
-        echo '<a href="https://mxchat.ai/" target="_blank">';
-        echo '<img src="' . esc_url(plugin_dir_url(__FILE__) . '../images/pro-only-dark.png') . '" alt="' . esc_attr__('Pro Only', 'mxchat') . '" />';
-        echo '</a>';
-        echo '</div>';
-    }
-    echo '</div>';
-}
-
-public function mxchat_mode_indicator_font_color_callback() {
-    $disabled = $this->is_activated ? '' : 'disabled';
-    $class = $this->is_activated ? 'pro-feature-wrapper active' : 'pro-feature-wrapper inactive';
-
-    echo '<div class="' . esc_attr($class) . '">';
-    echo sprintf(
-        '<input type="text"
-               id="mode_indicator_font_color"
-               name="mode_indicator_font_color"
-               value="%s"
-               class="my-color-field"
-               data-default-color="#ffffff"
-               %s />',
-        isset($this->options['mode_indicator_font_color']) ? esc_attr($this->options['mode_indicator_font_color']) : '#ffffff',
-        esc_attr($disabled)
-    );
-
-    if (!$this->is_activated) {
-        echo '<div class="pro-feature-overlay">';
-        echo '<a href="https://mxchat.ai/" target="_blank">';
-        echo '<img src="' . esc_url(plugin_dir_url(__FILE__) . '../images/pro-only-dark.png') . '" alt="' . esc_attr__('Pro Only', 'mxchat') . '" />';
-        echo '</a>';
-        echo '</div>';
-    }
-    echo '</div>';
-}
-
-public function mxchat_toolbar_icon_color_callback() {
-    $disabled = $this->is_activated ? '' : 'disabled';
-    $class = $this->is_activated ? 'pro-feature-wrapper active' : 'pro-feature-wrapper inactive';
-
-    echo '<div class="' . esc_attr($class) . '">';
-    echo sprintf(
-        '<input type="text"
-               id="toolbar_icon_color"
-               name="toolbar_icon_color"
-               value="%s"
-               class="my-color-field"
-               data-default-color="#212121"
-               %s />',
-        isset($this->options['toolbar_icon_color']) ? esc_attr($this->options['toolbar_icon_color']) : '#212121',
-        esc_attr($disabled)
-    );
-
-    if (!$this->is_activated) {
-        echo '<div class="pro-feature-overlay">';
-        echo '<a href="https://mxchat.ai/" target="_blank">';
-        echo '<img src="' . esc_url(plugin_dir_url(__FILE__) . '../images/pro-only-dark.png') . '" alt="' . esc_attr__('Pro Only', 'mxchat') . '" />';
-        echo '</a>';
-        echo '</div>';
-    }
-    echo '</div>';
-}
-
-public function mxchat_top_bar_bg_color_callback() {
-    $disabled = $this->is_activated ? '' : 'disabled';
-    $class = $this->is_activated ? 'pro-feature-wrapper active' : 'pro-feature-wrapper inactive';
-
-    echo '<div class="' . esc_attr($class) . '">';
-    echo sprintf(
-        '<input type="text"
-               id="top_bar_bg_color"
-               name="top_bar_bg_color"
-               value="%s"
-               class="my-color-field"
-               data-default-color="#00b294"
-               %s />',
-        isset($this->options['top_bar_bg_color']) ? esc_attr($this->options['top_bar_bg_color']) : '#00b294',
-        esc_attr($disabled)
-    );
-
-    if (!$this->is_activated) {
-        echo '<div class="pro-feature-overlay">';
-        echo '<a href="https://mxchat.ai/" target="_blank">';
-        echo '<img src="' . esc_url(plugin_dir_url(__FILE__) . '../images/pro-only-dark.png') . '" alt="' . esc_attr__('Pro Only', 'mxchat') . '" />';
-        echo '</a>';
-        echo '</div>';
-    }
-    echo '</div>';
-}
-
-public function mxchat_send_button_font_color_callback() {
-    $disabled = $this->is_activated ? '' : 'disabled';
-    $class = $this->is_activated ? 'pro-feature-wrapper active' : 'pro-feature-wrapper inactive';
-
-    echo '<div class="' . esc_attr($class) . '">';
-    echo sprintf(
-        '<input type="text"
-               id="send_button_font_color"
-               name="send_button_font_color"
-               value="%s"
-               class="my-color-field"
-               data-default-color="#ffffff"
-               %s />',
-        isset($this->options['send_button_font_color']) ? esc_attr($this->options['send_button_font_color']) : '#ffffff',
-        esc_attr($disabled)
-    );
-
-    if (!$this->is_activated) {
-        echo '<div class="pro-feature-overlay">';
-        echo '<a href="https://mxchat.ai/" target="_blank">';
-        echo '<img src="' . esc_url(plugin_dir_url(__FILE__) . '../images/pro-only-dark.png') . '" alt="' . esc_attr__('Pro Only', 'mxchat') . '" />';
-        echo '</a>';
-        echo '</div>';
-    }
-    echo '</div>';
-}
-
-public function mxchat_chatbot_background_color_callback() {
-    $disabled = $this->is_activated ? '' : 'disabled';
-    $class = $this->is_activated ? 'pro-feature-wrapper active' : 'pro-feature-wrapper inactive';
-
-    echo '<div class="' . esc_attr($class) . '">';
-    echo sprintf(
-        '<input type="text"
-               id="chatbot_background_color"
-               name="chatbot_background_color"
-               value="%s"
-               class="my-color-field"
-               data-default-color="#000000"
-               %s />',
-        isset($this->options['chatbot_background_color']) ? esc_attr($this->options['chatbot_background_color']) : '#000000',
-        esc_attr($disabled)
-    );
-
-    if (!$this->is_activated) {
-        echo '<div class="pro-feature-overlay">';
-        echo '<a href="https://mxchat.ai/" target="_blank">';
-        echo '<img src="' . esc_url(plugin_dir_url(__FILE__) . '../images/pro-only-dark.png') . '" alt="' . esc_attr__('Pro Only', 'mxchat') . '" />';
-        echo '</a>';
-        echo '</div>';
-    }
-    echo '</div>';
-}
-
-public function mxchat_icon_color_callback() {
-   $disabled = $this->is_activated ? '' : 'disabled';
-   $class = $this->is_activated ? 'pro-feature-wrapper active' : 'pro-feature-wrapper inactive';
-
-   echo '<div class="' . esc_attr($class) . '">';
-   echo sprintf(
-       '<input type="text"
-              id="icon_color"
-              name="icon_color"
-              value="%s"
-              class="my-color-field"
-              data-default-color="#ffffff"
-              %s />',
-       isset($this->options['icon_color']) ? esc_attr($this->options['icon_color']) : '#ffffff',
-       esc_attr($disabled)
-   );
-
-   if (!$this->is_activated) {
-       echo '<div class="pro-feature-overlay">';
-       echo '<a href="https://mxchat.ai/" target="_blank">';
-       echo '<img src="' . esc_url(plugin_dir_url(__FILE__) . '../images/pro-only-dark.png') . '" alt="' . esc_attr__('Pro Only', 'mxchat') . '" />';
-       echo '</a>';
-       echo '</div>';
-   }
-   echo '</div>';
-}
-
-public function mxchat_custom_icon_callback() {
-   $disabled = $this->is_activated ? '' : 'disabled';
-   $class = $this->is_activated ? 'pro-feature-wrapper active' : 'pro-feature-wrapper inactive';
-   $custom_icon_url = isset($this->options['custom_icon']) ? esc_url($this->options['custom_icon']) : '';
-
-   echo '<div class="' . esc_attr($class) . '">';
-   echo sprintf(
-       '<input type="url"
-              id="custom_icon"
-              name="custom_icon"
-              value="%s"
-              placeholder="%s"
-              class="regular-text"
-              %s />',
-       $custom_icon_url,
-       esc_attr__('Enter PNG URL', 'mxchat'),
-       esc_attr($disabled)
-   );
-
-   // Preview container for the icon
-   if (!empty($custom_icon_url)) {
-       echo '<div class="icon-preview" style="margin-top: 10px;">';
-       echo '<img src="' . esc_url($custom_icon_url) . '" alt="' . esc_attr__('Custom Icon Preview', 'mxchat') . '" style="max-width: 48px; height: auto;" />';
-       echo '</div>';
-   }
-
-   echo '<p class="description">' . esc_html__('Upload your PNG icon and paste the URL here. Recommended size: 48x48 pixels.', 'mxchat') . '</p>';
-
-   if (!$this->is_activated) {
-       echo '<div class="pro-feature-overlay">';
-       echo '<a href="https://mxchat.ai/" target="_blank">';
-       echo '<img src="' . esc_url(plugin_dir_url(__FILE__) . '../images/pro-only-dark.png') . '" alt="' . esc_attr__('Pro Only', 'mxchat') . '" />';
-       echo '</a>';
-       echo '</div>';
-   }
-   echo '</div>';
-}
-
-public function mxchat_title_icon_callback() {
-   $disabled = $this->is_activated ? '' : 'disabled';
-   $class = $this->is_activated ? 'pro-feature-wrapper active' : 'pro-feature-wrapper inactive';
-   // Fixed the variable reference - it was using custom_icon instead of title_icon
-   $title_icon_url = isset($this->options['title_icon']) ? esc_url($this->options['title_icon']) : '';
-
-   echo '<div class="' . esc_attr($class) . '">';
-   echo sprintf(
-       '<input type="url"
-              id="title_icon"
-              name="title_icon"
-              value="%s"
-              placeholder="%s"
-              class="regular-text"
-              %s />',
-       $title_icon_url,
-       esc_attr__('Enter PNG URL', 'mxchat'),
-       esc_attr($disabled)
-   );
-
-   // Preview container for the icon
-   if (!empty($title_icon_url)) {
-       echo '<div class="icon-preview" style="margin-top: 10px;">';
-       echo '<img src="' . esc_url($title_icon_url) . '" alt="' . esc_attr__('Title Icon Preview', 'mxchat') . '" style="max-width: 48px; height: auto;" />';
-       echo '</div>';
-   }
-
-   echo '<p class="description">' . esc_html__('Upload your PNG icon and paste the URL here. Recommended size: 48x48 pixels.', 'mxchat') . '</p>';
-
-   if (!$this->is_activated) {
-       echo '<div class="pro-feature-overlay">';
-       echo '<a href="https://mxchat.ai/" target="_blank">';
-       echo '<img src="' . esc_url(plugin_dir_url(__FILE__) . '../images/pro-only-dark.png') . '" alt="' . esc_attr__('Pro Only', 'mxchat') . '" />';
-       echo '</a>';
-       echo '</div>';
-   }
-   echo '</div>';
-}
-
-public function mxchat_chat_input_font_color_callback() {
-   $disabled = $this->is_activated ? '' : 'disabled';
-   $class = $this->is_activated ? 'pro-feature-wrapper active' : 'pro-feature-wrapper inactive';
-
-   echo '<div class="' . esc_attr($class) . '">';
-   echo sprintf(
-       '<input type="text"
-              id="chat_input_font_color"
-              name="chat_input_font_color"
-              value="%s"
-              class="my-color-field"
-              data-default-color="#555555"
-              %s />',
-       isset($this->options['chat_input_font_color']) ? esc_attr($this->options['chat_input_font_color']) : '#555555',
-       esc_attr($disabled)
-   );
-
-   if (!$this->is_activated) {
-       echo '<div class="pro-feature-overlay">';
-       echo '<a href="https://mxchat.ai/" target="_blank">';
-       echo '<img src="' . esc_url(plugin_dir_url(__FILE__) . '../images/pro-only-dark.png') . '" alt="' . esc_attr__('Pro Only', 'mxchat') . '" />';
-       echo '</a>';
-       echo '</div>';
-   }
-   echo '</div>';
-}
-
 public function mxchat_append_to_body_callback() {
     // Fetch fresh options to ensure we have the latest saved values
     $options = get_option('mxchat_options', array());
@@ -7892,13 +7476,6 @@ if (isset($input['openrouter_selected_model_name'])) {
     }
 
 
-    if (isset($input['close_button_color'])) {
-        $new_input['close_button_color'] = sanitize_hex_color($input['close_button_color']);
-    }
-
-    if (isset($input['chatbot_bg_color'])) {
-        $new_input['chatbot_bg_color'] = sanitize_hex_color($input['chatbot_bg_color']);
-    }
 
     if (isset($input['woocommerce_consumer_key'])) {
         $new_input['woocommerce_consumer_key'] = sanitize_text_field($input['woocommerce_consumer_key']);
@@ -7908,73 +7485,6 @@ if (isset($input['openrouter_selected_model_name'])) {
         $new_input['woocommerce_consumer_secret'] = sanitize_text_field($input['woocommerce_consumer_secret']);
     }
 
-    if (isset($input['user_message_bg_color'])) {
-        $new_input['user_message_bg_color'] = sanitize_hex_color($input['user_message_bg_color']);
-    }
-
-    if (isset($input['user_message_font_color'])) {
-        $new_input['user_message_font_color'] = sanitize_hex_color($input['user_message_font_color']);
-    }
-
-    if (isset($input['bot_message_bg_color'])) {
-        $new_input['bot_message_bg_color'] = sanitize_hex_color($input['bot_message_bg_color']);
-    }
-
-    if (isset($input['bot_message_font_color'])) {
-        $new_input['bot_message_font_color'] = sanitize_hex_color($input['bot_message_font_color']);
-    }
-
-    if (isset($input['live_agent_message_bg_color'])) {
-        $new_input['live_agent_message_bg_color'] = sanitize_hex_color($input['live_agent_message_bg_color']);
-    }
-
-    if (isset($input['live_agent_message_font_color'])) {
-        $new_input['live_agent_message_font_color'] = sanitize_hex_color($input['live_agent_message_font_color']);
-    }
-
-    if (isset($input['mode_indicator_bg_color'])) {
-        $new_input['mode_indicator_bg_color'] = sanitize_hex_color($input['mode_indicator_bg_color']);
-    }
-
-    if (isset($input['mode_indicator_font_color'])) {
-        $new_input['mode_indicator_font_color'] = sanitize_hex_color($input['mode_indicator_font_color']);
-    }
-
-    if (isset($input['toolbar_icon_color'])) {
-        $new_input['toolbar_icon_color'] = sanitize_hex_color($input['toolbar_icon_color']);
-    }
-
-    if (isset($input['top_bar_bg_color'])) {
-        $new_input['top_bar_bg_color'] = sanitize_hex_color($input['top_bar_bg_color']);
-    }
-
-    if (isset($input['quick_questions_toggle_color'])) {
-        $new_input['quick_questions_toggle_color'] = sanitize_hex_color($input['quick_questions_toggle_color']);
-    }
-
-    if (isset($input['send_button_font_color'])) {
-        $new_input['send_button_font_color'] = sanitize_hex_color($input['send_button_font_color']);
-    }
-
-    if (isset($input['chatbot_background_color'])) {
-        $new_input['chatbot_background_color'] = sanitize_hex_color($input['chatbot_background_color']);
-    }
-
-    if (isset($input['icon_color'])) {
-        $new_input['icon_color'] = sanitize_hex_color($input['icon_color']);
-    }
-
-    if (isset($input['custom_icon'])) {
-        $new_input['custom_icon'] = esc_url_raw($input['custom_icon']);
-    }
-
-    if (isset($input['title_icon'])) {
-        $new_input['title_icon'] = esc_url_raw($input['title_icon']);
-    }
-
-    if (isset($input['chat_input_font_color'])) {
-        $new_input['chat_input_font_color'] = sanitize_hex_color($input['chat_input_font_color']);
-    }
 
     // Sanitize link_target_toggle
     if (isset($input['link_target_toggle'])) {

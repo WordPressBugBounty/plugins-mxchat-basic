@@ -800,10 +800,10 @@ public function mxchat_handle_sitemap_submission() {
     $page_content = $this->mxchat_extract_main_content($body_content);
     $sanitized_content = $this->mxchat_sanitize_content_for_api($page_content);
 
-    error_log('[MXCHAT-URL-DEBUG] URL: ' . $submitted_url);
-    error_log('[MXCHAT-URL-DEBUG] Extracted page_content length: ' . strlen($page_content));
-    error_log('[MXCHAT-URL-DEBUG] Sanitized content length: ' . strlen($sanitized_content));
-    error_log('[MXCHAT-URL-DEBUG] Content preview: ' . substr($sanitized_content, 0, 500));
+    //error_log('[MXCHAT-URL-DEBUG] URL: ' . $submitted_url);
+    //error_log('[MXCHAT-URL-DEBUG] Extracted page_content length: ' . strlen($page_content));
+    //error_log('[MXCHAT-URL-DEBUG] Sanitized content length: ' . strlen($sanitized_content));
+    //error_log('[MXCHAT-URL-DEBUG] Content preview: ' . substr($sanitized_content, 0, 500));
 
     if (empty($sanitized_content)) {
         set_transient('mxchat_admin_notice_error',
@@ -920,7 +920,7 @@ public function mxchat_handle_sitemap_for_knowledge_base($xml, $sitemap_url, $bo
 
     } catch (Exception $e) {
         $error_message = $e->getMessage();
-        error_log(sprintf(esc_html__('Error preparing sitemap for processing: %s', 'mxchat'), esc_html($error_message)));
+        //error_log(sprintf(esc_html__('Error preparing sitemap for processing: %s', 'mxchat'), esc_html($error_message)));
         
         return $error_message;
     }
@@ -1014,7 +1014,7 @@ public function mxchat_extract_main_content($html) {
         $debugEnabled = true; // Set to true to enable debugging output
         $debug = function($message) use ($debugEnabled) {
             if ($debugEnabled) {
-                error_log('[MXCHAT-EXTRACT-DEBUG] ' . $message);
+                //error_log('[MXCHAT-EXTRACT-DEBUG] ' . $message);
             }
         };
         
@@ -1358,7 +1358,7 @@ public function mxchat_ajax_get_status_updates() {
         ));
         
     } catch (Exception $e) {
-        error_log('MxChat Status Update Error: ' . $e->getMessage());
+        //error_log('MxChat Status Update Error: ' . $e->getMessage());
         
         wp_send_json_error(array(
             'message' => 'Error getting status updates: ' . $e->getMessage(),
@@ -3292,10 +3292,10 @@ public function ajax_mxchat_process_selected_content() {
     }
 
     // Debug logging for WordPress Import content
-    error_log('[MXCHAT-WP-IMPORT-DEBUG] Post ID: ' . $post_id . ' Title: ' . $post->post_title);
-    error_log('[MXCHAT-WP-IMPORT-DEBUG] Raw post_content length: ' . strlen($post->post_content));
-    error_log('[MXCHAT-WP-IMPORT-DEBUG] Final content length: ' . strlen($content));
-    error_log('[MXCHAT-WP-IMPORT-DEBUG] Content preview: ' . substr($content, 0, 300));
+    //error_log('[MXCHAT-WP-IMPORT-DEBUG] Post ID: ' . $post_id . ' Title: ' . $post->post_title);
+    //error_log('[MXCHAT-WP-IMPORT-DEBUG] Raw post_content length: ' . strlen($post->post_content));
+    //error_log('[MXCHAT-WP-IMPORT-DEBUG] Final content length: ' . strlen($content));
+    //error_log('[MXCHAT-WP-IMPORT-DEBUG] Content preview: ' . substr($content, 0, 300));
 
     // Note: Removed 10,000 char limit - chunking now handles large content properly
 

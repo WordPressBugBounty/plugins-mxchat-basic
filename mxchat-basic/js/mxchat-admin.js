@@ -2112,22 +2112,12 @@ document.addEventListener('DOMContentLoaded', function() {
                 const actionIcon = this.querySelector('.dashicons').getAttribute('class').replace('dashicons dashicons-', '');
                 const actionDescription = this.querySelector('p').textContent;
                 
-                // Pro check using the proper detection method
-                const proIsActivated = typeof mxchatAdmin !== 'undefined' && 
-                                     (mxchatAdmin.is_activated === '1' || 
-                                      mxchatAdmin.is_activated === 'true' || 
-                                      mxchatAdmin.is_activated === true);
-                
-                // Handle different states
-                if (isPro && !proIsActivated) {
-                    // Pro feature but no Pro license
-                    showProFeatureNotice();
-                    return;
-                }
-                
-                if (addonName && !isInstalled) {
-                    // Add-on required but not installed
-                    const addonDisplayName = this.querySelector('.mxchat-addon-info')?.textContent?.replace('Requires ', '') || addonName + ' Add-on';
+                // Check if this is a promotional card (add-on not installed)
+                const isPromo = this.dataset.promo === 'true';
+
+                if (isPromo || (addonName && !isInstalled)) {
+                    // Add-on required but not installed — show informational notice
+                    const addonDisplayName = this.querySelector('.mxchat-addon-info')?.textContent?.replace('Requires ', '').replace('— Get Add-on', '').trim() || addonName + ' Add-on';
                     showAddonRequiredNotice(addonDisplayName);
                     return;
                 }

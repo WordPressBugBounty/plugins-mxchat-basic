@@ -5,7 +5,7 @@ Tags: ai chatbot, chatgpt, woocommerce, customer support, content generation
 Requires at least: 5.0
 Tested up to: 6.9
 Requires PHP: 7.2
-Stable tag: 3.1.2
+Stable tag: 3.1.3
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -32,25 +32,22 @@ The best free AI chatbot and content generation plugin for WordPress. Train Chat
 ### 📦 Optional Premium Add-Ons  
 Extend the free plugin with these optional premium features:  
 
-- [Advanced Content Editor Add-On](https://mxchat.ai/advanced-content-editor/) – Smart internal linking, AI image management, readability analysis, Google Search Console integration with per-page analytics, and advanced SEO optimization
+- [Advanced Content Editor Add-On](https://mxchat.ai/advanced-content-editor/) – Smart internal linking, AI image management, readability analysis, Google Search Console integration, advanced SEO optimization, and 30-day AI Content Calendar for automated blog scheduling
+- [WooCommerce Add-On](https://mxchat.ai/woocommerce/) – AI-powered shopping assistance with product-aware conversations, native product cards with images and pricing, upselling and recommendations, order inquiry handling, cart management, and real-time inventory awareness
 - [Forms Action Add-On](https://mxchat.ai/forms-action/) – Capture leads and data with custom in-chat forms
 - [MxChat Anywhere Add-On](https://mxchat.ai/mxchat-anywhere-deploy-your-ai-chatbot-on-any-website-with-one-script-tag/) – Deploy your chatbot on any website with one script tag — Shopify, Squarespace, Wix, static HTML, and more
-- [WooCommerce Add-On](https://mxchat.ai/woocommerce/) – AI-powered shopping assistance and product recommendations
-- [AI Chatbot Theme Customizer Add-On](https://mxchat.ai/ai-theme-customizer/) – Instantly design chatbot themes with natural language
+- [AI Chatbot Theme Customizer Add-On](https://mxchat.ai/ai-theme-customizer/) – Instantly design chatbot themes with natural language using AI
 - [Multi-Bot Add-On](https://mxchat.ai/multi-bot/) – Run unlimited AI chatbots with custom knowledge and personalities
 - [Image Analysis Add-On](https://mxchat.ai/image-analysis/) – Enable AI-powered image analysis and OCR inside chats
 
 👉 [Visit our website to view all add-ons](https://mxchat.ai)
 
-## 🔥 What's New in Version 3.1.2
+## 🔥 What's New in Version 3.1.3
 
-- **Per-Check AI Fix Buttons** — Hover any failing SEO check to see a sparkle icon that fixes just that item individually — no need to run a full optimize pass for a single issue.
-- **Batch Optimize from SEO Dashboard** — The SEO dashboard now supports row checkboxes with an "Optimize Selected" button to batch-optimize multiple posts at once (requires Advanced Content Editor add-on).
-- **Smarter AI Optimize** — AI Optimize now runs all addon checks including readability, internal links, image ALT, and featured image — previously only meta description, title, and slug were included.
-- **"Optimize All" & UI Improvements** — The AI Optimize button is now labeled "Optimize All" for clarity, the SEO modal includes a "View Page" link, and per-check fix buttons are always visible.
-- **Custom Post Type Support** — The post type dropdown now dynamically includes custom post types like WooCommerce Products.
-- **Emoji & Transcript Fixes** — Chat transcripts now correctly save and display bot responses containing emojis, and WooCommerce product cards render properly with image, price, and button in transcripts.
-- **Image Generation Upgraded** — Replaced deprecated DALL-E 3 with GPT Image (OpenAI) and added Gemini Imagen 4 as a new image generation action.
+- **Content Calendar Tab** — New Calendar tab in the Content page shows a preview of the 30-day AI content planning feature (requires Advanced Content Editor add-on for full functionality).
+- **Chat Teaser Pop-Up** — Now supports multiple lines. Simply structure the text in the input field and it will match.
+- **Markdown Table Rendering** — The chatbot now renders markdown tables with column alignment, responsive scrolling, and alternating row styling.
+- **Deferred Session Creation** — Session cookies and tracking are now created on first user interaction instead of page load, reducing unnecessary cookies and AJAX calls for passive visitors.
 
 ## Core Features That Set MxChat Apart
 
@@ -81,16 +78,6 @@ Grok-4, Grok-3, Grok-3 Fast, Grok-3 Mini, Grok-3 Mini Fast, Grok-2, **Grok 4.1 F
 Gemini 3 Pro Preview, Gemini 3 Flash Preview, Gemini 2.5 Pro, Gemini 2.5 Flash, Gemini 2.5 Flash-Lite, Gemini 2.0 Flash, Gemini 2.0 Flash-Lite, Gemini 1.5 Pro, Gemini 1.5 Flash
 **DeepSeek**:  
 DeepSeek V3
-
-## Supercharge Your eCommerce with AI
-
-Transform online shopping with intelligent assistance through direct WooCommerce integration:
-
-- Engage visitors in real time with product-aware conversations
-- Recommend products and upsell with native WooCommerce product cards  
-- Access order history, inventory, and customer data seamlessly
-- Convert passive users into paying customers with live support
-- Handle order inquiries and status updates directly through chat
 
 ## AI Content Generator — Create Blog Posts & Landing Pages with AI
 
@@ -321,6 +308,12 @@ Yes. MxChat is available for free on the WordPress plugin repository with full A
 *(Note: Screenshots will be added in future updates)*
 
 == Changelog ==
+
+= 3.1.3 - March 16, 2026 =
+- New: Content Calendar tab added to Content page — shows locked preview when Advanced Content Editor is not installed, fully functional when add-on is active
+- New: Chat teaser pop-up message now supports multiple lines.
+- Improved: Session cookies and tracking now deferred until first user interaction — passive visitors no longer trigger session creation or AJAX calls
+- Improved: Markdown table rendering with column alignment, responsive scrolling, and alternating row styling
 
 = 3.1.2 - March 13, 2026 =
 - New: Per-check AI fix buttons — hover any failing SEO check to see a sparkle icon that fixes just that item individually
@@ -903,8 +896,8 @@ Yes. MxChat is available for free on the WordPress plugin repository with full A
 
 == Upgrade Notice ==
 
-= 3.1.2 =
-New: Per-check AI fix buttons, batch SEO optimize from dashboard, and Gemini Imagen 4 image generation action. Upgraded: Image generation now uses GPT Image (OpenAI) replacing deprecated DALL-E 3. Improved: AI Optimize runs all addon checks, sequential fix execution prevents race conditions, custom post type support in SEO dashboard. Fixed: Emoji support in chat transcripts, WooCommerce product card rendering in transcripts.
+= 3.1.3 =
+Version 3.1.3 adds multi-line chat teaser messages, improved markdown table rendering, and deferred session tracking so passive visitors no longer trigger unnecessary background activity.
 
 == License & Warranty ==
 

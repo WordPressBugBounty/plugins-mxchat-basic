@@ -107,13 +107,13 @@ public static function mxchat_fetch_user_orders_details($type = 'all') {
  */
 public static function mxchat_extract_product_id_from_message($message) {
     if (!function_exists('wc_get_products')) {
-        error_log("WooCommerce is not active or not available.");
+        //error_log("WooCommerce is not active or not available.");
         return null;
     }
 
     // Clean and normalize input
     $message = sanitize_text_field(strtolower($message));
-    error_log("Product extraction message: " . $message);
+    //error_log("Product extraction message: " . $message);
     
     // Get all published products
     $products = wc_get_products([
@@ -122,14 +122,14 @@ public static function mxchat_extract_product_id_from_message($message) {
         'return' => 'objects'
     ]);
 
-    error_log("Total products to search: " . count($products));
+    //error_log("Total products to search: " . count($products));
 
     // Store all matches with their scores
     $matches = [];
     
     // Search terms (original message and name-only version)
     $search_terms = explode(' ', $message);
-    error_log("Search terms: " . implode(', ', $search_terms));
+    //error_log("Search terms: " . implode(', ', $search_terms));
 
     foreach ($products as $product) {
         $score = 0;
@@ -188,12 +188,7 @@ public static function mxchat_extract_product_id_from_message($message) {
                     'consecutive_matches' => $max_consecutive
                 ];
 
-                error_log(sprintf(
-                    "Product '%s' scored %f with %d consecutive matches",
-                    $product_name,
-                    $score,
-                    $max_consecutive
-                ));
+                // error_log(sprintf("Product '%s' scored %f with %d consecutive matches", $product_name, $score, $max_consecutive));
             }
         }
     }
@@ -210,17 +205,11 @@ public static function mxchat_extract_product_id_from_message($message) {
     // Return the best match if we found any
     if (!empty($matches)) {
         $best_match = $matches[0];
-        error_log(sprintf(
-            "Selected best match: '%s' (ID: %d) with score %f and %d consecutive matches",
-            $best_match['name'],
-            $best_match['product_id'],
-            $best_match['score'],
-            $best_match['consecutive_matches']
-        ));
+        // error_log(sprintf("Selected best match: '%s' (ID: %d) with score %f and %d consecutive matches", $best_match['name'], $best_match['product_id'], $best_match['score'], $best_match['consecutive_matches']));
         return $best_match['product_id'];
     }
 
-    error_log("No product matches found");
+    //error_log("No product matches found");
     return null;
 }
 

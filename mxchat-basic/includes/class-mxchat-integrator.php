@@ -382,28 +382,28 @@ public function verify_slack_request($request) {
 public function verify_telegram_request($request) {
     $secret_token = $this->options['telegram_webhook_secret'] ?? '';
 
-    error_log('[MxChat Telegram DEBUG] verify_telegram_request called');
-    error_log('[MxChat Telegram DEBUG] Stored secret: ' . (empty($secret_token) ? 'EMPTY' : substr($secret_token, 0, 10) . '...'));
+    //error_log('[MxChat Telegram DEBUG] verify_telegram_request called');
+    //error_log('[MxChat Telegram DEBUG] Stored secret: ' . (empty($secret_token) ? 'EMPTY' : substr($secret_token, 0, 10) . '...'));
 
     if (empty($secret_token)) {
         // If no secret is configured, allow the request (for initial setup)
-        error_log('[MxChat Telegram DEBUG] No secret configured, allowing request');
+        //error_log('[MxChat Telegram DEBUG] No secret configured, allowing request');
         return true;
     }
 
     // Telegram sends the secret token in the X-Telegram-Bot-Api-Secret-Token header
     $request_token = $request->get_header('X-Telegram-Bot-Api-Secret-Token');
 
-    error_log('[MxChat Telegram DEBUG] Request token: ' . (empty($request_token) ? 'EMPTY' : substr($request_token, 0, 10) . '...'));
+    //error_log('[MxChat Telegram DEBUG] Request token: ' . (empty($request_token) ? 'EMPTY' : substr($request_token, 0, 10) . '...'));
 
     if (empty($request_token)) {
-        error_log('[MxChat Telegram DEBUG] Request rejected: No token in header');
+        //error_log('[MxChat Telegram DEBUG] Request rejected: No token in header');
         return false;
     }
 
     // Timing-safe comparison
     $result = hash_equals($secret_token, $request_token);
-    error_log('[MxChat Telegram DEBUG] Token comparison result: ' . ($result ? 'MATCH' : 'MISMATCH'));
+    //error_log('[MxChat Telegram DEBUG] Token comparison result: ' . ($result ? 'MATCH' : 'MISMATCH'));
     return $result;
 }
 
@@ -1063,8 +1063,8 @@ public function mxchat_handle_chat_request() {
 
     // Debug: Log incoming bot_id
     $bot_id = isset($_POST['bot_id']) ? sanitize_key($_POST['bot_id']) : 'default';
-    error_log("=== MXCHAT DEBUG: Starting chat request ===");
-    error_log("MXCHAT DEBUG: Bot ID received: " . $bot_id);
+    //error_log("=== MXCHAT DEBUG: Starting chat request ===");
+    //error_log("MXCHAT DEBUG: Bot ID received: " . $bot_id);
     
     //   Get bot-specific options
     $bot_options = $this->get_bot_options($bot_id);
@@ -1718,7 +1718,7 @@ public function mxchat_handle_chat_request() {
                 // Remove duplicates
                 $this->current_valid_urls = array_unique($this->current_valid_urls);
 
-                error_log("Added " . count($system_instruction_urls[0]) . " URLs from system instructions");
+                //error_log("Added " . count($system_instruction_urls[0]) . " URLs from system instructions");
             }
         }
         
@@ -1734,7 +1734,7 @@ if ($testing_data !== null && $this->last_similarity_analysis !== null) {
 // NEW: Add valid URLs to testing data for admin panel display (AFTER similarity data)
 if ($testing_data !== null && !empty($this->current_valid_urls)) {
     $testing_data['approved_urls'] = array_values($this->current_valid_urls);
-    error_log("Added " . count($this->current_valid_urls) . " approved URLs to testing data");
+    //error_log("Added " . count($this->current_valid_urls) . " approved URLs to testing data");
 }
         
         if (!empty($relevant_content)) {
@@ -1839,17 +1839,17 @@ if ($testing_data !== null && !empty($this->current_valid_urls)) {
         }
         
         // DEBUG: Check what we have
-        error_log("=== BEFORE URL VALIDATION ===");
-        error_log("current_valid_urls is empty? " . (empty($this->current_valid_urls) ? 'YES' : 'NO'));
-        error_log("current_valid_urls count: " . count($this->current_valid_urls));
-        error_log("current_valid_urls content: " . print_r($this->current_valid_urls, true));
+        //error_log("=== BEFORE URL VALIDATION ===");
+        //error_log("current_valid_urls is empty? " . (empty($this->current_valid_urls) ? 'YES' : 'NO'));
+        //error_log("current_valid_urls count: " . count($this->current_valid_urls));
+        //error_log("current_valid_urls content: " . print_r($this->current_valid_urls, true));
         
         // If we get here, the response is valid text - now validate URLs
         if (!empty($this->current_valid_urls)) {
-            error_log("CALLING validate_and_clean_urls");
+            //error_log("CALLING validate_and_clean_urls");
             $response = $this->validate_and_clean_urls($response, $this->current_valid_urls);
         } else {
-            error_log("SKIPPING validation - current_valid_urls is empty");
+            //error_log("SKIPPING validation - current_valid_urls is empty");
         }
         // ===== END URL VALIDATION =====
 
@@ -1890,9 +1890,9 @@ if ($testing_data !== null && !empty($this->current_valid_urls)) {
 
         // Step 6: Return the response
         // DEBUG: Check if newlines exist in the response
-        error_log("=== MXCHAT NON-STREAMING RESPONSE DEBUG ===");
-        error_log("Response has newlines: " . (strpos($response, "\n") !== false ? 'YES' : 'NO'));
-        error_log("Response first 500 chars: " . substr($response, 0, 500));
+        //error_log("=== MXCHAT NON-STREAMING RESPONSE DEBUG ===");
+        //error_log("Response has newlines: " . (strpos($response, "\n") !== false ? 'YES' : 'NO'));
+        //error_log("Response first 500 chars: " . substr($response, 0, 500));
 
         $response_data = [
             'text' => $response,
@@ -1915,19 +1915,19 @@ if ($testing_data !== null && !empty($this->current_valid_urls)) {
  */
 // Also debug the bot options retrieval
 private function get_bot_options($bot_id = 'default') {
-    error_log("MXCHAT DEBUG: get_bot_options called for bot: " . $bot_id);
+    //error_log("MXCHAT DEBUG: get_bot_options called for bot: " . $bot_id);
     
     if ($bot_id === 'default' || !class_exists('MxChat_Multi_Bot_Manager')) {
-        error_log("MXCHAT DEBUG: Using default options (no multi-bot or bot is 'default')");
+        //error_log("MXCHAT DEBUG: Using default options (no multi-bot or bot is 'default')");
         return array();
     }
     
     $bot_options = apply_filters('mxchat_get_bot_options', array(), $bot_id);
     
     if (!empty($bot_options)) {
-        error_log("MXCHAT DEBUG: Got bot-specific options from filter");
+        //error_log("MXCHAT DEBUG: Got bot-specific options from filter");
         if (isset($bot_options['similarity_threshold'])) {
-            error_log("  - similarity_threshold: " . $bot_options['similarity_threshold']);
+            //error_log("  - similarity_threshold: " . $bot_options['similarity_threshold']);
         }
     }
     
@@ -1940,11 +1940,11 @@ private function get_bot_options($bot_id = 'default') {
  */
 // Also add debugging to your get_bot_pinecone_config function
 private function get_bot_pinecone_config($bot_id = 'default') {
-    error_log("MXCHAT DEBUG: get_bot_pinecone_config called for bot: " . $bot_id);
+    //error_log("MXCHAT DEBUG: get_bot_pinecone_config called for bot: " . $bot_id);
     
     // If default bot or multi-bot add-on not active, use default Pinecone config
     if ($bot_id === 'default' || !class_exists('MxChat_Multi_Bot_Manager')) {
-        error_log("MXCHAT DEBUG: Using default Pinecone config (no multi-bot or bot is 'default')");
+        //error_log("MXCHAT DEBUG: Using default Pinecone config (no multi-bot or bot is 'default')");
         $addon_options = get_option('mxchat_pinecone_addon_options', array());
         $config = array(
             'use_pinecone' => (isset($addon_options['mxchat_use_pinecone']) && $addon_options['mxchat_use_pinecone'] === '1'),
@@ -1952,22 +1952,22 @@ private function get_bot_pinecone_config($bot_id = 'default') {
             'host' => $addon_options['mxchat_pinecone_host'] ?? '',
             'namespace' => $addon_options['mxchat_pinecone_namespace'] ?? ''
         );
-        error_log("MXCHAT DEBUG: Default config - use_pinecone: " . ($config['use_pinecone'] ? 'true' : 'false'));
+        //error_log("MXCHAT DEBUG: Default config - use_pinecone: " . ($config['use_pinecone'] ? 'true' : 'false'));
         return $config;
     }
     
-    error_log("MXCHAT DEBUG: Calling filter 'mxchat_get_bot_pinecone_config' for bot: " . $bot_id);
+    //error_log("MXCHAT DEBUG: Calling filter 'mxchat_get_bot_pinecone_config' for bot: " . $bot_id);
     
     // Hook for multi-bot add-on to provide bot-specific Pinecone config
     $bot_pinecone_config = apply_filters('mxchat_get_bot_pinecone_config', array(), $bot_id);
     
     if (!empty($bot_pinecone_config)) {
-        error_log("MXCHAT DEBUG: Got bot-specific config from filter");
-        error_log("  - use_pinecone: " . (isset($bot_pinecone_config['use_pinecone']) ? ($bot_pinecone_config['use_pinecone'] ? 'true' : 'false') : 'not set'));
-        error_log("  - host: " . ($bot_pinecone_config['host'] ?? 'not set'));
-        error_log("  - namespace: " . ($bot_pinecone_config['namespace'] ?? 'not set'));
+        //error_log("MXCHAT DEBUG: Got bot-specific config from filter");
+        //error_log("  - use_pinecone: " . (isset($bot_pinecone_config['use_pinecone']) ? ($bot_pinecone_config['use_pinecone'] ? 'true' : 'false') : 'not set'));
+        //error_log("  - host: " . ($bot_pinecone_config['host'] ?? 'not set'));
+        //error_log("  - namespace: " . ($bot_pinecone_config['namespace'] ?? 'not set'));
     } else {
-        error_log("MXCHAT DEBUG: Filter returned empty config!");
+        //error_log("MXCHAT DEBUG: Filter returned empty config!");
     }
     
     return is_array($bot_pinecone_config) ? $bot_pinecone_config : array();
@@ -3375,13 +3375,13 @@ function mxchat_fetch_new_messages() {
 
     $history = get_option("mxchat_history_{$session_id}", []);
 
-    error_log("MxChat WhatsApp DEBUG: Fetch new messages for session {$session_id}");
-    error_log("MxChat WhatsApp DEBUG: last_seen_id = " . var_export($last_seen_id, true));
-    error_log("MxChat WhatsApp DEBUG: History count = " . count($history));
-    error_log("MxChat WhatsApp DEBUG: Full history = " . print_r($history, true));
+    //error_log("MxChat WhatsApp DEBUG: Fetch new messages for session {$session_id}");
+    //error_log("MxChat WhatsApp DEBUG: last_seen_id = " . var_export($last_seen_id, true));
+    //error_log("MxChat WhatsApp DEBUG: History count = " . count($history));
+    //error_log("MxChat WhatsApp DEBUG: Full history = " . print_r($history, true));
 
     $new_messages = array_filter($history, function ($message) use ($last_seen_id, $persistence_enabled, $initial_timestamp) {
-        error_log("MxChat WhatsApp DEBUG: Checking message - ID: " . ($message['id'] ?? 'NO_ID') . ", Role: " . ($message['role'] ?? 'NO_ROLE'));
+        //error_log("MxChat WhatsApp DEBUG: Checking message - ID: " . ($message['id'] ?? 'NO_ID') . ", Role: " . ($message['role'] ?? 'NO_ROLE'));
 
         // If persistence is enabled, show all new messages
         if ($persistence_enabled) {
@@ -3395,7 +3395,7 @@ function mxchat_fetch_new_messages() {
                 $is_newer = strcmp($message['id'] ?? '', $last_seen_id) > 0;
             }
 
-            error_log("MxChat WhatsApp DEBUG: has_id={$has_id}, is_newer={$is_newer}, is_agent={$is_agent}");
+            //error_log("MxChat WhatsApp DEBUG: has_id={$has_id}, is_newer={$is_newer}, is_agent={$is_agent}");
 
             return $has_id && $is_newer && $is_agent;
         }
@@ -3406,7 +3406,7 @@ function mxchat_fetch_new_messages() {
                $message['timestamp'] > $initial_timestamp;
     });
 
-    error_log("MxChat WhatsApp DEBUG: Filtered messages count = " . count($new_messages));
+    //error_log("MxChat WhatsApp DEBUG: Filtered messages count = " . count($new_messages));
 
     // Include current chat mode so frontend can detect agent→AI transitions
     $chat_mode = get_option("mxchat_mode_{$session_id}", 'ai');
@@ -3922,7 +3922,7 @@ public function handle_telegram_webhook(WP_REST_Request $request) {
     $body = $request->get_body();
     $data = json_decode($body, true);
 
-    error_log('[MxChat Telegram DEBUG] Webhook received: ' . $body);
+    //error_log('[MxChat Telegram DEBUG] Webhook received: ' . $body);
 
     // Handle message events from forum topics
     if (isset($data['message'])) {
@@ -3930,13 +3930,13 @@ public function handle_telegram_webhook(WP_REST_Request $request) {
 
         // Skip if not from a forum topic
         if (!isset($message_data['message_thread_id'])) {
-            error_log('[MxChat Telegram DEBUG] Skipped: No message_thread_id (not a forum topic message)');
+            //error_log('[MxChat Telegram DEBUG] Skipped: No message_thread_id (not a forum topic message)');
             return new WP_REST_Response(['ok' => true]);
         }
 
         // Skip bot messages
         if (isset($message_data['from']['is_bot']) && $message_data['from']['is_bot']) {
-            error_log('[MxChat Telegram DEBUG] Skipped: Message from bot');
+            //error_log('[MxChat Telegram DEBUG] Skipped: Message from bot');
             return new WP_REST_Response(['ok' => true]);
         }
 
@@ -3950,11 +3950,11 @@ public function handle_telegram_webhook(WP_REST_Request $request) {
             $agent_name = $from['username'] ?? 'Agent';
         }
 
-        error_log("[MxChat Telegram DEBUG] Parsed: chat_id={$chat_id}, topic_id={$topic_id}, agent={$agent_name}, text={$message_text}");
+        //error_log("[MxChat Telegram DEBUG] Parsed: chat_id={$chat_id}, topic_id={$topic_id}, agent={$agent_name}, text={$message_text}");
 
         // Skip empty messages
         if (empty($message_text)) {
-            error_log('[MxChat Telegram DEBUG] Skipped: Empty message text');
+            //error_log('[MxChat Telegram DEBUG] Skipped: Empty message text');
             return new WP_REST_Response(['ok' => true]);
         }
 
@@ -3971,25 +3971,25 @@ public function handle_telegram_webhook(WP_REST_Request $request) {
             )
         );
 
-        error_log("[MxChat Telegram DEBUG] Looking for topic_id={$topic_id_str} in options, found: " . ($session_option ?: 'NULL'));
+        //error_log("[MxChat Telegram DEBUG] Looking for topic_id={$topic_id_str} in options, found: " . ($session_option ?: 'NULL'));
 
         if ($session_option) {
             $session_id = str_replace('mxchat_telegram_topic_', '', $session_option);
-            error_log("[MxChat Telegram DEBUG] Session ID: {$session_id}");
+            //error_log("[MxChat Telegram DEBUG] Session ID: {$session_id}");
 
             // Verify the group ID matches
             $stored_group_id = get_option("mxchat_telegram_group_{$session_id}", '');
-            error_log("[MxChat Telegram DEBUG] Stored group_id={$stored_group_id}, received chat_id={$chat_id}");
+            //error_log("[MxChat Telegram DEBUG] Stored group_id={$stored_group_id}, received chat_id={$chat_id}");
 
             if (strval($stored_group_id) != strval($chat_id)) {
-                error_log('[MxChat Telegram DEBUG] Skipped: Group ID mismatch');
+                //error_log('[MxChat Telegram DEBUG] Skipped: Group ID mismatch');
                 return new WP_REST_Response(['ok' => true]);
             }
 
             // Check for closure commands
             $lower_text = strtolower(trim($message_text));
             if (in_array($lower_text, ['#close', '#end', '#disconnect', '#done'])) {
-                error_log("[MxChat Telegram DEBUG] Closure command received: {$lower_text}");
+                //error_log("[MxChat Telegram DEBUG] Closure command received: {$lower_text}");
                 // End the live agent session
                 update_option("mxchat_mode_{$session_id}", 'ai');
 
@@ -4028,7 +4028,7 @@ public function handle_telegram_webhook(WP_REST_Request $request) {
             $processed_messages = get_transient('mxchat_telegram_messages_' . $session_id) ?: [];
 
             if (in_array($message_key, $processed_messages)) {
-                error_log('[MxChat Telegram DEBUG] Skipped: Duplicate message');
+                //error_log('[MxChat Telegram DEBUG] Skipped: Duplicate message');
                 return new WP_REST_Response(['ok' => true]);
             }
 
@@ -4040,14 +4040,14 @@ public function handle_telegram_webhook(WP_REST_Request $request) {
 
             // Save the agent message - format with agent name prefix for proper parsing
             $formatted_message = "Agent: {$agent_name} - {$message_text}";
-            error_log("[MxChat Telegram DEBUG] Saving agent message: {$formatted_message}");
+            //error_log("[MxChat Telegram DEBUG] Saving agent message: {$formatted_message}");
 
             $this->mxchat_save_chat_message($session_id, 'agent', $formatted_message);
 
             // Verify the message was saved to history
             $history = get_option("mxchat_history_{$session_id}", []);
             $last_message = end($history);
-            error_log("[MxChat Telegram DEBUG] History after save - count: " . count($history) . ", last message role: " . ($last_message['role'] ?? 'none'));
+            //error_log("[MxChat Telegram DEBUG] History after save - count: " . count($history) . ", last message role: " . ($last_message['role'] ?? 'none'));
 
             // Send confirmation back to Telegram
             $telegram_bot_token = $this->options['telegram_bot_token'] ?? '';
@@ -4068,10 +4068,10 @@ public function handle_telegram_webhook(WP_REST_Request $request) {
                 }
             }
         } else {
-            error_log("[MxChat Telegram DEBUG] No session found for topic_id={$topic_id}");
+            //error_log("[MxChat Telegram DEBUG] No session found for topic_id={$topic_id}");
         }
     } else {
-        error_log('[MxChat Telegram DEBUG] No message in webhook data');
+        //error_log('[MxChat Telegram DEBUG] No message in webhook data');
     }
 
     return new WP_REST_Response(['ok' => true]);
@@ -4635,7 +4635,7 @@ private function mxchat_generate_embedding($text, $api_key) {
 
 
 private function mxchat_find_relevant_content($user_embedding, $bot_id = 'default', $user_query = '') {
-    error_log("MXCHAT DEBUG: find_relevant_content called with bot_id: " . $bot_id);
+    //error_log("MXCHAT DEBUG: find_relevant_content called with bot_id: " . $bot_id);
 
     // Check for OpenAI Vector Store first (takes priority when enabled)
     $bot_vectorstore_config = $this->get_bot_vectorstore_config($bot_id);
@@ -4648,10 +4648,10 @@ private function mxchat_find_relevant_content($user_embedding, $bot_id = 'defaul
         $selected_model = $current_options['model'] ?? 'gpt-5.1-chat-latest';
 
         if ($this->is_openai_chat_model($selected_model)) {
-            error_log("MXCHAT DEBUG: Using OpenAI Vector Store for knowledge retrieval");
+            //error_log("MXCHAT DEBUG: Using OpenAI Vector Store for knowledge retrieval");
             return $this->find_relevant_content_openai_vectorstore($user_query, $bot_id, $bot_vectorstore_config);
         } else {
-            error_log("MXCHAT DEBUG: Vector Store enabled but model is not OpenAI (" . $selected_model . "), skipping Vector Store");
+            //error_log("MXCHAT DEBUG: Vector Store enabled but model is not OpenAI (" . $selected_model . "), skipping Vector Store");
         }
     }
 
@@ -4659,16 +4659,16 @@ private function mxchat_find_relevant_content($user_embedding, $bot_id = 'defaul
     $bot_pinecone_config = $this->get_bot_pinecone_config($bot_id);
 
     // Debug: Log the Pinecone configuration
-    error_log("MXCHAT DEBUG: Pinecone config for bot '$bot_id':");
-    error_log("  - use_pinecone: " . ($bot_pinecone_config['use_pinecone'] ? 'true' : 'false'));
-    error_log("  - api_key: " . (empty($bot_pinecone_config['api_key']) ? 'EMPTY' : 'SET (hidden)'));
-    error_log("  - host: " . ($bot_pinecone_config['host'] ?? 'NOT SET'));
-    error_log("  - namespace: " . ($bot_pinecone_config['namespace'] ?? 'NOT SET'));
+    //error_log("MXCHAT DEBUG: Pinecone config for bot '$bot_id':");
+    //error_log("  - use_pinecone: " . ($bot_pinecone_config['use_pinecone'] ? 'true' : 'false'));
+    //error_log("  - api_key: " . (empty($bot_pinecone_config['api_key']) ? 'EMPTY' : 'SET (hidden)'));
+    //error_log("  - host: " . ($bot_pinecone_config['host'] ?? 'NOT SET'));
+    //error_log("  - namespace: " . ($bot_pinecone_config['namespace'] ?? 'NOT SET'));
 
     // Determine whether to use Pinecone based on bot configuration
     $use_pinecone = isset($bot_pinecone_config['use_pinecone']) ? $bot_pinecone_config['use_pinecone'] : false;
 
-    error_log("MXCHAT DEBUG: Using " . ($use_pinecone ? "Pinecone" : "WordPress Database") . " for knowledge retrieval");
+    //error_log("MXCHAT DEBUG: Using " . ($use_pinecone ? "Pinecone" : "WordPress Database") . " for knowledge retrieval");
 
     if ($use_pinecone) {
         return $this->find_relevant_content_pinecone($user_embedding, $bot_id, $bot_pinecone_config);
@@ -5071,10 +5071,10 @@ private function reassemble_chunks_from_wordpress($source_url, $max_chunks = 0, 
 private function find_relevant_content_pinecone($user_embedding, $bot_id = 'default', $bot_config = null) {
     global $wpdb;
     
-    error_log("MXCHAT DEBUG: find_relevant_content_pinecone called");
-    error_log("  - bot_id: " . $bot_id);
-    error_log("  - user_embedding is array: " . (is_array($user_embedding) ? 'yes' : 'no'));
-    error_log("  - user_embedding count: " . (is_array($user_embedding) ? count($user_embedding) : 'N/A'));
+    //error_log("MXCHAT DEBUG: find_relevant_content_pinecone called");
+    //error_log("  - bot_id: " . $bot_id);
+    //error_log("  - user_embedding is array: " . (is_array($user_embedding) ? 'yes' : 'no'));
+    //error_log("  - user_embedding count: " . (is_array($user_embedding) ? count($user_embedding) : 'N/A'));
     
     // Use bot-specific config or fall back to default
     if ($bot_config === null) {
@@ -5085,10 +5085,10 @@ private function find_relevant_content_pinecone($user_embedding, $bot_id = 'defa
     $host = $bot_config['host'] ?? '';
     $namespace = $bot_config['namespace'] ?? '';
     
-    error_log("MXCHAT DEBUG: Pinecone query parameters:");
-    error_log("  - API Key: " . (empty($api_key) ? 'EMPTY - ERROR!' : 'Present (length: ' . strlen($api_key) . ')'));
-    error_log("  - Host: " . (empty($host) ? 'EMPTY - ERROR!' : $host));
-    error_log("  - Namespace: " . (empty($namespace) ? 'EMPTY (will use default)' : $namespace));
+    //error_log("MXCHAT DEBUG: Pinecone query parameters:");
+    //error_log("  - API Key: " . (empty($api_key) ? 'EMPTY - ERROR!' : 'Present (length: ' . strlen($api_key) . ')'));
+    //error_log("  - Host: " . (empty($host) ? 'EMPTY - ERROR!' : $host));
+    //error_log("  - Namespace: " . (empty($namespace) ? 'EMPTY (will use default)' : $namespace));
     
     // Initialize similarity analysis storage
     $this->last_similarity_analysis = [
@@ -5104,9 +5104,9 @@ private function find_relevant_content_pinecone($user_embedding, $bot_id = 'defa
     $valid_urls = [];
     
     if (empty($host) || empty($api_key)) {
-        error_log("MXCHAT DEBUG ERROR: Missing Pinecone host or API key!");
-        error_log("  - Host empty: " . (empty($host) ? 'YES' : 'NO'));
-        error_log("  - API key empty: " . (empty($api_key) ? 'YES' : 'NO'));
+        //error_log("MXCHAT DEBUG ERROR: Missing Pinecone host or API key!");
+        //error_log("  - Host empty: " . (empty($host) ? 'YES' : 'NO'));
+        //error_log("  - API key empty: " . (empty($api_key) ? 'YES' : 'NO'));
         // Store empty array for valid URLs since we can't proceed
         $this->current_valid_urls = [];
         return '';
@@ -5140,9 +5140,9 @@ private function find_relevant_content_pinecone($user_embedding, $bot_id = 'defa
         $request_body['namespace'] = $namespace;
     }
     
-    error_log("MXCHAT DEBUG: About to call Pinecone API");
-    error_log("  - Endpoint: " . $api_endpoint);
-    error_log("  - Namespace in request: " . (!empty($namespace) ? $namespace : 'NOT SET'));
+    //error_log("MXCHAT DEBUG: About to call Pinecone API");
+    //error_log("  - Endpoint: " . $api_endpoint);
+    //error_log("  - Namespace in request: " . (!empty($namespace) ? $namespace : 'NOT SET'));
     
     $response = wp_remote_post($api_endpoint, array(
         'headers' => array(
@@ -5155,18 +5155,18 @@ private function find_relevant_content_pinecone($user_embedding, $bot_id = 'defa
     ));
     
     if (is_wp_error($response)) {
-        error_log("MXCHAT DEBUG ERROR: WP Error in Pinecone request: " . $response->get_error_message());
+        //error_log("MXCHAT DEBUG ERROR: WP Error in Pinecone request: " . $response->get_error_message());
         // Store empty array for valid URLs
         $this->current_valid_urls = [];
         return '';
     }
     
     $response_code = wp_remote_retrieve_response_code($response);
-    error_log("MXCHAT DEBUG: Pinecone response code: " . $response_code);
+    //error_log("MXCHAT DEBUG: Pinecone response code: " . $response_code);
     
     if ($response_code !== 200) {
         $response_body = wp_remote_retrieve_body($response);
-        error_log("MXCHAT DEBUG ERROR: Pinecone API error response: " . substr($response_body, 0, 500));
+        //error_log("MXCHAT DEBUG ERROR: Pinecone API error response: " . substr($response_body, 0, 500));
         // Store empty array for valid URLs
         $this->current_valid_urls = [];
         return '';
@@ -5174,40 +5174,40 @@ private function find_relevant_content_pinecone($user_embedding, $bot_id = 'defa
     
     // ADD DETAILED DEBUG SECTION HERE
     $response_body = wp_remote_retrieve_body($response);
-    error_log("MXCHAT DEBUG: Raw Pinecone response length: " . strlen($response_body));
+    //error_log("MXCHAT DEBUG: Raw Pinecone response length: " . strlen($response_body));
     
     $results = json_decode($response_body, true);
     
     if (json_last_error() !== JSON_ERROR_NONE) {
-        error_log("MXCHAT DEBUG ERROR: JSON decode error: " . json_last_error_msg());
-        error_log("MXCHAT DEBUG: First 500 chars of response: " . substr($response_body, 0, 500));
+        //error_log("MXCHAT DEBUG ERROR: JSON decode error: " . json_last_error_msg());
+        //error_log("MXCHAT DEBUG: First 500 chars of response: " . substr($response_body, 0, 500));
         // Store empty array for valid URLs
         $this->current_valid_urls = [];
         return '';
     }
     
-    error_log("MXCHAT DEBUG: Pinecone response structure:");
-    error_log("  - Has 'matches' key: " . (isset($results['matches']) ? 'yes' : 'no'));
-    error_log("  - Has 'namespace' key: " . (isset($results['namespace']) ? 'yes (' . $results['namespace'] . ')' : 'no'));
+    //error_log("MXCHAT DEBUG: Pinecone response structure:");
+    //error_log("  - Has 'matches' key: " . (isset($results['matches']) ? 'yes' : 'no'));
+    //error_log("  - Has 'namespace' key: " . (isset($results['namespace']) ? 'yes (' . $results['namespace'] . ')' : 'no'));
     
     if (empty($results['matches'])) {
-        error_log("MXCHAT DEBUG: No matches found in Pinecone response");
-        error_log("MXCHAT DEBUG: Response keys: " . implode(', ', array_keys($results)));
+        //error_log("MXCHAT DEBUG: No matches found in Pinecone response");
+        //error_log("MXCHAT DEBUG: Response keys: " . implode(', ', array_keys($results)));
         // Store empty array for valid URLs
         $this->current_valid_urls = [];
         return '';
     }
     
-    error_log("MXCHAT DEBUG: Found " . count($results['matches']) . " matches in Pinecone");
+    //error_log("MXCHAT DEBUG: Found " . count($results['matches']) . " matches in Pinecone");
     
     // Log first match details for debugging
     if (!empty($results['matches'][0])) {
         $first_match = $results['matches'][0];
-        error_log("MXCHAT DEBUG: First match details:");
-        error_log("  - Score: " . ($first_match['score'] ?? 'no score'));
-        error_log("  - Has metadata: " . (isset($first_match['metadata']) ? 'yes' : 'no'));
+        //error_log("MXCHAT DEBUG: First match details:");
+        //error_log("  - Score: " . ($first_match['score'] ?? 'no score'));
+        //error_log("  - Has metadata: " . (isset($first_match['metadata']) ? 'yes' : 'no'));
         if (isset($first_match['metadata'])) {
-            error_log("  - Metadata keys: " . implode(', ', array_keys($first_match['metadata'])));
+            //error_log("  - Metadata keys: " . implode(', ', array_keys($first_match['metadata'])));
         }
     }
     
@@ -5644,16 +5644,16 @@ private function reassemble_chunks_from_pinecone($source_url, $bot_config, $max_
  * @return string Formatted context string with references
  */
 private function find_relevant_content_openai_vectorstore($user_query, $bot_id = 'default', $vectorstore_config = array()) {
-    error_log("MXCHAT DEBUG: find_relevant_content_openai_vectorstore called");
-    error_log("  - bot_id: " . $bot_id);
-    error_log("  - user_query length: " . strlen($user_query));
+    //error_log("MXCHAT DEBUG: find_relevant_content_openai_vectorstore called");
+    //error_log("  - bot_id: " . $bot_id);
+    //error_log("  - user_query length: " . strlen($user_query));
 
     // Get OpenAI API key
     $mxchat_options = get_option('mxchat_options', array());
     $api_key = $mxchat_options['api_key'] ?? '';
 
     if (empty($api_key)) {
-        error_log("MXCHAT DEBUG ERROR: OpenAI API key not configured");
+        //error_log("MXCHAT DEBUG ERROR: OpenAI API key not configured");
         $this->current_valid_urls = [];
         return '';
     }
@@ -5667,7 +5667,7 @@ private function find_relevant_content_openai_vectorstore($user_query, $bot_id =
     $max_results = $vectorstore_config['max_results'] ?? 5;
 
     if (empty($vectorstore_ids_string)) {
-        error_log("MXCHAT DEBUG ERROR: No Vector Store IDs configured");
+        //error_log("MXCHAT DEBUG ERROR: No Vector Store IDs configured");
         $this->current_valid_urls = [];
         return '';
     }
@@ -5676,8 +5676,8 @@ private function find_relevant_content_openai_vectorstore($user_query, $bot_id =
     $vectorstore_ids = array_map('trim', explode(',', $vectorstore_ids_string));
     $vectorstore_ids = array_filter($vectorstore_ids); // Remove empty values
 
-    error_log("MXCHAT DEBUG: Vector Store IDs: " . implode(', ', $vectorstore_ids));
-    error_log("MXCHAT DEBUG: Max results: " . $max_results);
+    //error_log("MXCHAT DEBUG: Vector Store IDs: " . implode(', ', $vectorstore_ids));
+    //error_log("MXCHAT DEBUG: Max results: " . $max_results);
 
     // Initialize similarity analysis storage
     $this->last_similarity_analysis = [
@@ -5698,7 +5698,7 @@ private function find_relevant_content_openai_vectorstore($user_query, $bot_id =
 
     // Verify it's an OpenAI model
     if (!$this->is_openai_chat_model($selected_model)) {
-        error_log("MXCHAT DEBUG ERROR: Vector Store search requires OpenAI model. Current: " . $selected_model);
+        //error_log("MXCHAT DEBUG ERROR: Vector Store search requires OpenAI model. Current: " . $selected_model);
         $this->current_valid_urls = [];
         return '';
     }
@@ -5717,12 +5717,12 @@ private function find_relevant_content_openai_vectorstore($user_query, $bot_id =
         'include' => array('output[*].file_search_call.search_results')
     );
 
-    error_log("MXCHAT VECTORSTORE: ========== REQUEST START ==========");
-    error_log("MXCHAT VECTORSTORE: Model: " . $selected_model);
-    error_log("MXCHAT VECTORSTORE: Query: " . substr($user_query, 0, 200));
-    error_log("MXCHAT VECTORSTORE: Vector Store IDs: " . implode(', ', $vectorstore_ids));
-    error_log("MXCHAT VECTORSTORE: Max Results: " . $max_results);
-    error_log("MXCHAT VECTORSTORE: Request body: " . wp_json_encode($request_body));
+    //error_log("MXCHAT VECTORSTORE: ========== REQUEST START ==========");
+    //error_log("MXCHAT VECTORSTORE: Model: " . $selected_model);
+    //error_log("MXCHAT VECTORSTORE: Query: " . substr($user_query, 0, 200));
+    //error_log("MXCHAT VECTORSTORE: Vector Store IDs: " . implode(', ', $vectorstore_ids));
+    //error_log("MXCHAT VECTORSTORE: Max Results: " . $max_results);
+    //error_log("MXCHAT VECTORSTORE: Request body: " . wp_json_encode($request_body));
 
     $response = wp_remote_post('https://api.openai.com/v1/responses', array(
         'headers' => array(
@@ -5734,40 +5734,40 @@ private function find_relevant_content_openai_vectorstore($user_query, $bot_id =
     ));
 
     if (is_wp_error($response)) {
-        error_log("MXCHAT VECTORSTORE ERROR: WP Error: " . $response->get_error_message());
+        //error_log("MXCHAT VECTORSTORE ERROR: WP Error: " . $response->get_error_message());
         $this->current_valid_urls = [];
         return '';
     }
 
     $response_code = wp_remote_retrieve_response_code($response);
-    error_log("MXCHAT VECTORSTORE: Response code: " . $response_code);
+    //error_log("MXCHAT VECTORSTORE: Response code: " . $response_code);
 
     $response_body = wp_remote_retrieve_body($response);
-    error_log("MXCHAT VECTORSTORE: Raw response (first 2000 chars): " . substr($response_body, 0, 2000));
+    //error_log("MXCHAT VECTORSTORE: Raw response (first 2000 chars): " . substr($response_body, 0, 2000));
 
     if ($response_code !== 200) {
-        error_log("MXCHAT VECTORSTORE ERROR: API error response: " . $response_body);
+        //error_log("MXCHAT VECTORSTORE ERROR: API error response: " . $response_body);
         $this->current_valid_urls = [];
         return '';
     }
     $result = json_decode($response_body, true);
 
     if (json_last_error() !== JSON_ERROR_NONE) {
-        error_log("MXCHAT VECTORSTORE ERROR: JSON decode error: " . json_last_error_msg());
+        //error_log("MXCHAT VECTORSTORE ERROR: JSON decode error: " . json_last_error_msg());
         $this->current_valid_urls = [];
         return '';
     }
 
     // Debug: Log the structure of the result
-    error_log("MXCHAT VECTORSTORE: Result keys: " . implode(', ', array_keys($result)));
+    //error_log("MXCHAT VECTORSTORE: Result keys: " . implode(', ', array_keys($result)));
     if (isset($result['output'])) {
-        error_log("MXCHAT VECTORSTORE: Output count: " . count($result['output']));
+        //error_log("MXCHAT VECTORSTORE: Output count: " . count($result['output']));
         foreach ($result['output'] as $idx => $out) {
-            error_log("MXCHAT VECTORSTORE: Output[$idx] type: " . ($out['type'] ?? 'unknown'));
-            error_log("MXCHAT VECTORSTORE: Output[$idx] keys: " . implode(', ', array_keys($out)));
+            //error_log("MXCHAT VECTORSTORE: Output[$idx] type: " . ($out['type'] ?? 'unknown'));
+            //error_log("MXCHAT VECTORSTORE: Output[$idx] keys: " . implode(', ', array_keys($out)));
         }
     } else {
-        error_log("MXCHAT VECTORSTORE: No 'output' key in result!");
+        //error_log("MXCHAT VECTORSTORE: No 'output' key in result!");
     }
 
     // Extract file search results from the response
@@ -5780,16 +5780,16 @@ private function find_relevant_content_openai_vectorstore($user_query, $bot_id =
         foreach ($result['output'] as $output_item) {
             // Look for file_search_call results
             if (isset($output_item['type']) && $output_item['type'] === 'file_search_call') {
-                error_log("MXCHAT VECTORSTORE: Found file_search_call output item");
-                error_log("MXCHAT VECTORSTORE: file_search_call keys: " . implode(', ', array_keys($output_item)));
+                //error_log("MXCHAT VECTORSTORE: Found file_search_call output item");
+                //error_log("MXCHAT VECTORSTORE: file_search_call keys: " . implode(', ', array_keys($output_item)));
 
                 // Check for search_results in the output item directly
                 $search_results = $output_item['search_results'] ?? $output_item['results'] ?? [];
-                error_log("MXCHAT VECTORSTORE: Search results count: " . count($search_results));
+                //error_log("MXCHAT VECTORSTORE: Search results count: " . count($search_results));
 
                 if (empty($search_results)) {
-                    error_log("MXCHAT VECTORSTORE: No search results found in file_search_call");
-                    error_log("MXCHAT VECTORSTORE: file_search_call content: " . wp_json_encode($output_item));
+                    //error_log("MXCHAT VECTORSTORE: No search results found in file_search_call");
+                    //error_log("MXCHAT VECTORSTORE: file_search_call content: " . wp_json_encode($output_item));
                 }
 
                 foreach ($search_results as $index => $search_result) {
@@ -5802,7 +5802,7 @@ private function find_relevant_content_openai_vectorstore($user_query, $bot_id =
                     if (isset($search_result['text']) && !empty($search_result['text'])) {
                         // Direct text field (OpenAI's actual format)
                         $text_content = $search_result['text'];
-                        error_log("MXCHAT VECTORSTORE: Found text directly on result[$index], length: " . strlen($text_content));
+                        //error_log("MXCHAT VECTORSTORE: Found text directly on result[$index], length: " . strlen($text_content));
                     } elseif (isset($search_result['content']) && is_array($search_result['content'])) {
                         // Nested content array format
                         foreach ($search_result['content'] as $content_item) {
@@ -5810,9 +5810,9 @@ private function find_relevant_content_openai_vectorstore($user_query, $bot_id =
                                 $text_content .= $content_item['text'] . "\n";
                             }
                         }
-                        error_log("MXCHAT VECTORSTORE: Found text in content array for result[$index], length: " . strlen($text_content));
+                        //error_log("MXCHAT VECTORSTORE: Found text in content array for result[$index], length: " . strlen($text_content));
                     } else {
-                        error_log("MXCHAT VECTORSTORE: No text found for result[$index]. Keys: " . implode(', ', array_keys($search_result)));
+                        //error_log("MXCHAT VECTORSTORE: No text found for result[$index]. Keys: " . implode(', ', array_keys($search_result)));
                     }
 
                     if (!empty($text_content)) {
@@ -5916,12 +5916,12 @@ private function find_relevant_content_openai_vectorstore($user_query, $bot_id =
     // Store unique valid URLs for validation
     $this->current_valid_urls = array_unique($valid_urls);
 
-    error_log("MXCHAT VECTORSTORE: ========== SEARCH COMPLETE ==========");
-    error_log("MXCHAT VECTORSTORE: Matches used: " . $matches_used);
-    error_log("MXCHAT VECTORSTORE: All matches count: " . count($all_matches));
-    error_log("MXCHAT VECTORSTORE: Content length: " . strlen($content));
+    //error_log("MXCHAT VECTORSTORE: ========== SEARCH COMPLETE ==========");
+    //error_log("MXCHAT VECTORSTORE: Matches used: " . $matches_used);
+    //error_log("MXCHAT VECTORSTORE: All matches count: " . count($all_matches));
+    //error_log("MXCHAT VECTORSTORE: Content length: " . strlen($content));
     if ($matches_used > 0) {
-        error_log("MXCHAT VECTORSTORE: Content preview: " . substr($content, 0, 500));
+        //error_log("MXCHAT VECTORSTORE: Content preview: " . substr($content, 0, 500));
     }
 
     // Check if citation links are enabled
@@ -5929,7 +5929,7 @@ private function find_relevant_content_openai_vectorstore($user_query, $bot_id =
 
     // Add response guidelines
     if ($matches_used === 0) {
-        error_log("MXCHAT VECTORSTORE: No matches found - returning empty reference message");
+        //error_log("MXCHAT VECTORSTORE: No matches found - returning empty reference message");
         $content = "No reference information was found for this query.\n\n";
     } else {
         // Build response guidelines based on citation links setting
@@ -5950,7 +5950,7 @@ private function find_relevant_content_openai_vectorstore($user_query, $bot_id =
         }
     }
 
-    error_log("MXCHAT DEBUG: Vector Store search complete. Matches used: " . $matches_used);
+    //error_log("MXCHAT DEBUG: Vector Store search complete. Matches used: " . $matches_used);
 
     return trim($content);
 }
@@ -7129,7 +7129,7 @@ private function mxchat_generate_response_openai_web_search($selected_model, $ap
             // For other GPT-5 models, don't set reasoning to allow web search
         }
 
-        error_log("MXCHAT WEB SEARCH: Request body: " . json_encode($request_body));
+        //error_log("MXCHAT WEB SEARCH: Request body: " . json_encode($request_body));
 
         if ($streaming) {
             return $this->mxchat_web_search_streaming_response($request_body, $api_key, $session_id, $testing_data);
@@ -7138,7 +7138,7 @@ private function mxchat_generate_response_openai_web_search($selected_model, $ap
         }
 
     } catch (Exception $e) {
-        error_log("MXCHAT WEB SEARCH ERROR: " . $e->getMessage());
+        //error_log("MXCHAT WEB SEARCH ERROR: " . $e->getMessage());
         return [
             'error' => sprintf(esc_html__('Web search error: %s', 'mxchat'), esc_html($e->getMessage())),
             'error_code' => 'web_search_exception'
@@ -7162,7 +7162,7 @@ private function mxchat_web_search_non_streaming_response($request_body, $api_ke
     ));
 
     if (is_wp_error($response)) {
-        error_log("MXCHAT WEB SEARCH ERROR: WP Error: " . $response->get_error_message());
+        //error_log("MXCHAT WEB SEARCH ERROR: WP Error: " . $response->get_error_message());
         return [
             'error' => esc_html__('Failed to connect to OpenAI web search API', 'mxchat'),
             'error_code' => 'web_search_connection_error'
@@ -7172,8 +7172,8 @@ private function mxchat_web_search_non_streaming_response($request_body, $api_ke
     $response_code = wp_remote_retrieve_response_code($response);
     $response_body = wp_remote_retrieve_body($response);
 
-    error_log("MXCHAT WEB SEARCH: Response code: " . $response_code);
-    error_log("MXCHAT WEB SEARCH: Response body (first 2000): " . substr($response_body, 0, 2000));
+    //error_log("MXCHAT WEB SEARCH: Response code: " . $response_code);
+    //error_log("MXCHAT WEB SEARCH: Response body (first 2000): " . substr($response_body, 0, 2000));
 
     if ($response_code !== 200) {
         $error_data = json_decode($response_body, true);
@@ -7361,7 +7361,7 @@ private function mxchat_web_search_streaming_response($request_body, $api_key, $
         $curl_error = curl_error($ch);
         curl_close($ch);
 
-        error_log("MXCHAT WEB SEARCH STREAM ERROR: HTTP $http_code, cURL error: $curl_error");
+        //error_log("MXCHAT WEB SEARCH STREAM ERROR: HTTP $http_code, cURL error: $curl_error");
 
         // Fallback to non-streaming
         $fallback_response = $this->mxchat_web_search_non_streaming_response($request_body, $api_key, $session_id, $testing_data);
@@ -10433,15 +10433,15 @@ public function mxchat_track_originating_page() {
  */
 private function validate_and_clean_urls($response_text, $valid_urls) {
     // DEBUG: Log what we're working with
-    error_log("=== MxChat URL Validation Debug ===");
-    error_log("Valid URLs count: " . count($valid_urls));
-    error_log("Valid URLs: " . print_r($valid_urls, true));
-    error_log("Response text length: " . strlen($response_text));
-    error_log("Response text preview: " . substr($response_text, 0, 500));
+    //error_log("=== MxChat URL Validation Debug ===");
+    //error_log("Valid URLs count: " . count($valid_urls));
+    //error_log("Valid URLs: " . print_r($valid_urls, true));
+    //error_log("Response text length: " . strlen($response_text));
+    //error_log("Response text preview: " . substr($response_text, 0, 500));
     
     // If no valid URLs provided or empty response, return as-is
     if (empty($valid_urls) || empty($response_text)) {
-        error_log("Validation skipped - empty valid_urls or response");
+        //error_log("Validation skipped - empty valid_urls or response");
         return $response_text;
     }
     
@@ -10455,7 +10455,7 @@ private function validate_and_clean_urls($response_text, $valid_urls) {
     
     // If no URLs found in response, return as-is
     if (empty($matches[0])) {
-        error_log("No URLs found in response");
+        //error_log("No URLs found in response");
         return $response_text;
     }
     
@@ -10474,35 +10474,35 @@ private function validate_and_clean_urls($response_text, $valid_urls) {
         return $url;
     }, $valid_urls);
     
-    error_log("Normalized valid URLs: " . print_r($normalized_valid_urls, true));
+    //error_log("Normalized valid URLs: " . print_r($normalized_valid_urls, true));
     
     foreach ($found_urls as $found_url) {
         // Clean up the found URL (remove trailing punctuation that might have been captured)
         $clean_found_url = rtrim($found_url, '.,;:!?)');
         
         // DEBUG: Log each URL being checked
-        error_log("Checking found URL: " . $found_url);
+        //error_log("Checking found URL: " . $found_url);
         
         // Normalize for comparison
         $normalized_found = rtrim($clean_found_url, '/');
         $normalized_found = preg_replace('/#.*$/', '', $normalized_found);
         
-        error_log("Normalized found URL: " . $normalized_found);
+        //error_log("Normalized found URL: " . $normalized_found);
         
         // Check if this URL exists in our valid URLs list
         $is_valid = false;
         
-        error_log("Starting validation checks for: " . $normalized_found);
+        //error_log("Starting validation checks for: " . $normalized_found);
         
         // First, try exact match
         if (in_array($normalized_found, $normalized_valid_urls)) {
             $is_valid = true;
-            error_log("EXACT MATCH FOUND");
+            //error_log("EXACT MATCH FOUND");
         } else {
-            error_log("No exact match, checking variations...");
+            //error_log("No exact match, checking variations...");
             // If no exact match, check if it's a variation (with query params, etc.)
             foreach ($normalized_valid_urls as $valid_url) {
-                error_log("  Comparing against valid URL: " . $valid_url);
+                //error_log("  Comparing against valid URL: " . $valid_url);
                 
                 // Check if the found URL starts with a valid URL (handles query params)
                 if (strpos($normalized_found, $valid_url) === 0) {
@@ -10515,43 +10515,43 @@ private function validate_and_clean_urls($response_text, $valid_urls) {
                     // 3. Fragment (starts with #)
                     if (empty($remainder) || $remainder[0] === '?' || $remainder[0] === '#') {
                         $is_valid = true;
-                        error_log("  MATCH: Found URL is valid variation of base URL");
+                        //error_log("  MATCH: Found URL is valid variation of base URL");
                         break;
                     } else {
-                        error_log("  NOT A MATCH: Found URL extends path beyond valid URL (remainder: " . $remainder . ")");
+                        //error_log("  NOT A MATCH: Found URL extends path beyond valid URL (remainder: " . $remainder . ")");
                     }
                 }
                 // Also check the reverse (in case valid URL has query params)
                 if (strpos($valid_url, $normalized_found) === 0) {
                     $is_valid = true;
-                    error_log("  MATCH: Valid URL starts with found URL");
+                    //error_log("  MATCH: Valid URL starts with found URL");
                     break;
                 }
             }
             
             if (!$is_valid) {
-                error_log("NO MATCH FOUND - URL should be removed");
+                //error_log("NO MATCH FOUND - URL should be removed");
             }
         }
         
         // If URL is not valid, remove it from the response
         if (!$is_valid) {
             // Log the removal for debugging
-            error_log("MxChat: Removed hallucinated URL: " . $found_url);
-            error_log("MxChat: Valid URLs were: " . implode(', ', array_slice($normalized_valid_urls, 0, 5)));
+            //error_log("MxChat: Removed hallucinated URL: " . $found_url);
+            //error_log("MxChat: Valid URLs were: " . implode(', ', array_slice($normalized_valid_urls, 0, 5)));
             
             $removed_count++;
             
             // Check if URL is part of a markdown link: [text](url)
             $markdown_pattern = '/\[([^\]]+)\]\(' . preg_quote($found_url, '/') . '\)/';
             if (preg_match($markdown_pattern, $cleaned_response)) {
-                error_log("Found markdown link, removing but keeping text");
+                //error_log("Found markdown link, removing but keeping text");
                 // Remove the markdown link but keep the text
                 $cleaned_response = preg_replace($markdown_pattern, '$1', $cleaned_response);
             } 
             // Check if URL is part of an HTML link: <a href="url">text</a>
             else if (preg_match('/<a[^>]*href=["\']' . preg_quote($found_url, '/') . '["\'][^>]*>(.*?)<\/a>/i', $cleaned_response, $link_match)) {
-                error_log("Found HTML link, removing but keeping text");
+                //error_log("Found HTML link, removing but keeping text");
                 // Remove the HTML link but keep the text
                 $link_text = $link_match[1];
                 $cleaned_response = preg_replace(
@@ -10562,7 +10562,7 @@ private function validate_and_clean_urls($response_text, $valid_urls) {
             }
             // Otherwise just remove the bare URL
             else {
-                error_log("Removing bare URL");
+                //error_log("Removing bare URL");
                 $cleaned_response = str_replace($found_url, '', $cleaned_response);
             }
         }
@@ -10570,9 +10570,9 @@ private function validate_and_clean_urls($response_text, $valid_urls) {
     
     // Log summary if any URLs were removed
     if ($removed_count > 0) {
-        error_log("MxChat: URL Validation Summary - Removed {$removed_count} hallucinated URL(s)");
+        //error_log("MxChat: URL Validation Summary - Removed {$removed_count} hallucinated URL(s)");
     } else {
-        error_log("MxChat: URL Validation Summary - No URLs removed, all were valid");
+        //error_log("MxChat: URL Validation Summary - No URLs removed, all were valid");
     }
     
     // Clean up any double spaces or awkward punctuation left behind
@@ -10580,7 +10580,7 @@ private function validate_and_clean_urls($response_text, $valid_urls) {
     $cleaned_response = preg_replace('/[^\S\n]+/', ' ', $cleaned_response);  // Collapse spaces/tabs but NOT newlines
     $cleaned_response = preg_replace('/[^\S\n]+([.,;:!?])/', '$1', $cleaned_response);  // Same for punctuation cleanup
     
-    error_log("Final cleaned response: " . $cleaned_response);
+    //error_log("Final cleaned response: " . $cleaned_response);
     
     return trim($cleaned_response);
 }

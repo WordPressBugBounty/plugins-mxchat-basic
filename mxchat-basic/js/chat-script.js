@@ -26,7 +26,7 @@ jQuery(document).ready(function($) {
 
                 this.instances[botId] = {
                     botId: botId,
-                    sessionId: this.getChatSession(botId),
+                    sessionId: null,
                     lastSeenMessageId: '',
                     notificationCheckInterval: null,
                     pollingInterval: null,
@@ -63,6 +63,39 @@ jQuery(document).ready(function($) {
             }
 
             return sessionId;
+        },
+
+        // Lazy session initializer — called on first user interaction
+        ensureSession: function(botId) {
+            botId = botId || 'default';
+            var instance = this.instances[botId] || this.init(botId);
+
+            if (instance.sessionId) {
+                return instance.sessionId;
+            }
+
+            // Check if a cookie already exists from a prior visit
+            var cookieName = 'mxchat_session_id_' + botId;
+            var existingSession = getCookie(cookieName);
+
+            if (existingSession) {
+                instance.sessionId = existingSession;
+            } else {
+                // Brand new session
+                var newId = generateSessionId();
+                this.setChatSession(botId, newId);
+                instance.sessionId = newId;
+            }
+
+            // Now that we have a session, do the deferred work
+            trackOriginatingPage();
+
+            var chatPersistenceEnabled = typeof mxchatChat !== 'undefined' && mxchatChat.chat_persistence_toggle === 'on';
+            if (chatPersistenceEnabled && mxchatChat.email_collection_enabled !== 'on') {
+                loadChatHistory(botId);
+            }
+
+            return instance.sessionId;
         },
 
         setChatSession: function(botId, sessionId) {
@@ -390,6 +423,7 @@ function enableChatInput(botId) {
 // Update your existing sendMessage function
 function sendMessage(botId) {
     botId = botId || 'default';
+    MxChatInstances.ensureSession(botId);
     var $chatInput = getElement(botId, 'chat-input');
     var message = $chatInput.val();
 
@@ -434,6 +468,7 @@ function sendMessage(botId) {
 // Update your existing sendMessageToChatbot function
 function sendMessageToChatbot(message, botId) {
     botId = botId || 'default';
+    MxChatInstances.ensureSession(botId);
 
     // ADD PROMPT HOOK HERE
     if (typeof customMxChatFilter === 'function') {
@@ -1568,7 +1603,10 @@ function replaceLastMessage(sender, responseText, responseHtml = '', images = []
     
     // Process code blocks BEFORE processing links
     processedText = formatCodeBlocks(processedText);
-    
+
+    // Process markdown tables BEFORE converting newlines to paragraphs
+    processedText = formatMarkdownTables(processedText);
+
     // NOW convert to paragraphs
     processedText = convertNewlinesToBreaks(processedText);
     
@@ -1765,7 +1803,76 @@ function convertNewlinesToBreaks(text) {
 
         return text;
     }
-    
+
+    function formatMarkdownTables(text) {
+        var lines = text.split('\n');
+        var result = [];
+        var i = 0;
+
+        while (i < lines.length) {
+            // Check for a table: current line has pipes AND next line is a separator row
+            if (i + 1 < lines.length &&
+                lines[i].indexOf('|') !== -1 &&
+                /^\s*\|?[\s\-:]+(\|[\s\-:]+)+\|?\s*$/.test(lines[i + 1])) {
+
+                var tableLines = [];
+                var headerLine = lines[i];
+                var separatorLine = lines[i + 1];
+                tableLines.push(headerLine);
+                tableLines.push(separatorLine);
+
+                // Collect remaining table rows
+                var j = i + 2;
+                while (j < lines.length && lines[j].indexOf('|') !== -1 && lines[j].trim() !== '') {
+                    tableLines.push(lines[j]);
+                    j++;
+                }
+
+                // Parse alignment from separator row
+                var sepCells = separatorLine.split('|').filter(function(c) { return c.trim() !== ''; });
+                var alignments = sepCells.map(function(cell) {
+                    var trimmed = cell.trim();
+                    if (trimmed.charAt(0) === ':' && trimmed.charAt(trimmed.length - 1) === ':') return 'center';
+                    if (trimmed.charAt(trimmed.length - 1) === ':') return 'right';
+                    return 'left';
+                });
+
+                // Build HTML table
+                var html = '<div class="mxchat-table-wrapper"><table class="mxchat-table">';
+
+                // Header row
+                var headerCells = tableLines[0].split('|').filter(function(c) { return c.trim() !== ''; });
+                html += '<thead><tr>';
+                headerCells.forEach(function(cell, idx) {
+                    var align = alignments[idx] || 'left';
+                    html += '<th style="text-align:' + align + '">' + cell.trim() + '</th>';
+                });
+                html += '</tr></thead>';
+
+                // Body rows
+                html += '<tbody>';
+                for (var r = 2; r < tableLines.length; r++) {
+                    var rowCells = tableLines[r].split('|').filter(function(c) { return c.trim() !== ''; });
+                    html += '<tr>';
+                    rowCells.forEach(function(cell, idx) {
+                        var align = alignments[idx] || 'left';
+                        html += '<td style="text-align:' + align + '">' + cell.trim() + '</td>';
+                    });
+                    html += '</tr>';
+                }
+                html += '</tbody></table></div>';
+
+                result.push(html);
+                i = j;
+            } else {
+                result.push(lines[i]);
+                i++;
+            }
+        }
+
+        return result.join('\n');
+    }
+
     function sanitizeUserInput(text) {
         const div = document.createElement('div');
         div.textContent = text;
@@ -3251,16 +3358,9 @@ $(document).on('click', '.chat-box a[href]:not([data-tracked])', function(e) {
 
     // Initialize when document is ready
     setFullHeight();
-    trackOriginatingPage();
 
-    // Only load chat history if email collection is disabled
-    if (mxchatChat.email_collection_enabled !== 'on') {
-        // Load history for all instances
-        $('.mxchat-chatbot-wrapper').each(function() {
-            var botId = $(this).data('bot-id') || 'default';
-            loadChatHistory(botId);
-        });
-    }
+    // Note: trackOriginatingPage() and loadChatHistory() are now deferred
+    // until the user's first interaction via MxChatInstances.ensureSession()
 
     // Initialize chat visibility for all instances
     $('.mxchat-chatbot-wrapper').each(function() {

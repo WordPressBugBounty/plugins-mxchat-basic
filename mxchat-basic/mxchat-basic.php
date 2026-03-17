@@ -3,7 +3,7 @@
  * Plugin Name: MxChat
  * Plugin URI: https://mxchat.ai/
  * Description: AI chatbot for WordPress with OpenAI, Claude, xAI, DeepSeek, live agent, PDF uploads, WooCommerce, and training on website data.
- * Version: 3.1.2
+ * Version: 3.1.3
  * Author: MxChat
  * Author URI: https://mxchat.ai
  * License: GPLv2 or later
@@ -16,11 +16,21 @@ if (!defined('ABSPATH')) {
     exit; // Exit if accessed directly.
 }
 
+// Set to true during development to append a timestamp to the version for cache busting.
+// Set to false before releasing to production.
+if (!defined('MXCHAT_DEV_MODE')) {
+    define('MXCHAT_DEV_MODE', false);
+}
+
 // Define plugin version constant for asset versioning
 // Reads version from plugin header automatically
 if (!defined('MXCHAT_VERSION')) {
     $plugin_data = get_file_data(__FILE__, array('Version' => 'Version'), 'plugin');
-    define('MXCHAT_VERSION', $plugin_data['Version']);
+    $version = $plugin_data['Version'];
+    if (MXCHAT_DEV_MODE) {
+        $version .= '.' . time();
+    }
+    define('MXCHAT_VERSION', $version);
 }
 
 function mxchat_load_textdomain() {
@@ -557,7 +567,7 @@ function mxchat_migrate_pinecone_roles_add_bot_id() {
         // Add index for bot_id
         $wpdb->query("ALTER TABLE {$table_name} ADD KEY bot_id (bot_id)");
 
-        error_log('MxChat: Successfully added bot_id column to mxchat_pinecone_roles table');
+        //error_log('MxChat: Successfully added bot_id column to mxchat_pinecone_roles table');
     }
 
     // Mark migration as complete
@@ -594,7 +604,7 @@ function mxchat_migrate_add_content_type_column() {
         // Add index for better query performance
         $wpdb->query("ALTER TABLE {$table_name} ADD KEY content_type (content_type)");
 
-        error_log('MxChat: Successfully added content_type column to mxchat_system_prompt_content table');
+        //error_log('MxChat: Successfully added content_type column to mxchat_system_prompt_content table');
     }
 
     // Mark migration as complete
