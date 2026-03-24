@@ -24,6 +24,7 @@ function mxchat_render_content_page($admin_instance) {
     $pro_meta_management   = apply_filters('mxchat_content_pro_feature', false, 'meta_management');
     $pro_gsc_integration   = apply_filters('mxchat_content_pro_feature', false, 'gsc_integration');
     $pro_content_calendar  = apply_filters('mxchat_content_pro_feature', false, 'content_calendar');
+    $pro_template_generator = apply_filters('mxchat_content_pro_feature', false, 'template_generator');
     ?>
     <div class="mxch-admin-wrapper">
         <!-- Mobile Header -->
@@ -72,6 +73,10 @@ function mxchat_render_content_page($admin_instance) {
                     <button class="mxch-mobile-nav-link" data-target="content-calendar">
                         <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
                         <span><?php esc_html_e('Calendar', 'mxchat'); ?></span>
+                    </button>
+                    <button class="mxch-mobile-nav-link" data-target="content-templates">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18"/><path d="M9 21V9"/></svg>
+                        <span><?php esc_html_e('Templates', 'mxchat'); ?></span>
                     </button>
                 </div>
             </nav>
@@ -135,6 +140,15 @@ function mxchat_render_content_page($admin_instance) {
                                 <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
                             </span>
                             <span class="mxch-nav-link-text"><?php esc_html_e('Calendar', 'mxchat'); ?></span>
+                        </button>
+                    </div>
+
+                    <div class="mxch-nav-item" data-section="content-templates">
+                        <button class="mxch-nav-link" data-target="content-templates">
+                            <span class="mxch-nav-link-icon">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18"/><path d="M9 21V9"/></svg>
+                            </span>
+                            <span class="mxch-nav-link-text"><?php esc_html_e('Templates', 'mxchat'); ?></span>
                         </button>
                     </div>
                 </div>
@@ -219,6 +233,10 @@ function mxchat_render_content_page($admin_instance) {
                                 </div>
                                 <div class="mxch-cg-form">
                                     <textarea id="mxch-cg-prompt" class="mxch-cg-prompt" rows="3" placeholder="<?php esc_attr_e('Describe the content you want to generate...', 'mxchat'); ?>"></textarea>
+                                    <button type="button" id="mxch-cg-edit-prompt-btn" class="mxch-cg-edit-prompt-btn">
+                                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+                                        <?php esc_html_e('Edit Default Prompt', 'mxchat'); ?>
+                                    </button>
                                     <div class="mxch-cg-options">
                                         <div class="mxch-cg-option">
                                             <label class="mxch-cg-option-label" for="mxch-cg-type"><?php esc_html_e('Type', 'mxchat'); ?></label>
@@ -255,6 +273,13 @@ function mxchat_render_content_page($admin_instance) {
                                                 <option value="hide" selected><?php esc_html_e('Hide (title in content)', 'mxchat'); ?></option>
                                             </select>
                                         </div>
+                                        <div class="mxch-cg-option">
+                                            <label class="mxch-cg-option-label" for="mxch-cg-template-mode"><?php esc_html_e('Template Mode', 'mxchat'); ?></label>
+                                            <select id="mxch-cg-template-mode" class="mxch-cg-select">
+                                                <option value="off" selected><?php esc_html_e('Off', 'mxchat'); ?></option>
+                                                <option value="on"><?php esc_html_e('On (Spintax)', 'mxchat'); ?></option>
+                                            </select>
+                                        </div>
                                     </div>
                                     <button type="button" id="mxch-cg-generate-btn" class="mxch-cg-generate-btn mxch-cg-generate-btn-full">
                                         <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
@@ -267,6 +292,27 @@ function mxchat_render_content_page($admin_instance) {
                                         <div class="mxch-cg-progress-fill" style="width:0%"></div>
                                     </div>
                                     <p class="mxch-cg-progress-text"><?php esc_html_e('Starting...', 'mxchat'); ?></p>
+                                </div>
+                            </div>
+                        </div>
+                        <!-- Edit Default Prompt Modal -->
+                        <div id="mxch-cg-prompt-modal" class="mxch-cg-prompt-modal" style="display:none;">
+                            <div class="mxch-cg-prompt-modal-overlay"></div>
+                            <div class="mxch-cg-prompt-modal-content">
+                                <div class="mxch-cg-prompt-modal-header">
+                                    <h3><?php esc_html_e('Edit Default System Prompt', 'mxchat'); ?></h3>
+                                    <button type="button" id="mxch-cg-prompt-modal-close" class="mxch-cg-prompt-modal-close">&times;</button>
+                                </div>
+                                <div class="mxch-cg-prompt-modal-body">
+                                    <p class="mxch-cg-prompt-modal-desc"><?php esc_html_e('This is the system prompt sent to the AI when generating content. Edit it to customize how your content is generated.', 'mxchat'); ?></p>
+                                    <textarea id="mxch-cg-system-prompt-editor" class="mxch-cg-system-prompt-editor" rows="20"></textarea>
+                                </div>
+                                <div class="mxch-cg-prompt-modal-footer">
+                                    <button type="button" id="mxch-cg-prompt-reset" class="button"><?php esc_html_e('Reset to Default', 'mxchat'); ?></button>
+                                    <div class="mxch-cg-prompt-modal-footer-right">
+                                        <button type="button" id="mxch-cg-prompt-cancel" class="button"><?php esc_html_e('Cancel', 'mxchat'); ?></button>
+                                        <button type="button" id="mxch-cg-prompt-save" class="button button-primary"><?php esc_html_e('Save Changes', 'mxchat'); ?></button>
+                                    </div>
                                 </div>
                             </div>
                         </div>
@@ -470,6 +516,7 @@ function mxchat_render_content_page($admin_instance) {
                                     $content_model = $options['content_model'] ?? ($options['model'] ?? 'gpt-5.1-chat-latest');
                                     $models = array(
                                         'OpenAI' => array(
+                                            'gpt-5.4'              => 'GPT-5.4',
                                             'gpt-5.2'              => 'GPT-5.2',
                                             'gpt-5.1-chat-latest'  => 'GPT-5.1',
                                             'gpt-5'                => 'GPT-5',
@@ -905,6 +952,72 @@ function mxchat_render_content_page($admin_instance) {
                             <h2>AI Content Calendar</h2>
                             <p>Import SEO data and let AI generate a 30-day blog plan with targeted keywords, difficulty scores, and automated post scheduling.</p>
                             <a href="https://mxchat.ai/advanced-content-editor/" target="_blank" class="mxcal-demo-btn">Get Advanced Content Editor</a>
+                        </div>
+                    </div>
+                <?php endif; ?>
+            </div>
+
+            <!-- ========================================
+                 TEMPLATES
+                 ======================================== -->
+            <div id="content-templates" class="mxch-section">
+                <?php if ($pro_template_generator) : ?>
+                    <div id="mxtpl-container"></div>
+                <?php else : ?>
+                    <style>
+                        .mxtpl-demo-wrap { position: relative; }
+                        .mxtpl-demo-blur { filter: blur(3px); pointer-events: none; user-select: none; opacity: 0.7; padding: 24px; }
+                        .mxtpl-demo-overlay {
+                            position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+                            z-index: 10; text-align: center; background: rgba(255,255,255,0.95);
+                            border-radius: 16px; padding: 40px 48px; box-shadow: 0 8px 40px rgba(120,115,245,0.15);
+                            border: 1px solid rgba(120,115,245,0.12); max-width: 460px; width: 90%;
+                        }
+                        .mxtpl-demo-overlay h2 { font-size: 22px; font-weight: 700; margin: 0 0 8px; color: #1A202C; }
+                        .mxtpl-demo-overlay p { font-size: 14px; color: #718096; line-height: 1.6; margin: 0 0 20px; }
+                        .mxtpl-demo-badge { display: inline-block; background: linear-gradient(135deg, #fa73e6, #7873f5); color: #fff; font-size: 11px; font-weight: 700; padding: 4px 12px; border-radius: 20px; margin-bottom: 16px; letter-spacing: 0.5px; }
+                        .mxtpl-demo-btn { display: inline-block; background: linear-gradient(135deg, #fa73e6, #7873f5); color: #fff; font-size: 14px; font-weight: 600; padding: 12px 28px; border-radius: 10px; text-decoration: none; box-shadow: 0 4px 14px rgba(120,115,245,0.25); }
+                        .mxtpl-demo-section { margin-bottom: 20px; }
+                        .mxtpl-demo-label { font-size: 14px; font-weight: 700; color: #2D3748; margin-bottom: 8px; }
+                        .mxtpl-demo-textarea { width: 100%; padding: 12px; border: 2px solid #E2E8F0; border-radius: 8px; font-size: 13px; color: #4A5568; background: #F7FAFC; resize: none; font-family: inherit; }
+                        .mxtpl-demo-pills { display: flex; gap: 6px; margin-bottom: 12px; flex-wrap: wrap; }
+                        .mxtpl-demo-pill { background: rgba(120,115,245,0.08); color: #7873f5; padding: 3px 10px; border-radius: 20px; font-size: 11px; font-weight: 600; font-family: monospace; }
+                        .mxtpl-demo-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; }
+                        .mxtpl-demo-field { display: flex; flex-direction: column; gap: 4px; }
+                        .mxtpl-demo-field label { font-size: 12px; font-weight: 600; color: #718096; }
+                        .mxtpl-demo-field select, .mxtpl-demo-field input { padding: 8px 10px; border: 2px solid #E2E8F0; border-radius: 6px; font-size: 13px; background: #F7FAFC; }
+                    </style>
+                    <div class="mxtpl-demo-wrap">
+                        <div class="mxtpl-demo-blur">
+                            <div class="mxtpl-demo-section">
+                                <div class="mxtpl-demo-label">1. Upload Data</div>
+                                <button style="padding:8px 18px;border:1px solid #E2E8F0;border-radius:8px;background:#F7FAFC;color:#718096;font-size:13px;cursor:default;">Upload CSV</button>
+                                <span style="font-size:12px;color:#10b981;margin-left:8px;">24 rows loaded</span>
+                            </div>
+                            <div class="mxtpl-demo-section">
+                                <div class="mxtpl-demo-label">2. Content Source</div>
+                                <div class="mxtpl-demo-pills">
+                                    <span class="mxtpl-demo-pill">{city}</span>
+                                    <span class="mxtpl-demo-pill">{state}</span>
+                                    <span class="mxtpl-demo-pill">{service}</span>
+                                    <span class="mxtpl-demo-pill">{phone}</span>
+                                </div>
+                                <textarea class="mxtpl-demo-textarea" rows="3" readonly>Write a {comprehensive|detailed|in-depth} service page about {service} in {city}, {state}. Highlight our expertise and include a call to action with {phone}.</textarea>
+                            </div>
+                            <div class="mxtpl-demo-section">
+                                <div class="mxtpl-demo-label">3. Settings</div>
+                                <div class="mxtpl-demo-grid">
+                                    <div class="mxtpl-demo-field"><label>Content Type</label><select><option>Page</option></select></div>
+                                    <div class="mxtpl-demo-field"><label>Status</label><select><option>Draft</option></select></div>
+                                    <div class="mxtpl-demo-field"><label>Slug Template</label><input type="text" value="{service}-in-{city}" readonly /></div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="mxtpl-demo-overlay">
+                            <span class="mxtpl-demo-badge">PRO ADD-ON</span>
+                            <h2>Spintax & Template Generator</h2>
+                            <p>Generate bulk pages from CSV data with spintax variations. Create hundreds of unique, AI-written city pages, service pages, and landing pages.</p>
+                            <a href="https://mxchat.ai/advanced-content-editor/" target="_blank" class="mxtpl-demo-btn">Get Advanced Content Editor</a>
                         </div>
                     </div>
                 <?php endif; ?>

@@ -3154,3 +3154,193 @@ textarea.mxch-cg-meta-input {
         justify-content: center;
     }
 }
+
+/* ── Edit Default Prompt Button & Modal ────────────────────── */
+.mxch-cg-edit-prompt-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    background: none;
+    border: none;
+    color: #8a8f98;
+    font-size: 12px;
+    cursor: pointer;
+    padding: 4px 0;
+    margin-top: 2px;
+    transition: color 0.2s;
+}
+.mxch-cg-edit-prompt-btn:hover {
+    color: #c5c9d1;
+}
+.mxch-cg-edit-prompt-btn.mxch-cg-prompt-modified {
+    color: #7c6ee8;
+}
+.mxch-cg-edit-prompt-btn.mxch-cg-prompt-modified:hover {
+    color: #9d92f0;
+}
+
+/* Modal overlay + container */
+.mxch-cg-prompt-modal {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 100100;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+}
+.mxch-cg-prompt-modal-overlay {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.6);
+}
+.mxch-cg-prompt-modal-content {
+    position: relative;
+    background: #1e1e2e;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 12px;
+    width: 90%;
+    max-width: 760px;
+    height: 75vh;
+    max-height: 600px;
+    display: flex;
+    flex-direction: column;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+    overflow: hidden;
+}
+
+/* Header */
+.mxch-cg-prompt-modal-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 18px 24px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+.mxch-cg-prompt-modal-header h3 {
+    margin: 0;
+    font-size: 15px;
+    font-weight: 600;
+    color: #e2e4e9;
+}
+.mxch-cg-prompt-modal-close {
+    background: none;
+    border: none;
+    color: #8a8f98;
+    font-size: 22px;
+    cursor: pointer;
+    padding: 0 4px;
+    line-height: 1;
+    transition: color 0.2s;
+}
+.mxch-cg-prompt-modal-close:hover {
+    color: #fff;
+}
+
+/* Body */
+.mxch-cg-prompt-modal-body {
+    padding: 16px 24px;
+    overflow: hidden;
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+}
+.mxch-cg-prompt-modal-desc {
+    margin: 0 0 12px;
+    font-size: 13px;
+    color: #8a8f98;
+    line-height: 1.5;
+    flex-shrink: 0;
+}
+.mxch-cg-system-prompt-editor {
+    width: 100%;
+    flex: 1;
+    min-height: 200px;
+    background: #13131f;
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    border-radius: 8px;
+    color: #c5c9d1;
+    font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+    font-size: 12.5px;
+    line-height: 1.7;
+    padding: 14px 16px;
+    resize: none;
+    box-sizing: border-box;
+    overflow-y: auto;
+}
+.mxch-cg-system-prompt-editor:focus {
+    outline: none;
+    border-color: rgba(124, 110, 232, 0.4);
+    box-shadow: 0 0 0 2px rgba(124, 110, 232, 0.1);
+}
+/* Custom scrollbar for prompt editor */
+.mxch-cg-system-prompt-editor::-webkit-scrollbar {
+    width: 6px;
+}
+.mxch-cg-system-prompt-editor::-webkit-scrollbar-track {
+    background: transparent;
+    border-radius: 3px;
+}
+.mxch-cg-system-prompt-editor::-webkit-scrollbar-thumb {
+    background: rgba(124, 110, 232, 0.3);
+    border-radius: 3px;
+}
+.mxch-cg-system-prompt-editor::-webkit-scrollbar-thumb:hover {
+    background: rgba(124, 110, 232, 0.5);
+}
+
+/* Footer */
+.mxch-cg-prompt-modal-footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 14px 24px;
+    border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+.mxch-cg-prompt-modal-footer-right {
+    display: flex;
+    gap: 8px;
+}
+.mxch-cg-prompt-modal-footer .button {
+    background: #2a2a3d;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    color: #c5c9d1;
+    border-radius: 6px;
+    padding: 6px 14px;
+    font-size: 13px;
+    cursor: pointer;
+    transition: background 0.2s, border-color 0.2s;
+}
+.mxch-cg-prompt-modal-footer .button:hover {
+    background: #333350;
+    border-color: rgba(255, 255, 255, 0.14);
+}
+.mxch-cg-prompt-modal-footer .button-primary {
+    background: #7c6ee8;
+    border-color: #7c6ee8;
+    color: #fff;
+}
+.mxch-cg-prompt-modal-footer .button-primary:hover {
+    background: #6b5dd3;
+    border-color: #6b5dd3;
+}
+
+@media (max-width: 600px) {
+    .mxch-cg-prompt-modal-content {
+        width: 96%;
+        max-height: 90vh;
+    }
+    .mxch-cg-prompt-modal-header,
+    .mxch-cg-prompt-modal-body,
+    .mxch-cg-prompt-modal-footer {
+        padding-left: 16px;
+        padding-right: 16px;
+    }
+}

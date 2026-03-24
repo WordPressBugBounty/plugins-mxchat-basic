@@ -57,6 +57,8 @@ private function mxchat_init_hooks() {
     add_action('wp_ajax_mxchat_detect_sitemaps', array($this, 'ajax_mxchat_detect_sitemaps'));
     add_action('wp_ajax_mxchat_refresh_pinecone_entries', array($this, 'ajax_mxchat_refresh_pinecone_entries'));
     add_action('wp_ajax_mxchat_paginate_entries', array($this, 'ajax_mxchat_paginate_entries'));
+    add_action('wp_ajax_mxchat_get_entry_content', array($this, 'ajax_mxchat_get_entry_content'));
+    add_action('wp_ajax_mxchat_save_entry_content', array($this, 'ajax_mxchat_save_entry_content'));
 
     // Hook for content deletion
     add_action('mxchat_delete_content', array($this, 'mxchat_delete_from_pinecone_by_url'), 10, 1);
@@ -620,6 +622,260 @@ public function mxchat_save_inline_prompt() {
     }
 }
 
+
+/**
+ * AJAX: Get full content for editing — reassembles chunks if needed.
+ * Works for both WordPress DB and Pinecone entries.
+ */
+public function ajax_mxchat_get_entry_content() {
+    check_ajax_referer('mxchat_edit_entry_nonce', 'nonce');
+
+    if ( ! current_user_can('manage_options') ) {
+        wp_send_json_error( array( 'message' => 'Permission denied.' ) );
+    }
+
+    $source_url  = isset($_POST['source_url']) ? sanitize_text_field( wp_unslash($_POST['source_url']) ) : '';
+    $entry_id    = isset($_POST['entry_id']) ? absint($_POST['entry_id']) : 0;
+    $data_source = isset($_POST['data_source']) ? sanitize_key($_POST['data_source']) : 'wordpress';
+    $bot_id      = isset($_POST['bot_id']) ? sanitize_key($_POST['bot_id']) : 'default';
+
+    if ( $data_source === 'pinecone' ) {
+        // Pinecone: fetch vectors by source_url, reassemble chunks
+        $content = $this->get_pinecone_entry_content( $source_url, $entry_id, $bot_id );
+    } else {
+        // WordPress DB
+        $content = $this->get_wordpress_entry_content( $source_url, $entry_id );
+    }
+
+    if ( is_wp_error( $content ) ) {
+        wp_send_json_error( array( 'message' => $content->get_error_message() ) );
+    }
+
+    wp_send_json_success( $content );
+}
+
+/**
+ * Get content from WordPress DB — reassembles chunks by source_url.
+ */
+private function get_wordpress_entry_content( $source_url, $entry_id ) {
+    global $wpdb;
+    $table = $wpdb->prefix . 'mxchat_system_prompt_content';
+
+    // If we have a source_url, check for chunks
+    if ( ! empty( $source_url ) && strpos( $source_url, 'mxchat://' ) !== 0 ) {
+        $rows = $wpdb->get_results( $wpdb->prepare(
+            "SELECT id, article_content, source_url, content_type FROM {$table} WHERE source_url = %s ORDER BY id ASC",
+            $source_url
+        ) );
+
+        if ( $rows && count( $rows ) > 1 ) {
+            // Multiple rows = chunked. Reassemble.
+            $chunks = array();
+            foreach ( $rows as $row ) {
+                $parsed = MxChat_Chunker::parse_stored_chunk( $row->article_content );
+                $index  = isset( $parsed['metadata']['chunk_index'] ) ? intval( $parsed['metadata']['chunk_index'] ) : count( $chunks );
+                $chunks[ $index ] = $parsed['text'];
+            }
+            ksort( $chunks );
+            return array(
+                'content'      => implode( "\n\n", $chunks ),
+                'source_url'   => $source_url,
+                'is_chunked'   => true,
+                'chunk_count'  => count( $chunks ),
+                'content_type' => $rows[0]->content_type,
+            );
+        } elseif ( $rows && count( $rows ) === 1 ) {
+            $parsed = MxChat_Chunker::parse_stored_chunk( $rows[0]->article_content );
+            return array(
+                'content'      => $parsed['text'],
+                'source_url'   => $source_url,
+                'entry_id'     => $rows[0]->id,
+                'is_chunked'   => false,
+                'content_type' => $rows[0]->content_type,
+            );
+        }
+    }
+
+    // Fallback: fetch by ID
+    if ( $entry_id > 0 ) {
+        $row = $wpdb->get_row( $wpdb->prepare(
+            "SELECT id, article_content, source_url, content_type FROM {$table} WHERE id = %d",
+            $entry_id
+        ) );
+        if ( $row ) {
+            $parsed = MxChat_Chunker::parse_stored_chunk( $row->article_content );
+            return array(
+                'content'      => $parsed['text'],
+                'source_url'   => $row->source_url,
+                'entry_id'     => $row->id,
+                'is_chunked'   => false,
+                'content_type' => $row->content_type,
+            );
+        }
+    }
+
+    return new WP_Error( 'not_found', 'Entry not found.' );
+}
+
+/**
+ * Get content from Pinecone — fetches vectors by source_url, reassembles chunks.
+ */
+private function get_pinecone_entry_content( $source_url, $entry_id, $bot_id ) {
+    if ( ! class_exists('MxChat_Pinecone_Manager') ) {
+        return new WP_Error( 'pinecone_unavailable', 'Pinecone manager not available.' );
+    }
+
+    // Get Pinecone config
+    if ( $bot_id === 'default' || ! class_exists('MxChat_Multi_Bot_Manager') ) {
+        $pinecone_options = get_option('mxchat_pinecone_addon_options');
+        $api_key   = $pinecone_options['mxchat_pinecone_api_key'] ?? '';
+        $host      = $pinecone_options['mxchat_pinecone_host'] ?? '';
+        $namespace = $pinecone_options['mxchat_pinecone_namespace'] ?? '';
+    } else {
+        $bot_config = apply_filters('mxchat_get_bot_pinecone_config', array(), $bot_id);
+        $api_key   = $bot_config['api_key'] ?? '';
+        $host      = $bot_config['host'] ?? '';
+        $namespace = $bot_config['namespace'] ?? '';
+    }
+
+    if ( empty($host) || empty($api_key) ) {
+        return new WP_Error( 'pinecone_config', 'Pinecone not configured.' );
+    }
+
+    // List vectors with the source_url prefix
+    $base_id = md5( $source_url );
+    $vector_ids = array( $base_id );
+
+    // Find chunk vectors
+    $list_url  = "https://{$host}/vectors/list";
+    $list_body = array( 'prefix' => $base_id . '_chunk_', 'limit' => 100 );
+    if ( ! empty($namespace) ) {
+        $list_body['namespace'] = $namespace;
+    }
+
+    $list_resp = wp_remote_post( $list_url, array(
+        'headers' => array( 'Api-Key' => $api_key, 'Content-Type' => 'application/json' ),
+        'body'    => wp_json_encode( $list_body ),
+        'timeout' => 15,
+    ) );
+
+    if ( ! is_wp_error($list_resp) ) {
+        $list_data = json_decode( wp_remote_retrieve_body($list_resp), true );
+        if ( ! empty($list_data['vectors']) ) {
+            foreach ( $list_data['vectors'] as $v ) {
+                $vector_ids[] = $v['id'];
+            }
+        }
+    }
+
+    // Fetch vectors with metadata
+    $fetch_url  = "https://{$host}/vectors/fetch";
+    $fetch_body = array( 'ids' => $vector_ids );
+    if ( ! empty($namespace) ) {
+        $fetch_body['namespace'] = $namespace;
+    }
+
+    $fetch_resp = wp_remote_post( $fetch_url, array(
+        'headers' => array( 'Api-Key' => $api_key, 'Content-Type' => 'application/json' ),
+        'body'    => wp_json_encode( $fetch_body ),
+        'timeout' => 15,
+    ) );
+
+    if ( is_wp_error($fetch_resp) ) {
+        return new WP_Error( 'pinecone_fetch', 'Failed to fetch from Pinecone.' );
+    }
+
+    $fetch_data = json_decode( wp_remote_retrieve_body($fetch_resp), true );
+    $vectors    = $fetch_data['vectors'] ?? array();
+
+    if ( empty($vectors) ) {
+        return new WP_Error( 'not_found', 'Entry not found in Pinecone.' );
+    }
+
+    // Reassemble chunks
+    $chunks = array();
+    $content_type = 'content';
+    foreach ( $vectors as $vid => $vector ) {
+        $meta  = $vector['metadata'] ?? array();
+        $text  = $meta['text'] ?? '';
+        $index = $meta['chunk_index'] ?? 0;
+        $content_type = $meta['type'] ?? 'content';
+        $chunks[ intval($index) ] = $text;
+    }
+    ksort( $chunks );
+
+    return array(
+        'content'      => implode( "\n\n", $chunks ),
+        'source_url'   => $source_url,
+        'is_chunked'   => count($chunks) > 1,
+        'chunk_count'  => count($chunks),
+        'content_type' => $content_type,
+    );
+}
+
+/**
+ * AJAX: Save edited content — re-chunks and re-embeds as needed.
+ * Works for both WordPress DB and Pinecone entries.
+ */
+public function ajax_mxchat_save_entry_content() {
+    check_ajax_referer('mxchat_edit_entry_nonce', 'nonce');
+
+    if ( ! current_user_can('manage_options') ) {
+        wp_send_json_error( array( 'message' => 'Permission denied.' ) );
+    }
+
+    $source_url   = isset($_POST['source_url']) ? sanitize_text_field( wp_unslash($_POST['source_url']) ) : '';
+    $entry_id     = isset($_POST['entry_id']) ? absint($_POST['entry_id']) : 0;
+    $content      = isset($_POST['content']) ? wp_kses_post( wp_unslash($_POST['content']) ) : '';
+    $data_source  = isset($_POST['data_source']) ? sanitize_key($_POST['data_source']) : 'wordpress';
+    $bot_id       = isset($_POST['bot_id']) ? sanitize_key($_POST['bot_id']) : 'default';
+    $content_type = isset($_POST['content_type']) ? sanitize_key($_POST['content_type']) : 'content';
+
+    if ( empty($content) ) {
+        wp_send_json_error( array( 'message' => 'Content cannot be empty.' ) );
+    }
+
+    // Get the embedding API key
+    $options = get_option('mxchat_options', array());
+    $api_key = '';
+
+    if ( $bot_id !== 'default' && class_exists('MxChat_Multi_Bot_Manager') ) {
+        $bot_options = apply_filters('mxchat_get_bot_options', array(), $bot_id);
+        $api_key = $bot_options['api_key'] ?? '';
+    }
+    if ( empty($api_key) ) {
+        $api_key = $options['api_key'] ?? '';
+    }
+
+    global $wpdb;
+    $table = $wpdb->prefix . 'mxchat_system_prompt_content';
+
+    // If source_url is empty but we have an entry_id, look it up
+    if ( empty($source_url) && $entry_id > 0 && $data_source === 'wordpress' ) {
+        $row = $wpdb->get_row( $wpdb->prepare( "SELECT source_url FROM {$table} WHERE id = %d", $entry_id ) );
+        if ( $row && ! empty($row->source_url) ) {
+            $source_url = $row->source_url;
+        }
+    }
+
+    // For manual entries (no source_url or mxchat:// prefix), delete the old entry by ID first
+    // so submit_content_to_db creates a replacement instead of a duplicate
+    if ( $entry_id > 0 && (empty($source_url) || strpos($source_url, 'mxchat://') === 0) ) {
+        $wpdb->delete( $table, array( 'id' => $entry_id ), array( '%d' ) );
+    }
+
+    // Use the existing submit_content_to_db which handles chunking, Pinecone, and WP DB
+    $vector_id = ! empty($source_url) ? md5($source_url) : md5('mxchat_manual_' . $entry_id);
+
+    // submit_content_to_db already handles: delete old chunks → re-chunk → re-embed → store
+    $result = MxChat_Utils::submit_content_to_db( $content, $source_url, $api_key, $vector_id, $bot_id, $content_type );
+
+    if ( is_wp_error($result) ) {
+        wp_send_json_error( array( 'message' => $result->get_error_message() ) );
+    }
+
+    wp_send_json_success( array( 'message' => 'Content saved and re-embedded successfully.' ) );
+}
 
 public function mxchat_get_pdf_processing_status($pdf_url) {
     $pdf_url = esc_url_raw($pdf_url);
@@ -1624,6 +1880,8 @@ public function ajax_mxchat_get_recent_entries() {
             'source_url' => $entry->source_url,
             'has_link' => !empty($entry->source_url) && strpos($entry->source_url, 'mxchat://') !== 0,
             'chunk_metadata' => $chunk_metadata,
+            'bot_id' => $entry->bot_id ?? 'default',
+            'edit_nonce' => wp_create_nonce('mxchat_edit_entry_nonce'),
             'delete_nonce' => wp_create_nonce('mxchat_delete_prompt_nonce')
         );
     }
@@ -1831,7 +2089,19 @@ public function ajax_mxchat_refresh_pinecone_entries() {
                             <span style="color: var(--mxch-text-muted);"><?php esc_html_e('Manual Content', 'mxchat'); ?></span>
                         <?php endif; ?>
                     </td>
-                    <td class="mxchat-actions-cell" style="padding: 12px 16px;">
+                    <td class="mxchat-actions-cell" style="padding: 12px 16px; white-space: nowrap;">
+                        <?php if ($data_source !== 'pinecone') : ?>
+                        <button type="button"
+                                class="mxch-btn mxch-btn-ghost mxch-btn-sm mxchat-edit-entry-btn"
+                                data-source-url="<?php echo esc_attr($source_url); ?>"
+                                data-entry-id="<?php echo esc_attr($first_prompt->id); ?>"
+                                data-data-source="<?php echo esc_attr($data_source); ?>"
+                                data-bot-id="<?php echo esc_attr($current_bot_id); ?>"
+                                data-nonce="<?php echo wp_create_nonce('mxchat_edit_entry_nonce'); ?>"
+                                title="<?php esc_attr_e('Edit content', 'mxchat'); ?>">
+                            <span class="dashicons dashicons-edit" style="font-size: 14px;"></span>
+                        </button>
+                        <?php endif; ?>
                         <button type="button"
                                 class="mxch-btn mxch-btn-ghost mxch-btn-sm delete-button-group"
                                 data-source-url="<?php echo esc_attr($source_url); ?>"
@@ -2287,7 +2557,19 @@ public function ajax_mxchat_paginate_entries() {
                             <span style="color: var(--mxch-text-muted);"><?php esc_html_e('Manual Content', 'mxchat'); ?></span>
                         <?php endif; ?>
                     </td>
-                    <td class="mxchat-actions-cell" style="padding: 12px 16px;">
+                    <td class="mxchat-actions-cell" style="padding: 12px 16px; white-space: nowrap;">
+                        <?php if ($data_source !== 'pinecone') : ?>
+                        <button type="button"
+                                class="mxch-btn mxch-btn-ghost mxch-btn-sm mxchat-edit-entry-btn"
+                                data-source-url="<?php echo esc_attr($source_url); ?>"
+                                data-entry-id="<?php echo esc_attr($first_prompt->id); ?>"
+                                data-data-source="<?php echo esc_attr($data_source); ?>"
+                                data-bot-id="<?php echo esc_attr($current_bot_id); ?>"
+                                data-nonce="<?php echo wp_create_nonce('mxchat_edit_entry_nonce'); ?>"
+                                title="<?php esc_attr_e('Edit content', 'mxchat'); ?>">
+                            <span class="dashicons dashicons-edit" style="font-size: 14px;"></span>
+                        </button>
+                        <?php endif; ?>
                         <button type="button"
                                 class="mxch-btn mxch-btn-ghost mxch-btn-sm delete-button-group"
                                 data-source-url="<?php echo esc_attr($source_url); ?>"
@@ -2420,7 +2702,17 @@ public function ajax_mxchat_paginate_entries() {
                             <span style="color: var(--mxch-text-muted);"><?php esc_html_e('Manual', 'mxchat'); ?></span>
                         <?php endif; ?>
                     </td>
-                    <td style="padding: 12px 16px;">
+                    <td style="padding: 12px 16px; white-space: nowrap;">
+                        <button type="button"
+                                class="mxch-btn mxch-btn-ghost mxch-btn-sm mxchat-edit-entry-btn"
+                                data-source-url="<?php echo esc_attr($prompt->source_url ?? ''); ?>"
+                                data-entry-id="<?php echo esc_attr($prompt->id); ?>"
+                                data-data-source="<?php echo esc_attr($data_source); ?>"
+                                data-bot-id="<?php echo esc_attr($current_bot_id); ?>"
+                                data-nonce="<?php echo wp_create_nonce('mxchat_edit_entry_nonce'); ?>"
+                                title="<?php esc_attr_e('Edit content', 'mxchat'); ?>">
+                            <span class="dashicons dashicons-edit" style="font-size: 14px;"></span>
+                        </button>
                         <button type="button" class="mxch-btn mxch-btn-ghost mxch-btn-sm delete-button-wordpress" data-entry-id="<?php echo esc_attr($prompt->id); ?>" data-bot-id="<?php echo esc_attr($current_bot_id); ?>" data-nonce="<?php echo wp_create_nonce('mxchat_delete_wordpress_prompt_nonce'); ?>" style="color: var(--mxch-error);">
                             <span class="dashicons dashicons-trash" style="font-size: 14px;"></span>
                         </button>
@@ -6900,8 +7192,9 @@ private function mxchat_process_queue_url($item_data, $bot_id = 'default') {
     }
 
     // Fetch URL content (fallback for non-products or when WooCommerce extraction fails)
+    $is_likely_pdf = (strtolower(pathinfo(parse_url($url, PHP_URL_PATH) ?: '', PATHINFO_EXTENSION)) === 'pdf');
     $response = wp_remote_get($url, array(
-        'timeout' => 30,
+        'timeout' => $is_likely_pdf ? 60 : 30,
         'redirection' => 5,
         'user-agent' => 'MxChat/1.0'
     ));
@@ -6913,6 +7206,11 @@ private function mxchat_process_queue_url($item_data, $bot_id = 'default') {
     $response_code = wp_remote_retrieve_response_code($response);
     if ($response_code !== 200) {
         return new WP_Error('http_error', 'HTTP ' . $response_code . ' error');
+    }
+
+    // Check if URL is a PDF — process through PDF pipeline instead of HTML
+    if ($this->mxchat_is_pdf_url($url, $response)) {
+        return $this->mxchat_process_pdf_url_inline($url, $response, $api_key, $bot_id);
     }
 
     $html = wp_remote_retrieve_body($response);
@@ -6941,6 +7239,93 @@ private function mxchat_process_queue_url($item_data, $bot_id = 'default') {
     );
 
     return $result;
+}
+
+/**
+ * Process a PDF URL inline during sitemap queue processing.
+ * Downloads the PDF, extracts all pages, and submits each to the DB.
+ */
+private function mxchat_process_pdf_url_inline($pdf_url, $response, $api_key, $bot_id = 'default') {
+    set_time_limit(120); // PDFs need more time — downloading + parsing all pages
+
+    $upload_dir = wp_upload_dir();
+    $pdf_filename = sanitize_file_name('mxchat_kb_' . md5($pdf_url) . '.pdf');
+    $pdf_path = trailingslashit($upload_dir['path']) . $pdf_filename;
+
+    $response_body = wp_remote_retrieve_body($response);
+    if (empty($response_body)) {
+        return new WP_Error('empty_pdf', 'Empty PDF response');
+    }
+
+    if (!wp_mkdir_p(dirname($pdf_path))) {
+        return new WP_Error('dir_error', 'Failed to create upload directory');
+    }
+
+    file_put_contents($pdf_path, $response_body);
+
+    if (!file_exists($pdf_path)) {
+        return new WP_Error('save_error', 'Failed to save PDF file');
+    }
+
+    try {
+        mxchat_load_pdf_parser();
+        $parser = new \Smalot\PdfParser\Parser();
+        $pdf = $parser->parseFile($pdf_path);
+        $pages = $pdf->getPages();
+        $total_pages = count($pages);
+
+        if ($total_pages < 1) {
+            wp_delete_file($pdf_path);
+            return new WP_Error('no_pages', 'PDF has no pages');
+        }
+
+        $processed = 0;
+
+        for ($i = 0; $i < $total_pages; $i++) {
+            $text = $pages[$i]->getText();
+            if (empty($text)) {
+                continue;
+            }
+
+            $sanitized = $this->mxchat_sanitize_content_for_api($text);
+            if (empty($sanitized)) {
+                continue;
+            }
+
+            $page_num = $i + 1;
+            $metadata = array(
+                'document_type' => 'pdf',
+                'total_pages'   => $total_pages,
+                'current_page'  => $page_num,
+                'source_url'    => $pdf_url,
+            );
+
+            $content_with_metadata = wp_json_encode($metadata) . "\n---\n" . $sanitized;
+            $page_url = esc_url($pdf_url . '#page=' . $page_num);
+
+            MxChat_Utils::submit_content_to_db(
+                $content_with_metadata,
+                $page_url,
+                $api_key,
+                null,
+                $bot_id,
+                'pdf'
+            );
+
+            $processed++;
+        }
+
+        // Clean up the temp PDF file
+        wp_delete_file($pdf_path);
+
+        return $processed > 0 ? true : false;
+
+    } catch (Exception $e) {
+        if (file_exists($pdf_path)) {
+            wp_delete_file($pdf_path);
+        }
+        return new WP_Error('pdf_parse_error', 'Error parsing PDF: ' . $e->getMessage());
+    }
 }
 
 /**

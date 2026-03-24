@@ -33,7 +33,7 @@ class MxChat_Addons {
                 'url' => 'https://mxchat.ai/documentation-bot/',
                 'download_url' => 'https://mxchat.ai/advanced-content-editor/',
                 'plugin_file' => 'mxchat-advanced-content/mxchat-advanced-content.php',
-                'config_page' => 'mxchat-advanced-content',
+                'config_page' => 'mxchat-content',
                 'hero_features' => array(
                     array(
                         'icon' => '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>',
@@ -330,8 +330,8 @@ class MxChat_Addons {
                 'accent' => '#10b981',
                 'url' => 'https://mxchat.ai/mxchat-anywhere-deploy-your-ai-chatbot-on-any-website-with-one-script-tag/',
                 'download_url' => 'https://mxchat.ai/mxchat-anywhere-deploy-your-ai-chatbot-on-any-website-with-one-script-tag/',
-                'plugin_file' => 'mxchat-anywhere/mxchat-anywhere.php',
-                'config_page' => 'mxchat-anywhere',
+                'plugin_file' => 'mxchat-embed/mxchat-embed.php',
+                'config_page' => 'mxchat-embed',
                 'hero_features' => array(
                     array(
                         'icon' => '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>',

@@ -1028,6 +1028,10 @@ function setupMxChatModelSelector() {
                 { value: 'gemini-1.5-flash', label: 'Gemini 1.5 Flash', description: 'Deprecated September 2025' },
             ],
             openai: [
+                { value: 'gpt-5.4', label: 'GPT-5.4', description: 'Flagship reasoning and coding model' },
+                { value: 'gpt-5.4-mini', label: 'GPT-5.4 Mini', description: 'Fast and affordable with 400K context' },
+                { value: 'gpt-5.4-nano', label: 'GPT-5.4 Nano', description: 'Fastest and cheapest for lightweight tasks' },
+                { value: 'gpt-5.3-chat-latest', label: 'GPT-5.3 Chat', description: 'Optimized for natural conversations with reduced hallucinations' },
                 { value: 'gpt-5.2', label: 'GPT-5.2', description: 'Best general-purpose & agentic model with fast responses' },
                 { value: 'gpt-5.1-chat-latest', label: 'GPT-5.1 Chat Latest', description: 'Recommended for most use cases' },
                 { value: 'gpt-5.1-2025-11-13', label: 'GPT-5.1', description: 'Flagship for coding & agentic tasks with low reasoning (400K context)' },

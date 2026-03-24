@@ -3,7 +3,7 @@
  * Plugin Name: MxChat
  * Plugin URI: https://mxchat.ai/
  * Description: AI chatbot for WordPress with OpenAI, Claude, xAI, DeepSeek, live agent, PDF uploads, WooCommerce, and training on website data.
- * Version: 3.1.3
+ * Version: 3.1.4
  * Author: MxChat
  * Author URI: https://mxchat.ai
  * License: GPLv2 or later
@@ -16,14 +16,11 @@ if (!defined('ABSPATH')) {
     exit; // Exit if accessed directly.
 }
 
-// Set to true during development to append a timestamp to the version for cache busting.
-// Set to false before releasing to production.
+
 if (!defined('MXCHAT_DEV_MODE')) {
     define('MXCHAT_DEV_MODE', false);
 }
 
-// Define plugin version constant for asset versioning
-// Reads version from plugin header automatically
 if (!defined('MXCHAT_VERSION')) {
     $plugin_data = get_file_data(__FILE__, array('Version' => 'Version'), 'plugin');
     $version = $plugin_data['Version'];

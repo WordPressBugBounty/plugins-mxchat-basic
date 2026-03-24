@@ -211,7 +211,7 @@ function mxchat_render_settings_page($admin_instance) {
             <div class="mxch-pro-banner">
                 <div class="mxch-pro-banner-content">
                     <h3 class="mxch-pro-banner-title"><?php esc_html_e('MxChat Pro — Lifetime Access', 'mxchat'); ?></h3>
-                    <p class="mxch-pro-banner-text"><?php esc_html_e('One-time purchase. Unlock 10+ premium add-ons: Admin AI Assistant, Forms Builder, Chatbot Themes, and more.', 'mxchat'); ?></p>
+                    <p class="mxch-pro-banner-text"><?php esc_html_e('One-time purchase. Unlock 14+ premium add-ons: Chat with GSC, WooCommerce, Chatbot Themes, Forms Builder, and more.', 'mxchat'); ?></p>
                 </div>
                 <a href="https://mxchat.ai/" target="_blank" class="mxch-pro-banner-btn"><span><?php esc_html_e('Learn More', 'mxchat'); ?></span></a>
             </div>

@@ -1,11 +1,19 @@
 jQuery(document).ready(function($) {
 
-    // Refresh nonce on load — fixes stale nonces from page-cache plugins
-    if (typeof mxchatChat !== 'undefined' && mxchatChat.ajax_url) {
+    // Nonce refresh is deferred until first user interaction (ensureSession)
+    // to avoid admin-ajax calls on passive page loads.
+    var nonceRefreshed = false;
+    function refreshNonceIfNeeded(callback) {
+        if (nonceRefreshed || typeof mxchatChat === 'undefined' || !mxchatChat.ajax_url) {
+            if (callback) callback();
+            return;
+        }
+        nonceRefreshed = true;
         $.post(mxchatChat.ajax_url, { action: 'mxchat_refresh_nonce' }, function(res) {
             if (res && res.success && res.data && res.data.nonce) {
                 mxchatChat.nonce = res.data.nonce;
             }
+            if (callback) callback();
         });
     }
 
@@ -88,6 +96,7 @@ jQuery(document).ready(function($) {
             }
 
             // Now that we have a session, do the deferred work
+            refreshNonceIfNeeded();
             trackOriginatingPage();
 
             var chatPersistenceEnabled = typeof mxchatChat !== 'undefined' && mxchatChat.chat_persistence_toggle === 'on';
@@ -748,7 +757,11 @@ function callMxChat(message, callback, botId) {
                         }
                     }
                 } else {
-                    replaceLastMessage("bot", "I received an empty response. Please try again or contact support if this persists.", '', [], botId);
+                    var emptyMsg = "I received an empty response. Please try again or contact support if this persists.";
+                    if (response.vectorstore_error) {
+                        emptyMsg = "I received an empty response. Debug info: " + response.vectorstore_error;
+                    }
+                    replaceLastMessage("bot", emptyMsg, '', [], botId);
                 }
 
                 if (response.message_id) {
@@ -2168,12 +2181,13 @@ function checkForAgentMessages(botId) {
     // CHAT HISTORY & PERSISTENCE
     // ====================================
 
-function loadChatHistory(botId) {
+function loadChatHistory(botId, onComplete) {
     botId = botId || 'default';
     var instance = MxChatInstances.get(botId);
 
     // Prevent duplicate loading
     if (instance.chatHistoryLoaded) {
+        if (onComplete) onComplete();
         return;
     }
 
@@ -2195,6 +2209,7 @@ function loadChatHistory(botId) {
                     // Silently reset session - user will start fresh
                     resetChatSession(botId);
                     instance.chatHistoryLoaded = true; // Prevent retry loop
+                    if (onComplete) onComplete();
                     return;
                 }
 
@@ -2294,11 +2309,15 @@ function loadChatHistory(botId) {
                         }
                     }
                 }
+                if (onComplete) onComplete();
             },
             error: function(xhr, status, error) {
                 // Error loading chat history - silently continue
+                if (onComplete) onComplete();
             }
         });
+    } else {
+        if (onComplete) onComplete();
     }
 }
 
@@ -2476,43 +2495,27 @@ function loadChatHistory(botId) {
 
     function checkPreChatDismissal(botId) {
         botId = botId || 'default';
-        $.ajax({
-            url: mxchatChat.ajax_url,
-            type: 'POST',
-            data: {
-                action: 'mxchat_check_pre_chat_message_status',
-                _ajax_nonce: mxchatChat.nonce
-            },
-            success: function(response) {
-                if (response.success && !response.data.dismissed) {
-                    getElement(botId, 'pre-chat-message').fadeIn(250);
-                } else {
-                    getElement(botId, 'pre-chat-message').hide();
-                }
-            },
-            error: function() {
-                // Error checking pre-chat dismissal - silently continue
+        try {
+            var dismissed = localStorage.getItem('mxchat_pre_chat_dismissed_' + botId);
+            if (!dismissed) {
+                getElement(botId, 'pre-chat-message').fadeIn(250);
+            } else {
+                getElement(botId, 'pre-chat-message').hide();
             }
-        });
+        } catch (e) {
+            // localStorage unavailable — show the message
+            getElement(botId, 'pre-chat-message').fadeIn(250);
+        }
     }
 
     function handlePreChatDismissal(botId) {
         botId = botId || 'default';
         getElement(botId, 'pre-chat-message').fadeOut(200);
-        $.ajax({
-            url: mxchatChat.ajax_url,
-            type: 'POST',
-            data: {
-                action: 'mxchat_dismiss_pre_chat_message',
-                _ajax_nonce: mxchatChat.nonce
-            },
-            success: function() {
-                $('#pre-chat-message').hide();
-            },
-            error: function() {
-                // Error dismissing pre-chat message - silently continue
-            }
-        });
+        try {
+            localStorage.setItem('mxchat_pre_chat_dismissed_' + botId, '1');
+        } catch (e) {
+            // localStorage unavailable — dismissal won't persist
+        }
     }
 
 
@@ -2581,6 +2584,14 @@ $(document).on('click', '.questions-collapse-btn', function(e) {
             $badge.hide(); // Hide notification when opening chat
             disableScroll();
             $preChat.fadeOut(250);
+
+            // Deferred email check — only on first widget open
+            var emailBlocker = getElementDOM(botId, 'email-blocker');
+            var instance = MxChatInstances.get(botId);
+            if (emailBlocker && !instance.emailCheckDone) {
+                instance.emailCheckDone = true;
+                resolveEmailState(botId);
+            }
         } else {
             $chatbot.removeClass('visible').addClass('hidden');
             $(this).removeClass('hidden');
@@ -2854,11 +2865,23 @@ if (mxchatChat && mxchatChat.email_collection_enabled === 'on') {
         var emailBlocker = getElementDOM(botId, 'email-blocker');
         var chatContainer = getElementDOM(botId, 'chat-container');
         if (emailBlocker) emailBlocker.style.display = 'none';
-        if (chatContainer) chatContainer.style.display = 'flex';
 
-        // Load chat history for this bot
-        if (typeof loadChatHistory === 'function') {
-            loadChatHistory(botId);
+        var instance = MxChatInstances.get(botId);
+        var chatPersistenceEnabled = mxchatChat.chat_persistence_toggle === 'on';
+
+        // If persistence is on and history hasn't loaded yet, keep container
+        // hidden until history loads to prevent flash of empty chat
+        if (chatPersistenceEnabled && !instance.chatHistoryLoaded) {
+            if (chatContainer) chatContainer.style.display = 'none';
+            loadChatHistory(botId, function() {
+                if (chatContainer) chatContainer.style.display = 'flex';
+                scrollToBottom(botId, true);
+            });
+        } else {
+            if (chatContainer) chatContainer.style.display = 'flex';
+            if (typeof loadChatHistory === 'function') {
+                loadChatHistory(botId);
+            }
         }
     }
 
@@ -2985,8 +3008,27 @@ if (mxchatChat && mxchatChat.email_collection_enabled === 'on') {
         }
     }
 
+    // Resolve email state using server-side data when available, AJAX fallback otherwise
+    function resolveEmailState(botId) {
+        if (mxchatChat.skip_email_check && mxchatChat.initial_email_state) {
+            if (mxchatChat.initial_email_state.show_email_form) {
+                showEmailFormForBot(botId);
+            } else {
+                showChatContainerForBot(botId);
+            }
+        } else {
+            checkSessionAndEmailForBot(botId);
+        }
+    }
+
     function checkSessionAndEmailForBot(botId) {
         const sessionId = getChatSession(botId);
+
+        // Hide both panels while we check — prevents flash of wrong state
+        var emailBlocker = getElementDOM(botId, 'email-blocker');
+        var chatContainer = getElementDOM(botId, 'chat-container');
+        if (emailBlocker) emailBlocker.style.display = 'none';
+        if (chatContainer) chatContainer.style.display = 'none';
 
         fetch(mxchatChat.ajax_url, {
             method: 'POST',
@@ -3162,23 +3204,19 @@ if (mxchatChat && mxchatChat.email_collection_enabled === 'on') {
     });
 
     // Initialize email check for all bot instances
+    // For floating bots: defer until widget is opened (zero passive AJAX)
+    // For embedded bots: check immediately since the form is visible
     $('.mxchat-chatbot-wrapper').each(function() {
         var botId = $(this).data('bot-id') || 'default';
         var emailBlocker = getElementDOM(botId, 'email-blocker');
 
         // Only check if email blocker exists for this bot
         if (emailBlocker) {
-            if (mxchatChat.skip_email_check && mxchatChat.initial_email_state) {
-                if (mxchatChat.initial_email_state.show_email_form) {
-                    showEmailFormForBot(botId);
-                } else {
-                    showChatContainerForBot(botId);
-                }
-            } else {
-                setTimeout(function() {
-                    checkSessionAndEmailForBot(botId);
-                }, 100);
+            if (isEmbeddedBot(botId)) {
+                // Embedded bots are always visible — check now
+                resolveEmailState(botId);
             }
+            // Floating bots: handled in the widget open handler
         }
     });
 }
@@ -3192,6 +3230,14 @@ if (mxchatChat && mxchatChat.email_collection_enabled === 'on') {
             getElement(botId, 'floating-chatbot-button').addClass('hidden');
             $(this).fadeOut(250); // Hide pre-chat message
             disableScroll(); // Disable scroll when chatbot opens
+
+            // Deferred email check — only on first widget open
+            var emailBlocker = getElementDOM(botId, 'email-blocker');
+            var instance = MxChatInstances.get(botId);
+            if (emailBlocker && !instance.emailCheckDone) {
+                instance.emailCheckDone = true;
+                resolveEmailState(botId);
+            }
         }
     });
 

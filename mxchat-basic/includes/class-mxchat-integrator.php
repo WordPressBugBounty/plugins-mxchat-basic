@@ -12,6 +12,7 @@ class MxChat_Integrator {
     private $word_handler;
     private $last_similarity_analysis = null;
     private $current_valid_urls = [];
+    private $last_vectorstore_error = null;
     private $is_streaming = false; // ADDED: Track if current request is streaming
     private $streaming_headers_sent = false; // Track if streaming headers have been sent
 
@@ -1584,8 +1585,8 @@ public function mxchat_handle_chat_request() {
                 if (!empty($this->fallbackResponse['text'])) {
                     $this->mxchat_save_chat_message($session_id, 'bot', $this->fallbackResponse['text']);
                 }
-                // Save product card HTML separately so it renders in transcripts
-                if (!empty($this->fallbackResponse['html']) && strpos($this->fallbackResponse['html'], 'mxchat-product-card') !== false) {
+                // Save action HTML (product cards, featured products, etc.) so it renders in transcripts
+                if (!empty($this->fallbackResponse['html'])) {
                     $this->mxchat_save_chat_message($session_id, 'bot', $this->fallbackResponse['html']);
                 }
 
@@ -1899,6 +1900,16 @@ if ($testing_data !== null && !empty($this->current_valid_urls)) {
             'html' => !empty($this->productCardHtml) ? $this->productCardHtml : ($this->fallbackResponse['html'] ?? ''),
             'session_id' => $session_id
         ];
+
+        // Include vectorstore error info for admin debugging (only visible to admins via testing_data)
+        if (!empty($this->last_vectorstore_error) && $testing_data !== null) {
+            $testing_data['vectorstore_error'] = $this->last_vectorstore_error;
+        }
+
+        // Also pass it as a top-level field so JS can show a better error message to admins
+        if (!empty($this->last_vectorstore_error) && current_user_can('manage_options')) {
+            $response_data['vectorstore_error'] = $this->last_vectorstore_error;
+        }
 
         // Always add testing data for admins (no toggle needed)
         if ($testing_data !== null) {
@@ -5652,8 +5663,12 @@ private function find_relevant_content_openai_vectorstore($user_query, $bot_id =
     $mxchat_options = get_option('mxchat_options', array());
     $api_key = $mxchat_options['api_key'] ?? '';
 
+    // Reset vectorstore error tracking
+    $this->last_vectorstore_error = null;
+
     if (empty($api_key)) {
         //error_log("MXCHAT DEBUG ERROR: OpenAI API key not configured");
+        $this->last_vectorstore_error = 'Vector Store search failed: OpenAI API key is not configured.';
         $this->current_valid_urls = [];
         return '';
     }
@@ -5668,6 +5683,7 @@ private function find_relevant_content_openai_vectorstore($user_query, $bot_id =
 
     if (empty($vectorstore_ids_string)) {
         //error_log("MXCHAT DEBUG ERROR: No Vector Store IDs configured");
+        $this->last_vectorstore_error = 'Vector Store search failed: No Vector Store IDs are configured for this bot.';
         $this->current_valid_urls = [];
         return '';
     }
@@ -5699,6 +5715,7 @@ private function find_relevant_content_openai_vectorstore($user_query, $bot_id =
     // Verify it's an OpenAI model
     if (!$this->is_openai_chat_model($selected_model)) {
         //error_log("MXCHAT DEBUG ERROR: Vector Store search requires OpenAI model. Current: " . $selected_model);
+        $this->last_vectorstore_error = 'Vector Store search requires an OpenAI model. Current model: ' . $selected_model;
         $this->current_valid_urls = [];
         return '';
     }
@@ -5735,6 +5752,7 @@ private function find_relevant_content_openai_vectorstore($user_query, $bot_id =
 
     if (is_wp_error($response)) {
         //error_log("MXCHAT VECTORSTORE ERROR: WP Error: " . $response->get_error_message());
+        $this->last_vectorstore_error = 'Vector Store API request failed: ' . $response->get_error_message();
         $this->current_valid_urls = [];
         return '';
     }
@@ -5747,6 +5765,12 @@ private function find_relevant_content_openai_vectorstore($user_query, $bot_id =
 
     if ($response_code !== 200) {
         //error_log("MXCHAT VECTORSTORE ERROR: API error response: " . $response_body);
+        $api_error_detail = '';
+        $decoded_error = json_decode($response_body, true);
+        if (isset($decoded_error['error']['message'])) {
+            $api_error_detail = $decoded_error['error']['message'];
+        }
+        $this->last_vectorstore_error = 'Vector Store API returned HTTP ' . $response_code . ($api_error_detail ? ': ' . $api_error_detail : '');
         $this->current_valid_urls = [];
         return '';
     }
@@ -5754,6 +5778,7 @@ private function find_relevant_content_openai_vectorstore($user_query, $bot_id =
 
     if (json_last_error() !== JSON_ERROR_NONE) {
         //error_log("MXCHAT VECTORSTORE ERROR: JSON decode error: " . json_last_error_msg());
+        $this->last_vectorstore_error = 'Vector Store response could not be parsed: ' . json_last_error_msg();
         $this->current_valid_urls = [];
         return '';
     }
@@ -6478,7 +6503,7 @@ private function mxchat_generate_response($relevant_content, $api_key, $xai_api_
                 $model_supports_web_search = !in_array($selected_model, $unsupported_web_search_models);
 
                 if ($web_search_enabled && $model_supports_web_search) {
-                    // Use Responses API with web search
+                    // Use Responses API (required for some models, or when web search is enabled)
                     return $this->mxchat_generate_response_openai_web_search(
                         $selected_model,
                         $api_key,
@@ -6870,13 +6895,16 @@ private function mxchat_generate_response_openai_stream($selected_model, $api_ke
         ];
 
         // Add reasoning_effort only for GPT-5 models that support it
-        // gpt-5.2 and gpt-5.1-chat-latest don't support reasoning_effort parameter
-        if ($is_gpt5_model && $selected_model !== 'gpt-5.2' && $selected_model !== 'gpt-5.1-chat-latest') {
+        // These chat models don't support reasoning_effort parameter
+        $no_reasoning_models = array('gpt-5.2', 'gpt-5.1-chat-latest', 'gpt-5.3-chat-latest', 'gpt-5.4-mini', 'gpt-5.4-nano');
+        if ($is_gpt5_model && !in_array($selected_model, $no_reasoning_models, true)) {
             // GPT-5.1 uses 'low' instead of 'minimal'
             if ($selected_model === 'gpt-5.1-2025-11-13') {
                 $request_body['reasoning_effort'] = 'low';
+            } elseif ($selected_model === 'gpt-5.4') {
+                $request_body['reasoning_effort'] = 'none';
             } else {
-                $request_body['reasoning_effort'] = 'minimal'; // For other GPT-5 models
+                $request_body['reasoning_effort'] = 'minimal';
             }
         }
 
@@ -7107,26 +7135,31 @@ private function mxchat_generate_response_openai_web_search($selected_model, $ap
             }
         }
 
-        // Build request body for Responses API with web search
+        // Build request body for Responses API
         $request_body = [
             'model' => $selected_model,
             'input' => $input_parts,
             'instructions' => $system_context,
-            'tools' => [
-                ['type' => 'web_search']
-            ],
             'stream' => $streaming
         ];
 
-        // Add reasoning effort for supported models (not for gpt-5 with minimal which doesn't support web search)
-        // Per OpenAI docs: web search is not supported with gpt-5 minimal reasoning
+        // Only add web search tool if web search is enabled in settings
+        $web_search_enabled = isset($this->options['enable_web_search']) && $this->options['enable_web_search'] === 'on';
+        if ($web_search_enabled) {
+            $request_body['tools'] = [
+                ['type' => 'web_search']
+            ];
+        }
+
+        // Add reasoning effort for supported models
         $is_gpt5_model = strpos($selected_model, 'gpt-5') === 0;
-        if ($is_gpt5_model && $selected_model !== 'gpt-5.2') {
-            // Use 'low' for GPT-5.1, skip for others to avoid 'minimal' which doesn't support web search
+        $no_reasoning_web = array('gpt-5.2', 'gpt-5.3-chat-latest', 'gpt-5.4-mini', 'gpt-5.4-nano');
+        if ($is_gpt5_model && !in_array($selected_model, $no_reasoning_web, true)) {
             if ($selected_model === 'gpt-5.1-2025-11-13') {
                 $request_body['reasoning'] = ['effort' => 'low'];
+            } elseif ($selected_model === 'gpt-5.4') {
+                $request_body['reasoning'] = ['effort' => 'low'];
             }
-            // For other GPT-5 models, don't set reasoning to allow web search
         }
 
         //error_log("MXCHAT WEB SEARCH: Request body: " . json_encode($request_body));
@@ -7158,7 +7191,7 @@ private function mxchat_web_search_non_streaming_response($request_body, $api_ke
             'Content-Type' => 'application/json'
         ),
         'body' => json_encode($request_body),
-        'timeout' => 90 // Web search can take longer
+        'timeout' => 90
     ));
 
     if (is_wp_error($response)) {
@@ -7267,7 +7300,7 @@ private function mxchat_web_search_streaming_response($request_body, $api_key, $
         'Authorization: Bearer ' . $api_key
     ));
     curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, true);
-    curl_setopt($ch, CURLOPT_TIMEOUT, 120); // Web search can take longer
+    curl_setopt($ch, CURLOPT_TIMEOUT, 120);
 
     $full_response = '';
     $stream_started = false;
@@ -8463,13 +8496,16 @@ private function mxchat_generate_response_openai($selected_model, $api_key, $con
         ];
 
         // Add reasoning_effort only for GPT-5 models that support it
-        // gpt-5.2 and gpt-5.1-chat-latest don't support reasoning_effort parameter
-        if ($is_gpt5_model && $selected_model !== 'gpt-5.2' && $selected_model !== 'gpt-5.1-chat-latest') {
+        // These chat models don't support reasoning_effort parameter
+        $no_reasoning_models = array('gpt-5.2', 'gpt-5.1-chat-latest', 'gpt-5.3-chat-latest', 'gpt-5.4-mini', 'gpt-5.4-nano');
+        if ($is_gpt5_model && !in_array($selected_model, $no_reasoning_models, true)) {
             // GPT-5.1 uses 'low' instead of 'minimal'
             if ($selected_model === 'gpt-5.1-2025-11-13') {
                 $request_body['reasoning_effort'] = 'low';
+            } elseif ($selected_model === 'gpt-5.4') {
+                $request_body['reasoning_effort'] = 'none';
             } else {
-                $request_body['reasoning_effort'] = 'minimal'; // For other GPT-5 models
+                $request_body['reasoning_effort'] = 'minimal';
             }
         }
 

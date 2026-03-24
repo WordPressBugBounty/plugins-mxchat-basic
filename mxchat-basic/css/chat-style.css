@@ -1168,7 +1168,7 @@
     background-color: #fff;
     border-radius: 50%;
     display: inline-block;
-    animation: bounce 1.4s ease-in-out infinite both;
+    animation: mxchat-dot-bounce 1.4s ease-in-out infinite both;
     vertical-align: middle;
 }
 
@@ -1180,7 +1180,7 @@
     animation-delay: -0.16s;
 }
 
-@keyframes bounce {
+@keyframes mxchat-dot-bounce {
     0%, 100%, 80% {
         transform: scale(1);
     }
@@ -1337,30 +1337,32 @@
     }
 
     .floating-chatbot {
-        width: 100vw;
+        width: calc(100vw - 16px);
         /* Use multiple fallbacks for maximum browser compatibility */
-        height: 100vh; /* Fallback */
-        height: calc(var(--vh, 1vh) * 100); /* JS-set custom property fallback */
-        height: 100dvh; /* Modern dynamic viewport height */
-        max-height: 100vh;
-        max-height: 100dvh;
+        height: calc(100vh - 16px); /* Fallback */
+        height: calc(var(--vh, 1vh) * 100 - 16px); /* JS-set custom property fallback */
+        height: calc(100dvh - 16px); /* Modern dynamic viewport height */
+        max-height: calc(100vh - 16px);
+        max-height: calc(100dvh - 16px);
         margin: 0;
         padding: 0;
         position: fixed;
-        bottom: 0;
-        top: 0;
-        left: 0;
-        right: 0;
-        border-radius: 0;
+        bottom: 8px;
+        top: auto;
+        left: 8px;
+        right: 8px;
+        border-radius: 16px;
+        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
     }
 
     .floating-chatbot .mxchat-chatbot-wrapper {
-        border-radius: 0;
+        border-radius: 16px;
+        overflow: hidden;
     }
 
     .mxchat-chatbot-wrapper .chatbot-top-bar {
-        border-top-left-radius: 0;
-        border-top-right-radius: 0;
+        border-top-left-radius: 16px;
+        border-top-right-radius: 16px;
     }
 }
 

@@ -539,26 +539,47 @@ updateActionMatches(actionMatches) {
     }
 
     clearChatSession() {
-        // Get current session ID from cookie (most reliable)
-        const sessionId = this.getCookie('mxchat_session_id') || this.getCurrentSessionId();
-        
+        // Determine the active bot ID from MxChatInstances
+        let botId = 'default';
+        if (typeof MxChatInstances !== 'undefined' && typeof MxChatInstances.getAllBotIds === 'function') {
+            const botIds = MxChatInstances.getAllBotIds();
+            if (botIds.length > 0) {
+                botId = botIds[0];
+            }
+        }
+
+        // Get current session ID using the correct bot-suffixed cookie name
+        const cookieName = 'mxchat_session_id_' + botId;
+        const sessionId = this.getCookie(cookieName) || this.getCookie('mxchat_session_id') || this.getCurrentSessionId();
+
         if (!sessionId) {
-            this.log('❌ No active session found');
+            this.log('No active session found');
             return;
         }
-        
-        this.log(`🔍 Current session ID: ${sessionId}`);
-        this.log('🧹 Starting fresh session...');
-        
-        // Generate new session ID (using your existing format)
-        const newSessionId = 'mxchat_chat_' + Math.random().toString(36).substr(2, 9);
-        
-        // Clear the old cookie and set new one immediately
-        this.clearMxChatCookie();
-        this.setChatSession(newSessionId);
-        
-        this.log(`🆕 New session ID: ${newSessionId}`);
-        
+
+        this.log('Current session ID: ' + sessionId);
+        this.log('Starting fresh session...');
+
+        // Use MxChatInstances.resetChatSession to properly reset in-memory state + cookie
+        if (typeof MxChatInstances !== 'undefined' && typeof MxChatInstances.resetChatSession === 'function') {
+            MxChatInstances.resetChatSession(botId);
+        }
+
+        // Get the new session ID that was just set by resetChatSession
+        let newSessionId = '';
+        if (typeof MxChatInstances !== 'undefined' && typeof MxChatInstances.getChatSession === 'function') {
+            newSessionId = MxChatInstances.getChatSession(botId);
+        }
+
+        // Fallback if MxChatInstances wasn't available
+        if (!newSessionId) {
+            newSessionId = 'mxchat_chat_' + Math.random().toString(36).substr(2, 9);
+            this.clearMxChatCookie(botId);
+            this.setChatSession(newSessionId, botId);
+        }
+
+        this.log('New session ID: ' + newSessionId);
+
         // Call backend to clear old session data
         fetch(mxchatTestData.ajaxUrl, {
             method: 'POST',
@@ -575,34 +596,34 @@ updateActionMatches(actionMatches) {
         .then(response => response.json())
         .then(data => {
             if (data.success) {
-                this.log('✅ Backend session cleared: ' + data.data.message);
-                
+                this.log('Backend session cleared: ' + data.data.message);
+
                 // Update the session ID everywhere in the DOM
                 this.updateSessionIdEverywhere(newSessionId);
-                
+
                 // Clear the chat UI
                 this.clearChatUI();
-                
+
                 // Show popular questions again
                 const popularQuestions = document.querySelector('#mxchat-popular-questions');
                 if (popularQuestions) {
                     popularQuestions.style.display = 'block';
                 }
-                
+
                 // Clear testing data displays
                 this.updateLastQuery('New session started', []);
                 this.updateTopMatches([], 0);
                 this.updateApprovedUrls([]);
-                
-                this.log('🎉 Fresh session started successfully');
-                
+
+                this.log('Fresh session started successfully');
+
             } else {
-                this.log('❌ Error clearing session: ' + (data.data?.message || 'Unknown error'));
+                this.log('Error clearing session: ' + (data.data?.message || 'Unknown error'));
             }
         })
         .catch(error => {
             console.error('Error clearing chat session:', error);
-            this.log('🔌 Connection error when clearing session');
+            this.log('Connection error when clearing session');
         });
     }
 
@@ -613,17 +634,19 @@ updateActionMatches(actionMatches) {
         if (parts.length == 2) return parts.pop().split(";").shift();
     }
 
-    // Helper function to set session cookie (same as your existing one)
-    setChatSession(sessionId) {
-        // Set the cookie with a 24-hour expiration (86400 seconds)
-        document.cookie = "mxchat_session_id=" + sessionId + "; path=/; max-age=86400; SameSite=Lax";
+    // Helper function to set session cookie (matches chat-script.js format)
+    setChatSession(sessionId, botId) {
+        botId = botId || 'default';
+        document.cookie = 'mxchat_session_id_' + botId + '=' + sessionId + '; path=/; max-age=86400; SameSite=Lax';
     }
 
     // Helper function to clear the MxChat session cookie
-    clearMxChatCookie() {
-        // Clear the cookie by setting it to expire in the past
-        document.cookie = "mxchat_session_id=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT; SameSite=Lax";
-        this.log('🍪 Session cookie cleared');
+    clearMxChatCookie(botId) {
+        botId = botId || 'default';
+        // Clear both bot-suffixed and legacy cookie formats
+        document.cookie = 'mxchat_session_id_' + botId + '=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT; SameSite=Lax';
+        document.cookie = 'mxchat_session_id=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT; SameSite=Lax';
+        this.log('Session cookie cleared');
     }
 
     updateSessionIdEverywhere(newSessionId) {
@@ -684,7 +707,21 @@ updateActionMatches(actionMatches) {
     }
 
     getCurrentSessionId() {
-        // First try to get from cookie (most reliable)
+        // Try MxChatInstances first (most reliable — matches chat-script.js)
+        if (typeof MxChatInstances !== 'undefined' && typeof MxChatInstances.getChatSession === 'function') {
+            const botIds = typeof MxChatInstances.getAllBotIds === 'function' ? MxChatInstances.getAllBotIds() : ['default'];
+            const botId = botIds.length > 0 ? botIds[0] : 'default';
+            const instanceSession = MxChatInstances.getChatSession(botId);
+            if (instanceSession) {
+                return instanceSession;
+            }
+        }
+
+        // Try bot-suffixed cookie, then legacy cookie
+        const botCookieId = this.getCookie('mxchat_session_id_default');
+        if (botCookieId) {
+            return botCookieId;
+        }
         const cookieSessionId = this.getCookie('mxchat_session_id');
         if (cookieSessionId) {
             return cookieSessionId;

@@ -273,6 +273,9 @@ function mxchat_render_knowledge_page($admin_instance, $knowledge_manager, $page
     // Render the Content Selector Modal
     mxchat_render_content_selector_modal();
 
+    // Render the Edit Entry Modal
+    mxchat_render_edit_entry_modal();
+
     // Render the navigation JavaScript
     mxchat_render_knowledge_page_scripts();
 }
@@ -962,7 +965,19 @@ function mxchat_render_knowledge_base_section($admin_instance, $knowledge_manage
                                                     <span style="color: var(--mxch-text-muted);"><?php esc_html_e('Manual Content', 'mxchat'); ?></span>
                                                 <?php endif; ?>
                                             </td>
-                                            <td class="mxchat-actions-cell" style="padding: 12px 16px;">
+                                            <td class="mxchat-actions-cell" style="padding: 12px 16px; white-space: nowrap;">
+                                                <?php if ($data_source !== 'pinecone') : ?>
+                                                <button type="button"
+                                                        class="mxch-btn mxch-btn-ghost mxch-btn-sm mxchat-edit-entry-btn"
+                                                        data-source-url="<?php echo esc_attr($source_url); ?>"
+                                                        data-entry-id="<?php echo esc_attr($first_prompt->id); ?>"
+                                                        data-data-source="<?php echo esc_attr($data_source); ?>"
+                                                        data-bot-id="<?php echo esc_attr($current_bot_id); ?>"
+                                                        data-nonce="<?php echo wp_create_nonce('mxchat_edit_entry_nonce'); ?>"
+                                                        title="<?php esc_attr_e('Edit content', 'mxchat'); ?>">
+                                                    <span class="dashicons dashicons-edit" style="font-size: 14px;"></span>
+                                                </button>
+                                                <?php endif; ?>
                                                 <button type="button"
                                                         class="mxch-btn mxch-btn-ghost mxch-btn-sm delete-button-group"
                                                         data-source-url="<?php echo esc_attr($source_url); ?>"
@@ -1100,7 +1115,19 @@ function mxchat_render_knowledge_base_section($admin_instance, $knowledge_manage
                                                 <span style="color: var(--mxch-text-muted);"><?php esc_html_e('Manual', 'mxchat'); ?></span>
                                             <?php endif; ?>
                                         </td>
-                                        <td style="padding: 12px 16px;">
+                                        <td style="padding: 12px 16px; white-space: nowrap;">
+                                            <?php if ($data_source !== 'pinecone') : ?>
+                                            <button type="button"
+                                                    class="mxch-btn mxch-btn-ghost mxch-btn-sm mxchat-edit-entry-btn"
+                                                    data-source-url="<?php echo esc_attr($prompt->source_url ?? ''); ?>"
+                                                    data-entry-id="<?php echo esc_attr($prompt->id); ?>"
+                                                    data-data-source="<?php echo esc_attr($data_source); ?>"
+                                                    data-bot-id="<?php echo esc_attr($current_bot_id); ?>"
+                                                    data-nonce="<?php echo wp_create_nonce('mxchat_edit_entry_nonce'); ?>"
+                                                    title="<?php esc_attr_e('Edit content', 'mxchat'); ?>">
+                                                <span class="dashicons dashicons-edit" style="font-size: 14px;"></span>
+                                            </button>
+                                            <?php endif; ?>
                                             <?php if ($data_source === 'pinecone') : ?>
                                                 <button type="button" class="mxch-btn mxch-btn-ghost mxch-btn-sm delete-button-ajax" data-vector-id="<?php echo esc_attr($prompt->id); ?>" data-bot-id="<?php echo esc_attr($current_bot_id); ?>" data-nonce="<?php echo wp_create_nonce('mxchat_delete_pinecone_prompt_nonce'); ?>" style="color: var(--mxch-error);">
                                                     <span class="dashicons dashicons-trash" style="font-size: 14px;"></span>
@@ -1731,6 +1758,45 @@ function mxchat_render_content_selector_modal() {
 }
 
 /**
+ * Render Edit Entry Modal
+ */
+function mxchat_render_edit_entry_modal() {
+    ?>
+    <div id="mxchat-kb-edit-modal" class="mxchat-kb-modal">
+        <div class="mxchat-kb-modal-content mxchat-kb-edit-modal-content">
+            <div class="mxchat-kb-modal-header">
+                <h3 id="mxchat-kb-edit-title"><?php esc_html_e('Edit Knowledge Entry', 'mxchat'); ?></h3>
+                <span class="mxchat-kb-modal-close" id="mxchat-kb-edit-close">&times;</span>
+            </div>
+            <div class="mxchat-kb-edit-body">
+                <div class="mxchat-kb-edit-source" id="mxchat-kb-edit-source"></div>
+                <textarea id="mxchat-kb-edit-textarea" class="mxchat-kb-edit-textarea" placeholder="<?php esc_attr_e('Loading content...', 'mxchat'); ?>"></textarea>
+                <div class="mxchat-kb-edit-meta">
+                    <span id="mxchat-kb-edit-charcount"></span>
+                    <span id="mxchat-kb-edit-chunkinfo"></span>
+                </div>
+            </div>
+            <div class="mxchat-kb-edit-footer">
+                <div class="mxchat-kb-edit-notice" id="mxchat-kb-edit-notice"></div>
+                <div class="mxchat-kb-edit-actions">
+                    <button type="button" id="mxchat-kb-edit-cancel" class="mxch-btn mxch-btn-ghost">
+                        <?php esc_html_e('Cancel', 'mxchat'); ?>
+                    </button>
+                    <button type="button" id="mxchat-kb-edit-save" class="mxch-btn mxch-btn-primary">
+                        <span class="mxchat-kb-edit-save-text"><?php esc_html_e('Save & Re-embed', 'mxchat'); ?></span>
+                        <span class="mxchat-kb-edit-save-spinner" style="display:none;">
+                            <span class="mxchat-kb-spinner is-active" style="margin: 0;"></span>
+                            <?php esc_html_e('Saving...', 'mxchat'); ?>
+                        </span>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+    <?php
+}
+
+/**
  * Render Knowledge Page Navigation Scripts
  */
 function mxchat_render_knowledge_page_scripts() {
@@ -1907,6 +1973,195 @@ function mxchat_render_knowledge_page_scripts() {
 
         // Sitemap detection is now handled by knowledge-processing.js
         // It will be initialized when user clicks "Sitemap Import" option
+
+        // ─── Edit Entry Modal ────────────────────────────────────
+        initEditModal();
+
+        function initEditModal() {
+            var modal     = document.getElementById('mxchat-kb-edit-modal');
+            var textarea  = document.getElementById('mxchat-kb-edit-textarea');
+            var saveBtn   = document.getElementById('mxchat-kb-edit-save');
+            var cancelBtn = document.getElementById('mxchat-kb-edit-cancel');
+            var closeBtn  = document.getElementById('mxchat-kb-edit-close');
+            var notice    = document.getElementById('mxchat-kb-edit-notice');
+            var charCount = document.getElementById('mxchat-kb-edit-charcount');
+            var chunkInfo = document.getElementById('mxchat-kb-edit-chunkinfo');
+            var sourceEl  = document.getElementById('mxchat-kb-edit-source');
+            var titleEl   = document.getElementById('mxchat-kb-edit-title');
+            var saveText  = saveBtn ? saveBtn.querySelector('.mxchat-kb-edit-save-text') : null;
+            var saveSpin  = saveBtn ? saveBtn.querySelector('.mxchat-kb-edit-save-spinner') : null;
+
+            if (!modal) return;
+
+            var currentEntry = {};
+
+            // Bind edit buttons (delegated)
+            document.addEventListener('click', function(e) {
+                var btn = e.target.closest('.mxchat-edit-entry-btn');
+                if (btn) {
+                    e.preventDefault();
+                    openEditModal(btn);
+                }
+            });
+
+            // Close handlers
+            if (closeBtn) closeBtn.addEventListener('click', closeModal);
+            if (cancelBtn) cancelBtn.addEventListener('click', closeModal);
+            modal.addEventListener('click', function(e) {
+                if (e.target === modal) closeModal();
+            });
+
+            // Character count
+            if (textarea) {
+                textarea.addEventListener('input', function() {
+                    updateCharCount();
+                });
+            }
+
+            // Save handler
+            if (saveBtn) saveBtn.addEventListener('click', saveContent);
+
+            function openEditModal(btn) {
+                currentEntry = {
+                    sourceUrl:  btn.getAttribute('data-source-url') || '',
+                    entryId:    btn.getAttribute('data-entry-id') || '',
+                    dataSource: btn.getAttribute('data-data-source') || 'wordpress',
+                    botId:      btn.getAttribute('data-bot-id') || 'default',
+                    nonce:      btn.getAttribute('data-nonce') || ''
+                };
+
+                // Reset state
+                textarea.value = '';
+                textarea.placeholder = 'Loading content...';
+                textarea.disabled = true;
+                saveBtn.disabled = true;
+                notice.textContent = '';
+                notice.className = 'mxchat-kb-edit-notice';
+                charCount.textContent = '';
+                chunkInfo.textContent = '';
+
+                // Show source
+                if (currentEntry.sourceUrl && currentEntry.sourceUrl.indexOf('mxchat://') !== 0) {
+                    sourceEl.innerHTML = 'Source: <a href="' + escapeHtml(currentEntry.sourceUrl) + '" target="_blank">' + escapeHtml(truncate(currentEntry.sourceUrl, 60)) + '</a>';
+                } else {
+                    sourceEl.textContent = 'Manual Content';
+                }
+
+                // Show modal
+                modal.classList.add('active');
+
+                // Fetch content
+                var formData = new FormData();
+                formData.append('action', 'mxchat_get_entry_content');
+                formData.append('nonce', currentEntry.nonce);
+                formData.append('source_url', currentEntry.sourceUrl);
+                formData.append('entry_id', currentEntry.entryId);
+                formData.append('data_source', currentEntry.dataSource);
+                formData.append('bot_id', currentEntry.botId);
+
+                fetch(ajaxurl, { method: 'POST', body: formData })
+                    .then(function(r) { return r.json(); })
+                    .then(function(resp) {
+                        if (resp.success) {
+                            textarea.value = resp.data.content || '';
+                            textarea.disabled = false;
+                            textarea.placeholder = 'Edit your content here...';
+                            saveBtn.disabled = false;
+                            currentEntry.contentType = resp.data.content_type || 'content';
+
+                            updateCharCount();
+
+                            if (resp.data.is_chunked) {
+                                chunkInfo.textContent = resp.data.chunk_count + ' chunks — will be re-chunked on save';
+                                titleEl.textContent = 'Edit Knowledge Entry (' + resp.data.chunk_count + ' chunks)';
+                            } else {
+                                chunkInfo.textContent = '';
+                                titleEl.textContent = 'Edit Knowledge Entry';
+                            }
+
+                            textarea.focus();
+                        } else {
+                            textarea.placeholder = '';
+                            showNotice((resp.data && resp.data.message) || 'Failed to load content.', 'error');
+                        }
+                    })
+                    .catch(function(err) {
+                        textarea.placeholder = '';
+                        showNotice('Network error: ' + err.message, 'error');
+                    });
+            }
+
+            function saveContent() {
+                if (!textarea.value.trim()) {
+                    showNotice('Content cannot be empty.', 'error');
+                    return;
+                }
+
+                saveBtn.disabled = true;
+                if (saveText) saveText.style.display = 'none';
+                if (saveSpin) saveSpin.style.display = '';
+                showNotice('Saving and re-embedding...', '');
+
+                var formData = new FormData();
+                formData.append('action', 'mxchat_save_entry_content');
+                formData.append('nonce', currentEntry.nonce);
+                formData.append('source_url', currentEntry.sourceUrl);
+                formData.append('entry_id', currentEntry.entryId);
+                formData.append('content', textarea.value);
+                formData.append('data_source', currentEntry.dataSource);
+                formData.append('bot_id', currentEntry.botId);
+                formData.append('content_type', currentEntry.contentType || 'content');
+
+                fetch(ajaxurl, { method: 'POST', body: formData })
+                    .then(function(r) { return r.json(); })
+                    .then(function(resp) {
+                        if (saveText) saveText.style.display = '';
+                        if (saveSpin) saveSpin.style.display = 'none';
+                        saveBtn.disabled = false;
+
+                        if (resp.success) {
+                            showNotice('Saved successfully!', 'success');
+                            setTimeout(function() {
+                                closeModal();
+                                window.location.reload();
+                            }, 1000);
+                        } else {
+                            showNotice((resp.data && resp.data.message) || 'Save failed.', 'error');
+                        }
+                    })
+                    .catch(function(err) {
+                        if (saveText) saveText.style.display = '';
+                        if (saveSpin) saveSpin.style.display = 'none';
+                        saveBtn.disabled = false;
+                        showNotice('Network error: ' + err.message, 'error');
+                    });
+            }
+
+            function closeModal() {
+                modal.classList.remove('active');
+            }
+
+            function updateCharCount() {
+                var len = textarea.value.length;
+                charCount.textContent = len.toLocaleString() + ' characters';
+            }
+
+            function showNotice(msg, type) {
+                notice.textContent = msg;
+                notice.className = 'mxchat-kb-edit-notice' + (type ? ' ' + type : '');
+            }
+
+            function escapeHtml(str) {
+                var div = document.createElement('div');
+                div.textContent = str;
+                return div.innerHTML;
+            }
+
+            function truncate(str, max) {
+                return str.length > max ? str.substring(0, max) + '...' : str;
+            }
+        }
+
     })();
     </script>
     <?php

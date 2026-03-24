@@ -4170,7 +4170,8 @@ private function mxchat_get_available_callbacks($grouped = false, $include_all =
                 'mxchat_handle_order_history',
                 'mxchat_show_product_card',
                 'mxchat_add_to_cart',
-                'mxchat_checkout_redirect'
+                'mxchat_checkout_redirect',
+                'mxchat_handle_featured_products'
             ),
             'name' => __('WooCommerce Add-on', 'mxchat'),
             'pro_required' => true
@@ -4348,6 +4349,14 @@ private function mxchat_get_available_callbacks($grouped = false, $include_all =
             'group'       => __('WooCommerce Features', 'mxchat'),
             'icon'        => 'arrow-right-alt',
             'description' => __('Redirect customer to checkout page', 'mxchat'),
+        ),
+        'mxchat_handle_featured_products' => array(
+            'label'       => __('Featured Products Showcase', 'mxchat'),
+            'pro_only'    => false,
+            'addon_promo' => true,
+            'group'       => __('WooCommerce Features', 'mxchat'),
+            'icon'        => 'star-filled',
+            'description' => __('Display a curated selection of products with an AI-generated message', 'mxchat'),
         ),
 
         // Perplexity Add-on
@@ -5755,6 +5764,10 @@ public function mxchat_model_callback() {
             'claude-sonnet-4-20250514' => esc_html__('Claude 4 Sonnet (High Performance)', 'mxchat'),
         ),
         esc_html__('OpenAI Models', 'mxchat') => array(
+            'gpt-5.4' => esc_html__('GPT-5.4 (Flagship Reasoning & Coding)', 'mxchat'),
+            'gpt-5.4-mini' => esc_html__('GPT-5.4 Mini (Fast, 400K Context)', 'mxchat'),
+            'gpt-5.4-nano' => esc_html__('GPT-5.4 Nano (Fastest & Cheapest)', 'mxchat'),
+            'gpt-5.3-chat-latest' => esc_html__('GPT-5.3 Chat (Conversational)', 'mxchat'),
             'gpt-5.2' => esc_html__('GPT-5.2 (Best General-Purpose & Agentic Model)', 'mxchat'),
             'gpt-5.1-chat-latest' => esc_html__('GPT-5.1 Chat Latest (Recommended)', 'mxchat'),
             'gpt-5.1-2025-11-13' => esc_html__('GPT-5.1 (Flagship for Coding & Agentic Tasks)', 'mxchat'),
@@ -5898,6 +5911,7 @@ public function enable_web_search_toggle_callback() {
 
     // Check if current model is an OpenAI model that supports web search
     $openai_models = array(
+        'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.4-nano', 'gpt-5.3-chat-latest',
         'gpt-5.2', 'gpt-5.1-chat-latest', 'gpt-5.1-2025-11-13', 'gpt-5', 'gpt-5-mini', 'gpt-5-nano'
     );
 
@@ -7450,6 +7464,10 @@ if (isset($input['model'])) {
             'gpt-5',
             'gpt-5-mini',
             'gpt-5-nano',
+            'gpt-5.4',
+            'gpt-5.4-mini',
+            'gpt-5.4-nano',
+            'gpt-5.3-chat-latest',
         );
 
         if (in_array($input['model'], $allowed_models)) {

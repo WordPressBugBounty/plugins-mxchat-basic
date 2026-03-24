@@ -167,7 +167,7 @@ function mxchat_render_pro_page($admin_instance, $addons_config) {
             <div class="mxch-pro-banner">
                 <div class="mxch-pro-banner-content">
                     <h3 class="mxch-pro-banner-title"><?php esc_html_e('Unlock All Premium Features', 'mxchat'); ?></h3>
-                    <p class="mxch-pro-banner-text"><?php esc_html_e('Get MxChat Pro for unlimited access to powerful add-ons including Admin AI Assistant, Forms Builder, AI Theme Generator, and more!', 'mxchat'); ?></p>
+                    <p class="mxch-pro-banner-text"><?php esc_html_e('Get MxChat Pro for unlimited access to 14+ powerful add-ons including Chat with GSC, WooCommerce, Chatbot Themes, Forms Builder, and more!', 'mxchat'); ?></p>
                 </div>
                 <a href="https://mxchat.ai/" target="_blank" class="mxch-pro-banner-btn"><span><?php esc_html_e('Get Pro', 'mxchat'); ?></span></a>
             </div>

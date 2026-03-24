@@ -33,6 +33,8 @@ class MxChat_Content_Generator {
         add_action('wp_ajax_mxchat_seo_analyze_batch', array($this, 'handle_seo_analyze_batch'));
         add_action('wp_ajax_mxchat_seo_suggest', array($this, 'handle_seo_suggest'));
         add_action('wp_ajax_mxchat_seo_list_posts', array($this, 'handle_seo_list_posts'));
+        add_action('wp_ajax_mxchat_get_default_prompt', array($this, 'handle_get_default_prompt'));
+        add_action('wp_ajax_mxchat_save_custom_prompt', array($this, 'handle_save_custom_prompt'));
 
         // Background generation via loopback (nopriv because loopback doesn't carry cookies — auth via secret token)
         add_action('wp_ajax_nopriv_mxchat_generate_content_background', array($this, 'handle_generate_content_background'));
@@ -102,10 +104,8 @@ class MxChat_Content_Generator {
 
     /**
      * Inject generated CSS into <head> on the frontend.
-     * Fires on wp_head for any singular post/page that was created
-     * by the content generator. CSS is stored in post meta to avoid
-     * issues with wp_kses, wpautop, and wptexturize mangling styles
-     * stored in post_content.
+     * Legacy fallback for posts created before CSS was embedded in post_content.
+     * New posts (with mxchat-css CSS comment marker) skip this entirely.
      */
     public function inject_generated_css() {
         if (!is_singular()) {
@@ -122,52 +122,21 @@ class MxChat_Content_Generator {
             return;
         }
 
+        // New-format posts have CSS embedded in post_content — skip injection
+        $post = get_post($post_id);
+        if ($post && strpos($post->post_content, '/* mxchat-css */') !== false) {
+            return;
+        }
+
+        // Legacy fallback: inject via wp_head as before
         $ai_css    = get_post_meta($post_id, '_mxchat_content_css', true);
         $fullwidth = get_post_meta($post_id, '_mxchat_fullwidth', true) === '1';
         $hide_title = get_post_meta($post_id, '_mxchat_hide_title', true) === '1';
 
-        // Output the combined CSS
         echo $this->get_generated_css($fullwidth, $ai_css);
 
-        // Hide the WordPress post/page title if configured.
-        // Covers: generic WP, Astra, GeneratePress, Kadence, OceanWP, Neve,
-        // Hello Elementor, Bricks, Divi, Blocksy, and common starter themes.
         if ($hide_title) {
-            echo '<style>
-.entry-title,
-.page-title,
-.post-title,
-.wp-block-post-title,
-/* Astra */
-.ast-title-with-post-meta-wrapper,
-.ast-the-title,
-/* GeneratePress */
-.generate-page-header .page-hero,
-.entry-header .entry-title,
-/* Kadence */
-.entry-hero .entry-title,
-.kadence-page-title,
-.wp-site-blocks .entry-title,
-/* OceanWP */
-.ocean-single-post-header,
-.page-header,
-/* Neve */
-.nv-page-title-wrap,
-.nv-post-title,
-/* Hello Elementor */
-.elementor-page-title,
-/* Divi */
-.et_pb_title_container .entry-title,
-/* Bricks */
-.brxe-post-title,
-/* Blocksy */
-[data-hero] .page-title,
-.hero-section .page-title,
-/* Generic header containers */
-.entry-header {
-    display: none !important;
-}
-</style>' . "\n";
+            echo '<style>' . $this->get_title_hide_css() . '</style>' . "\n";
         }
     }
 
@@ -321,6 +290,8 @@ class MxChat_Content_Generator {
         $schedule_date = sanitize_text_field($_POST['schedule_date'] ?? '');
         $layout        = sanitize_text_field($_POST['layout'] ?? 'fullwidth');
         $title_display = sanitize_text_field($_POST['title_display'] ?? 'hide');
+        $template_mode = sanitize_text_field($_POST['template_mode'] ?? 'off');
+        $custom_system_prompt = wp_unslash($_POST['custom_system_prompt'] ?? '');
 
         if (empty($prompt)) {
             wp_send_json_error(array('message' => __('Please enter a prompt.', 'mxchat')));
@@ -350,6 +321,8 @@ class MxChat_Content_Generator {
             'schedule_date' => $schedule_date,
             'layout'        => $layout,
             'title_display' => $title_display,
+            'template_mode' => $template_mode,
+            'custom_system_prompt' => $custom_system_prompt,
         );
         set_transient($progress_key . '_params', $params, 600);
 
@@ -451,6 +424,8 @@ class MxChat_Content_Generator {
         $schedule_date = $params['schedule_date'];
         $layout        = $params['layout'];
         $title_display = $params['title_display'];
+        $template_mode = $params['template_mode'] ?? 'off';
+        $custom_system_prompt = $params['custom_system_prompt'] ?? '';
 
         $this->update_progress($progress_key, 'planning', __('Planning content structure...', 'mxchat'), 10);
 
@@ -469,7 +444,7 @@ class MxChat_Content_Generator {
         $this->update_progress($progress_key, 'writing', __('Writing full content...', 'mxchat'), 60);
 
         // Step 3: Generate full HTML content
-        $html_content = $this->generate_html_content($plan, $image_urls, $content_type, $prompt);
+        $html_content = $this->generate_html_content($plan, $image_urls, $content_type, $prompt, $custom_system_prompt);
         if (is_wp_error($html_content)) {
             $this->update_progress($progress_key, 'error', $html_content->get_error_message(), 0);
             return;
@@ -478,22 +453,29 @@ class MxChat_Content_Generator {
         $this->update_progress($progress_key, 'creating', __('Creating WordPress post...', 'mxchat'), 85);
 
         // Step 4: Create the WordPress post/page
-        // Extract AI CSS before sanitization — stored in post meta, injected via wp_head
+        // Extract AI CSS — saved to post meta for edit workflow, and embedded in post_content for portability
         $ai_css = $this->extract_css($html_content);
         $html_without_style = preg_replace('/<style[^>]*>.*?<\/style>/is', '', $html_content);
         $sanitized_html = $this->sanitize_generated_html($html_without_style);
 
+        // Build self-contained <style> block (all layers) and prepend to HTML
+        $is_fullwidth = ($layout === 'fullwidth');
+        $is_hide_title = ($title_display === 'hide');
+        $embedded_css = $this->build_embedded_css($ai_css, $is_fullwidth, $is_hide_title);
+        $full_content = $embedded_css . $sanitized_html;
+
         $post_args = array(
             'post_title'   => sanitize_text_field($plan['title']),
-            'post_content' => $sanitized_html,
+            'post_content' => $full_content,
             'post_status'  => $post_status,
             'post_type'    => $content_type === 'page' ? 'page' : 'post',
             'meta_input'   => array(
-                '_mxchat_generated'   => '1',
-                '_mxchat_prompt'      => $prompt,
-                '_mxchat_fullwidth'   => ($layout === 'fullwidth') ? '1' : '0',
-                '_mxchat_hide_title'  => ($title_display === 'hide') ? '1' : '0',
-                '_mxchat_content_css' => $ai_css,
+                '_mxchat_generated'      => '1',
+                '_mxchat_prompt'         => $prompt,
+                '_mxchat_fullwidth'      => ($layout === 'fullwidth') ? '1' : '0',
+                '_mxchat_hide_title'     => ($title_display === 'hide') ? '1' : '0',
+                '_mxchat_content_css'    => $ai_css,
+                '_mxchat_template_mode'  => ($template_mode === 'on') ? '1' : '0',
             ),
         );
 
@@ -606,12 +588,16 @@ class MxChat_Content_Generator {
         // Build the edit prompt — send both CSS and HTML so AI can edit either
         $system_prompt = "You are a content editor. You have an existing page that uses a CSS-first approach: a <style> block with mxg- prefixed classes followed by clean HTML.\n\nApply ONLY the requested change and return the complete updated output. Do not add commentary — return ONLY the updated <style> block + HTML.\n\nIMPORTANT RULES:\n- Keep the same overall structure\n- Only change what the user specifically asks for\n- Return the complete output (not just the changed part)\n- If the user asks to change the title, update the <h1> in the HTML\n- Maintain the <style> block — update CSS rules if the edit requires style changes\n- ALL class names must use the mxg- prefix\n- Do NOT add inline styles — all styling stays in the <style> block\n- Do NOT include HTML comments\n- Do NOT generate a <header>, <footer>, or <nav>";
 
-        // Reconstruct the full content (CSS + HTML) for the AI to edit
+        // Strip embedded boilerplate CSS from post_content (Layer 1/2 + marker)
+        // so the AI only sees the clean AI CSS + HTML
+        $clean_content = preg_replace('/<style>\/\* mxchat-css \*\/.*?<\/style>\s*/is', '', $current_content);
+
+        // Reconstruct: prepend only the AI CSS (from meta) + clean HTML
         $full_content_for_ai = '';
         if (!empty($current_css)) {
             $full_content_for_ai = "<style>\n" . $current_css . "\n</style>\n";
         }
-        $full_content_for_ai .= $current_content;
+        $full_content_for_ai .= $clean_content;
 
         $user_message = "Current post title: " . $current_title . "\n\nCurrent content (style block + HTML):\n" . $full_content_for_ai . "\n\nUser edit request: " . $edit_instruction;
 
@@ -646,10 +632,16 @@ class MxChat_Content_Generator {
             $new_title = wp_strip_all_tags($title_match[1]);
         }
 
-        // Extract CSS → meta, sanitize HTML → post_content
+        // Extract CSS → meta (for edit workflow), embed full CSS in post_content (for portability)
         $ai_css = $this->extract_css($result);
         $html_without_style = preg_replace('/<style[^>]*>.*?<\/style>/is', '', $result);
         $sanitized_html = $this->sanitize_generated_html($html_without_style);
+
+        // Re-embed all CSS layers into post_content
+        $fullwidth = get_post_meta($post_id, '_mxchat_fullwidth', true) === '1';
+        $hide_title = get_post_meta($post_id, '_mxchat_hide_title', true) === '1';
+        $embedded_css = $this->build_embedded_css($ai_css, $fullwidth, $hide_title);
+        $full_content = $embedded_css . $sanitized_html;
 
         // Clear invalid page template meta that causes "Invalid page template" errors
         $current_template = get_post_meta($post_id, '_wp_page_template', true);
@@ -660,14 +652,14 @@ class MxChat_Content_Generator {
             }
         }
 
-        // Update the post content (HTML only)
+        // Update the post content (CSS + HTML) and meta
         $update_result = wp_update_post(array(
             'ID'           => $post_id,
             'post_title'   => sanitize_text_field($new_title),
-            'post_content' => $sanitized_html,
+            'post_content' => $full_content,
         ), true);
 
-        // Update CSS in meta (injected via wp_head)
+        // Keep CSS in meta for edit workflow reconstruction
         update_post_meta($post_id, '_mxchat_content_css', $ai_css);
 
         if (is_wp_error($update_result)) {
@@ -1345,7 +1337,7 @@ class MxChat_Content_Generator {
     /**
      * Step 3: Generate the full HTML content
      */
-    private function generate_html_content($plan, $image_urls, $content_type, $original_prompt = '') {
+    private function generate_html_content($plan, $image_urls, $content_type, $original_prompt = '', $custom_system_prompt = '') {
         $type_label = ($content_type === 'page') ? 'landing page' : 'blog post';
         $has_images = !empty($image_urls);
 
@@ -1386,14 +1378,22 @@ class MxChat_Content_Generator {
             $image_reference .= "=== END IMAGE URLS — Do NOT use any other image URLs ===\n";
         }
 
-        if ($content_type === 'page') {
+        // Check for custom prompt: passed directly, or saved in DB
+        if (empty($custom_system_prompt)) {
+            $option_key = 'mxchat_custom_prompt_' . ($content_type === 'page' ? 'page' : 'post');
+            $custom_system_prompt = get_option($option_key, '');
+        }
+
+        if (!empty($custom_system_prompt)) {
+            $system_prompt = $custom_system_prompt;
+        } elseif ($content_type === 'page') {
             $system_prompt = $this->get_landing_page_prompt($has_images);
         } else {
             $system_prompt = $this->get_blog_post_prompt($has_images);
         }
 
         // Allow add-ons to modify the system prompt (e.g. internal linking instructions)
-        $system_prompt = apply_filters('mxchat_content_system_prompt', $system_prompt, $plan, $content_type);
+        $system_prompt = apply_filters('mxchat_content_system_prompt', $system_prompt, $plan, $content_type, $template_mode);
 
         // Include the original user prompt so the AI can see any specific URLs, links, or details the user mentioned
         $original_context = '';
@@ -1475,6 +1475,56 @@ class MxChat_Content_Generator {
         }, $html);
 
         return $html;
+    }
+
+    /**
+     * AJAX handler: return the default system prompt for the given content type.
+     */
+    public function handle_get_default_prompt() {
+        check_ajax_referer('mxchat_content_nonce', 'nonce');
+
+        if (!current_user_can('manage_options')) {
+            wp_send_json_error(array('message' => __('Unauthorized', 'mxchat')));
+        }
+
+        $content_type = sanitize_text_field($_POST['content_type'] ?? 'post');
+
+        if ($content_type === 'page') {
+            $default = $this->get_landing_page_prompt(true);
+        } else {
+            $default = $this->get_blog_post_prompt(true);
+        }
+
+        $option_key = 'mxchat_custom_prompt_' . ($content_type === 'page' ? 'page' : 'post');
+        $saved = get_option($option_key, '');
+
+        wp_send_json_success(array(
+            'default_prompt' => $default,
+            'saved_prompt'   => $saved,
+        ));
+    }
+
+    /**
+     * AJAX handler: save or reset a custom system prompt for a content type.
+     */
+    public function handle_save_custom_prompt() {
+        check_ajax_referer('mxchat_content_nonce', 'nonce');
+
+        if (!current_user_can('manage_options')) {
+            wp_send_json_error(array('message' => __('Unauthorized', 'mxchat')));
+        }
+
+        $content_type = sanitize_text_field($_POST['content_type'] ?? 'post');
+        $custom_prompt = wp_unslash($_POST['custom_prompt'] ?? '');
+        $option_key = 'mxchat_custom_prompt_' . ($content_type === 'page' ? 'page' : 'post');
+
+        if (empty($custom_prompt)) {
+            delete_option($option_key);
+        } else {
+            update_option($option_key, $custom_prompt, false);
+        }
+
+        wp_send_json_success();
     }
 
     /**
@@ -1672,26 +1722,63 @@ PROMPT;
         return trim($css);
     }
 
+    /**
+     * Build a self-contained <style> block to embed in post_content.
+     * Combines all three CSS layers so the page renders correctly
+     * even if the plugin is deactivated.
+     */
+    private function build_embedded_css($ai_css, $fullwidth = false, $hide_title = false) {
+        $css = "<style>/* mxchat-css */\n";
+
+        // Layer 1: Fullwidth theme resets
+        if ($fullwidth) {
+            $css .= $this->get_fullwidth_reset_css();
+        }
+
+        // Layer 2: mxg- isolation + responsive overrides
+        $css .= $this->get_isolation_css();
+
+        // Layer 3: AI-generated CSS
+        // Collapse blank lines to prevent wpautop from injecting <p> tags
+        // inside the style block when the_content filter runs.
+        if (!empty($ai_css)) {
+            $clean_css = preg_replace('/\n\s*\n/', "\n", $ai_css);
+            $css .= "\n/* MxChat — AI Generated Styles */\n" . $clean_css . "\n";
+        }
+
+        // Title hiding
+        if ($hide_title) {
+            $css .= $this->get_title_hide_css();
+        }
+
+        $css .= "</style>\n";
+        return $css;
+    }
+
     // ─── Layout / Fullwidth Settings ──────────────────────────────────
 
     /**
-     * Build a single <style> block for generated content.
-     *
-     * Merges three layers:
-     * 1. Theme padding reset (when fullwidth is enabled)
-     * 2. Our mxg- responsive overrides (always)
-     * 3. AI-generated CSS extracted from the content (page-specific design)
-     *
-     * @param bool   $fullwidth Whether to include theme padding reset rules.
-     * @param string $ai_css    Raw CSS extracted from the AI output (no <style> tags).
-     * @return string Complete <style>...</style> block ready to prepend to post content.
+     * Build a single <style> block for legacy posts (CSS not yet embedded in post_content).
+     * Used by inject_generated_css() as a backwards-compatibility fallback.
      */
     private function get_generated_css($fullwidth = true, $ai_css = '') {
         $css = '<style>' . "\n";
-
-        // Layer 1: Theme & page builder padding reset — only when fullwidth is selected
         if ($fullwidth) {
-            $css .= '/* MxChat — Fullwidth Theme Reset */
+            $css .= $this->get_fullwidth_reset_css();
+        }
+        $css .= $this->get_isolation_css();
+        if (!empty($ai_css)) {
+            $css .= "\n/* MxChat — AI Generated Styles */\n" . $ai_css . "\n";
+        }
+        $css .= '</style>';
+        return $css;
+    }
+
+    /**
+     * Layer 1: Theme & page builder fullwidth padding resets.
+     */
+    private function get_fullwidth_reset_css() {
+        return '/* MxChat — Fullwidth Theme Reset */
 /* Generic WordPress themes */
 .entry-content-wrap,
 .entry-content,
@@ -1704,10 +1791,24 @@ article .entry-content,
 .type-page .entry-content,
 .page .entry-content,
 .single .entry-content {
-    padding-left: 0 !important;
-    padding-right: 0 !important;
+    padding: 0 !important;
     max-width: 100% !important;
     width: 100% !important;
+}
+/* Outer wrappers that themes use to add spacing */
+.site-main > article,
+.content-area,
+.site-content,
+#content,
+#primary,
+.hentry,
+.post,
+.page .post,
+.single .post {
+    padding: 0 !important;
+    margin-left: 0 !important;
+    margin-right: 0 !important;
+    max-width: 100% !important;
 }
 /* Astra */
 .ast-container .entry-content,
@@ -1728,8 +1829,7 @@ article .entry-content,
 .inside-article .entry-content,
 .generate-columns-container,
 .inside-article {
-    padding-left: 0 !important;
-    padding-right: 0 !important;
+    padding: 0 !important;
     max-width: 100% !important;
     width: 100% !important;
 }
@@ -1737,8 +1837,7 @@ article .entry-content,
 .kb-row-layout-wrap,
 .entry-content-wrap,
 .content-container.site-container {
-    padding-left: 0 !important;
-    padding-right: 0 !important;
+    padding: 0 !important;
     max-width: 100% !important;
     width: 100% !important;
 }
@@ -1752,16 +1851,14 @@ article .entry-content,
 /* OceanWP */
 .ocean-content .entry,
 #content-wrap .container {
-    padding-left: 0 !important;
-    padding-right: 0 !important;
+    padding: 0 !important;
     max-width: 100% !important;
     width: 100% !important;
 }
 /* Neve */
 .nv-single-post-wrap .entry-content,
 .nv-content-wrap .entry-content {
-    padding-left: 0 !important;
-    padding-right: 0 !important;
+    padding: 0 !important;
     max-width: 100% !important;
     width: 100% !important;
 }
@@ -1769,8 +1866,7 @@ article .entry-content,
 .site-main .elementor-section-wrap,
 .elementor-page .page-content .entry-content,
 .elementor-default .entry-content {
-    padding-left: 0 !important;
-    padding-right: 0 !important;
+    padding: 0 !important;
     max-width: 100% !important;
     width: 100% !important;
 }
@@ -1778,8 +1874,7 @@ article .entry-content,
 .brxe-post-content .entry-content,
 .bricks-layout-wrapper .entry-content,
 .brxe-container .entry-content {
-    padding-left: 0 !important;
-    padding-right: 0 !important;
+    padding: 0 !important;
     max-width: 100% !important;
     width: 100% !important;
 }
@@ -1787,43 +1882,39 @@ article .entry-content,
 .et_pb_post .entry-content,
 #main-content .container .entry-content,
 .et_full_width_page .entry-content {
-    padding-left: 0 !important;
-    padding-right: 0 !important;
+    padding: 0 !important;
     max-width: 100% !important;
     width: 100% !important;
 }
 /* Beaver Builder */
 .fl-post-content .entry-content,
 .fl-content-full .entry-content {
-    padding-left: 0 !important;
-    padding-right: 0 !important;
+    padding: 0 !important;
     max-width: 100% !important;
     width: 100% !important;
 }
 /* Blocksy */
 .entry-content[data-source],
 .site-main > article > .entry-content {
-    padding-left: 0 !important;
-    padding-right: 0 !important;
+    padding: 0 !important;
     max-width: 100% !important;
     width: 100% !important;
 }
 /* Spectra / starter templates */
 .uagb-body-wrapper .entry-content,
 .starter-template-content .entry-content {
-    padding-left: 0 !important;
-    padding-right: 0 !important;
+    padding: 0 !important;
     max-width: 100% !important;
     width: 100% !important;
 }
 ';
-        }
+    }
 
-        // Layer 2: CSS isolation + responsive overrides — always included.
-        // Page builders (Elementor, Bricks, Divi, Beaver) inject global CSS
-        // that can override display, margin, padding, and box-sizing on generic
-        // elements. The mxg-wrapper scope ensures our layout rules take priority.
-        $css .= '/* MxChat — CSS Isolation & Responsive Overrides */
+    /**
+     * Layer 2: CSS isolation + responsive overrides for mxg- classes.
+     */
+    private function get_isolation_css() {
+        return '/* MxChat — CSS Isolation & Responsive Overrides */
 .mxg-wrapper { box-sizing: border-box; }
 .mxg-wrapper *, .mxg-wrapper *::before, .mxg-wrapper *::after { box-sizing: inherit; }
 .mxg-wrapper img { max-width: 100%; height: auto; }
@@ -1848,15 +1939,37 @@ article .entry-content,
     .mxg-container { padding-left: 16px !important; padding-right: 16px !important; }
 }
 ';
+    }
 
-        // Layer 3: AI-generated CSS (page-specific design)
-        if (!empty($ai_css)) {
-            $css .= "\n/* MxChat — AI Generated Styles */\n";
-            $css .= $ai_css . "\n";
-        }
-
-        $css .= '</style>';
-        return $css;
+    /**
+     * Title-hiding CSS for WordPress themes.
+     */
+    private function get_title_hide_css() {
+        return '/* MxChat — Hide Title */
+.entry-title,
+.page-title,
+.post-title,
+.wp-block-post-title,
+.ast-title-with-post-meta-wrapper,
+.ast-the-title,
+.generate-page-header .page-hero,
+.entry-header .entry-title,
+.entry-hero .entry-title,
+.kadence-page-title,
+.wp-site-blocks .entry-title,
+.ocean-single-post-header,
+.page-header,
+.nv-page-title-wrap,
+.nv-post-title,
+.elementor-page-title,
+.et_pb_title_container .entry-title,
+.brxe-post-title,
+[data-hero] .page-title,
+.hero-section .page-title,
+.entry-header {
+    display: none !important;
+}
+';
     }
 
     /**
@@ -2075,8 +2188,10 @@ article .entry-content,
             // GPT-5.1 uses 'low' instead of 'minimal'
             if ($model === 'gpt-5.1-2025-11-13') {
                 $body['reasoning_effort'] = 'low';
+            } elseif ($model === 'gpt-5.4') {
+                $body['reasoning_effort'] = 'low';
             } else {
-                $body['reasoning_effort'] = 'minimal'; // For other GPT-5 models
+                $body['reasoning_effort'] = 'minimal';
             }
         }
 

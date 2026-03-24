@@ -5,7 +5,7 @@ Tags: ai chatbot, chatgpt, woocommerce, customer support, content generation
 Requires at least: 5.0
 Tested up to: 6.9
 Requires PHP: 7.2
-Stable tag: 3.1.3
+Stable tag: 3.1.4
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -42,12 +42,12 @@ Extend the free plugin with these optional premium features:
 
 👉 [Visit our website to view all add-ons](https://mxchat.ai)
 
-## 🔥 What's New in Version 3.1.3
+## 🔥 What's New in Version 3.1.4
 
-- **Content Calendar Tab** — New Calendar tab in the Content page shows a preview of the 30-day AI content planning feature (requires Advanced Content Editor add-on for full functionality).
-- **Chat Teaser Pop-Up** — Now supports multiple lines. Simply structure the text in the input field and it will match.
-- **Markdown Table Rendering** — The chatbot now renders markdown tables with column alignment, responsive scrolling, and alternating row styling.
-- **Deferred Session Creation** — Session cookies and tracking are now created on first user interaction instead of page load, reducing unnecessary cookies and AJAX calls for passive visitors.
+- **New AI Models** — Added support for OpenAI GPT-5.4, GPT-5.4 Mini, GPT-5.4 Nano, and GPT-5.3 Chat models.
+- **Editable Default Prompts** — Customize the AI system prompt for blog posts and landing pages directly from the Content page, saved per type across sessions.
+- **Inline Knowledge Base Editing** — Edit knowledge base entries inline with automatic re-chunking and re-embedding, supporting both database and Pinecone.
+- **PDF Sitemap Import** — Sitemap import now supports PDF URLs for bulk importing PDFs via XML sitemap.
 
 ## Core Features That Set MxChat Apart
 
@@ -308,6 +308,14 @@ Yes. MxChat is available for free on the WordPress plugin repository with full A
 *(Note: Screenshots will be added in future updates)*
 
 == Changelog ==
+
+= 3.1.4 - March 22, 2026 =
+- New: Added support for OpenAI GPT-5.4, GPT-5.4 Mini, GPT-5.4 Nano, and GPT-5.3 Chat models
+- New: Edit Default Prompt — customize the AI system prompt for blog posts and landing pages from the Content page, saved per type across sessions
+- New: Knowledge base entries can be edited inline with automatic re-chunking and re-embedding (works with both database and Pinecone)
+- New: Sitemap import now supports PDF URLs — bulk import PDFs via XML sitemap
+- Improved: Performance updates and bug fixes
+- Fixed: Clear chat session in MxChat debugger now fully clears chat sessions and context history
 
 = 3.1.3 - March 16, 2026 =
 - New: Content Calendar tab added to Content page — shows locked preview when Advanced Content Editor is not installed, fully functional when add-on is active
@@ -896,8 +904,8 @@ Yes. MxChat is available for free on the WordPress plugin repository with full A
 
 == Upgrade Notice ==
 
-= 3.1.3 =
-Version 3.1.3 adds multi-line chat teaser messages, improved markdown table rendering, and deferred session tracking so passive visitors no longer trigger unnecessary background activity.
+= 3.1.4 =
+Version 3.1.4 adds support for OpenAI GPT-5.4 models, editable default AI prompts for content generation, and inline knowledge base editing with automatic re-chunking and re-embedding.
 
 == License & Warranty ==
 

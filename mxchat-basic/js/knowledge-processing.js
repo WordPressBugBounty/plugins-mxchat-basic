@@ -1961,7 +1961,16 @@ function checkForActiveQueues() {
                 '<td style="padding: 12px 16px; font-size: 13px;">' + entry.id + '</td>' +
                 '<td class="mxchat-content-cell" style="padding: 12px 16px; font-size: 13px;">' + contentHtml + '</td>' +
                 '<td class="mxchat-url-cell" style="padding: 12px 16px; font-size: 13px;">' + sourceHtml + '</td>' +
-                '<td style="padding: 12px 16px;">' +
+                '<td style="padding: 12px 16px; white-space: nowrap;">' +
+                    '<button type="button" class="mxch-btn mxch-btn-ghost mxch-btn-sm mxchat-edit-entry-btn"' +
+                        ' data-source-url="' + (entry.source_url || '') + '"' +
+                        ' data-entry-id="' + entry.id + '"' +
+                        ' data-data-source="wordpress"' +
+                        ' data-bot-id="' + (entry.bot_id || 'default') + '"' +
+                        ' data-nonce="' + (entry.edit_nonce || '') + '"' +
+                        ' title="Edit content">' +
+                        '<span class="dashicons dashicons-edit" style="font-size: 14px;"></span>' +
+                    '</button>' +
                     '<a href="' + deleteUrl + '" class="mxch-btn mxch-btn-ghost mxch-btn-sm" style="color: var(--mxch-error);" onclick="return confirm(\'Delete this entry?\');">' +
                         '<span class="dashicons dashicons-trash" style="font-size: 14px;"></span>' +
                     '</a>' +

@@ -28,6 +28,7 @@
         phraseTimer: null,
         phraseIndex: 0,
         pollStartTime: null,
+        customSystemPrompt: '',
         lastProgressTime: null,
         postStatus: null
     };
@@ -180,6 +181,89 @@
         });
     }
 
+    // ── Edit Default Prompt Modal ──────────────────────────────
+    function initPromptModal() {
+        var $modal = $('#mxch-cg-prompt-modal');
+        var $editor = $('#mxch-cg-system-prompt-editor');
+        var $btn = $('#mxch-cg-edit-prompt-btn');
+        var currentDefault = '';
+
+        function fetchPromptData(callback) {
+            var contentType = $('#mxch-cg-type').val() || 'post';
+            $.post(mxchatContent.ajaxUrl, {
+                action: 'mxchat_get_default_prompt',
+                nonce: mxchatContent.nonce,
+                content_type: contentType
+            }, function(response) {
+                if (response.success) {
+                    currentDefault = response.data.default_prompt;
+                    var saved = response.data.saved_prompt || '';
+                    state.customSystemPrompt = saved;
+                    updateButtonState();
+                    if (callback) callback(currentDefault, saved);
+                }
+            });
+        }
+
+        function updateButtonState() {
+            if (state.customSystemPrompt) {
+                $btn.addClass('mxch-cg-prompt-modified');
+            } else {
+                $btn.removeClass('mxch-cg-prompt-modified');
+            }
+        }
+
+        function openModal() {
+            fetchPromptData(function(def, saved) {
+                $editor.val(saved || def);
+                $modal.fadeIn(200);
+            });
+        }
+
+        function closeModal() {
+            $modal.fadeOut(200);
+        }
+
+        function saveToServer(promptText, callback) {
+            var contentType = $('#mxch-cg-type').val() || 'post';
+            $.post(mxchatContent.ajaxUrl, {
+                action: 'mxchat_save_custom_prompt',
+                nonce: mxchatContent.nonce,
+                content_type: contentType,
+                custom_prompt: promptText
+            }, function(response) {
+                if (callback) callback(response.success);
+            });
+        }
+
+        $btn.on('click', openModal);
+        $('#mxch-cg-prompt-modal-close, #mxch-cg-prompt-cancel, .mxch-cg-prompt-modal-overlay').on('click', closeModal);
+
+        $('#mxch-cg-prompt-save').on('click', function() {
+            var edited = $editor.val().trim();
+            var customValue = (edited && edited !== currentDefault) ? edited : '';
+            state.customSystemPrompt = customValue;
+            saveToServer(customValue);
+            updateButtonState();
+            closeModal();
+        });
+
+        $('#mxch-cg-prompt-reset').on('click', function() {
+            $editor.val(currentDefault);
+            state.customSystemPrompt = '';
+            saveToServer('');
+            updateButtonState();
+        });
+
+        // Load saved state for initial content type on page load
+        fetchPromptData();
+
+        // When content type changes, load the saved prompt for that type
+        $('#mxch-cg-type').on('change', function() {
+            fetchPromptData();
+        });
+    }
+
     function startGeneration() {
         var prompt = $('#mxch-cg-prompt').val().trim();
         if (!prompt) {
@@ -209,7 +293,9 @@
             post_status: $('#mxch-cg-status').val(),
             schedule_date: $('#mxch-cg-schedule').val() || '',
             layout: $('#mxch-cg-layout').val() || 'fullwidth',
-            title_display: $('#mxch-cg-title-display').val() || 'hide'
+            title_display: $('#mxch-cg-title-display').val() || 'hide',
+            template_mode: $('#mxch-cg-template-mode').val() || 'off',
+            custom_system_prompt: state.customSystemPrompt || ''
         };
 
         $.ajax({
@@ -2127,6 +2213,7 @@
         initNavigation();
         initInlineForm();
         initGeneration();
+        initPromptModal();
         initPreview();
         initChat();
         initSettingsAutoSave();

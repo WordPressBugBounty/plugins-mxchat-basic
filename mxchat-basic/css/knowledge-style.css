@@ -3737,3 +3737,122 @@ tr.mxchat-row-error td:first-child::before {
         width: 40px;
     }
 }
+
+/* ─── Edit Entry Modal ─── */
+
+.mxchat-edit-entry-btn {
+    color: var(--mxch-primary, #7873f5);
+}
+.mxchat-edit-entry-btn:hover {
+    color: var(--mxch-primary-dark, #5b56d6);
+    background: rgba(120, 115, 245, 0.08);
+}
+
+.mxchat-kb-edit-modal-content {
+    max-width: 760px;
+    max-height: 90vh;
+}
+
+.mxchat-kb-edit-body {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    padding: 20px;
+    overflow: hidden;
+    gap: 12px;
+}
+
+.mxchat-kb-edit-source {
+    font-size: 12px;
+    color: var(--mxch-text-muted, #6b7280);
+    word-break: break-all;
+}
+.mxchat-kb-edit-source a {
+    color: var(--mxch-primary, #7873f5);
+    text-decoration: none;
+}
+
+.mxchat-kb-edit-textarea {
+    flex: 1;
+    min-height: 300px;
+    max-height: 55vh;
+    width: 100%;
+    padding: 14px;
+    border: 1px solid var(--mxch-input-border, #d1d5db);
+    border-radius: 8px;
+    font-size: 14px;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    line-height: 1.6;
+    resize: vertical;
+    color: var(--mxch-text-primary, #1a1a2e);
+    background: var(--mxch-input-bg, #fff);
+    box-sizing: border-box;
+    transition: border-color 0.2s;
+}
+.mxchat-kb-edit-textarea:focus {
+    outline: none;
+    border-color: var(--mxch-primary, #7873f5);
+    box-shadow: 0 0 0 3px rgba(120, 115, 245, 0.1);
+}
+
+.mxchat-kb-edit-meta {
+    display: flex;
+    justify-content: space-between;
+    font-size: 12px;
+    color: var(--mxch-text-muted, #6b7280);
+}
+
+.mxchat-kb-edit-footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 14px 20px;
+    border-top: 1px solid #e5e5e5;
+    gap: 12px;
+}
+
+.mxchat-kb-edit-notice {
+    flex: 1;
+    font-size: 13px;
+}
+.mxchat-kb-edit-notice.success { color: #16a34a; }
+.mxchat-kb-edit-notice.error { color: #dc2626; }
+
+.mxchat-kb-edit-actions {
+    display: flex;
+    gap: 8px;
+    flex-shrink: 0;
+}
+
+.mxchat-kb-edit-save-spinner {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+
+@media (max-width: 782px) {
+    .mxchat-kb-edit-modal-content {
+        width: 96%;
+        max-width: 96%;
+        margin: 10px auto;
+        max-height: 95vh;
+    }
+    .mxchat-kb-edit-body {
+        padding: 14px;
+    }
+    .mxchat-kb-edit-textarea {
+        min-height: 200px;
+        font-size: 15px;
+    }
+    .mxchat-kb-edit-footer {
+        flex-direction: column;
+        align-items: stretch;
+    }
+    .mxchat-kb-edit-actions {
+        justify-content: stretch;
+    }
+    .mxchat-kb-edit-actions .mxch-btn {
+        flex: 1;
+        text-align: center;
+    }
+}
