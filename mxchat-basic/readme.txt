@@ -5,7 +5,7 @@ Tags: ai chatbot, chatgpt, woocommerce, customer support, content generation
 Requires at least: 5.0
 Tested up to: 6.9
 Requires PHP: 7.2
-Stable tag: 3.1.4
+Stable tag: 3.1.5
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -42,12 +42,12 @@ Extend the free plugin with these optional premium features:
 
 👉 [Visit our website to view all add-ons](https://mxchat.ai)
 
-## 🔥 What's New in Version 3.1.4
+## 🔥 What's New in Version 3.1.5
 
-- **New AI Models** — Added support for OpenAI GPT-5.4, GPT-5.4 Mini, GPT-5.4 Nano, and GPT-5.3 Chat models.
-- **Editable Default Prompts** — Customize the AI system prompt for blog posts and landing pages directly from the Content page, saved per type across sessions.
-- **Inline Knowledge Base Editing** — Edit knowledge base entries inline with automatic re-chunking and re-embedding, supporting both database and Pinecone.
-- **PDF Sitemap Import** — Sitemap import now supports PDF URLs for bulk importing PDFs via XML sitemap.
+- **Smarter RAG Defaults** — Lowered default sources limit to 3 and added a per-source chunk cap of 5 to reduce token usage and prevent any single document from dominating context.
+- **RAG Chunks Limit Setting** — New slider to control max total chunks sent to AI (8–20, default 15) for fine-tuning context quality vs. token cost.
+- **Page-Level Chatbot Visibility** — Show, hide, or inherit the global setting on any page or post via the meta box.
+- **Enhanced Debugging** — Frontend debugger and transcripts now display actual sources and chunks used counts.
 
 ## Core Features That Set MxChat Apart
 
@@ -308,6 +308,13 @@ Yes. MxChat is available for free on the WordPress plugin repository with full A
 *(Note: Screenshots will be added in future updates)*
 
 == Changelog ==
+
+= 3.1.5 - March 25, 2026 =
+* Improved: Lowered default RAG sources limit from 6 to 3 to reduce token usage for users on lower-tier API plans
+* Improved: Added per-source chunk cap of 5 to prevent any single document from dominating context
+* New: RAG Chunks Limit setting — control max total chunks sent to AI (range 8–20, default 15) to balance context quality and token cost
+* New: Page-level chatbot visibility — show, hide, or use global setting per page/post from the meta box
+* New: Frontend debugger and transcripts now show actual sources and chunks used counts
 
 = 3.1.4 - March 22, 2026 =
 - New: Added support for OpenAI GPT-5.4, GPT-5.4 Mini, GPT-5.4 Nano, and GPT-5.3 Chat models
@@ -904,8 +911,8 @@ Yes. MxChat is available for free on the WordPress plugin repository with full A
 
 == Upgrade Notice ==
 
-= 3.1.4 =
-Version 3.1.4 adds support for OpenAI GPT-5.4 models, editable default AI prompts for content generation, and inline knowledge base editing with automatic re-chunking and re-embedding.
+= 3.1.5 =
+Version 3.1.5 reduces RAG token usage — default sources lowered from 6 to 3, max chunks from 30 to 15, and adds a per-source cap of 5 chunks. Prevents rate limit issues on lower-tier OpenAI plans. Enhances individual page level control for showing or hiding chatbot.
 
 == License & Warranty ==
 

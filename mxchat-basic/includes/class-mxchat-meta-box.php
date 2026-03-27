@@ -4,23 +4,23 @@ if (!defined('ABSPATH')) {
 }
 
 /**
- * Enhanced meta box to hide chatbot and select specific bot on pages
+ * Enhanced meta box for page-level chatbot visibility and bot selection
  */
 class MxChat_Meta_Box {
-    
+
     public function __construct() {
         add_action('add_meta_boxes', array($this, 'add_chatbot_meta_box'));
         add_action('save_post', array($this, 'save_chatbot_meta_box'));
         add_action('enqueue_block_editor_assets', array($this, 'enqueue_gutenberg_assets'));
         add_action('init', array($this, 'register_meta_fields'));
     }
-    
+
     /**
      * Add meta box to posts and pages
      */
     public function add_chatbot_meta_box() {
         $post_types = get_post_types(array('public' => true), 'names');
-        
+
         foreach ($post_types as $post_type) {
             add_meta_box(
                 'mxchat_visibility',
@@ -32,11 +32,12 @@ class MxChat_Meta_Box {
             );
         }
     }
-    
+
     /**
      * Register meta fields for Gutenberg
      */
     public function register_meta_fields() {
+        // Legacy field - kept for backward compatibility
         register_post_meta('', '_mxchat_hide_chatbot', array(
             'show_in_rest' => true,
             'single' => true,
@@ -46,7 +47,18 @@ class MxChat_Meta_Box {
                 return current_user_can('edit_posts');
             }
         ));
-        
+
+        // New visibility field: '' (global), 'show', 'hide'
+        register_post_meta('', '_mxchat_page_visibility', array(
+            'show_in_rest' => true,
+            'single' => true,
+            'type' => 'string',
+            'default' => '',
+            'auth_callback' => function() {
+                return current_user_can('edit_posts');
+            }
+        ));
+
         register_post_meta('', '_mxchat_selected_bot', array(
             'show_in_rest' => true,
             'single' => true,
@@ -57,18 +69,18 @@ class MxChat_Meta_Box {
             }
         ));
     }
-    
+
     /**
      * Get available bots
      */
     private function get_available_bots() {
         $bots = array();
-        
+
         // Check if multi-bot addon is active
         if (class_exists('MxChat_Multi_Bot_Manager')) {
             $multi_bot_manager = MxChat_Multi_Bot_Core_Manager::get_instance();
             $available_bots = $multi_bot_manager->get_available_bots();
-            
+
             // Add the available bots
             foreach ($available_bots as $bot_id => $bot_name) {
                 $bots[$bot_id] = $bot_name;
@@ -77,10 +89,10 @@ class MxChat_Meta_Box {
             // Only default bot available
             $bots['default'] = __('Default Bot', 'mxchat');
         }
-        
+
         return $bots;
     }
-    
+
     /**
      * Check if global auto-show is enabled
      */
@@ -88,37 +100,94 @@ class MxChat_Meta_Box {
         $options = get_option('mxchat_options', array());
         return isset($options['append_to_body']) && $options['append_to_body'] === 'on';
     }
-    
+
     /**
-     * Updated render_meta_box method with clarified copy
+     * Get the effective visibility value for a post, with backward compatibility
+     */
+    private function get_effective_visibility($post_id) {
+        // Check new field first
+        $visibility = get_post_meta($post_id, '_mxchat_page_visibility', true);
+
+        if (!empty($visibility)) {
+            return $visibility;
+        }
+
+        // Backward compat: check legacy hide checkbox
+        $hide_chatbot = get_post_meta($post_id, '_mxchat_hide_chatbot', true);
+        if ($hide_chatbot === '1') {
+            return 'hide';
+        }
+
+        return ''; // Global default
+    }
+
+    /**
+     * Render meta box with 3-option visibility control
      */
     public function render_meta_box($post) {
         wp_nonce_field('mxchat_meta_box_nonce', 'mxchat_meta_box_nonce');
-        
-        $hide_chatbot = get_post_meta($post->ID, '_mxchat_hide_chatbot', true);
+
+        $visibility = $this->get_effective_visibility($post->ID);
         $selected_bot = get_post_meta($post->ID, '_mxchat_selected_bot', true);
         $available_bots = $this->get_available_bots();
         $global_autoshow = $this->is_global_autoshow_enabled();
         $has_multibot = class_exists('MxChat_Multi_Bot_Manager');
-        
+
         ?>
         <div style="padding: 10px 0;">
-            
-            <!-- Hide Chatbot Option -->
+
+            <!-- Chatbot Visibility -->
             <div style="margin-bottom: 15px;">
-                <label style="display: flex; align-items: center;">
-                    <input type="checkbox" 
-                           name="mxchat_hide_chatbot" 
-                           value="1" 
-                           <?php checked($hide_chatbot, '1'); ?>
-                           style="margin-right: 8px;" />
-                    <?php _e('Hide auto-floating chatbot on this page', 'mxchat'); ?>
+                <label style="display: block; margin-bottom: 8px; font-weight: 600;">
+                    <?php _e('Chatbot Visibility', 'mxchat'); ?>
                 </label>
-                <p style="font-size: 12px; color: #666; margin-top: 5px; font-style: italic;">
-                    <?php _e('Prevents the floating chatbot from auto-appearing. Embedded chatbots (floating="no") will still work.', 'mxchat'); ?>
-                </p>
+
+                <label style="display: flex; align-items: center; margin-bottom: 6px; cursor: pointer;">
+                    <input type="radio"
+                           name="mxchat_page_visibility"
+                           value=""
+                           <?php checked($visibility, ''); ?>
+                           style="margin-right: 8px;" />
+                    <?php _e('Use Global Setting', 'mxchat'); ?>
+                </label>
+
+                <label style="display: flex; align-items: center; margin-bottom: 6px; cursor: pointer;">
+                    <input type="radio"
+                           name="mxchat_page_visibility"
+                           value="show"
+                           <?php checked($visibility, 'show'); ?>
+                           style="margin-right: 8px;" />
+                    <?php _e('Show Chatbot on this page', 'mxchat'); ?>
+                </label>
+
+                <label style="display: flex; align-items: center; cursor: pointer;">
+                    <input type="radio"
+                           name="mxchat_page_visibility"
+                           value="hide"
+                           <?php checked($visibility, 'hide'); ?>
+                           style="margin-right: 8px;" />
+                    <?php _e('Hide Chatbot on this page', 'mxchat'); ?>
+                </label>
+
+                <div style="margin-top: 8px; padding: 8px; background: #f8f9fa; border-left: 3px solid #007cba; font-size: 12px;">
+                    <?php if ($global_autoshow) : ?>
+                        <p style="margin: 0 0 5px 0; color: #0073aa;">
+                            <strong><?php _e('Global Auto-Show: ON', 'mxchat'); ?></strong>
+                        </p>
+                        <p style="margin: 0; color: #666;">
+                            <?php _e('The chatbot appears on all pages by default. Use "Hide" to exclude this page, or "Show" to override post type restrictions.', 'mxchat'); ?>
+                        </p>
+                    <?php else : ?>
+                        <p style="margin: 0 0 5px 0; color: #d63638;">
+                            <strong><?php _e('Global Auto-Show: OFF', 'mxchat'); ?></strong>
+                        </p>
+                        <p style="margin: 0; color: #666;">
+                            <?php _e('The chatbot is hidden by default. Select "Show" to display it on this page without needing a shortcode.', 'mxchat'); ?>
+                        </p>
+                    <?php endif; ?>
+                </div>
             </div>
-            
+
             <!-- Bot Selection (only show if multi-bot is available) -->
             <?php if ($has_multibot && count($available_bots) > 1) : ?>
                 <div style="margin-bottom: 15px;">
@@ -126,45 +195,27 @@ class MxChat_Meta_Box {
                         <?php _e('Select Bot for this Page:', 'mxchat'); ?>
                     </label>
                     <select name="mxchat_selected_bot" style="width: 100%;">
-                        <option value=""><?php _e('Use Global Setting', 'mxchat'); ?></option>
+                        <option value=""><?php _e('Use Default Bot', 'mxchat'); ?></option>
                         <?php foreach ($available_bots as $bot_id => $bot_name) : ?>
                             <option value="<?php echo esc_attr($bot_id); ?>" <?php selected($selected_bot, $bot_id); ?>>
                                 <?php echo esc_html($bot_name); ?>
                             </option>
                         <?php endforeach; ?>
                     </select>
-                    
-                    <div style="margin-top: 8px; padding: 8px; background: #f8f9fa; border-left: 3px solid #007cba; font-size: 12px;">
-                        <?php if ($global_autoshow) : ?>
-                            <p style="margin: 0 0 5px 0; color: #0073aa;">
-                                <strong><?php _e('Global Auto-Show: ON', 'mxchat'); ?></strong>
-                            </p>
-                            <p style="margin: 0; color: #666;">
-                                <?php _e('• "Use Global Setting" = Default bot will show automatically', 'mxchat'); ?><br>
-                                <?php _e('• Select specific bot = That bot will show instead', 'mxchat'); ?><br>
-                                <?php _e('• Check "Hide auto-floating" above = No auto bot, but shortcodes still work', 'mxchat'); ?>
-                            </p>
-                        <?php else : ?>
-                            <p style="margin: 0 0 5px 0; color: #d63638;">
-                                <strong><?php _e('Global Auto-Show: OFF', 'mxchat'); ?></strong>
-                            </p>
-                            <p style="margin: 0; color: #666;">
-                                <?php _e('• "Use Global Setting" = No bot will show (use shortcodes)', 'mxchat'); ?><br>
-                                <?php _e('• Select specific bot = That bot will show on this page only', 'mxchat'); ?>
-                            </p>
-                        <?php endif; ?>
-                    </div>
+                    <p style="font-size: 12px; color: #666; margin-top: 5px; font-style: italic;">
+                        <?php _e('Only applies when visibility is set to "Show" or "Use Global Setting" with auto-show enabled.', 'mxchat'); ?>
+                    </p>
                 </div>
             <?php endif; ?>
-            
+
             <!-- Preview Notice -->
             <div style="margin-top: 15px; padding: 8px; background: #fff3cd; border-left: 3px solid #ffc107; font-size: 12px;">
                 <p style="margin: 0; color: #856404;">
-                    <strong><?php _e('Important:', 'mxchat'); ?></strong> 
-                    <?php _e('Bot changes only take effect after saving/updating the page. Preview mode will show the previously saved settings.', 'mxchat'); ?>
+                    <strong><?php _e('Important:', 'mxchat'); ?></strong>
+                    <?php _e('Changes only take effect after saving/updating the page.', 'mxchat'); ?>
                 </p>
             </div>
-            
+
             <!-- Shortcode Examples -->
             <div style="margin-top: 10px; padding: 8px; background: #e7f3ff; border-left: 3px solid #2196f3; font-size: 12px;">
                 <p style="margin: 0 0 5px 0; color: #1565c0;">
@@ -172,7 +223,7 @@ class MxChat_Meta_Box {
                 </p>
                 <p style="margin: 0; color: #666; font-family: monospace;">
                     <?php _e('[mxchat_chatbot floating="yes"] - Floating chatbot', 'mxchat'); ?><br>
-                    <?php _e('[mxchat_chatbot floating="no"] - Embedded chatbot (always works)', 'mxchat'); ?>
+                    <?php _e('[mxchat_chatbot floating="no"] - Embedded chatbot', 'mxchat'); ?>
                 </p>
             </div>
         </div>
@@ -183,26 +234,35 @@ class MxChat_Meta_Box {
      * Save meta box data
      */
     public function save_chatbot_meta_box($post_id) {
-        if (!isset($_POST['mxchat_meta_box_nonce']) || 
+        if (!isset($_POST['mxchat_meta_box_nonce']) ||
             !wp_verify_nonce($_POST['mxchat_meta_box_nonce'], 'mxchat_meta_box_nonce')) {
             return;
         }
-        
+
         if (!current_user_can('edit_post', $post_id)) {
             return;
         }
-        
+
         if (defined('DOING_AUTOSAVE') && DOING_AUTOSAVE) {
             return;
         }
-        
-        // Save hide chatbot setting
-        if (isset($_POST['mxchat_hide_chatbot'])) {
+
+        // Save new visibility field
+        $visibility = isset($_POST['mxchat_page_visibility']) ? sanitize_text_field($_POST['mxchat_page_visibility']) : '';
+
+        if (in_array($visibility, array('show', 'hide'), true)) {
+            update_post_meta($post_id, '_mxchat_page_visibility', $visibility);
+        } else {
+            delete_post_meta($post_id, '_mxchat_page_visibility');
+        }
+
+        // Sync legacy field for backward compat with any external code
+        if ($visibility === 'hide') {
             update_post_meta($post_id, '_mxchat_hide_chatbot', '1');
         } else {
             delete_post_meta($post_id, '_mxchat_hide_chatbot');
         }
-        
+
         // Save selected bot setting
         if (isset($_POST['mxchat_selected_bot'])) {
             $selected_bot = sanitize_text_field($_POST['mxchat_selected_bot']);
@@ -213,7 +273,7 @@ class MxChat_Meta_Box {
             }
         }
     }
-    
+
     /**
      * Enqueue Gutenberg assets
      */
@@ -221,7 +281,7 @@ class MxChat_Meta_Box {
         $available_bots = $this->get_available_bots();
         $global_autoshow = $this->is_global_autoshow_enabled();
         $has_multibot = class_exists('MxChat_Multi_Bot_Manager');
-        
+
         // Enqueue the JavaScript file
         wp_enqueue_script(
             'mxchat-meta-box',
@@ -230,7 +290,7 @@ class MxChat_Meta_Box {
             '1.0.0',
             true
         );
-        
+
         // Localize script with data
         wp_localize_script('mxchat-meta-box', 'mxchatMetaBox', array(
             'availableBots' => $available_bots,
@@ -238,41 +298,58 @@ class MxChat_Meta_Box {
             'hasMultibot' => $has_multibot,
             'strings' => array(
                 'panelTitle' => __('MxChat Settings', 'mxchat'),
+                'visibilityLabel' => __('Chatbot Visibility', 'mxchat'),
                 'useGlobalSetting' => __('Use Global Setting', 'mxchat'),
-                'hideChatbot' => __('Hide chatbot on this page', 'mxchat'),
-                'hideChatbotHelp' => __('Prevent any chatbot from appearing on this page', 'mxchat'),
+                'showChatbot' => __('Show Chatbot on this page', 'mxchat'),
+                'hideChatbot' => __('Hide Chatbot on this page', 'mxchat'),
                 'selectBot' => __('Select Bot for this Page', 'mxchat'),
-                'globalAutoshowOn' => __('Global Auto-Show: ON. Use Global Setting = Default bot shows automatically. Select specific bot = That bot shows instead.', 'mxchat'),
-                'globalAutoshowOff' => __('Global Auto-Show: OFF. Use Global Setting = No bot shows. Select specific bot = That bot shows on this page only.', 'mxchat')
+                'useDefaultBot' => __('Use Default Bot', 'mxchat'),
+                'globalAutoshowOn' => __('Global Auto-Show is ON. The chatbot appears on all pages by default. Use "Hide" to exclude this page.', 'mxchat'),
+                'globalAutoshowOff' => __('Global Auto-Show is OFF. Select "Show" to display the chatbot on this page without needing a shortcode.', 'mxchat')
             )
         ));
     }
-    
+
     /**
      * Helper function to get the bot that should display on current page
-     * Call this from your main chatbot display logic
+     * Returns: array with 'action' (hide/show/global) and optional 'bot_id'
      */
     public static function get_page_bot_setting($post_id = null) {
         if (!$post_id) {
             $post_id = get_the_ID();
         }
-        
+
         if (!$post_id) {
             return null;
         }
-        
-        // Check if chatbot is hidden on this page
-        $hide_chatbot = get_post_meta($post_id, '_mxchat_hide_chatbot', true);
-        if ($hide_chatbot === '1') {
+
+        // Check new visibility field first
+        $visibility = get_post_meta($post_id, '_mxchat_page_visibility', true);
+
+        if ($visibility === 'hide') {
             return array('action' => 'hide');
         }
-        
-        // Check if specific bot is selected
+
+        if ($visibility === 'show') {
+            $selected_bot = get_post_meta($post_id, '_mxchat_selected_bot', true);
+            $bot_id = !empty($selected_bot) ? $selected_bot : 'default';
+            return array('action' => 'show', 'bot_id' => $bot_id);
+        }
+
+        // Backward compat: check legacy hide checkbox if no new field set
+        if (empty($visibility)) {
+            $hide_chatbot = get_post_meta($post_id, '_mxchat_hide_chatbot', true);
+            if ($hide_chatbot === '1') {
+                return array('action' => 'hide');
+            }
+        }
+
+        // Check if specific bot is selected (legacy path)
         $selected_bot = get_post_meta($post_id, '_mxchat_selected_bot', true);
         if (!empty($selected_bot)) {
             return array('action' => 'show', 'bot_id' => $selected_bot);
         }
-        
+
         // Use global setting
         return array('action' => 'global');
     }

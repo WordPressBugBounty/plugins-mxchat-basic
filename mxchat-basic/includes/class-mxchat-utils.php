@@ -178,7 +178,11 @@ private static function store_in_wordpress_db($safe_content, $source_url, $embed
 
     // ===== FIXED: Generate unique identifier for manual content =====
     $original_source_url = $source_url;
-    $is_manual_content = empty($source_url) || $source_url === '' || !filter_var($source_url, FILTER_VALIDATE_URL);
+    // Check if this is truly manual content (no URL at all) vs a real URL that filter_var rejects
+    // filter_var(FILTER_VALIDATE_URL) rejects valid URLs with encoded chars, non-ASCII, fragments, etc.
+    // Use a looser check: if it starts with http(s):// or has a scheme, it's a URL
+    $has_url_scheme = !empty($source_url) && preg_match('#^https?://#i', $source_url);
+    $is_manual_content = empty($source_url) || $source_url === '' || !$has_url_scheme;
 
     if ($is_manual_content) {
         // Generate unique identifier for manual content to prevent overwrites
@@ -304,12 +308,12 @@ private static function store_in_pinecone_main($embedding_vector, $content, $url
     if ($vector_id) {
         // Use provided vector ID
         //error_log('[MXCHAT-PINECONE-MAIN] Using provided vector ID: ' . $vector_id);
-    } elseif (!empty($url) && filter_var($url, FILTER_VALIDATE_URL)) {
-        // For valid URLs, use URL-based ID (existing behavior)
+    } elseif (!empty($url) && preg_match('#^https?://#i', $url)) {
+        // For URLs, use URL-based ID (existing behavior)
         $vector_id = md5($url);
         //error_log('[MXCHAT-PINECONE-MAIN] Generated vector ID from URL: ' . $vector_id);
     } else {
-        // For manual content (empty/invalid URL), generate unique ID
+        // For manual content (empty/no URL scheme), generate unique ID
         $vector_id = 'manual_' . time() . '_' . substr(md5($content . microtime(true)), 0, 8);
         //error_log('[MXCHAT-PINECONE-MAIN] Generated unique vector ID for manual content: ' . $vector_id);
     }
@@ -347,7 +351,7 @@ private static function store_in_pinecone_main($embedding_vector, $content, $url
         $is_product = false;
         $content_type = 'manual'; // Default for manual content
 
-        if (!empty($url) && filter_var($url, FILTER_VALIDATE_URL)) {
+        if (!empty($url) && preg_match('#^https?://#i', $url)) {
             $is_product = (strpos($url, '/product/') !== false || strpos($url, '/shop/') !== false);
             $content_type = $is_product ? 'product' : 'content';
         }

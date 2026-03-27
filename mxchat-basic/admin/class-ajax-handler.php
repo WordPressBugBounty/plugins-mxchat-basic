@@ -191,6 +191,13 @@ public function mxchat_save_setting_callback() {
             if ($rag_limit > 10) $rag_limit = 10;
             $options[$field_name] = $rag_limit;
             break;
+        case 'rag_chunks_limit':
+            // Validate and save - enforce min 8, max 20, default 15
+            $chunks_limit = intval($value);
+            if ($chunks_limit < 8) $chunks_limit = 8;
+            if ($chunks_limit > 20) $chunks_limit = 20;
+            $options[$field_name] = $chunks_limit;
+            break;
         case 'live_agent_status':
             //error_log('MXChat Save: Processing live_agent_status');
             // Set the new value

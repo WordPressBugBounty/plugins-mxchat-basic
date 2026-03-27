@@ -1729,6 +1729,8 @@ if ($testing_data !== null && $this->last_similarity_analysis !== null) {
     $testing_data['top_matches'] = $this->last_similarity_analysis['top_matches'];
     $testing_data['total_documents_checked'] = $this->last_similarity_analysis['total_checked'] ?? 0;
     $testing_data['knowledge_base_type'] = $this->last_similarity_analysis['knowledge_base_type'];
+    $testing_data['sources_used'] = $this->last_similarity_analysis['sources_used'] ?? 0;
+    $testing_data['total_chunks_used'] = $this->last_similarity_analysis['total_chunks_used'] ?? 0;
 }
 // ===== END SIMILARITY DATA CAPTURE =====
 
@@ -1869,6 +1871,8 @@ if ($testing_data !== null && !empty($this->current_valid_urls)) {
                 $rag_context_for_storage['similarity_threshold'] = $this->last_similarity_analysis['threshold_used'] ?? 0.35;
                 $rag_context_for_storage['knowledge_base_type'] = $this->last_similarity_analysis['knowledge_base_type'] ?? 'WordPress Database';
                 $rag_context_for_storage['total_documents_checked'] = $this->last_similarity_analysis['total_checked'] ?? 0;
+                $rag_context_for_storage['sources_used'] = $this->last_similarity_analysis['sources_used'] ?? 0;
+                $rag_context_for_storage['total_chunks_used'] = $this->last_similarity_analysis['total_chunks_used'] ?? 0;
             }
 
             // Add action analysis data if available
@@ -4875,7 +4879,7 @@ private function find_relevant_content_wordpress($user_embedding, $bot_id = 'def
     });
 
     // Get RAG sources limit from options (default 6, min 3, max 10)
-    $rag_sources_limit = isset($options['rag_sources_limit']) ? intval($options['rag_sources_limit']) : 6;
+    $rag_sources_limit = isset($options['rag_sources_limit']) ? intval($options['rag_sources_limit']) : 3;
     if ($rag_sources_limit < 3) $rag_sources_limit = 3;
     if ($rag_sources_limit > 10) $rag_sources_limit = 10;
 
@@ -4907,7 +4911,10 @@ private function find_relevant_content_wordpress($user_embedding, $bot_id = 'def
     $content = '';
     $matches_used = 0;
     $total_chunks_used = 0;
-    $max_total_chunks = 30; // Hard cap on total chunks to prevent excessive token usage
+    $max_total_chunks = isset($options['rag_chunks_limit']) ? intval($options['rag_chunks_limit']) : 15;
+    if ($max_total_chunks < 8) $max_total_chunks = 8;
+    if ($max_total_chunks > 20) $max_total_chunks = 20;
+    $max_chunks_per_source = 5; // Cap per individual source to limit token usage
 
     // Check if citation links are enabled (default to 'on' for backwards compatibility)
     // Use fresh options to ensure we get the latest setting value
@@ -4927,8 +4934,8 @@ private function find_relevant_content_wordpress($user_embedding, $bot_id = 'def
         $chunks_in_this_source = 1; // Default for non-chunked content
 
         if ($group['is_chunked']) {
-            // Calculate how many chunks we can still use
-            $chunks_remaining = $max_total_chunks - $total_chunks_used;
+            // Calculate how many chunks we can still use (respect both total and per-source caps)
+            $chunks_remaining = min($max_chunks_per_source, $max_total_chunks - $total_chunks_used);
 
             // Fetch chunks for this URL with limit
             $full_text = $this->reassemble_chunks_from_wordpress($source_url, $chunks_remaining, $chunks_in_this_source);
@@ -4998,6 +5005,10 @@ private function find_relevant_content_wordpress($user_embedding, $bot_id = 'def
 
     // NEW: Store unique valid URLs for validation
     $this->current_valid_urls = array_unique($valid_urls);
+
+    // Store sources and chunks counts for testing/transcript display
+    $this->last_similarity_analysis['sources_used'] = $matches_used;
+    $this->last_similarity_analysis['total_chunks_used'] = $total_chunks_used;
 
     // Add response guidelines
     if (empty($top_urls)) {
@@ -5227,7 +5238,10 @@ private function find_relevant_content_pinecone($user_embedding, $bot_id = 'defa
     $matches_used = 0;
     $matches_used_for_context = [];
     $total_chunks_used = 0;
-    $max_total_chunks = 30; // Hard cap on total chunks to prevent excessive token usage
+    $max_total_chunks = isset($current_options['rag_chunks_limit']) ? intval($current_options['rag_chunks_limit']) : 15;
+    if ($max_total_chunks < 8) $max_total_chunks = 8;
+    if ($max_total_chunks > 20) $max_total_chunks = 20;
+    $max_chunks_per_source = 5; // Cap per individual source to limit token usage
 
     // Check if citation links are enabled (default to 'on' for backwards compatibility)
     // Use fresh options to ensure we get the latest setting value
@@ -5296,7 +5310,7 @@ private function find_relevant_content_pinecone($user_embedding, $bot_id = 'defa
     });
 
     // Get RAG sources limit from options (default 6, min 3, max 10)
-    $rag_sources_limit = isset($current_options['rag_sources_limit']) ? intval($current_options['rag_sources_limit']) : 6;
+    $rag_sources_limit = isset($current_options['rag_sources_limit']) ? intval($current_options['rag_sources_limit']) : 3;
     if ($rag_sources_limit < 3) $rag_sources_limit = 3;
     if ($rag_sources_limit > 10) $rag_sources_limit = 10;
 
@@ -5327,8 +5341,8 @@ private function find_relevant_content_pinecone($user_embedding, $bot_id = 'defa
         $chunks_in_this_source = 1; // Default for non-chunked content
 
         if ($group['is_chunked']) {
-            // Calculate how many chunks we can still use
-            $chunks_remaining = $max_total_chunks - $total_chunks_used;
+            // Calculate how many chunks we can still use (respect both total and per-source caps)
+            $chunks_remaining = min($max_chunks_per_source, $max_total_chunks - $total_chunks_used);
 
             // Fetch chunks for this URL with limit
             $full_text = $this->reassemble_chunks_from_pinecone($source_url, $bot_config, $chunks_remaining, $chunks_in_this_source);
@@ -5448,7 +5462,9 @@ private function find_relevant_content_pinecone($user_embedding, $bot_id = 'defa
     // Store for testing panel
     $this->last_similarity_analysis['top_matches'] = $all_matches;
     $this->last_similarity_analysis['total_checked'] = count($results['matches']);
-    
+    $this->last_similarity_analysis['sources_used'] = $matches_used;
+    $this->last_similarity_analysis['total_chunks_used'] = $total_chunks_used;
+
     // NEW: Store unique valid URLs for validation
     $this->current_valid_urls = array_unique($valid_urls);
     

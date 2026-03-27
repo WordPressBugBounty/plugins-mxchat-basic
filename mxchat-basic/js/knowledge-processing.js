@@ -496,29 +496,26 @@ function checkForActiveQueues() {
             detailsHtml += '<div class="mxchat-error-summary" style="background: #fff3cd; border-left: 4px solid #ffc107; padding: 15px; margin-top: 15px;">';
             detailsHtml += '<h4 style="margin: 0 0 10px 0; color: #856404;">⚠️ Failed Pages</h4>';
             
-            detailsHtml += '<details style="cursor: pointer;">';
-            detailsHtml += '<summary style="font-weight: bold; color: #856404; padding: 5px 0;">Click to view ' + status.failed_items.length + ' failed pages</summary>';
-            
             detailsHtml += '<div style="margin-top: 10px; max-height: 400px; overflow-y: auto;">';
             detailsHtml += '<table style="width: 100%; border-collapse: collapse;">';
             detailsHtml += '<thead><tr style="background: #f5f5f5;"><th style="padding: 8px; text-align: left;">Page</th><th style="padding: 8px; text-align: left;">Error</th><th style="padding: 8px; text-align: left;">Attempts</th></tr></thead>';
             detailsHtml += '<tbody>';
-            
+
             status.failed_items.forEach(function(item) {
-                const data = JSON.parse(item.item_data);
+                let data;
+                try { data = JSON.parse(item.item_data); } catch(e) { data = {}; }
                 const pageNum = data.page_number || 'Unknown';
-                
+
                 detailsHtml += '<tr style="border-bottom: 1px solid #ddd;">';
                 detailsHtml += '<td style="padding: 8px;">Page ' + pageNum + '</td>';
                 detailsHtml += '<td style="padding: 8px; word-break: break-word;">' + (item.error_message || 'Unknown error') + '</td>';
                 detailsHtml += '<td style="padding: 8px;">' + item.attempts + '</td>';
                 detailsHtml += '</tr>';
             });
-            
+
             detailsHtml += '</tbody></table>';
             detailsHtml += '</div>';
-            detailsHtml += '</details>';
-            
+
             detailsHtml += '</div>';
         }
         
@@ -575,33 +572,31 @@ function checkForActiveQueues() {
             detailsHtml += '<div class="mxchat-error-summary" style="background: #fff3cd; border-left: 4px solid #ffc107; padding: 15px; margin-top: 15px;">';
             detailsHtml += '<h4 style="margin: 0 0 10px 0; color: #856404;">⚠️ Failed URLs</h4>';
             
-            detailsHtml += '<details style="cursor: pointer;">';
-            detailsHtml += '<summary style="font-weight: bold; color: #856404; padding: 5px 0;">Click to view ' + status.failed_items.length + ' failed URLs</summary>';
-            
             detailsHtml += '<div style="margin-top: 10px; max-height: 400px; overflow-y: auto;">';
             detailsHtml += '<table style="width: 100%; border-collapse: collapse;">';
             detailsHtml += '<thead><tr style="background: #f5f5f5;"><th style="padding: 8px; text-align: left;">URL</th><th style="padding: 8px; text-align: left;">Error</th><th style="padding: 8px; text-align: left;">Attempts</th></tr></thead>';
             detailsHtml += '<tbody>';
-            
+
             status.failed_items.forEach(function(item) {
-                const data = JSON.parse(item.item_data);
-                const url = data.url || 'Unknown URL';
-                const displayUrl = url.length > 60 ? url.substring(0, 57) + '...' : url;
-                
+                let data;
+                try { data = JSON.parse(item.item_data); } catch(e) { data = {}; }
+                const url = data.url || data.pdf_url || 'Unknown URL';
+                const pageInfo = data.page_number ? ' (page ' + data.page_number + ')' : '';
+                const displayUrl = (url.length > 60 ? url.substring(0, 57) + '...' : url) + pageInfo;
+
                 detailsHtml += '<tr style="border-bottom: 1px solid #ddd;">';
                 detailsHtml += '<td style="padding: 8px;"><a href="' + url + '" target="_blank" style="color: #0073aa; text-decoration: none;">' + displayUrl + '</a></td>';
                 detailsHtml += '<td style="padding: 8px; word-break: break-word;">' + (item.error_message || 'Unknown error') + '</td>';
                 detailsHtml += '<td style="padding: 8px;">' + item.attempts + '</td>';
                 detailsHtml += '</tr>';
             });
-            
+
             detailsHtml += '</tbody></table>';
             detailsHtml += '</div>';
-            detailsHtml += '</details>';
-            
+
             detailsHtml += '</div>';
         }
-        
+
         $card.find('.mxchat-status-details').html(detailsHtml);
     }
     

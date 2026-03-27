@@ -285,6 +285,11 @@ function mxchat_render_settings_page($admin_instance) {
                             $admin_instance->mxchat_rag_sources_limit_callback();
                         }, __('Number of knowledge base sources (pages/documents) to include in AI context. Higher values provide more context but use more tokens.', 'mxchat'));
 
+                        // RAG Chunks Limit
+                        mxchat_render_field_wrapper('rag_chunks_limit', __('RAG Chunks Limit', 'mxchat'), function() use ($admin_instance) {
+                            $admin_instance->mxchat_rag_chunks_limit_callback();
+                        }, __('Maximum total content chunks sent to the AI across all sources. Higher values provide more context but increase token usage and cost.', 'mxchat'));
+
                         // Contextual Awareness
                         mxchat_render_field_wrapper('contextual_awareness', __('Contextual Awareness', 'mxchat'), function() use ($admin_instance) {
                             $admin_instance->mxchat_contextual_awareness_callback();

@@ -4647,6 +4647,15 @@ public function mxchat_page_init() {
         'mxchat_chatbot_section' // Section
     );
 
+    // RAG Chunks Limit Slider
+    add_settings_field(
+        'rag_chunks_limit', // Field ID
+        esc_html__('RAG Chunks Limit', 'mxchat'), // Field title
+        array($this, 'mxchat_rag_chunks_limit_callback'), // Callback function
+        'mxchat-chatbot', // Page
+        'mxchat_chatbot_section' // Section
+    );
+
     add_settings_field(
         'append_to_body',
         esc_html__('Auto-Display Chatbot', 'mxchat'),
@@ -6910,8 +6919,8 @@ public function mxchat_rag_sources_limit_callback() {
     // Load from mxchat_options array
     $options = get_option('mxchat_options', []);
 
-    // Get value from options array with default of 6
-    $rag_sources_limit = isset($options['rag_sources_limit']) ? intval($options['rag_sources_limit']) : 6;
+    // Get value from options array with default of 3
+    $rag_sources_limit = isset($options['rag_sources_limit']) ? intval($options['rag_sources_limit']) : 3;
 
     echo '<div class="slider-container">';
     echo sprintf(
@@ -6928,6 +6937,32 @@ public function mxchat_rag_sources_limit_callback() {
     echo sprintf(
         '<span id="rag_sources_limit_value" class="range-value">%s</span>',
         esc_html($rag_sources_limit)
+    );
+    echo '</div>';
+}
+
+public function mxchat_rag_chunks_limit_callback() {
+    // Load from mxchat_options array
+    $options = get_option('mxchat_options', []);
+
+    // Get value from options array with default of 15
+    $rag_chunks_limit = isset($options['rag_chunks_limit']) ? intval($options['rag_chunks_limit']) : 15;
+
+    echo '<div class="slider-container">';
+    echo sprintf(
+        '<input type="range"
+               id="rag_chunks_limit"
+               name="rag_chunks_limit"
+               min="8"
+               max="20"
+               step="1"
+               value="%s"
+               class="range-slider" />',
+        esc_attr($rag_chunks_limit)
+    );
+    echo sprintf(
+        '<span id="rag_chunks_limit_value" class="range-value">%s</span>',
+        esc_html($rag_chunks_limit)
     );
     echo '</div>';
 }
@@ -7234,6 +7269,11 @@ public function mxchat_sanitize($input) {
     if (isset($input['rag_sources_limit'])) {
         $new_input['rag_sources_limit'] = absint($input['rag_sources_limit']); // Ensure it's an integer
         $new_input['rag_sources_limit'] = min(max($new_input['rag_sources_limit'], 3), 10); // Enforce range 3-10
+    }
+
+    if (isset($input['rag_chunks_limit'])) {
+        $new_input['rag_chunks_limit'] = absint($input['rag_chunks_limit']); // Ensure it's an integer
+        $new_input['rag_chunks_limit'] = min(max($new_input['rag_chunks_limit'], 8), 20); // Enforce range 8-20
     }
 
     if (isset($input['xai_api_key'])) {

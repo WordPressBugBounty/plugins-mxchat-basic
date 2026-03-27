@@ -929,11 +929,12 @@ jQuery(document).ready(function($) {
         });
 
         const urlGroups = Object.values(groupedByUrl).sort((a, b) => b.bestScore - a.bestScore);
-        const usedUrlCount = urlGroups.filter(g => g.usedForContext).length;
+        const usedUrlCount = data.sources_used > 0 ? data.sources_used : urlGroups.filter(g => g.usedForContext).length;
+        const chunksInfo = data.total_chunks_used > 0 ? data.total_chunks_used + ' chunks sent to AI' : '';
 
         html += '<div class="mxch-rag-matches">';
         html += '<h3>Retrieved Documents</h3>';
-        html += '<p style="color: var(--mxch-text-secondary); font-size: 13px; margin-bottom: 16px;">' + usedUrlCount + ' entr' + (usedUrlCount === 1 ? 'y' : 'ies') + ' used for response</p>';
+        html += '<p style="color: var(--mxch-text-secondary); font-size: 13px; margin-bottom: 16px;">' + usedUrlCount + ' source' + (usedUrlCount === 1 ? '' : 's') + ' used for response' + (chunksInfo ? ' &middot; ' + chunksInfo : '') + '</p>';
 
         urlGroups.forEach(function(group) {
             const cardClass = group.usedForContext ? 'mxch-rag-match-used' : 'mxch-rag-match-below';

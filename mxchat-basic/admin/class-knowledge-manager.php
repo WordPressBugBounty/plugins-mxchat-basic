@@ -7050,11 +7050,25 @@ public function ajax_mxchat_process_queue_item() {
         $result = false;
         $error_message = '';
         
+        // Read item directly from DB to get queue_id and preserve special chars in item_data
+        // (POST round-trip through JS mangles characters like apostrophes in URLs)
+        $db_item = $wpdb->get_row($wpdb->prepare(
+            "SELECT queue_id, item_data FROM $table_name WHERE id = %d",
+            $item_id
+        ));
+        $item_queue_id = $db_item ? $db_item->queue_id : '';
+        if ($db_item && !empty($db_item->item_data)) {
+            $db_data = json_decode($db_item->item_data, true);
+            if (is_array($db_data)) {
+                $item_data = $db_data;
+            }
+        }
+
         switch ($item_type) {
             case 'url':
-                $result = $this->mxchat_process_queue_url($item_data, $bot_id);
+                $result = $this->mxchat_process_queue_url($item_data, $bot_id, $item_queue_id);
                 break;
-                
+
             case 'pdf_page':
                 $result = $this->mxchat_process_queue_pdf_page($item_data, $bot_id);
                 break;
@@ -7144,7 +7158,7 @@ public function ajax_mxchat_process_queue_item() {
 /**
  * Process a URL from the queue
  */
-private function mxchat_process_queue_url($item_data, $bot_id = 'default') {
+private function mxchat_process_queue_url($item_data, $bot_id = 'default', $queue_id = '') {
     $url = isset($item_data['url']) ? $item_data['url'] : '';
 
     if (empty($url)) {
@@ -7194,7 +7208,7 @@ private function mxchat_process_queue_url($item_data, $bot_id = 'default') {
     // Fetch URL content (fallback for non-products or when WooCommerce extraction fails)
     $is_likely_pdf = (strtolower(pathinfo(parse_url($url, PHP_URL_PATH) ?: '', PATHINFO_EXTENSION)) === 'pdf');
     $response = wp_remote_get($url, array(
-        'timeout' => $is_likely_pdf ? 60 : 30,
+        'timeout' => $is_likely_pdf ? 120 : 30,
         'redirection' => 5,
         'user-agent' => 'MxChat/1.0'
     ));
@@ -7205,12 +7219,12 @@ private function mxchat_process_queue_url($item_data, $bot_id = 'default') {
 
     $response_code = wp_remote_retrieve_response_code($response);
     if ($response_code !== 200) {
-        return new WP_Error('http_error', 'HTTP ' . $response_code . ' error');
+        return new WP_Error('http_error', 'HTTP ' . $response_code . ' error for: ' . $url);
     }
 
-    // Check if URL is a PDF — process through PDF pipeline instead of HTML
+    // Check if URL is a PDF — expand into per-page queue items using the standard PDF pipeline
     if ($this->mxchat_is_pdf_url($url, $response)) {
-        return $this->mxchat_process_pdf_url_inline($url, $response, $api_key, $bot_id);
+        return $this->mxchat_expand_pdf_to_queue($url, $response, $bot_id, $queue_id);
     }
 
     $html = wp_remote_retrieve_body($response);
@@ -7242,8 +7256,86 @@ private function mxchat_process_queue_url($item_data, $bot_id = 'default') {
 }
 
 /**
- * Process a PDF URL inline during sitemap queue processing.
- * Downloads the PDF, extracts all pages, and submits each to the DB.
+ * Expand a PDF URL into per-page queue items using the standard PDF pipeline.
+ * Called when a sitemap URL turns out to be a PDF — downloads, parses page count,
+ * and adds pdf_page items to the same queue so they process with full progress tracking.
+ */
+private function mxchat_expand_pdf_to_queue($pdf_url, $response, $bot_id = 'default', $queue_id = '') {
+    set_time_limit(120); // PDFs need extra time for download + parsing
+
+    $upload_dir = wp_upload_dir();
+    $pdf_filename = sanitize_file_name('mxchat_kb_' . md5($pdf_url) . '.pdf');
+    $pdf_path = trailingslashit($upload_dir['path']) . $pdf_filename;
+
+    $response_body = wp_remote_retrieve_body($response);
+    if (empty($response_body)) {
+        return new WP_Error('empty_pdf', 'Empty PDF response for: ' . $pdf_url);
+    }
+
+    if (!wp_mkdir_p(dirname($pdf_path))) {
+        return new WP_Error('dir_error', 'Failed to create upload directory');
+    }
+
+    file_put_contents($pdf_path, $response_body);
+
+    if (!file_exists($pdf_path)) {
+        return new WP_Error('save_error', 'Failed to save PDF file');
+    }
+
+    try {
+        $total_pages = $this->mxchat_validate_and_count_pdf_pages($pdf_path);
+
+        if ($total_pages === false || $total_pages < 1) {
+            wp_delete_file($pdf_path);
+            return new WP_Error('no_pages', 'PDF has no pages: ' . $pdf_url);
+        }
+
+        // Build per-page items identical to mxchat_handle_pdf_for_knowledge_base
+        $pages = array();
+        for ($i = 1; $i <= $total_pages; $i++) {
+            $pages[] = array(
+                'pdf_path' => $pdf_path,
+                'pdf_url'  => $pdf_url,
+                'page_number' => $i,
+                'total_pages' => $total_pages
+            );
+        }
+
+        // Add pdf_page items to the SAME queue so the JS picks them up automatically
+        if (!empty($queue_id)) {
+            $queued_count = $this->mxchat_add_to_queue($queue_id, 'pdf_page', $pages, $bot_id);
+        } else {
+            // Fallback: create a new PDF queue (shouldn't happen in sitemap flow)
+            $new_queue_id = 'pdf_' . md5($pdf_url . time());
+            $queued_count = $this->mxchat_add_to_queue($new_queue_id, 'pdf_page', $pages, $bot_id);
+            $this->mxchat_set_queue_meta($new_queue_id, 'source_url', $pdf_url);
+            $this->mxchat_set_queue_meta($new_queue_id, 'queue_type', 'pdf');
+            $this->mxchat_set_queue_meta($new_queue_id, 'total_items', $total_pages);
+            $this->mxchat_set_queue_meta($new_queue_id, 'bot_id', $bot_id);
+            $this->mxchat_set_queue_meta($new_queue_id, 'pdf_path', $pdf_path);
+            $this->mxchat_set_queue_meta($new_queue_id, 'created_at', current_time('mysql'));
+        }
+
+        if ($queued_count === 0) {
+            wp_delete_file($pdf_path);
+            return new WP_Error('queue_error', 'Failed to add PDF pages to queue');
+        }
+
+        // Return true so the original URL item is marked complete
+        // The new pdf_page items will be processed in subsequent batches
+        return true;
+
+    } catch (Exception $e) {
+        if (file_exists($pdf_path)) {
+            wp_delete_file($pdf_path);
+        }
+        return new WP_Error('pdf_parse_error', 'Error parsing PDF: ' . $e->getMessage());
+    }
+}
+
+/**
+ * Legacy: Process a PDF URL inline during sitemap queue processing.
+ * @deprecated Use mxchat_expand_pdf_to_queue instead — kept for reference only.
  */
 private function mxchat_process_pdf_url_inline($pdf_url, $response, $api_key, $bot_id = 'default') {
     set_time_limit(120); // PDFs need more time — downloading + parsing all pages

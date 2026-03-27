@@ -258,7 +258,7 @@ handleTestingData(testingData) {
     // NEW: Update approved URLs
     this.updateApprovedUrls(testingData.approved_urls || []);
     
-    this.updateTopMatches(testingData.top_matches || [], testingData.similarity_threshold || 0.75);
+    this.updateTopMatches(testingData.top_matches || [], testingData.similarity_threshold || 0.75, testingData.sources_used || 0, testingData.total_chunks_used || 0);
     
     // NEW: Update action matches
     this.updateActionMatches(testingData.action_matches || []);
@@ -392,7 +392,7 @@ updateActionMatches(actionMatches) {
     actionsEl.innerHTML = html;
 }
 
-    updateTopMatches(topMatches, threshold) {
+    updateTopMatches(topMatches, threshold, sourcesUsed = 0, totalChunksUsed = 0) {
         const scoresEl = this.panel.querySelector('#similarity-scores');
 
         if (!topMatches || topMatches.length === 0) {
@@ -438,12 +438,13 @@ updateActionMatches(actionMatches) {
         // Convert to array and sort by best score
         const urlGroups = Object.values(groupedByUrl).sort((a, b) => b.bestScore - a.bestScore);
 
-        // Count unique URLs used for context
-        const usedUrlCount = urlGroups.filter(g => g.usedForContext).length;
+        // Use backend counts if available, otherwise fall back to frontend calculation
+        const usedUrlCount = sourcesUsed > 0 ? sourcesUsed : urlGroups.filter(g => g.usedForContext).length;
+        const chunksInfo = totalChunksUsed > 0 ? `${totalChunksUsed} chunks sent to AI` : `${topMatches.length} chunk matches`;
 
         let html = `<div class="matches-header">
-            <strong>${usedUrlCount} entr${usedUrlCount === 1 ? 'y' : 'ies'} used for AI context</strong>
-            <span class="matches-subheader">(from ${topMatches.length} chunk matches)</span>
+            <strong>${usedUrlCount} source${usedUrlCount === 1 ? '' : 's'} used for AI context</strong>
+            <span class="matches-subheader">(${chunksInfo})</span>
         </div>`;
 
         urlGroups.forEach((group, groupIndex) => {

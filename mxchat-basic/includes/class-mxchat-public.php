@@ -82,19 +82,29 @@ class MxChat_Public {
  */
 private function should_hide_chatbot($context = 'auto') {
     global $post;
-    
+
     if (!$post) {
         return false;
     }
-    
-    $hide_chatbot = get_post_meta($post->ID, '_mxchat_hide_chatbot', true);
-    
+
     // Only hide if it's the auto-append context (floating="yes" from global setting)
     // Allow shortcodes to work regardless of this setting
-    if ($context === 'auto' && $hide_chatbot === '1') {
-        return true;
+    if ($context === 'auto') {
+        // Check new visibility field first
+        $visibility = get_post_meta($post->ID, '_mxchat_page_visibility', true);
+        if ($visibility === 'hide') {
+            return true;
+        }
+
+        // Backward compat: check legacy field if new field not set
+        if (empty($visibility)) {
+            $hide_chatbot = get_post_meta($post->ID, '_mxchat_hide_chatbot', true);
+            if ($hide_chatbot === '1') {
+                return true;
+            }
+        }
     }
-    
+
     return false;
 }
 
@@ -688,29 +698,44 @@ private function get_current_post_type() {
 }
 
 /**
- * NEW: Get page-specific bot setting
+ * Get page-specific bot setting using new visibility field with backward compat
  */
 private function get_page_bot_setting($post_id = null) {
     if (!$post_id) {
         $post_id = get_the_ID();
     }
-    
+
     if (!$post_id) {
         return null;
     }
-    
-    // Check if chatbot is hidden on this page
-    $hide_chatbot = get_post_meta($post_id, '_mxchat_hide_chatbot', true);
-    if ($hide_chatbot === '1') {
+
+    // Check new visibility field first
+    $visibility = get_post_meta($post_id, '_mxchat_page_visibility', true);
+
+    if ($visibility === 'hide') {
         return array('action' => 'hide');
     }
-    
-    // Check if specific bot is selected
+
+    if ($visibility === 'show') {
+        $selected_bot = get_post_meta($post_id, '_mxchat_selected_bot', true);
+        $bot_id = !empty($selected_bot) ? $selected_bot : 'default';
+        return array('action' => 'show', 'bot_id' => $bot_id);
+    }
+
+    // Backward compat: check legacy hide checkbox if no new field set
+    if (empty($visibility)) {
+        $hide_chatbot = get_post_meta($post_id, '_mxchat_hide_chatbot', true);
+        if ($hide_chatbot === '1') {
+            return array('action' => 'hide');
+        }
+    }
+
+    // Check if specific bot is selected (legacy path)
     $selected_bot = get_post_meta($post_id, '_mxchat_selected_bot', true);
     if (!empty($selected_bot)) {
         return array('action' => 'show', 'bot_id' => $selected_bot);
     }
-    
+
     // Use global setting
     return array('action' => 'global');
 }
