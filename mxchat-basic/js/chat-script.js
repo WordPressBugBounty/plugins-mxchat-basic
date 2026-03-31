@@ -61,16 +61,24 @@ jQuery(document).ready(function($) {
         },
 
         // Session management per bot
+        // Returns existing session ID from cookie or localStorage, or null if none exists.
+        // Does NOT create a new session — use ensureSession() for that.
         getChatSession: function(botId) {
             var cookieName = 'mxchat_session_id_' + botId;
+            var storageKey = 'mxchat_session_id_' + botId;
             var sessionId = getCookie(cookieName);
 
+            // Fallback to localStorage if cookie is missing (e.g. cleared by browser/consent)
             if (!sessionId) {
-                sessionId = generateSessionId();
-                this.setChatSession(botId, sessionId);
+                try { sessionId = localStorage.getItem(storageKey); } catch (e) {}
             }
 
-            return sessionId;
+            // Re-sync cookie from localStorage if cookie was lost
+            if (sessionId && !getCookie(cookieName)) {
+                document.cookie = cookieName + "=" + sessionId + "; path=/; max-age=86400; SameSite=Lax";
+            }
+
+            return sessionId || null;
         },
 
         // Lazy session initializer — called on first user interaction
@@ -82,9 +90,8 @@ jQuery(document).ready(function($) {
                 return instance.sessionId;
             }
 
-            // Check if a cookie already exists from a prior visit
-            var cookieName = 'mxchat_session_id_' + botId;
-            var existingSession = getCookie(cookieName);
+            // Check for existing session from cookie or localStorage
+            var existingSession = this.getChatSession(botId);
 
             if (existingSession) {
                 instance.sessionId = existingSession;
@@ -109,13 +116,17 @@ jQuery(document).ready(function($) {
 
         setChatSession: function(botId, sessionId) {
             var cookieName = 'mxchat_session_id_' + botId;
+            var storageKey = 'mxchat_session_id_' + botId;
             document.cookie = cookieName + "=" + sessionId + "; path=/; max-age=86400; SameSite=Lax";
+            try { localStorage.setItem(storageKey, sessionId); } catch (e) {}
             if (this.instances[botId]) {
                 this.instances[botId].sessionId = sessionId;
             }
         },
 
         resetChatSession: function(botId) {
+            // Clear old session from localStorage before setting new one
+            try { localStorage.removeItem('mxchat_session_id_' + botId); } catch (e) {}
             var newSessionId = generateSessionId();
             this.setChatSession(botId, newSessionId);
             var $chatBox = getElement(botId, 'chat-box');
@@ -126,6 +137,18 @@ jQuery(document).ready(function($) {
                 this.instances[botId].chatHistoryLoaded = false;
                 this.instances[botId].processedMessageIds = new Set();
             }
+        },
+
+        // Silent reset — new session ID without clearing the chat UI
+        // Used when IP changes mid-conversation so the user doesn't see messages vanish
+        silentResetSession: function(botId) {
+            try { localStorage.removeItem('mxchat_session_id_' + botId); } catch (e) {}
+            var newSessionId = generateSessionId();
+            this.setChatSession(botId, newSessionId);
+            if (this.instances[botId]) {
+                this.instances[botId].sessionId = newSessionId;
+            }
+            return newSessionId;
         }
     };
 
@@ -647,21 +670,14 @@ function callMxChat(message, callback, botId) {
                 }
 
                 // Handle session reset action (IP changed, session expired, etc.)
+                // Silent reset — keep chat UI intact, just get a new session and retry
                 if (response.data && response.data.action === 'reset_session') {
-                    // Clear the old session and generate a new one
-                    resetChatSession(botId);
-                    // Remove the temporary loading message
-                    getElement(botId, 'chat-box').find('.bot-message.temporary-message').remove();
-                    // Re-send the original message with the new session
+                    MxChatInstances.silentResetSession(botId);
+                    // Re-send the original message with the new session (user message is already displayed)
                     var originalMessage = getElement(botId, 'mxchat-chatbot-wrapper').find('.mxchat-input-holder textarea').data('pending-message');
                     if (originalMessage) {
                         getElement(botId, 'mxchat-chatbot-wrapper').find('.mxchat-input-holder textarea').data('pending-message', null);
-                        // Re-add the user message and thinking indicator
-                        appendMessage("user", originalMessage, '', [], false, botId);
-                        appendThinkingMessage(botId);
-                        scrollToBottom(botId);
-                        // Determine whether to use streaming
-                        const currentModel = mxchatChat.model || 'gpt-5.1-chat-latest';
+                        var currentModel = mxchatChat.model || 'gpt-5.1-chat-latest';
                         if (shouldUseStreaming(currentModel)) {
                             callMxChatStream(originalMessage, function(response) {
                                 getElement(botId, 'chat-box').find('.bot-message.temporary-message').removeClass('temporary-message');
@@ -1074,19 +1090,14 @@ function handleNonStreamResponse(data, callback, botId) {
         }
 
         // Handle session reset action (IP changed, session expired, etc.)
+        // Silent reset — keep chat UI intact, just get a new session and retry
         if (data.data && data.data.action === 'reset_session') {
-            // Clear the old session and generate a new one
-            resetChatSession(botId);
-            // Re-send the original message with the new session
+            MxChatInstances.silentResetSession(botId);
+            // Re-send the original message with the new session (user message is already displayed)
             var originalMessage = getElement(botId, 'mxchat-chatbot-wrapper').find('.mxchat-input-holder textarea').data('pending-message');
             if (originalMessage) {
                 getElement(botId, 'mxchat-chatbot-wrapper').find('.mxchat-input-holder textarea').data('pending-message', null);
-                // Re-add the user message and thinking indicator
-                appendMessage("user", originalMessage, '', [], false, botId);
-                appendThinkingMessage(botId);
-                scrollToBottom(botId);
-                // Determine whether to use streaming
-                const currentModel = mxchatChat.model || 'gpt-5.1-chat-latest';
+                var currentModel = mxchatChat.model || 'gpt-5.1-chat-latest';
                 if (shouldUseStreaming(currentModel)) {
                     callMxChatStream(originalMessage, callback, botId);
                 } else {
@@ -1309,15 +1320,10 @@ function appendMessage(sender, messageText = '', messageHtml = '', images = [], 
             });
         }
 
-        // Process the message content based on sender
-        let fullMessage;
-        if (sender === "user") {
-            // For user messages, apply linkify after sanitization
-            fullMessage = linkify(messageText);
-        } else {
-            // For bot/agent messages, preserve HTML
-            fullMessage = messageText;
-        }
+        // Process the message content - always run linkify to convert markdown
+        // links and format text. linkify() handles existing HTML safely via
+        // negative lookaheads that skip URLs already inside <a> tags.
+        let fullMessage = linkify(messageText);
 
         // Add images if provided
         if (images && images.length > 0) {
@@ -1454,24 +1460,10 @@ function replaceLastMessage(sender, responseText, responseHtml = '', images = []
         fontColor = botMessageFontColor;
     }
 
-    // FIXED: Only linkify if response doesn't already contain HTML links or tags
-    // This prevents double-processing of URLs that are already formatted as HTML
-    var fullMessage;
-    if (sender === "user") {
-        // Always linkify user messages (they're plain text)
-        fullMessage = linkify(responseText);
-    } else {
-        // For bot/agent messages, check if HTML already exists
-        if (responseText.includes('<a href=') || responseText.includes('</a>') ||
-            responseText.includes('<img') || responseText.includes('<div') ||
-            responseText.includes('<p>') || responseText.includes('<br>')) {
-            // Response already has HTML, don't process it
-            fullMessage = responseText;
-        } else {
-            // Plain text response, apply linkify
-            fullMessage = linkify(responseText);
-        }
-    }
+    // Always run linkify to convert markdown links and format text.
+    // linkify() already handles existing HTML (its URL patterns use negative lookaheads
+    // to avoid double-processing URLs that are already inside <a> tags).
+    var fullMessage = linkify(responseText);
 
     if (responseHtml) {
         // Only add line breaks if there's actual text content before the HTML
@@ -1634,34 +1626,60 @@ function replaceLastMessage(sender, responseText, responseHtml = '', images = []
         return `<a href="${safeUrl}" target="${linkTarget}">${cleanUrl}</a>`;
     });
     
-    // Process proper markdown links with text: [text](url)
-    // This MUST have non-empty text in the first brackets
-    const markdownLinkPattern = /\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g;
-    processedText = processedText.replace(markdownLinkPattern, (match, text, url) => {
-        // Make sure we have actual text (not just whitespace)
-        if (!text || !text.trim()) {
-            // If no text, treat the URL as the text
-            let cleanUrl = url.replace(/[.,;!?]+$/, '');
-            const safeUrl = safeEncodeUrl(cleanUrl);
-            return `<a href="${safeUrl}" target="${linkTarget}">${cleanUrl}</a>`;
+    // Process markdown links: [text](url) and [](url)
+    // Uses balanced parenthesis matching to handle URLs containing parens
+    // (e.g. PDF filenames with dates like (2025-08-28).pdf)
+    processedText = (function(input) {
+        var result = '';
+        var i = 0;
+        while (i < input.length) {
+            // Look for [ at current position
+            if (input[i] === '[') {
+                // Find closing ]
+                var closeBracket = input.indexOf(']', i + 1);
+                if (closeBracket === -1 || closeBracket + 1 >= input.length || input[closeBracket + 1] !== '(') {
+                    result += input[i];
+                    i++;
+                    continue;
+                }
+                var linkText = input.substring(i + 1, closeBracket);
+                // Check if URL starts with http
+                var urlStart = closeBracket + 2;
+                if (!input.substring(urlStart).match(/^https?:\/\//)) {
+                    result += input[i];
+                    i++;
+                    continue;
+                }
+                // Find balanced closing paren
+                var depth = 1;
+                var j = urlStart;
+                while (j < input.length && depth > 0) {
+                    if (input[j] === '(') depth++;
+                    else if (input[j] === ')') depth--;
+                    if (depth > 0) j++;
+                }
+                if (depth !== 0) {
+                    result += input[i];
+                    i++;
+                    continue;
+                }
+                var url = input.substring(urlStart, j);
+                var cleanUrl = url.replace(/[\].,;!?]+$/, '');
+                var encodedUrl = safeEncodeUrl(cleanUrl);
+                if (!linkText || !linkText.trim()) {
+                    result += '<a href="' + encodedUrl + '" target="' + linkTarget + '">' + cleanUrl + '</a>';
+                } else {
+                    var safeText = sanitizeUserInput(linkText);
+                    result += '<a href="' + encodedUrl + '" target="' + linkTarget + '">' + safeText + '</a>';
+                }
+                i = j + 1; // Skip past the closing )
+            } else {
+                result += input[i];
+                i++;
+            }
         }
-        
-        // Clean the URL
-        let cleanUrl = url.replace(/[\].,;!?]+$/, '');
-        const safeUrl = safeEncodeUrl(cleanUrl);
-        const safeText = sanitizeUserInput(text);
-        return `<a href="${safeUrl}" target="${linkTarget}">${safeText}</a>`;
-    });
-    
-    // Handle empty markdown links: [](url)
-    // This is a specific case where there's no text
-    const emptyMarkdownPattern = /\[\]\((https?:\/\/[^\s)]+)\)/g;
-    processedText = processedText.replace(emptyMarkdownPattern, (match, url) => {
-        let cleanUrl = url.replace(/[.,;!?]+$/, '');
-        const safeUrl = safeEncodeUrl(cleanUrl);
-        // Use the URL itself as the link text
-        return `<a href="${safeUrl}" target="${linkTarget}">${cleanUrl}</a>`;
-    });
+        return result;
+    })(processedText);
     
     // Process phone numbers: [text](tel:number)
     const phonePattern = /\[([^\]]+)\]\((tel:[\d+\-\s()]+)\)/g;
@@ -2191,8 +2209,16 @@ function loadChatHistory(botId, onComplete) {
         return;
     }
 
+    // Use getChatSession which returns null if no session exists (does NOT create one)
     var sessionId = getChatSession(botId);
     var chatPersistenceEnabled = mxchatChat.chat_persistence_toggle === 'on';
+
+    // No session yet — nothing to load. History will load after first message via ensureSession.
+    if (!sessionId) {
+        instance.chatHistoryLoaded = true;
+        if (onComplete) onComplete();
+        return;
+    }
 
     if (chatPersistenceEnabled && sessionId) {
         $.ajax({
@@ -2206,8 +2232,8 @@ function loadChatHistory(botId, onComplete) {
             success: function(response) {
                 // Handle session reset (IP changed while user was away)
                 if (response.success === false && response.data && response.data.action === 'reset_session') {
-                    // Silently reset session - user will start fresh
-                    resetChatSession(botId);
+                    // Silent reset — new session but don't clear UI
+                    MxChatInstances.silentResetSession(botId);
                     instance.chatHistoryLoaded = true; // Prevent retry loop
                     if (onComplete) onComplete();
                     return;
@@ -2496,12 +2522,18 @@ function loadChatHistory(botId, onComplete) {
     function checkPreChatDismissal(botId) {
         botId = botId || 'default';
         try {
-            var dismissed = localStorage.getItem('mxchat_pre_chat_dismissed_' + botId);
-            if (!dismissed) {
-                getElement(botId, 'pre-chat-message').fadeIn(250);
-            } else {
-                getElement(botId, 'pre-chat-message').hide();
+            var dismissedAt = localStorage.getItem('mxchat_pre_chat_dismissed_' + botId);
+            if (dismissedAt) {
+                // Re-show after 24 hours
+                var elapsed = Date.now() - parseInt(dismissedAt, 10);
+                if (elapsed < 86400000) {
+                    getElement(botId, 'pre-chat-message').hide();
+                    return;
+                }
+                // Expired — clear and show again
+                localStorage.removeItem('mxchat_pre_chat_dismissed_' + botId);
             }
+            getElement(botId, 'pre-chat-message').fadeIn(250);
         } catch (e) {
             // localStorage unavailable — show the message
             getElement(botId, 'pre-chat-message').fadeIn(250);
@@ -2512,7 +2544,7 @@ function loadChatHistory(botId, onComplete) {
         botId = botId || 'default';
         getElement(botId, 'pre-chat-message').fadeOut(200);
         try {
-            localStorage.setItem('mxchat_pre_chat_dismissed_' + botId, '1');
+            localStorage.setItem('mxchat_pre_chat_dismissed_' + botId, String(Date.now()));
         } catch (e) {
             // localStorage unavailable — dismissal won't persist
         }
@@ -2611,9 +2643,7 @@ $(document).on('click', '.questions-collapse-btn', function(e) {
     $(document).on('click', '.close-pre-chat-message', function(e) {
         e.stopPropagation(); // Prevent triggering the parent .pre-chat-message click
         var botId = getBotIdFromElement(this);
-        getElement(botId, 'pre-chat-message').fadeOut(200, function() {
-            $(this).remove();
-        });
+        handlePreChatDismissal(botId);
     });
 
 
@@ -3228,7 +3258,7 @@ if (mxchatChat && mxchatChat.email_collection_enabled === 'on') {
         if ($chatbot.hasClass('hidden')) {
             $chatbot.removeClass('hidden').addClass('visible');
             getElement(botId, 'floating-chatbot-button').addClass('hidden');
-            $(this).fadeOut(250); // Hide pre-chat message
+            handlePreChatDismissal(botId);
             disableScroll(); // Disable scroll when chatbot opens
 
             // Deferred email check — only on first widget open
@@ -3241,30 +3271,7 @@ if (mxchatChat && mxchatChat.email_collection_enabled === 'on') {
         }
     });
 
-    // Dismiss pre-chat message via close button - handled by event delegation above at line ~2376
-    // This is a fallback for legacy support
-    $(document).on('click', '.close-pre-chat-message', function() {
-        var botId = getBotIdFromElement(this);
-        var $preChat = getElement(botId, 'pre-chat-message');
-        $preChat.fadeOut(200); // Hide the message
-
-        // Send an AJAX request to set the transient flag for 24 hours
-        $.ajax({
-            url: mxchatChat.ajax_url,
-            type: 'POST',
-            data: {
-                action: 'mxchat_dismiss_pre_chat_message',
-                _ajax_nonce: mxchatChat.nonce
-            },
-            success: function() {
-                // Ensure the message is hidden after dismissal
-                $preChat.hide();
-            },
-            error: function() {
-                // Error dismissing pre-chat message - silently continue
-            }
-        });
-    });
+    // Legacy duplicate close handler removed — handled by single event delegation above
 
 
 function hasQuickQuestions(botId) {

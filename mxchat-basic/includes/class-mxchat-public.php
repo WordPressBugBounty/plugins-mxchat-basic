@@ -241,7 +241,7 @@ public function render_chatbot_shortcode($atts) {
     $show_email_form = $email_state['show_email_form'];
     $user_email = $email_state['user_email'] ?? '';
     $user_name = $email_state['user_name'] ?? '';
-    $transient_key = 'mxchat_pre_chat_message_dismissed_' . $user_id;
+    // Pre-chat dismissal now handled client-side via localStorage (zero server load)
     $input_copy = isset($current_options['input_copy']) ? esc_attr($current_options['input_copy']) : esc_attr__('How can I assist?', 'mxchat');
     $rate_limit_message = isset($current_options['rate_limit_message']) ? esc_attr($current_options['rate_limit_message']) : esc_attr__('Rate limit exceeded. Please try again later.', 'mxchat');
     $mode_indicator_bg_color = $current_options['mode_indicator_bg_color'] ?? '#212121';
@@ -484,8 +484,9 @@ public function render_chatbot_shortcode($atts) {
             if ($is_floating) {
                 echo '</div>';
     
-                if (!empty($pre_chat_message) && !get_transient($transient_key)) {
-                    echo '<div id="pre-chat-message-' . esc_attr($bot_id) . '" class="pre-chat-message">';
+                if (!empty($pre_chat_message)) {
+                    // Rendered hidden by default — JS checkPreChatDismissal() handles show/hide via localStorage
+                    echo '<div id="pre-chat-message-' . esc_attr($bot_id) . '" class="pre-chat-message" style="display:none;">';
                     echo nl2br(esc_html($pre_chat_message));
                     echo '<button class="close-pre-chat-message" aria-label="' . esc_attr__('Close', 'mxchat') . '">&times;</button>';
                     echo '</div>';
