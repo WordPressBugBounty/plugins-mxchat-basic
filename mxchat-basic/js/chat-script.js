@@ -2617,6 +2617,12 @@ $(document).on('click', '.questions-collapse-btn', function(e) {
             disableScroll();
             $preChat.fadeOut(250);
 
+            // Load chat history for returning visitors (persistence)
+            var chatPersistenceEnabled = typeof mxchatChat !== 'undefined' && mxchatChat.chat_persistence_toggle === 'on';
+            if (chatPersistenceEnabled) {
+                MxChatInstances.ensureSession(botId);
+            }
+
             // Deferred email check — only on first widget open
             var emailBlocker = getElementDOM(botId, 'email-blocker');
             var instance = MxChatInstances.get(botId);
@@ -3052,7 +3058,7 @@ if (mxchatChat && mxchatChat.email_collection_enabled === 'on') {
     }
 
     function checkSessionAndEmailForBot(botId) {
-        const sessionId = getChatSession(botId);
+        const sessionId = MxChatInstances.ensureSession(botId);
 
         // Hide both panels while we check — prevents flash of wrong state
         var emailBlocker = getElementDOM(botId, 'email-blocker');
@@ -3109,7 +3115,7 @@ if (mxchatChat && mxchatChat.email_collection_enabled === 'on') {
         var nameInput = getElementDOM(botId, 'user-name');
         var userEmail = emailInput ? emailInput.value.trim() : '';
         var userName = nameInput ? nameInput.value.trim() : '';
-        var sessionId = getChatSession(botId);
+        var sessionId = MxChatInstances.ensureSession(botId);
 
         // Validate email
         if (!userEmail) {
@@ -3260,6 +3266,12 @@ if (mxchatChat && mxchatChat.email_collection_enabled === 'on') {
             getElement(botId, 'floating-chatbot-button').addClass('hidden');
             handlePreChatDismissal(botId);
             disableScroll(); // Disable scroll when chatbot opens
+
+            // Load chat history for returning visitors (persistence)
+            var chatPersistenceEnabled = typeof mxchatChat !== 'undefined' && mxchatChat.chat_persistence_toggle === 'on';
+            if (chatPersistenceEnabled) {
+                MxChatInstances.ensureSession(botId);
+            }
 
             // Deferred email check — only on first widget open
             var emailBlocker = getElementDOM(botId, 'email-blocker');

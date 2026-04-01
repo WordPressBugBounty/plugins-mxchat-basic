@@ -5,7 +5,7 @@ Tags: ai chatbot, chatgpt, woocommerce, customer support, content generation
 Requires at least: 5.0
 Tested up to: 6.9
 Requires PHP: 7.2
-Stable tag: 3.1.6
+Stable tag: 3.1.7
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -308,6 +308,12 @@ Yes. MxChat is available for free on the WordPress plugin repository with full A
 *(Note: Screenshots will be added in future updates)*
 
 == Changelog ==
+
+= 3.1.7 - April 1, 2026 =
+- Fixed: Chat history not appearing for returning visitors until first message sent when chat persistence is enabled and email collection is off
+- Fixed: Lead capture form not displaying for new visitors when email collection is enabled
+- Fixed: Editing legacy manual knowledge base entries deleting all other manual entries sharing the same source URL
+- New: Google Drive PDF links are now automatically converted to direct downloads for knowledge base import
 
 = 3.1.6 - March 30, 2026 =
 - Fixed: Pre-chat popup reappearing on every page refresh — it now stays dismissed for 24 hours
@@ -917,8 +923,8 @@ Yes. MxChat is available for free on the WordPress plugin repository with full A
 
 == Upgrade Notice ==
 
-= 3.1.6 =
-Bug fixes: resolves teaser popup reappearing on refresh, markdown links with parentheses in URLs being truncated, chat history not loading for returning visitors, and links displaying as raw text instead of clickable hyperlinks.
+= 3.1.7 =
+Fixes chat persistence bug where returning visitors didn't see history until sending a message, lead capture form not showing for new visitors, and legacy knowledge base editing issue. Adds Google Drive PDF link support.
 
 == License & Warranty ==
 

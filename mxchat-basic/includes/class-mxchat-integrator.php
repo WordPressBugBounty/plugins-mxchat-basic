@@ -128,6 +128,7 @@ public function __construct() {
  * Return a fresh nonce so cached pages can replace the stale one.
  */
 public function mxchat_refresh_nonce() {
+    nocache_headers();
     wp_send_json_success(array('nonce' => wp_create_nonce('mxchat_chat_nonce')));
 }
 
@@ -883,6 +884,8 @@ public function mxchat_handle_save_email_and_response() {
     //error_log('[DEBUG] ---------- mxchat_handle_save_email_and_response START ----------');
     //error_log('DEBUG: POST data: ' . print_r($_POST, true));
 
+    nocache_headers();
+
     // Validate nonce
     if (!isset($_POST['nonce']) || !wp_verify_nonce($_POST['nonce'], 'mxchat_chat_nonce')) {
         //error_log(esc_html__('[ERROR] Invalid nonce in mxchat_handle_save_email_and_response', 'mxchat'));
@@ -896,7 +899,7 @@ public function mxchat_handle_save_email_and_response() {
 
     //error_log("[DEBUG] handle_save_email_and_response -> session_id: {$session_id}, email: {$email}, name: {$name}");
 
-    if (empty($session_id) || empty($email)) {
+    if (empty($session_id) || $session_id === 'null' || empty($email)) {
         //error_log("[ERROR] Missing session_id or email: session_id={$session_id}, email={$email}");
         wp_send_json_error(['message' => esc_html__('Session ID or email is missing.', 'mxchat')]);
         wp_die();
@@ -915,13 +918,13 @@ public function mxchat_handle_save_email_and_response() {
 
     // 1) Always store email in wp_options
     $email_option_key = "mxchat_email_{$session_id}";
-    update_option($email_option_key, $email);
+    update_option($email_option_key, $email, 'no');
     //error_log("[DEBUG] handle_save_email_and_response -> updated option: {$email_option_key} => {$email}");
 
     //   Store name in wp_options if provided
     if (!empty($name)) {
         $name_option_key = "mxchat_name_{$session_id}";
-        update_option($name_option_key, $name);
+        update_option($name_option_key, $name, 'no');
         //error_log("[DEBUG] handle_save_email_and_response -> updated option: {$name_option_key} => {$name}");
     }
 
@@ -967,13 +970,15 @@ public function mxchat_handle_save_email_and_response() {
 public function mxchat_check_email_provided() {
     //error_log('[DEBUG] ---------- mxchat_check_email_provided START ----------');
 
+    nocache_headers();
+
     if (!isset($_POST['nonce']) || !wp_verify_nonce($_POST['nonce'], 'mxchat_chat_nonce')) {
         //error_log('[ERROR] Invalid nonce in mxchat_check_email_provided');
         wp_send_json_error(['message' => esc_html__('Invalid nonce', 'mxchat')]);
     }
 
     $session_id = isset($_POST['session_id']) ? sanitize_text_field($_POST['session_id']) : '';
-    if (empty($session_id)) {
+    if (empty($session_id) || $session_id === 'null') {
         //error_log('[ERROR] No session ID provided in mxchat_check_email_provided');
         wp_send_json_error(['message' => esc_html__('No session ID provided', 'mxchat')]);
     }

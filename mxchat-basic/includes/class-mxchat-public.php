@@ -553,10 +553,7 @@ public function render_chatbot_shortcode($atts) {
     
         
     private function determine_email_collection_state() {
-    // Get session ID
-    $session_id = 'mxchat_chat_' . wp_generate_uuid4(); // You'll need to use your actual session generation logic
-    
-    // Check if user is logged in first
+    // Logged-in users skip the email form
     if (is_user_logged_in()) {
         $current_user = wp_get_current_user();
         return [
@@ -565,24 +562,14 @@ public function render_chatbot_shortcode($atts) {
             'user_name' => $current_user->display_name ?: $current_user->first_name ?: ''
         ];
     }
-    
-    // Check stored email for session
-    $stored_email = get_option("mxchat_email_{$session_id}", '');
-    $stored_name = get_option("mxchat_name_{$session_id}", '');
-    
-    // Check if name is required
-    $name_field_enabled = isset($this->options['enable_name_field']) && 
-        ($this->options['enable_name_field'] === '1' || $this->options['enable_name_field'] === 'on');
-    
-    $has_required_info = !empty($stored_email);
-    if ($name_field_enabled) {
-        $has_required_info = $has_required_info && !empty($stored_name);
-    }
-    
+
+    // For guests, default to showing the email form.
+    // The session-based check happens client-side via AJAX since the
+    // session ID lives in the browser cookie/localStorage.
     return [
-        'show_email_form' => !$has_required_info,
-        'user_email' => $stored_email,
-        'user_name' => $stored_name
+        'show_email_form' => true,
+        'user_email' => '',
+        'user_name' => ''
     ];
 }
     

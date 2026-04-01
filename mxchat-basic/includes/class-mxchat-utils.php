@@ -182,7 +182,9 @@ private static function store_in_wordpress_db($safe_content, $source_url, $embed
     // filter_var(FILTER_VALIDATE_URL) rejects valid URLs with encoded chars, non-ASCII, fragments, etc.
     // Use a looser check: if it starts with http(s):// or has a scheme, it's a URL
     $has_url_scheme = !empty($source_url) && preg_match('#^https?://#i', $source_url);
-    $is_manual_content = empty($source_url) || $source_url === '' || !$has_url_scheme;
+    // Treat legacy mxchat.ai source URLs as manual — old bug assigned the site URL to manual entries
+    $is_legacy_mxchat_url = $has_url_scheme && strpos($source_url, 'mxchat.ai') !== false;
+    $is_manual_content = empty($source_url) || $source_url === '' || !$has_url_scheme || $is_legacy_mxchat_url;
 
     if ($is_manual_content) {
         // Generate unique identifier for manual content to prevent overwrites

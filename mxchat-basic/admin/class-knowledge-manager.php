@@ -164,7 +164,11 @@ public function mxchat_is_pdf_url($url, $response) {
     $content_type = wp_remote_retrieve_header($response, 'content-type');
     $file_extension = strtolower(pathinfo($url, PATHINFO_EXTENSION));
 
-    return strpos($content_type, 'pdf') !== false || $file_extension === 'pdf';
+    // Check Content-Disposition header for .pdf filename (Google Drive sends this)
+    $disposition = wp_remote_retrieve_header($response, 'content-disposition');
+    $has_pdf_disposition = ! empty($disposition) && stripos($disposition, '.pdf') !== false;
+
+    return strpos($content_type, 'pdf') !== false || $file_extension === 'pdf' || $has_pdf_disposition;
 }
 
 
@@ -860,8 +864,15 @@ public function ajax_mxchat_save_entry_content() {
 
     // For manual entries (no source_url or mxchat:// prefix), delete the old entry by ID first
     // so submit_content_to_db creates a replacement instead of a duplicate
-    if ( $entry_id > 0 && (empty($source_url) || strpos($source_url, 'mxchat://') === 0) ) {
+    // Also treat legacy mxchat.ai source URLs as manual — old bug assigned the site URL to manual entries
+    $is_legacy_manual = !empty($source_url) && strpos($source_url, 'mxchat.ai') !== false && strpos($source_url, 'mxchat://') !== 0;
+    if ( $entry_id > 0 && (empty($source_url) || strpos($source_url, 'mxchat://') === 0 || $is_legacy_manual) ) {
         $wpdb->delete( $table, array( 'id' => $entry_id ), array( '%d' ) );
+        // Clear legacy URL so submit_content_to_db generates a unique mxchat:// identifier
+        // instead of reusing the shared URL (which would mass-delete other entries with the same URL)
+        if ( $is_legacy_manual ) {
+            $source_url = '';
+        }
     }
 
     // Use the existing submit_content_to_db which handles chunking, Pinecone, and WP DB
@@ -940,7 +951,20 @@ public function mxchat_handle_sitemap_submission() {
     }
 
     $submitted_url = esc_url_raw($_POST['sitemap_url']);
-    
+
+    // Convert Google Drive sharing URLs to direct download URLs
+    if ( strpos($submitted_url, 'drive.google.com') !== false ) {
+        $file_id = '';
+        if ( preg_match('/[?&]id=([a-zA-Z0-9_-]+)/', $submitted_url, $m) ) {
+            $file_id = $m[1];
+        } elseif ( preg_match('#/file/d/([a-zA-Z0-9_-]+)#', $submitted_url, $m) ) {
+            $file_id = $m[1];
+        }
+        if ( ! empty($file_id) ) {
+            $submitted_url = 'https://drive.google.com/uc?export=download&id=' . $file_id;
+        }
+    }
+
     // Get bot_id from form submission
     $bot_id = isset($_POST['bot_id']) ? sanitize_key($_POST['bot_id']) : 'default';
 
@@ -7078,9 +7102,35 @@ public function ajax_mxchat_process_queue_item() {
         }
         
         if (is_wp_error($result)) {
+            $error_code = $result->get_error_code();
+            // Content errors (empty page, sanitization) are permanent — retrying won't help
+            $permanent_codes = array('empty_page', 'empty_after_sanitization', 'no_api_key', 'page_not_found');
+            if (in_array($error_code, $permanent_codes)) {
+                // Mark as permanently failed — set attempts = max_attempts so it won't be retried
+                $current_item = $wpdb->get_row($wpdb->prepare(
+                    "SELECT max_attempts FROM $table_name WHERE id = %d", $item_id
+                ));
+                $wpdb->update(
+                    $table_name,
+                    array(
+                        'status' => 'failed',
+                        'error_message' => $result->get_error_message(),
+                        'attempts' => $current_item ? $current_item->max_attempts : 3
+                    ),
+                    array('id' => $item_id),
+                    array('%s', '%s', '%d'),
+                    array('%d')
+                );
+                wp_send_json_error(array(
+                    'message' => $result->get_error_message(),
+                    'permanent_failure' => true,
+                    'item_id' => $item_id
+                ));
+                return;
+            }
             throw new Exception($result->get_error_message());
         }
-        
+
         if ($result === false) {
             throw new Exception('Processing returned false - item may be empty or invalid');
         }
@@ -7372,19 +7422,22 @@ private function mxchat_process_pdf_url_inline($pdf_url, $response, $api_key, $b
         }
 
         $processed = 0;
+        $skipped_pages = array();
 
         for ($i = 0; $i < $total_pages; $i++) {
+            $page_num = $i + 1;
             $text = $pages[$i]->getText();
             if (empty($text)) {
+                $skipped_pages[] = 'Page ' . $page_num . ': No text could be extracted — page may contain only images, links, or non-standard encoding';
                 continue;
             }
 
             $sanitized = $this->mxchat_sanitize_content_for_api($text);
             if (empty($sanitized)) {
+                $skipped_pages[] = 'Page ' . $page_num . ': Text was extracted but contained only special characters, control codes, or unsupported content';
                 continue;
             }
 
-            $page_num = $i + 1;
             $metadata = array(
                 'document_type' => 'pdf',
                 'total_pages'   => $total_pages,
@@ -7409,6 +7462,10 @@ private function mxchat_process_pdf_url_inline($pdf_url, $response, $api_key, $b
 
         // Clean up the temp PDF file
         wp_delete_file($pdf_path);
+
+        if (!empty($skipped_pages)) {
+            error_log('MxChat PDF: Skipped ' . count($skipped_pages) . ' of ' . $total_pages . ' pages: ' . implode('; ', $skipped_pages));
+        }
 
         return $processed > 0 ? true : false;
 
@@ -7576,16 +7633,15 @@ private function mxchat_process_queue_pdf_page($item_data, $bot_id = 'default') 
         }
         
         $text = $pages[$page_number - 1]->getText();
-        
+
         if (empty($text)) {
-            // Not an error - just an empty page
-            return false;
+            return new WP_Error('empty_page', 'Page ' . $page_number . ': No text could be extracted — page may contain only images, links, or non-standard encoding');
         }
-        
+
         $sanitized = $this->mxchat_sanitize_content_for_api($text);
-        
+
         if (empty($sanitized)) {
-            return false;
+            return new WP_Error('empty_after_sanitization', 'Page ' . $page_number . ': Text was extracted but contained only special characters, control codes, or unsupported content that was removed during cleanup');
         }
         
         // Create metadata
@@ -7691,15 +7747,14 @@ public function ajax_mxchat_get_queue_status() {
     // Calculate percentage
     $percentage = $total > 0 ? round((($completed + $failed) / $total) * 100) : 0;
     
-    // Get failed items details
+    // Get failed items details (include all failed items, not just those that exhausted retries)
     $failed_items = array();
     if ($failed > 0) {
         $failed_items = $wpdb->get_results($wpdb->prepare(
-            "SELECT item_type, item_data, error_message, attempts 
-            FROM $table_name 
-            WHERE queue_id = %s 
+            "SELECT item_type, item_data, error_message, attempts
+            FROM $table_name
+            WHERE queue_id = %s
             AND status = 'failed'
-            AND attempts >= max_attempts
             ORDER BY id DESC
             LIMIT 50",
             $queue_id
