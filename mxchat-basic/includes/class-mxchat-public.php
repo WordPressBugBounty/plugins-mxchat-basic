@@ -11,70 +11,6 @@ class MxChat_Public {
         $this->options = get_option('mxchat_options', array());
         add_shortcode('mxchat_chatbot', array($this, 'render_chatbot_shortcode'));
         add_action('wp_footer', array($this, 'append_chatbot_to_body'));
-        
-        // Initialize testing panel for admins
-        add_action('wp_enqueue_scripts', array($this, 'enqueue_testing_assets'));
-        
-        // Add debug hook
-        add_action('wp_footer', array($this, 'debug_display_logic'));
-    }
-
-    /**
-     * Enqueue testing panel assets for admin users
-     */
-    public function enqueue_testing_assets() {
-        // Check if frontend debugger is enabled in settings
-        $options = get_option('mxchat_options', array());
-        $show_debugger = isset($options['show_frontend_debugger']) ? $options['show_frontend_debugger'] : 'on';
-
-        // Only load if setting is enabled AND (user is admin or testing parameter is present)
-        if ($show_debugger === 'on' && (current_user_can('administrator') || isset($_GET['mxchat_test']))) {
-
-            // Get plugin URL for assets
-            $plugin_url = plugin_dir_url(dirname(__FILE__));
-            
-            // Enqueue test panel CSS
-            wp_enqueue_style(
-                'mxchat-test-panel',
-                $plugin_url . 'css/test-panel.css',
-                array(),
-                '2.5.2'
-            );
-            
-            // Enqueue test panel JS
-            wp_enqueue_script(
-                'mxchat-test-panel',
-                $plugin_url . 'js/test-panel.js',
-                array('jquery'),
-                '2.5.2',
-                true
-            );
-            
-            // Pass data to JavaScript
-            wp_localize_script('mxchat-test-panel', 'mxchatTestData', array(
-                'ajaxUrl' => admin_url('admin-ajax.php'),
-                'nonce' => wp_create_nonce('mxchat_test_nonce'),
-                'isAdmin' => current_user_can('administrator'),
-                'testingEnabled' => true
-            ));
-            
-            // Add JavaScript flag to enable testing
-            add_action('wp_footer', array($this, 'add_testing_flag'));
-        }
-    }
-
-    /**
-     * Add JavaScript flag to enable testing panel
-     */
-    public function add_testing_flag() {
-        echo '<script>window.mxchatTestingEnabled = true;</script>';
-    }
-
-    /**
-     * Check if testing mode should be enabled
-     */
-    private function is_testing_mode_enabled() {
-        return (current_user_can('administrator') || isset($_GET['mxchat_test']));
     }
 
 /**
@@ -336,6 +272,12 @@ public function render_chatbot_shortcode($atts) {
                 echo '</div>';
             }
         
+            echo '      <div id="mxchat-init-loader-' . esc_attr($bot_id) . '" class="mxchat-init-loader" style="display:none;">';
+            echo '          <div class="mxchat-init-loader-dots">';
+            echo '              <span class="dot"></span><span class="dot"></span><span class="dot"></span>';
+            echo '          </div>';
+            echo '      </div>';
+
             echo '      <div id="chat-container-' . esc_attr($bot_id) . '" class="chat-container" style="' . ($enable_email_block && $show_email_form ? 'display: none;' : '') . '">';
             echo '          <div id="chat-box-' . esc_attr($bot_id) . '" class="chat-box">';
             echo '              <div class="bot-message"' . ($skip_inline_colors ? '' : ' style="background: ' . esc_attr($bot_message_bg_color) . ';"') . '>';
@@ -757,25 +699,6 @@ private function is_auto_append_enabled() {
 /**
  * UPDATED: Debug function with new context info
  */
-public function debug_display_logic() {
-    if (current_user_can('manage_options') && isset($_GET['mxchat_debug'])) {
-        $bot_to_show = $this->get_display_bot();
-        $page_setting = $this->get_page_bot_setting();
-        $global_autoshow = isset($this->options['append_to_body']) && $this->options['append_to_body'] === 'on';
-        $hide_auto = $this->should_hide_chatbot('auto');
-        
-        echo '<div style="position: fixed; top: 50px; right: 20px; background: white; border: 2px solid red; padding: 10px; z-index: 9999; max-width: 300px; font-size: 12px;">';
-        echo '<h4 style="margin: 0 0 10px 0;">MxChat Debug Info</h4>';
-        echo '<p><strong>Raw append_to_body value:</strong> "' . ($this->options['append_to_body'] ?? 'NOT SET') . '"</p>';
-        echo '<p><strong>Page Setting:</strong><br><pre>' . print_r($page_setting, true) . '</pre></p>';
-        echo '<p><strong>Global Auto-show:</strong> ' . ($global_autoshow ? 'ON' : 'OFF') . '</p>';
-        echo '<p><strong>Hide Auto-Append:</strong> ' . ($hide_auto ? 'YES' : 'NO') . '</p>';
-        echo '<p><strong>Bot to Show:</strong> ' . ($bot_to_show === false ? 'NONE' : $bot_to_show) . '</p>';
-        echo '<p><strong>Shortcodes:</strong> floating="no" always works</p>';
-        echo '<p><small>Add ?mxchat_debug=1 to URL to see this</small></p>';
-        echo '</div>';
-    }
-}
 
 /**
  * NEW: Helper method to get available bots (for admin notices, etc.)

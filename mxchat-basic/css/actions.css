@@ -1727,3 +1727,112 @@ body.mxch-mobile-panel-open {
         grid-template-columns: repeat(2, 1fr);
     }
 }
+
+/* ==========================================================================
+   Phrase Tag Input
+   ========================================================================== */
+
+.mxch-phrase-input-wrapper {
+    border: 1px solid var(--mxch-card-border, #e5e7eb);
+    border-radius: 8px;
+    padding: 10px;
+    background: var(--mxch-card-bg, #fff);
+}
+
+.mxch-phrase-tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-bottom: 8px;
+    min-height: 28px;
+}
+
+.mxch-phrase-tags:empty {
+    margin-bottom: 0;
+}
+
+.mxch-phrase-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 10px;
+    background: #f3f4f6;
+    border-radius: 16px;
+    font-size: 13px;
+    color: #374151;
+    border: 1px solid #e5e7eb;
+    line-height: 1.4;
+    max-width: 100%;
+    word-break: break-word;
+}
+
+.mxch-phrase-pill .mxch-phrase-remove {
+    background: none;
+    border: none;
+    cursor: pointer;
+    color: #9ca3af;
+    font-size: 16px;
+    line-height: 1;
+    padding: 0 2px;
+    flex-shrink: 0;
+}
+
+.mxch-phrase-pill .mxch-phrase-remove:hover {
+    color: #ef4444;
+}
+
+/* Legacy phrase pill */
+.mxch-phrase-pill.mxch-phrase-legacy {
+    background: #fef3c7;
+    border-color: #fcd34d;
+    color: #92400e;
+}
+
+.mxch-legacy-badge {
+    font-size: 10px;
+    text-transform: uppercase;
+    background: #f59e0b;
+    color: #fff;
+    padding: 1px 5px;
+    border-radius: 4px;
+    font-weight: 600;
+    flex-shrink: 0;
+}
+
+/* Legacy tag in view mode */
+.mxch-phrase-tag.mxch-phrase-legacy {
+    background: #fef3c7;
+    border: 1px solid #fcd34d;
+    color: #92400e;
+}
+
+.mxch-phrase-add-row {
+    display: flex;
+    gap: 8px;
+}
+
+.mxch-phrase-add-row input {
+    flex: 1;
+    padding: 6px 10px;
+    border: 1px solid #d1d5db;
+    border-radius: 6px;
+    font-size: 13px;
+}
+
+.mxch-phrase-add-row input:focus {
+    outline: none;
+    border-color: #6366f1;
+    box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.15);
+}
+
+.mxch-phrase-add-row .mxch-btn-sm {
+    padding: 6px 14px;
+    font-size: 13px;
+    white-space: nowrap;
+}
+
+.mxch-no-phrases {
+    font-size: 13px;
+    color: #9ca3af;
+    font-style: italic;
+}

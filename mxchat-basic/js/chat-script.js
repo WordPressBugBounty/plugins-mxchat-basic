@@ -106,10 +106,8 @@ jQuery(document).ready(function($) {
             refreshNonceIfNeeded();
             trackOriginatingPage();
 
-            var chatPersistenceEnabled = typeof mxchatChat !== 'undefined' && mxchatChat.chat_persistence_toggle === 'on';
-            if (chatPersistenceEnabled && mxchatChat.email_collection_enabled !== 'on') {
-                loadChatHistory(botId);
-            }
+            // Note: loadChatHistory is handled by showChatContainerForBot with loader UI,
+            // so we do NOT call it here to avoid a race condition.
 
             return instance.sessionId;
         },
@@ -2293,7 +2291,17 @@ function loadChatHistory(botId, onComplete) {
                                 content = content.replace(/\\'/g, "'").replace(/\\"/g, '"');
                                 content = decodeHTMLEntities(content);
 
-                                if (content.includes("mxchat-product-card") || content.includes("mxchat-image-gallery")) {
+                                // Skip linkify for messages containing structured HTML
+                                // (forms, product cards, galleries, etc.) to avoid
+                                // markdown formatting corrupting HTML attributes
+                                // (e.g. underscores in name="field_name" becoming <em> tags)
+                                if (content.includes("mxchat-product-card") ||
+                                    content.includes("mxchat-image-gallery") ||
+                                    content.includes("mxchat-featured-products") ||
+                                    content.includes("<form") ||
+                                    content.includes("<input") ||
+                                    content.includes("<select") ||
+                                    content.includes("<textarea")) {
                                     messageElement.html(content);
                                 } else {
                                     var formattedContent = linkify(content);
@@ -2629,6 +2637,10 @@ $(document).on('click', '.questions-collapse-btn', function(e) {
             if (emailBlocker && !instance.emailCheckDone) {
                 instance.emailCheckDone = true;
                 resolveEmailState(botId);
+            } else if (!emailBlocker) {
+                // No email collection — still route through showChatContainerForBot
+                // so the loader is shown while chat history loads
+                showChatContainerForBot(botId);
             }
         } else {
             $chatbot.removeClass('visible').addClass('hidden');
@@ -2852,6 +2864,57 @@ $(document).on('click', '.questions-collapse-btn', function(e) {
 
 
 // ====================================
+//  INIT LOADER & CHAT CONTAINER HELPERS
+// ====================================
+// These must be outside the email collection block so they're always available
+// (used by persistence loading even when email collection is off)
+
+function showInitLoader(botId) {
+    var loader = getElementDOM(botId, 'mxchat-init-loader');
+    if (loader) loader.style.display = 'flex';
+}
+
+function hideInitLoader(botId) {
+    var loader = getElementDOM(botId, 'mxchat-init-loader');
+    if (loader) loader.style.display = 'none';
+}
+
+function showEmailFormForBot(botId) {
+    hideInitLoader(botId);
+    var emailBlocker = getElementDOM(botId, 'email-blocker');
+    var chatContainer = getElementDOM(botId, 'chat-container');
+    if (emailBlocker) emailBlocker.style.display = 'flex';
+    if (chatContainer) chatContainer.style.display = 'none';
+}
+
+function showChatContainerForBot(botId) {
+    var emailBlocker = getElementDOM(botId, 'email-blocker');
+    var chatContainer = getElementDOM(botId, 'chat-container');
+    if (emailBlocker) emailBlocker.style.display = 'none';
+
+    var instance = MxChatInstances.get(botId);
+    var chatPersistenceEnabled = mxchatChat.chat_persistence_toggle === 'on';
+
+    // If persistence is on and history hasn't loaded yet, show loader
+    // while history loads to prevent flash of empty chat
+    if (chatPersistenceEnabled && !instance.chatHistoryLoaded) {
+        if (chatContainer) chatContainer.style.display = 'none';
+        showInitLoader(botId);
+        loadChatHistory(botId, function() {
+            hideInitLoader(botId);
+            if (chatContainer) chatContainer.style.display = 'flex';
+            scrollToBottom(botId, true);
+        });
+    } else {
+        hideInitLoader(botId);
+        if (chatContainer) chatContainer.style.display = 'flex';
+        if (typeof loadChatHistory === 'function') {
+            loadChatHistory(botId);
+        }
+    }
+}
+
+// ====================================
 //  EMAIL COLLECTION SETUP - MULTI-INSTANCE VERSION
 // ====================================
 // Only run email collection setup if it's enabled
@@ -2887,38 +2950,6 @@ if (mxchatChat && mxchatChat.email_collection_enabled === 'on') {
             }
         `;
         document.head.appendChild(style);
-    }
-
-    // Helper functions for email collection (multi-instance aware)
-    function showEmailFormForBot(botId) {
-        var emailBlocker = getElementDOM(botId, 'email-blocker');
-        var chatContainer = getElementDOM(botId, 'chat-container');
-        if (emailBlocker) emailBlocker.style.display = 'flex';
-        if (chatContainer) chatContainer.style.display = 'none';
-    }
-
-    function showChatContainerForBot(botId) {
-        var emailBlocker = getElementDOM(botId, 'email-blocker');
-        var chatContainer = getElementDOM(botId, 'chat-container');
-        if (emailBlocker) emailBlocker.style.display = 'none';
-
-        var instance = MxChatInstances.get(botId);
-        var chatPersistenceEnabled = mxchatChat.chat_persistence_toggle === 'on';
-
-        // If persistence is on and history hasn't loaded yet, keep container
-        // hidden until history loads to prevent flash of empty chat
-        if (chatPersistenceEnabled && !instance.chatHistoryLoaded) {
-            if (chatContainer) chatContainer.style.display = 'none';
-            loadChatHistory(botId, function() {
-                if (chatContainer) chatContainer.style.display = 'flex';
-                scrollToBottom(botId, true);
-            });
-        } else {
-            if (chatContainer) chatContainer.style.display = 'flex';
-            if (typeof loadChatHistory === 'function') {
-                loadChatHistory(botId);
-            }
-        }
     }
 
     function isValidEmailAddress(email) {
@@ -3060,11 +3091,12 @@ if (mxchatChat && mxchatChat.email_collection_enabled === 'on') {
     function checkSessionAndEmailForBot(botId) {
         const sessionId = MxChatInstances.ensureSession(botId);
 
-        // Hide both panels while we check — prevents flash of wrong state
+        // Hide both panels while we check — show loader instead
         var emailBlocker = getElementDOM(botId, 'email-blocker');
         var chatContainer = getElementDOM(botId, 'chat-container');
         if (emailBlocker) emailBlocker.style.display = 'none';
         if (chatContainer) chatContainer.style.display = 'none';
+        showInitLoader(botId);
 
         fetch(mxchatChat.ajax_url, {
             method: 'POST',
@@ -3246,13 +3278,19 @@ if (mxchatChat && mxchatChat.email_collection_enabled === 'on') {
         var botId = $(this).data('bot-id') || 'default';
         var emailBlocker = getElementDOM(botId, 'email-blocker');
 
-        // Only check if email blocker exists for this bot
         if (emailBlocker) {
             if (isEmbeddedBot(botId)) {
                 // Embedded bots are always visible — check now
                 resolveEmailState(botId);
             }
             // Floating bots: handled in the widget open handler
+        } else if (isEmbeddedBot(botId)) {
+            // Embedded bot, no email collection — load history with loader
+            var chatPersistenceEnabled = typeof mxchatChat !== 'undefined' && mxchatChat.chat_persistence_toggle === 'on';
+            if (chatPersistenceEnabled) {
+                MxChatInstances.ensureSession(botId);
+                showChatContainerForBot(botId);
+            }
         }
     });
 }
@@ -3279,6 +3317,8 @@ if (mxchatChat && mxchatChat.email_collection_enabled === 'on') {
             if (emailBlocker && !instance.emailCheckDone) {
                 instance.emailCheckDone = true;
                 resolveEmailState(botId);
+            } else if (!emailBlocker) {
+                showChatContainerForBot(botId);
             }
         }
     });

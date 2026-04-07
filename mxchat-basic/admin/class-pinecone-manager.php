@@ -1397,7 +1397,7 @@ public function fetch_pinecone_vectors_by_ids($pinecone_options, $vector_ids) {
  * Delete all vectors from Pinecone
  * Loops until all vectors are deleted (handles large databases)
  */
-public function mxchat_delete_all_from_pinecone($pinecone_options) {
+public function mxchat_delete_all_from_pinecone($pinecone_options, $content_type_filter = '') {
     $api_key = $pinecone_options['mxchat_pinecone_api_key'] ?? '';
     $host = $pinecone_options['mxchat_pinecone_host'] ?? '';
 
@@ -1424,11 +1424,19 @@ public function mxchat_delete_all_from_pinecone($pinecone_options) {
 
             foreach ($records as $record) {
                 if (!empty($record->id)) {
+                    // If content type filter is active, only include matching records
+                    if (!empty($content_type_filter)) {
+                        $record_type = isset($record->type) ? $record->type : '';
+                        if ($record_type !== $content_type_filter) {
+                            continue;
+                        }
+                    }
                     $vector_ids[] = $record->id;
                 }
             }
 
-            // If no vectors found, we're done
+            // If no matching vectors found, we're done
+            // (either no records at all, or all remaining records are non-matching types)
             if (empty($vector_ids)) {
                 break;
             }

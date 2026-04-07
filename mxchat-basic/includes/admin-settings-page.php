@@ -68,6 +68,10 @@ function mxchat_render_settings_page($admin_instance) {
                         <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
                         <span><?php esc_html_e('Optimization', 'mxchat'); ?></span>
                     </button>
+                    <button class="mxch-mobile-nav-link" data-target="testing">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 2v6"/><path d="M15 2v6"/><path d="M12 17v5"/><path d="M5 8h14"/><path d="M6 11v-1a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v1"/><path d="m9 14 3 3 3-3"/></svg>
+                        <span><?php esc_html_e('Testing', 'mxchat'); ?></span>
+                    </button>
                 </div>
                 <!-- Integrations Section -->
                 <div class="mxch-mobile-nav-section">
@@ -156,6 +160,15 @@ function mxchat_render_settings_page($admin_instance) {
                             <span class="mxch-nav-link-text"><?php esc_html_e('Optimization', 'mxchat'); ?></span>
                         </button>
                     </div>
+
+                    <div class="mxch-nav-item" data-section="testing">
+                        <button class="mxch-nav-link" data-target="testing">
+                            <span class="mxch-nav-link-icon">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 2v6"/><path d="M15 2v6"/><path d="M12 17v5"/><path d="M5 8h14"/><path d="M6 11v-1a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v1"/><path d="m9 14 3 3 3-3"/></svg>
+                            </span>
+                            <span class="mxch-nav-link-text"><?php esc_html_e('Testing', 'mxchat'); ?></span>
+                        </button>
+                    </div>
                 </div>
 
                 <!-- Integrations Section -->
@@ -193,6 +206,7 @@ function mxchat_render_settings_page($admin_instance) {
                         </button>
                     </div>
                 </div>
+
             </nav>
 
             <?php if (!$is_activated): ?>
@@ -300,10 +314,6 @@ function mxchat_render_settings_page($admin_instance) {
                             $admin_instance->mxchat_citation_links_toggle_callback();
                         }, __('Allow the AI to include citation links from your knowledge database in responses. If disabled, ensure your AI Behavior settings do not mention links or the AI may fabricate URLs.', 'mxchat'));
 
-                        // Frontend Debugger
-                        mxchat_render_field_wrapper('frontend_debugger', __('Frontend Debugger', 'mxchat'), function() use ($admin_instance) {
-                            $admin_instance->mxchat_frontend_debugger_callback();
-                        }, __('Show debug panel on frontend for admins. Displays similarity scores and query analysis.', 'mxchat'));
                         ?>
                     </div>
                 </div>
@@ -1036,6 +1046,113 @@ function mxchat_render_settings_page($admin_instance) {
                         </div>
                     </div>
                     <?php endforeach; ?>
+                </div>
+            </div>
+
+            <!-- =====================================================
+                 TESTING SECTION
+                 ===================================================== -->
+            <div id="testing" class="mxch-section">
+                <div class="mxch-content-header">
+                    <h1 class="mxch-content-title"><?php esc_html_e('Testing', 'mxchat'); ?></h1>
+                    <p class="mxch-content-subtitle"><?php esc_html_e('Test your chatbot and inspect debug data in real time.', 'mxchat'); ?></p>
+                </div>
+
+                <div class="mxch-testing-layout">
+                    <!-- Left Column: Debug Panel -->
+                    <div class="mxch-testing-debug-panel">
+                        <!-- Quick Actions -->
+                        <div class="mxch-card">
+                            <div class="mxch-card-body">
+                                <h3 class="mxch-testing-section-title"><?php esc_html_e('Quick Actions', 'mxchat'); ?></h3>
+                                <div class="mxch-testing-actions-row">
+                                    <button type="button" class="mxch-testing-btn mxch-testing-btn-danger" id="mxch-testing-clear-session">
+                                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg>
+                                        <?php esc_html_e('Clear Chat Session', 'mxchat'); ?>
+                                    </button>
+                                    <button type="button" class="mxch-testing-btn mxch-testing-btn-secondary" id="mxch-testing-clear-debug">
+                                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v20M2 12h20"/></svg>
+                                        <?php esc_html_e('Clear Debug Log', 'mxchat'); ?>
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Last Query Analysis -->
+                        <div class="mxch-card">
+                            <div class="mxch-card-body">
+                                <h3 class="mxch-testing-section-title"><?php esc_html_e('Last Query Analysis', 'mxchat'); ?></h3>
+
+                                <div class="mxch-testing-field">
+                                    <label><?php esc_html_e('Similarity Threshold', 'mxchat'); ?></label>
+                                    <span id="mxch-testing-threshold"><?php esc_html_e('Loading...', 'mxchat'); ?></span>
+                                </div>
+
+                                <div class="mxch-testing-field">
+                                    <label><?php esc_html_e('User Query', 'mxchat'); ?></label>
+                                    <div id="mxch-testing-last-query" class="mxch-testing-query-display"><?php esc_html_e('Waiting for next query...', 'mxchat'); ?></div>
+                                </div>
+
+                                <div class="mxch-testing-field">
+                                    <label><?php esc_html_e('Approved URLs for Citations', 'mxchat'); ?></label>
+                                    <div id="mxch-testing-approved-urls" class="mxch-testing-results">
+                                        <div class="mxch-testing-no-data"><?php esc_html_e('No URL data yet', 'mxchat'); ?></div>
+                                    </div>
+                                </div>
+
+                                <div class="mxch-testing-field">
+                                    <label><?php esc_html_e('Document Matches', 'mxchat'); ?></label>
+                                    <div id="mxch-testing-similarity-scores" class="mxch-testing-results">
+                                        <div class="mxch-testing-no-data"><?php esc_html_e('No query data yet', 'mxchat'); ?></div>
+                                    </div>
+                                </div>
+
+                                <div class="mxch-testing-field">
+                                    <label><?php esc_html_e('Actions Triggered', 'mxchat'); ?></label>
+                                    <div id="mxch-testing-action-scores" class="mxch-testing-results">
+                                        <div class="mxch-testing-no-data"><?php esc_html_e('No action data yet', 'mxchat'); ?></div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- System Information -->
+                        <div class="mxch-card">
+                            <div class="mxch-card-body">
+                                <h3 class="mxch-testing-section-title"><?php esc_html_e('System Information', 'mxchat'); ?></h3>
+
+                                <div class="mxch-testing-field">
+                                    <label><?php esc_html_e('System Prompt', 'mxchat'); ?></label>
+                                    <div id="mxch-testing-system-prompt" class="mxch-testing-system-prompt"><?php esc_html_e('Loading...', 'mxchat'); ?></div>
+                                </div>
+
+                                <div class="mxch-testing-field">
+                                    <label><?php esc_html_e('Knowledge Base', 'mxchat'); ?></label>
+                                    <span id="mxch-testing-kb-status"><?php esc_html_e('Checking...', 'mxchat'); ?></span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Debug Log -->
+                        <div class="mxch-card">
+                            <div class="mxch-card-body">
+                                <h3 class="mxch-testing-section-title"><?php esc_html_e('Debug Log', 'mxchat'); ?></h3>
+                                <div id="mxch-testing-debug-console" class="mxch-testing-debug-console">
+                                    <div class="mxch-testing-debug-entry"><?php esc_html_e('Debug panel ready - send a message to begin...', 'mxchat'); ?></div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Right Column: Chatbot Replica -->
+                    <div class="mxch-testing-chatbot-column">
+                        <div class="mxch-testing-chatbot-scope">
+                            <?php
+                            // Render the chatbot inline for testing
+                            echo do_shortcode('[mxchat_chatbot floating="no" bot_id="testing"]');
+                            ?>
+                        </div>
+                    </div>
                 </div>
             </div>
 

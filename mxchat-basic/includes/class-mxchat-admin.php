@@ -80,6 +80,10 @@ class MxChat_Admin {
         add_action('wp_ajax_mxchat_add_intent_ajax', array($this, 'mxchat_add_intent_ajax'));
         add_action('wp_ajax_mxchat_edit_intent_ajax', array($this, 'mxchat_edit_intent_ajax'));
         add_action('wp_ajax_mxchat_delete_intent_ajax', array($this, 'mxchat_delete_intent_ajax'));
+        add_action('wp_ajax_mxchat_add_phrase', array($this, 'mxchat_add_phrase_ajax'));
+        add_action('wp_ajax_mxchat_delete_phrase', array($this, 'mxchat_delete_phrase_ajax'));
+        add_action('wp_ajax_mxchat_get_phrases', array($this, 'mxchat_get_phrases_ajax'));
+        add_action('wp_ajax_mxchat_delete_legacy_phrases', array($this, 'mxchat_delete_legacy_phrases_ajax'));
 
         // Slack test connection
         add_action('wp_ajax_mxchat_test_slack_connection', array($this, 'mxchat_test_slack_connection'));
@@ -90,11 +94,8 @@ class MxChat_Admin {
     }
 
 private function is_license_active() {
-    // Get the raw value without translation
     $license_status = get_option('mxchat_license_status', 'inactive');
-
-    // Check against multiple possible values, bypassing translation issues
-    return ($license_status === 'active' || $license_status === esc_html__('active', 'mxchat'));
+    return ($license_status === 'active');
 }
 
 private function initialize_default_options() {
@@ -145,7 +146,6 @@ private function initialize_default_options() {
         'post_type_visibility_list' => array(), // Array of post type slugs
         'contextual_awareness_toggle' => 'off',
         'citation_links_toggle' => 'on',
-        'show_frontend_debugger' => 'on',
         'close_button_color' => esc_html__('#fff', 'mxchat'),
         'chatbot_bg_color' => esc_html__('#fff', 'mxchat'),
         'user_message_bg_color' => esc_html__('#fff', 'mxchat'),
@@ -3852,6 +3852,23 @@ public function mxchat_fetch_actions_list() {
     // Get available callbacks for labels/icons
     $available_callbacks = $this->mxchat_get_available_callbacks();
 
+    // Prefetch individual phrase counts for all fetched actions
+    $phrases_table = $wpdb->prefix . 'mxchat_intent_phrases';
+    $phrase_counts = array();
+    if ($wpdb->get_var("SHOW TABLES LIKE '$phrases_table'") === $phrases_table) {
+        $action_ids = wp_list_pluck($actions, 'id');
+        if (!empty($action_ids)) {
+            $id_placeholders = implode(',', array_fill(0, count($action_ids), '%d'));
+            $count_results = $wpdb->get_results($wpdb->prepare(
+                "SELECT intent_id, COUNT(*) as cnt FROM $phrases_table WHERE intent_id IN ($id_placeholders) GROUP BY intent_id",
+                $action_ids
+            ));
+            foreach ($count_results as $row) {
+                $phrase_counts[$row->intent_id] = intval($row->cnt);
+            }
+        }
+    }
+
     // Format actions for response
     $formatted_actions = array();
     foreach ($actions as $action) {
@@ -3874,6 +3891,8 @@ public function mxchat_fetch_actions_list() {
             'threshold' => round($action->similarity_threshold * 100),
             'enabled' => (bool) $action->enabled,
             'enabled_bots' => $enabled_bots,
+            'has_legacy_vector' => !empty($action->embedding_vector),
+            'individual_phrase_count' => isset($phrase_counts[$action->id]) ? $phrase_counts[$action->id] : 0,
         );
     }
 
@@ -3954,6 +3973,12 @@ public function mxchat_bulk_delete_actions() {
         wp_send_json_error(__('Failed to delete actions', 'mxchat'));
     }
 
+    // Also delete individual phrases for these intents
+    $phrases_table = $wpdb->prefix . 'mxchat_intent_phrases';
+    if ($wpdb->get_var("SHOW TABLES LIKE '$phrases_table'") === $phrases_table) {
+        $wpdb->query($wpdb->prepare("DELETE FROM $phrases_table WHERE intent_id IN ($placeholders)", $action_ids));
+    }
+
     wp_send_json_success(array('deleted' => $result));
 }
 
@@ -3978,23 +4003,16 @@ public function mxchat_add_intent_ajax() {
     $enabled_bots = isset($_POST['enabled_bots']) ? array_map('sanitize_text_field', (array) $_POST['enabled_bots']) : array('default');
 
     // Validate
-    if (empty($intent_label) || empty($phrases_input) || empty($callback_function)) {
+    // Check if using new individual phrases mode or legacy mode
+    $individual_phrases = isset($_POST['individual_phrases']) ? array_filter(array_map('sanitize_text_field', (array) $_POST['individual_phrases'])) : array();
+    $use_individual = !empty($individual_phrases);
+
+    // Validate required fields (phrases not required when using individual mode)
+    if (empty($intent_label) || empty($callback_function)) {
         wp_send_json_error(__('Please fill in all required fields.', 'mxchat'));
     }
-
-    // Process phrases
-    $phrases_array = array_filter(array_map('trim', preg_split('/[\n,]+/', $phrases_input)));
-    if (empty($phrases_array)) {
-        wp_send_json_error(__('Please provide at least one trigger phrase.', 'mxchat'));
-    }
-
-    // Generate embedding (combine phrases into single string for embedding)
-    $embedding_vector = $this->mxchat_generate_embedding(implode(' ', $phrases_array));
-    if (is_wp_error($embedding_vector)) {
-        // Fallback: store without embedding
-        $serialized_vector = null;
-    } else {
-        $serialized_vector = maybe_serialize($embedding_vector);
+    if (!$use_individual && empty($phrases_input)) {
+        wp_send_json_error(__('Please fill in all required fields.', 'mxchat'));
     }
 
     // Ensure default bot is included
@@ -4003,25 +4021,93 @@ public function mxchat_add_intent_ajax() {
     }
     $enabled_bots_json = json_encode($enabled_bots);
 
-    // Insert
-    $result = $wpdb->insert(
-        $table_name,
-        array(
-            'intent_label' => $intent_label,
-            'phrases' => implode(', ', $phrases_array),
-            'embedding_vector' => $serialized_vector,
-            'similarity_threshold' => $similarity_threshold,
-            'callback_function' => $callback_function,
-            'enabled' => 1,
-            'enabled_bots' => $enabled_bots_json,
-        )
-    );
+    if ($use_individual) {
+        // New mode: individual phrases each get their own vector
+        // Insert the intent row with empty legacy fields
+        $result = $wpdb->insert(
+            $table_name,
+            array(
+                'intent_label' => $intent_label,
+                'phrases' => '',
+                'embedding_vector' => '',
+                'similarity_threshold' => $similarity_threshold,
+                'callback_function' => $callback_function,
+                'enabled' => 1,
+                'enabled_bots' => $enabled_bots_json,
+            )
+        );
 
-    if ($result === false) {
-        wp_send_json_error(__('Failed to add action to database.', 'mxchat'));
+        if ($result === false) {
+            wp_send_json_error(__('Failed to add action to database.', 'mxchat'));
+        }
+
+        $intent_id = $wpdb->insert_id;
+
+        // Insert each phrase individually with its own embedding
+        $phrases_table = $wpdb->prefix . 'mxchat_intent_phrases';
+        $failed_phrases = array();
+        foreach ($individual_phrases as $phrase) {
+            $phrase = trim($phrase);
+            if (empty($phrase)) continue;
+
+            $embedding_vector = $this->mxchat_generate_embedding($phrase);
+            if (is_wp_error($embedding_vector)) {
+                $failed_phrases[] = $phrase;
+                continue;
+            }
+
+            $wpdb->insert(
+                $phrases_table,
+                array(
+                    'intent_id' => $intent_id,
+                    'phrase' => $phrase,
+                    'embedding_vector' => maybe_serialize($embedding_vector),
+                )
+            );
+        }
+
+        $response = array('id' => $intent_id);
+        if (!empty($failed_phrases)) {
+            $response['failed_phrases'] = $failed_phrases;
+        }
+        wp_send_json_success($response);
+
+    } else {
+        // Legacy mode: combine all phrases into one embedding (backwards compatible)
+        $phrases_array = array_filter(array_map('trim', preg_split('/[\n,]+/', $phrases_input)));
+        if (empty($phrases_array)) {
+            wp_send_json_error(__('Please provide at least one trigger phrase.', 'mxchat'));
+        }
+
+        // Generate embedding (combine phrases into single string for embedding)
+        $embedding_vector = $this->mxchat_generate_embedding(implode(' ', $phrases_array));
+        if (is_wp_error($embedding_vector)) {
+            // Fallback: store without embedding
+            $serialized_vector = null;
+        } else {
+            $serialized_vector = maybe_serialize($embedding_vector);
+        }
+
+        // Insert
+        $result = $wpdb->insert(
+            $table_name,
+            array(
+                'intent_label' => $intent_label,
+                'phrases' => implode(', ', $phrases_array),
+                'embedding_vector' => $serialized_vector,
+                'similarity_threshold' => $similarity_threshold,
+                'callback_function' => $callback_function,
+                'enabled' => 1,
+                'enabled_bots' => $enabled_bots_json,
+            )
+        );
+
+        if ($result === false) {
+            wp_send_json_error(__('Failed to add action to database.', 'mxchat'));
+        }
+
+        wp_send_json_success(array('id' => $wpdb->insert_id));
     }
-
-    wp_send_json_success(array('id' => $wpdb->insert_id));
 }
 
 /**
@@ -4046,38 +4132,50 @@ public function mxchat_edit_intent_ajax() {
     $enabled_bots = isset($_POST['enabled_bots']) ? array_map('sanitize_text_field', (array) $_POST['enabled_bots']) : array('default');
 
     // Validate
-    if (!$intent_id || empty($intent_label) || empty($phrases_input)) {
+    if (!$intent_id || empty($intent_label)) {
         wp_send_json_error(__('Please fill in all required fields.', 'mxchat'));
     }
 
-    // Process phrases
-    $phrases_array = array_filter(array_map('trim', preg_split('/[\n,]+/', $phrases_input)));
-    if (empty($phrases_array)) {
-        wp_send_json_error(__('Please provide at least one trigger phrase.', 'mxchat'));
-    }
+    // Check if phrases are managed individually (empty phrases_input means individual mode)
+    $uses_individual_phrases = empty($phrases_input);
 
-    // Generate new embedding (combine phrases into single string for embedding)
-    $embedding_vector = $this->mxchat_generate_embedding(implode(' ', $phrases_array));
-    if (is_wp_error($embedding_vector)) {
-        // Keep existing embedding
-        $serialized_vector = null;
+    if ($uses_individual_phrases) {
+        // Individual phrase mode: only update non-phrase fields, skip embedding regeneration
         $update_data = array(
             'intent_label' => $intent_label,
-            'phrases' => implode(', ', $phrases_array),
             'similarity_threshold' => $similarity_threshold,
             'callback_function' => $callback_function,
             'enabled_bots' => json_encode($enabled_bots),
         );
     } else {
-        $serialized_vector = maybe_serialize($embedding_vector);
-        $update_data = array(
-            'intent_label' => $intent_label,
-            'phrases' => implode(', ', $phrases_array),
-            'embedding_vector' => $serialized_vector,
-            'similarity_threshold' => $similarity_threshold,
-            'callback_function' => $callback_function,
-            'enabled_bots' => json_encode($enabled_bots),
-        );
+        // Legacy mode: process phrases and regenerate embedding (backwards compatible for add-ons)
+        $phrases_array = array_filter(array_map('trim', preg_split('/[\n,]+/', $phrases_input)));
+        if (empty($phrases_array)) {
+            wp_send_json_error(__('Please provide at least one trigger phrase.', 'mxchat'));
+        }
+
+        // Generate new embedding (combine phrases into single string for embedding)
+        $embedding_vector = $this->mxchat_generate_embedding(implode(' ', $phrases_array));
+        if (is_wp_error($embedding_vector)) {
+            // Keep existing embedding
+            $update_data = array(
+                'intent_label' => $intent_label,
+                'phrases' => implode(', ', $phrases_array),
+                'similarity_threshold' => $similarity_threshold,
+                'callback_function' => $callback_function,
+                'enabled_bots' => json_encode($enabled_bots),
+            );
+        } else {
+            $serialized_vector = maybe_serialize($embedding_vector);
+            $update_data = array(
+                'intent_label' => $intent_label,
+                'phrases' => implode(', ', $phrases_array),
+                'embedding_vector' => $serialized_vector,
+                'similarity_threshold' => $similarity_threshold,
+                'callback_function' => $callback_function,
+                'enabled_bots' => json_encode($enabled_bots),
+            );
+        }
     }
 
     // Ensure default bot is included
@@ -4126,9 +4224,150 @@ public function mxchat_delete_intent_ajax() {
         wp_send_json_error(__('Failed to delete action', 'mxchat'));
     }
 
+    // Also delete individual phrases for this intent
+    $phrases_table = $wpdb->prefix . 'mxchat_intent_phrases';
+    if ($wpdb->get_var("SHOW TABLES LIKE '$phrases_table'") === $phrases_table) {
+        $wpdb->delete($phrases_table, array('intent_id' => $intent_id), array('%d'));
+    }
+
     wp_send_json_success(array('deleted' => true));
 }
 
+/**
+ * AJAX handler to add a single phrase with its own embedding to an intent
+ */
+public function mxchat_add_phrase_ajax() {
+    check_ajax_referer('mxchat_add_phrase_nonce', 'security');
+
+    if (!current_user_can('manage_options')) {
+        wp_send_json_error(__('Unauthorized', 'mxchat'));
+    }
+
+    $intent_id = isset($_POST['intent_id']) ? intval($_POST['intent_id']) : 0;
+    $phrase = isset($_POST['phrase']) ? sanitize_text_field($_POST['phrase']) : '';
+
+    if (!$intent_id || empty($phrase)) {
+        wp_send_json_error(__('Please provide an intent ID and phrase.', 'mxchat'));
+    }
+
+    // Verify the intent exists
+    global $wpdb;
+    $intents_table = $wpdb->prefix . 'mxchat_intents';
+    $intent = $wpdb->get_row($wpdb->prepare("SELECT id FROM $intents_table WHERE id = %d", $intent_id));
+    if (!$intent) {
+        wp_send_json_error(__('Action not found.', 'mxchat'));
+    }
+
+    // Generate embedding for this single phrase
+    $embedding_vector = $this->mxchat_generate_embedding($phrase);
+    if (is_wp_error($embedding_vector)) {
+        wp_send_json_error(__('Failed to generate embedding: ', 'mxchat') . $embedding_vector->get_error_message());
+    }
+
+    $phrases_table = $wpdb->prefix . 'mxchat_intent_phrases';
+    $result = $wpdb->insert(
+        $phrases_table,
+        array(
+            'intent_id' => $intent_id,
+            'phrase' => $phrase,
+            'embedding_vector' => maybe_serialize($embedding_vector),
+        )
+    );
+
+    if ($result === false) {
+        wp_send_json_error(__('Failed to add phrase.', 'mxchat'));
+    }
+
+    wp_send_json_success(array('id' => $wpdb->insert_id, 'phrase' => $phrase));
+}
+
+/**
+ * AJAX handler to delete a single phrase from wp_mxchat_intent_phrases
+ */
+public function mxchat_delete_phrase_ajax() {
+    check_ajax_referer('mxchat_delete_phrase_nonce', 'security');
+
+    if (!current_user_can('manage_options')) {
+        wp_send_json_error(__('Unauthorized', 'mxchat'));
+    }
+
+    $phrase_id = isset($_POST['phrase_id']) ? intval($_POST['phrase_id']) : 0;
+    if (!$phrase_id) {
+        wp_send_json_error(__('Invalid phrase ID.', 'mxchat'));
+    }
+
+    global $wpdb;
+    $phrases_table = $wpdb->prefix . 'mxchat_intent_phrases';
+    $result = $wpdb->delete($phrases_table, array('id' => $phrase_id), array('%d'));
+
+    if ($result === false) {
+        wp_send_json_error(__('Failed to delete phrase.', 'mxchat'));
+    }
+
+    wp_send_json_success(array('deleted' => true));
+}
+
+/**
+ * AJAX handler to fetch individual phrases for an intent
+ */
+public function mxchat_get_phrases_ajax() {
+    check_ajax_referer('mxchat_get_phrases_nonce', 'security');
+
+    if (!current_user_can('manage_options')) {
+        wp_send_json_error(__('Unauthorized', 'mxchat'));
+    }
+
+    $intent_id = isset($_POST['intent_id']) ? intval($_POST['intent_id']) : 0;
+    if (!$intent_id) {
+        wp_send_json_error(__('Invalid intent ID.', 'mxchat'));
+    }
+
+    global $wpdb;
+    $phrases_table = $wpdb->prefix . 'mxchat_intent_phrases';
+
+    $phrases = array();
+    if ($wpdb->get_var("SHOW TABLES LIKE '$phrases_table'") === $phrases_table) {
+        $phrases = $wpdb->get_results($wpdb->prepare(
+            "SELECT id, phrase, created_at FROM $phrases_table WHERE intent_id = %d ORDER BY created_at ASC",
+            $intent_id
+        ));
+    }
+
+    wp_send_json_success(array('phrases' => $phrases));
+}
+
+/**
+ * AJAX handler to clear legacy phrases and embedding from the main intents table
+ */
+public function mxchat_delete_legacy_phrases_ajax() {
+    check_ajax_referer('mxchat_delete_legacy_nonce', 'security');
+
+    if (!current_user_can('manage_options')) {
+        wp_send_json_error(__('Unauthorized', 'mxchat'));
+    }
+
+    $intent_id = isset($_POST['intent_id']) ? intval($_POST['intent_id']) : 0;
+    if (!$intent_id) {
+        wp_send_json_error(__('Invalid intent ID.', 'mxchat'));
+    }
+
+    global $wpdb;
+    $table_name = $wpdb->prefix . 'mxchat_intents';
+
+    $result = $wpdb->update(
+        $table_name,
+        array('phrases' => '', 'embedding_vector' => ''),
+        array('id' => $intent_id),
+        array('%s', '%s'),
+        array('%d')
+    );
+
+    if ($result === false) {
+        wp_send_json_error(__('Failed to clear legacy phrases.', 'mxchat'));
+    }
+
+    wp_send_json_success(array('cleared' => true));
+}
 
 /**
  * Enhanced get_available_callbacks function with form action exclusion
@@ -4618,15 +4857,6 @@ public function mxchat_page_init() {
         array($this, 'mxchat_brave_api_key_callback'),
         'mxchat-api-keys',
         'mxchat_api_keys_section'
-    );
-
-    // Frontend Debugger Toggle
-    add_settings_field(
-        'show_frontend_debugger',
-        esc_html__('Frontend Debugger', 'mxchat'),
-        array($this, 'mxchat_frontend_debugger_callback'),
-        'mxchat-chatbot',
-        'mxchat_chatbot_section'
     );
 
     // Similarity Threshold Slider
@@ -6260,18 +6490,6 @@ public function mxchat_append_to_body_callback() {
     echo '</div>'; // End mxchat-autosave-section
 }
 
-public function mxchat_frontend_debugger_callback() {
-    $show_debugger = isset($this->options['show_frontend_debugger']) ? $this->options['show_frontend_debugger'] : 'on';
-    $checked = ($show_debugger === 'on') ? 'checked' : '';
-    echo '<label class="toggle-switch">';
-    echo sprintf(
-        '<input type="checkbox" id="show_frontend_debugger" name="show_frontend_debugger" value="on" %s />',
-        esc_attr($checked)
-    );
-    echo '<span class="slider"></span>';
-    echo '</label>';
-}
-
 public function mxchat_contextual_awareness_callback() {
     // Get value from options array, default to 'off'
     $contextual_awareness = isset($this->options['contextual_awareness_toggle']) ? $this->options['contextual_awareness_toggle'] : 'off';
@@ -7034,6 +7252,10 @@ private function enqueue_page_specific_assets($current_page, $plugin_url, $versi
                 'editNonce' => wp_create_nonce('mxchat_edit_intent'),
                 'deleteNonce' => wp_create_nonce('mxchat_delete_intent_nonce'),
                 'toggleNonce' => wp_create_nonce('mxchat_actions_nonce'),
+                'addPhraseNonce' => wp_create_nonce('mxchat_add_phrase_nonce'),
+                'deletePhraseNonce' => wp_create_nonce('mxchat_delete_phrase_nonce'),
+                'getPhrasesNonce' => wp_create_nonce('mxchat_get_phrases_nonce'),
+                'deleteLegacyNonce' => wp_create_nonce('mxchat_delete_legacy_nonce'),
                 'isActivated' => $is_activated,
                 'i18n' => array(
                     'confirmDelete' => __('Are you sure you want to delete this action?', 'mxchat'),
@@ -7080,6 +7302,75 @@ private function enqueue_page_specific_assets($current_page, $plugin_url, $versi
                 'nonce' => wp_create_nonce('mxchat_test_streaming_nonce'),
                 'settings_nonce' => wp_create_nonce('mxchat_save_setting_nonce')
             ]);
+
+            // Testing Tab: Load chatbot assets for the embedded testing chatbot
+            wp_enqueue_style('mxchat-chat-css', $plugin_url . 'css/chat-style.css', array(), $version);
+            wp_enqueue_style('mxchat-admin-testing-css', $plugin_url . 'css/admin-testing-tab.css', array('mxchat-admin-sidebar-css', 'mxchat-chat-css'), $version);
+
+            wp_enqueue_script('mxchat-chat-js', $plugin_url . 'js/chat-script.js', array('jquery'), $version, true);
+            wp_enqueue_script('mxchat-admin-testing-js', $plugin_url . 'js/admin-testing-tab.js', array('jquery', 'mxchat-chat-js'), $version, true);
+
+            // Allow add-ons to enqueue their public CSS/JS for the testing chatbot
+            do_action('mxchat_enqueue_testing_tab_assets');
+
+            // Localize mxchatChat for the chatbot JS (same settings as frontend)
+            $options = get_option('mxchat_options', array());
+            $prompts_options = get_option('mxchat_prompts_options', array());
+            $theme_options = get_option('mxchat_theme_options', array());
+            $ai_theme_active = !empty($theme_options['active_ai_theme_css']);
+            $has_bot_theme_assignments = !empty($theme_options['bot_theme_assignments']);
+            $skip_inline_colors = $ai_theme_active || $has_bot_theme_assignments;
+
+            wp_localize_script('mxchat-chat-js', 'mxchatChat', array(
+                'ajax_url' => admin_url('admin-ajax.php'),
+                'nonce' => wp_create_nonce('mxchat_chat_nonce'),
+                'model' => isset($options['model']) ? $options['model'] : 'gpt-5.1-chat-latest',
+                'enable_streaming_toggle' => isset($options['enable_streaming_toggle']) ? $options['enable_streaming_toggle'] : 'on',
+                'contextual_awareness_toggle' => isset($options['contextual_awareness_toggle']) ? $options['contextual_awareness_toggle'] : 'off',
+                'link_target_toggle' => $options['link_target_toggle'] ?? 'off',
+                'rate_limit_message' => $options['rate_limit_message'] ?? 'Rate limit exceeded. Please try again later.',
+                'complianz_toggle' => isset($options['complianz_toggle']) && $options['complianz_toggle'] === 'on',
+                'user_message_bg_color' => $options['user_message_bg_color'] ?? '#fff',
+                'user_message_font_color' => $options['user_message_font_color'] ?? '#212121',
+                'bot_message_bg_color' => $options['bot_message_bg_color'] ?? '#212121',
+                'bot_message_font_color' => $options['bot_message_font_color'] ?? '#fff',
+                'top_bar_bg_color' => $options['top_bar_bg_color'] ?? '#212121',
+                'send_button_font_color' => $options['send_button_font_color'] ?? '#212121',
+                'close_button_color' => $options['close_button_color'] ?? '#fff',
+                'chatbot_background_color' => $options['chatbot_background_color'] ?? '#212121',
+                'chatbot_bg_color' => $options['chatbot_bg_color'] ?? '#fff',
+                'icon_color' => $options['icon_color'] ?? '#fff',
+                'chat_input_font_color' => $options['chat_input_font_color'] ?? '#212121',
+                'chat_persistence_toggle' => 'off', // Always off for testing chatbot
+                'appendWidgetToBody' => 'off',
+                'live_agent_message_bg_color' => $options['live_agent_message_bg_color'] ?? '#ffffff',
+                'live_agent_message_font_color' => $options['live_agent_message_font_color'] ?? '#333333',
+                'chat_toolbar_toggle' => $options['chat_toolbar_toggle'] ?? 'off',
+                'mode_indicator_bg_color' => $options['mode_indicator_bg_color'] ?? '#767676',
+                'mode_indicator_font_color' => $options['mode_indicator_font_color'] ?? '#ffffff',
+                'toolbar_icon_color' => $options['toolbar_icon_color'] ?? '#212121',
+                'use_pinecone' => $prompts_options['mxchat_use_pinecone'] ?? '0',
+                'email_collection_enabled' => 'off', // No email collection in testing
+                'initial_email_state' => null,
+                'skip_email_check' => true,
+                'pinecone_enabled' => isset($prompts_options['mxchat_use_pinecone']) && $prompts_options['mxchat_use_pinecone'] === '1',
+                'skip_inline_colors' => $skip_inline_colors,
+                'bot_theme_assignments' => $theme_options['bot_theme_assignments'] ?? array()
+            ));
+
+            // Localize testing tab script data
+            wp_localize_script('mxchat-admin-testing-js', 'mxchatAdminTestData', array(
+                'ajaxUrl' => admin_url('admin-ajax.php'),
+                'nonce' => wp_create_nonce('mxchat_test_nonce'),
+                'isAdmin' => true,
+                'testingEnabled' => true
+            ));
+
+            // Add testing enabled flag for the chatbot to return debug data
+            add_action('admin_footer', function() {
+                echo '<script>window.mxchatTestingEnabled = true;</script>';
+            });
+
             break;
     }
 }
@@ -7096,6 +7387,10 @@ private function localize_admin_scripts($current_page) {
         'actions_nonce' => wp_create_nonce('mxchat_actions_nonce'),
         'add_intent_nonce' => wp_create_nonce('mxchat_add_intent_nonce'),
         'edit_intent_nonce' => wp_create_nonce('mxchat_edit_intent'),
+        'add_phrase_nonce' => wp_create_nonce('mxchat_add_phrase_nonce'),
+        'delete_phrase_nonce' => wp_create_nonce('mxchat_delete_phrase_nonce'),
+        'get_phrases_nonce' => wp_create_nonce('mxchat_get_phrases_nonce'),
+        'delete_legacy_nonce' => wp_create_nonce('mxchat_delete_legacy_nonce'),
         'toggle_action_nonce' => wp_create_nonce('mxchat_actions_nonce'),
         'fetch_openrouter_models_nonce' => wp_create_nonce('mxchat_fetch_openrouter_models'),
         'is_activated' => $this->is_activated ? '1' : '0',
@@ -7358,10 +7653,6 @@ public function mxchat_sanitize($input) {
 
     if (isset($input['contextual_awareness_toggle'])) {
     $new_input['contextual_awareness_toggle'] = $input['contextual_awareness_toggle'] === 'on' ? 'on' : 'off';
-}
-
-    if (isset($input['show_frontend_debugger'])) {
-    $new_input['show_frontend_debugger'] = $input['show_frontend_debugger'] === 'on' ? 'on' : 'off';
 }
 
     if (isset($input['citation_links_toggle'])) {
@@ -7967,71 +8258,63 @@ public function mxchat_handle_delete_all_prompts() {
         wp_die(__('You do not have sufficient permissions to delete all prompts.', 'mxchat'));
     }
     
-    // Get bot_id from POST data
+    // Get bot_id and content type filter from POST data
     $bot_id = isset($_POST['bot_id']) ? sanitize_text_field($_POST['bot_id']) : 'default';
-    //error_log('DEBUG: Bot ID from POST: ' . $bot_id);
-    
+    $content_type_filter = isset($_POST['content_type_filter']) ? sanitize_text_field($_POST['content_type_filter']) : '';
+
     $success = true;
     $error_messages = array();
-    
+
     // Get bot-specific Pinecone configuration
     $pinecone_manager = MxChat_Pinecone_Manager::get_instance();
     $pinecone_options = $pinecone_manager->mxchat_get_bot_pinecone_options($bot_id);
-    
-    //error_log('DEBUG: Pinecone options retrieved:');
-    //error_log('  - Use Pinecone: ' . ($pinecone_options['mxchat_use_pinecone'] ?? 'NOT SET'));
-    //error_log('  - API Key: ' . (empty($pinecone_options['mxchat_pinecone_api_key']) ? 'EMPTY' : 'SET'));
-    //error_log('  - Host: ' . ($pinecone_options['mxchat_pinecone_host'] ?? 'NOT SET'));
-    
+
     $use_pinecone = ($pinecone_options['mxchat_use_pinecone'] ?? '0') === '1';
-    
+
     if ($use_pinecone && !empty($pinecone_options['mxchat_pinecone_api_key'])) {
-        //error_log('[MXCHAT-DELETE] Pinecone is enabled for bot ' . $bot_id . ' - deleting all from Pinecone');
-        
-        // Delete from bot-specific Pinecone index
-        $result = $pinecone_manager->mxchat_delete_all_from_pinecone($pinecone_options);
-        
-        //error_log('DEBUG: Delete all result: ' . ($result['success'] ? 'SUCCESS' : 'FAILED'));
-        if (!$result['success']) {
-            //error_log('DEBUG: Delete all error: ' . $result['message']);
-        }
-        
+        // Delete from Pinecone (with optional content type filter)
+        $result = $pinecone_manager->mxchat_delete_all_from_pinecone($pinecone_options, $content_type_filter);
+
         if (!$result['success']) {
             $success = false;
             $error_messages[] = $result['message'];
         }
-        
-        // No cache clearing needed since we removed caching
-        
+
     } else {
-        //error_log('[MXCHAT-DELETE] Pinecone not enabled for bot ' . $bot_id . ' - deleting from WordPress database');
-        
         // Delete from WordPress database
         global $wpdb;
         $table_name = $wpdb->prefix . 'mxchat_system_prompt_content';
-        
-        // If multi-bot is active and we have a specific bot, delete only that bot's content
+
+        // Build WHERE conditions
+        $where_clauses = array();
+        $where_values = array();
+
+        // Bot filter
         if ($bot_id !== 'default' && class_exists('MxChat_Multi_Bot_Manager')) {
-            $result = $wpdb->delete(
-                $table_name,
-                array('bot_id' => $bot_id),
-                array('%s')
-            );
+            $where_clauses[] = 'bot_id = %s';
+            $where_values[] = $bot_id;
+        }
+
+        // Content type filter
+        if (!empty($content_type_filter)) {
+            $where_clauses[] = 'content_type = %s';
+            $where_values[] = $content_type_filter;
+        }
+
+        if (!empty($where_clauses)) {
+            $where_sql = implode(' AND ', $where_clauses);
+            $result = $wpdb->query($wpdb->prepare("DELETE FROM {$table_name} WHERE {$where_sql}", $where_values));
         } else {
-            // Delete all content for default bot
+            // No filters — delete all
             $result = $wpdb->query("DELETE FROM {$table_name}");
         }
-        
+
         if ($result === false) {
             $success = false;
             $error_messages[] = 'Failed to delete from WordPress database';
         }
     }
-    
-    // No cache clearing needed since we removed caching
 
-    //error_log('=== DELETE ALL DEBUG END ===');
-    
     // Redirect back with a success message and bot_id
     $redirect_url = add_query_arg(array(
         'page' => 'mxchat-prompts',

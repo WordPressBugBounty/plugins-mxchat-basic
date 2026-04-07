@@ -2065,41 +2065,81 @@ private function mxchat_check_intent_and_invoke_callback($message, $user_id, $se
     } else {
         $intents = $wpdb->get_results("SELECT * FROM $table_name WHERE enabled = 1 OR enabled IS NULL");
     }
-    
+
     if (empty($intents)) {
         return false;
     }
-    
+
+    // Prefetch individual phrase vectors from wp_mxchat_intent_phrases (grouped by intent_id)
+    $phrases_table = $wpdb->prefix . 'mxchat_intent_phrases';
+    $phrases_by_intent = [];
+    if ($wpdb->get_var("SHOW TABLES LIKE '$phrases_table'") === $phrases_table) {
+        $all_phrases = $wpdb->get_results("SELECT intent_id, phrase, embedding_vector FROM $phrases_table");
+        foreach ($all_phrases as $p) {
+            $phrases_by_intent[$p->intent_id][] = $p;
+        }
+    }
+
     $highest_similarity = -INF;
     $matched_intent = null;
-    
+
     //   Array to store action analysis for testing panel
     $action_analysis = [];
-    
+
     foreach ($intents as $intent) {
         // Additional check for enabled state
         $is_enabled = isset($intent->enabled) ? (bool)$intent->enabled : true;
         if (!$is_enabled) {
             continue;
         }
-        
+
         //  Check if this action is enabled for the current bot
         if (!$this->is_action_enabled_for_bot($intent, $current_bot_id)) {
             continue;
         }
-        
+
+        $best_similarity = -INF;
+        $matched_phrase_text = '';
+
+        // Check legacy embedding vector (existing behavior)
         $intent_embedding_serialized = $intent->embedding_vector;
         $intent_embedding = $intent_embedding_serialized
             ? unserialize($intent_embedding_serialized, ['allowed_classes' => false])
             : null;
-            
-        if (!is_array($intent_embedding)) {
+
+        if (is_array($intent_embedding) && !empty($intent_embedding)) {
+            $legacy_similarity = $this->mxchat_calculate_cosine_similarity($user_embedding, $intent_embedding);
+            if ($legacy_similarity > $best_similarity) {
+                $best_similarity = $legacy_similarity;
+                $matched_phrase_text = 'legacy';
+            }
+        }
+
+        // Check individual phrase vectors
+        if (isset($phrases_by_intent[$intent->id])) {
+            foreach ($phrases_by_intent[$intent->id] as $phrase_row) {
+                $phrase_embedding = $phrase_row->embedding_vector
+                    ? unserialize($phrase_row->embedding_vector, ['allowed_classes' => false])
+                    : null;
+                if (!is_array($phrase_embedding)) {
+                    continue;
+                }
+                $phrase_similarity = $this->mxchat_calculate_cosine_similarity($user_embedding, $phrase_embedding);
+                if ($phrase_similarity > $best_similarity) {
+                    $best_similarity = $phrase_similarity;
+                    $matched_phrase_text = $phrase_row->phrase;
+                }
+            }
+        }
+
+        // Skip if no valid embedding was found at all
+        if ($best_similarity === -INF) {
             continue;
         }
-        
-        $similarity = $this->mxchat_calculate_cosine_similarity($user_embedding, $intent_embedding);
+
+        $similarity = $best_similarity;
         $intent_threshold = isset($intent->similarity_threshold) ? $intent->similarity_threshold : 0.85;
-        
+
         //   Store action analysis data for testing panel
         $action_analysis[] = [
             'intent_label' => $intent->intent_label,
@@ -2109,9 +2149,10 @@ private function mxchat_check_intent_and_invoke_callback($message, $user_id, $se
             'threshold' => $intent_threshold,
             'threshold_percentage' => round($intent_threshold * 100, 2),
             'above_threshold' => $similarity >= $intent_threshold,
+            'matched_phrase' => $matched_phrase_text,
             'triggered' => false // Will be updated below if this intent is triggered
         ];
-        
+
         if ($similarity >= $intent_threshold && $similarity > $highest_similarity) {
             $highest_similarity = $similarity;
             $matched_intent = $intent;
@@ -2184,14 +2225,20 @@ private function is_action_enabled_for_bot($intent, $bot_id) {
     if (!isset($intent->enabled_bots) || empty($intent->enabled_bots)) {
         return true;
     }
-    
+
     $enabled_bots = json_decode($intent->enabled_bots, true);
-    
+
     // If JSON decode fails or returns empty array, assume enabled for all (backward compatibility)
     if (!is_array($enabled_bots) || empty($enabled_bots)) {
         return true;
     }
-    
+
+    // Admin testing tab uses bot_id "testing" — treat it as "default" so all
+    // default-bot actions are testable from the admin panel
+    if ($bot_id === 'testing') {
+        $bot_id = 'default';
+    }
+
     // Check if the current bot is in the enabled bots list
     return in_array($bot_id, $enabled_bots);
 }

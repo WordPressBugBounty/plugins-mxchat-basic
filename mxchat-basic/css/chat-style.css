@@ -609,6 +609,7 @@
 .questions-collapse-btn svg {
     transition: transform 0.2s ease;
     fill: none;
+    stroke: #212121;
     width: 25px;
     height: 25px;
 }
@@ -1139,6 +1140,39 @@
 }
 
 /* ========================================
+   INIT LOADER (shown while chat initializes)
+   ======================================== */
+.mxchat-init-loader {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-grow: 1;
+    min-height: 0;
+    animation: fadeIn 0.3s ease-in-out;
+}
+
+.mxchat-init-loader-dots {
+    display: flex;
+    gap: 8px;
+}
+
+.mxchat-init-loader-dots .dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background-color: #888;
+    animation: mxchat-dot-bounce 1.4s ease-in-out infinite both;
+}
+
+.mxchat-init-loader-dots .dot:nth-child(1) {
+    animation-delay: -0.32s;
+}
+
+.mxchat-init-loader-dots .dot:nth-child(2) {
+    animation-delay: -0.16s;
+}
+
+/* ========================================
    THINKING DOTS ANIMATION
    ======================================== */
 .chat-box .bot-message.temporary-message .thinking-dots-container {
@@ -1551,6 +1585,7 @@ pre {
 /* SVG styles - these are MISSING */
 .mxchat-popular-questions .mxchat-popular-questions-container .questions-collapse-btn svg {
     fill: none;
+    stroke: #212121;
     transition: transform 0.2s ease;
     width: 25px;
     height: 25px;

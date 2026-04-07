@@ -114,6 +114,169 @@ jQuery(document).ready(function($) {
     let currentSortOrder = 'desc';
     let currentFilter = '';
 
+    // ==========================================================================
+    // Phrase Tag Management
+    // ==========================================================================
+
+    let currentPhrases = []; // Array of {id, text, isLegacy}
+
+    function renderPhraseTags() {
+        const $container = $('#mxch-phrase-tags');
+        let html = '';
+        currentPhrases.forEach(function(phrase, index) {
+            const legacyClass = phrase.isLegacy ? ' mxch-phrase-legacy' : '';
+            const badge = phrase.isLegacy ? ' <span class="mxch-legacy-badge">legacy</span>' : '';
+            html += '<span class="mxch-phrase-pill' + legacyClass + '" data-index="' + index + '" data-phrase-id="' + (phrase.id || '') + '">'
+                + escapeHtml(phrase.text) + badge
+                + ' <button type="button" class="mxch-phrase-remove" title="Remove">&times;</button>'
+                + '</span>';
+        });
+        $container.html(html);
+    }
+
+    function addPhraseFromInput() {
+        const $input = $('#mxch-phrase-input');
+        const text = $input.val().trim();
+        if (!text) return;
+
+        const formMode = $('#mxch-form-mode').val();
+        const intentId = $('#mxch-action-id').val();
+
+        if (formMode === 'edit' && intentId) {
+            // Edit mode: AJAX add immediately
+            const $btn = $('#mxch-add-phrase-btn');
+            $btn.prop('disabled', true).text('Adding...');
+
+            $.ajax({
+                url: mxchActionsData.ajaxUrl,
+                type: 'POST',
+                data: {
+                    action: 'mxchat_add_phrase',
+                    intent_id: intentId,
+                    phrase: text,
+                    security: mxchActionsData.addPhraseNonce
+                },
+                success: function(response) {
+                    $btn.prop('disabled', false).text('Add');
+                    if (response.success) {
+                        currentPhrases.push({id: response.data.id, text: text, isLegacy: false});
+                        renderPhraseTags();
+                        $input.val('').focus();
+                    } else {
+                        alert(response.data || 'Failed to add phrase.');
+                    }
+                },
+                error: function() {
+                    $btn.prop('disabled', false).text('Add');
+                    alert('Failed to add phrase. Please try again.');
+                }
+            });
+        } else {
+            // Add mode: just push locally
+            currentPhrases.push({id: null, text: text, isLegacy: false});
+            renderPhraseTags();
+            $input.val('').focus();
+        }
+    }
+
+    // Add phrase on Enter key
+    $(document).on('keydown', '#mxch-phrase-input', function(e) {
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            addPhraseFromInput();
+        }
+    });
+
+    // Add phrase on button click
+    $(document).on('click', '#mxch-add-phrase-btn', function() {
+        addPhraseFromInput();
+    });
+
+    // Remove phrase on X click
+    $(document).on('click', '.mxch-phrase-remove', function(e) {
+        e.stopPropagation();
+        const $pill = $(this).closest('.mxch-phrase-pill');
+        const index = parseInt($pill.data('index'));
+        const phrase = currentPhrases[index];
+
+        if (!phrase) return;
+
+        if (phrase.isLegacy) {
+            // Delete legacy phrases from main table
+            const intentId = $('#mxch-action-id').val();
+            if (!intentId) {
+                currentPhrases.splice(index, 1);
+                renderPhraseTags();
+                return;
+            }
+
+            if (!confirm('Remove all legacy grouped phrases? You can re-add them individually for better matching.')) return;
+
+            $.ajax({
+                url: mxchActionsData.ajaxUrl,
+                type: 'POST',
+                data: {
+                    action: 'mxchat_delete_legacy_phrases',
+                    intent_id: intentId,
+                    security: mxchActionsData.deleteLegacyNonce
+                },
+                success: function(response) {
+                    if (response.success) {
+                        currentPhrases.splice(index, 1);
+                        renderPhraseTags();
+                    } else {
+                        alert(response.data || 'Failed to remove legacy phrases.');
+                    }
+                }
+            });
+        } else if (phrase.id) {
+            // Delete individual phrase via AJAX
+            $.ajax({
+                url: mxchActionsData.ajaxUrl,
+                type: 'POST',
+                data: {
+                    action: 'mxchat_delete_phrase',
+                    phrase_id: phrase.id,
+                    security: mxchActionsData.deletePhraseNonce
+                },
+                success: function(response) {
+                    if (response.success) {
+                        currentPhrases.splice(index, 1);
+                        renderPhraseTags();
+                    } else {
+                        alert(response.data || 'Failed to delete phrase.');
+                    }
+                }
+            });
+        } else {
+            // Local-only phrase (add mode, not yet saved)
+            currentPhrases.splice(index, 1);
+            renderPhraseTags();
+        }
+    });
+
+    function fetchIndividualPhrases(intentId, callback) {
+        $.ajax({
+            url: mxchActionsData.ajaxUrl,
+            type: 'POST',
+            data: {
+                action: 'mxchat_get_phrases',
+                intent_id: intentId,
+                security: mxchActionsData.getPhrasesNonce
+            },
+            success: function(response) {
+                if (response.success) {
+                    callback(response.data.phrases || []);
+                } else {
+                    callback([]);
+                }
+            },
+            error: function() {
+                callback([]);
+            }
+        });
+    }
+
     // Load action list on page load
     loadActionList(1, '', '');
 
@@ -302,7 +465,9 @@ jQuery(document).ready(function($) {
                      data-threshold="${action.threshold}"
                      data-callback="${escapeHtml(action.callback_function)}"
                      data-enabled="${action.enabled ? '1' : '0'}"
-                     data-enabled-bots='${escapeHtml(JSON.stringify(action.enabled_bots))}'>
+                     data-enabled-bots='${escapeHtml(JSON.stringify(action.enabled_bots))}'
+                     data-has-legacy="${action.has_legacy_vector ? '1' : '0'}"
+                     data-individual-count="${action.individual_phrase_count || 0}">
                     <input type="checkbox" class="mxch-action-checkbox"${isChecked}>
                     <div class="mxch-action-icon">
                         <span class="dashicons dashicons-${escapeHtml(action.icon || 'admin-generic')}"></span>
@@ -409,10 +574,16 @@ jQuery(document).ready(function($) {
             threshold: $item.data('threshold'),
             callback_function: $item.data('callback'),
             enabled: $item.data('enabled') == '1',
-            enabled_bots: $item.data('enabled-bots') || ['default']
+            enabled_bots: $item.data('enabled-bots') || ['default'],
+            has_legacy: $item.data('has-legacy') == '1',
+            individualPhrases: []
         };
 
-        showActionView(data);
+        // Fetch individual phrases then show view
+        fetchIndividualPhrases(actionId, function(phrases) {
+            data.individualPhrases = phrases;
+            showActionView(data);
+        });
     }
 
     // Show action view (details)
@@ -441,12 +612,20 @@ jQuery(document).ready(function($) {
         $('#mxch-view-icon').html('<span class="' + iconClass + '"></span>');
         $('#mxch-detail-icon').html('<span class="' + iconClass + '"></span>');
 
-        // Phrases
-        const phrases = action.phrases.split(',').map(p => p.trim()).filter(p => p);
+        // Phrases - show legacy grouped phrases and individual phrases
         let phrasesHtml = '';
-        phrases.forEach(function(phrase) {
-            phrasesHtml += '<span class="mxch-phrase-tag">' + escapeHtml(phrase) + '</span>';
-        });
+        const legacyPhrases = action.phrases ? String(action.phrases).trim() : '';
+        if (legacyPhrases) {
+            phrasesHtml += '<span class="mxch-phrase-tag mxch-phrase-legacy">' + escapeHtml(legacyPhrases) + ' <span class="mxch-legacy-badge">legacy</span></span>';
+        }
+        if (action.individualPhrases && action.individualPhrases.length) {
+            action.individualPhrases.forEach(function(p) {
+                phrasesHtml += '<span class="mxch-phrase-tag">' + escapeHtml(p.phrase) + '</span>';
+            });
+        }
+        if (!phrasesHtml) {
+            phrasesHtml = '<span class="mxch-no-phrases">No trigger phrases configured</span>';
+        }
         $('#mxch-view-phrases').html(phrasesHtml);
 
         // Settings
@@ -506,9 +685,21 @@ jQuery(document).ready(function($) {
         $('#mxch-callback-function').val(action.callback_function);
         $('#mxch-form-mode').val('edit');
         $('#mxch-action-label').val(action.label);
-        $('#mxch-action-phrases').val(action.phrases);
         $('#mxch-action-threshold').val(action.threshold);
         $('#mxch-threshold-value').text(action.threshold + '%');
+
+        // Populate phrase tags
+        currentPhrases = [];
+        const legacyPhrases = action.phrases ? String(action.phrases).trim() : '';
+        if (legacyPhrases) {
+            currentPhrases.push({id: 'legacy', text: legacyPhrases, isLegacy: true});
+        }
+        if (action.individualPhrases && action.individualPhrases.length) {
+            action.individualPhrases.forEach(function(p) {
+                currentPhrases.push({id: p.id, text: p.phrase, isLegacy: false});
+            });
+        }
+        renderPhraseTags();
 
         // Set selected type display
         const $typeCard = $('.mxch-type-card[data-value="' + action.callback_function + '"]');
@@ -537,8 +728,11 @@ jQuery(document).ready(function($) {
         $('#mxch-callback-function').val('');
         $('#mxch-form-mode').val('add');
         $('#mxch-action-label').val('');
-        $('#mxch-action-phrases').val('');
         $('#mxch-action-threshold').val(85);
+
+        // Clear phrase tags
+        currentPhrases = [];
+        renderPhraseTags();
         $('#mxch-threshold-value').text('85%');
         $('#mxch-config-title').text('Configure Action');
         $('#mxch-save-action').text('Save Action');
@@ -720,7 +914,6 @@ jQuery(document).ready(function($) {
         const actionId = $('#mxch-action-id').val();
         const callbackFunction = $('#mxch-callback-function').val();
         const label = $('#mxch-action-label').val().trim();
-        const phrases = $('#mxch-action-phrases').val().trim();
         const threshold = $('#mxch-action-threshold').val();
 
         // Validation
@@ -735,9 +928,10 @@ jQuery(document).ready(function($) {
             return;
         }
 
-        if (!phrases) {
-            alert('Please enter at least one trigger phrase.');
-            $('#mxch-action-phrases').focus();
+        // Check phrases exist (from tag input)
+        if (currentPhrases.length === 0) {
+            alert('Please add at least one trigger phrase.');
+            $('#mxch-phrase-input').focus();
             return;
         }
 
@@ -756,7 +950,6 @@ jQuery(document).ready(function($) {
         const data = {
             action: formMode === 'edit' ? 'mxchat_edit_intent_ajax' : 'mxchat_add_intent_ajax',
             intent_label: label,
-            phrases: phrases,
             similarity_threshold: threshold,
             callback_function: callbackFunction,
             enabled_bots: enabledBots,
@@ -765,6 +958,18 @@ jQuery(document).ready(function($) {
 
         if (formMode === 'edit') {
             data.intent_id = actionId;
+            // In edit mode, phrases are managed via individual AJAX calls already
+            // Send empty phrases to skip legacy re-embedding
+            data.phrases = '';
+        } else {
+            // Add mode: send individual phrases for per-phrase embedding
+            const nonLegacyPhrases = currentPhrases.filter(p => !p.isLegacy).map(p => p.text);
+            if (nonLegacyPhrases.length > 0) {
+                data.individual_phrases = nonLegacyPhrases;
+                data.phrases = '';
+            } else {
+                data.phrases = '';
+            }
         }
 
         $.ajax({

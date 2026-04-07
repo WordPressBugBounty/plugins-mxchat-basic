@@ -3,7 +3,7 @@
  * Plugin Name: MxChat
  * Plugin URI: https://mxchat.ai/
  * Description: AI chatbot for WordPress with OpenAI, Claude, xAI, DeepSeek, live agent, PDF uploads, WooCommerce, and training on website data.
- * Version: 3.1.7
+ * Version: 3.1.8
  * Author: MxChat
  * Author URI: https://mxchat.ai
  * License: GPLv2 or later
@@ -742,7 +742,7 @@ function mxchat_migrate_deprecated_models() {
         $options['model'] = 'claude-opus-4-6';
         $migrated = true;
         $migration_message = sprintf(
-            __('Your chatbot model has been automatically updated from %s to Claude Opus 4.6 due to Anthropic deprecating older Claude models.', 'mxchat'),
+            'Your chatbot model has been automatically updated from %s to Claude Opus 4.6 due to Anthropic deprecating older Claude models.',
             $current_model
         );
     }
@@ -751,7 +751,7 @@ function mxchat_migrate_deprecated_models() {
     if ($current_model === 'claude-3-5-haiku-20241022') {
         $options['model'] = 'claude-haiku-4-5-20251001';
         $migrated = true;
-        $migration_message = __('Your chatbot model has been automatically updated from Claude Haiku 3.5 to Claude Haiku 4.5 due to Anthropic deprecating the older model.', 'mxchat');
+        $migration_message = 'Your chatbot model has been automatically updated from Claude Haiku 3.5 to Claude Haiku 4.5 due to Anthropic deprecating the older model.';
     }
 
     // Migrate deprecated GPT-4 series and GPT-3.5 Turbo to GPT-5.1 Chat Latest
@@ -759,7 +759,7 @@ function mxchat_migrate_deprecated_models() {
         $options['model'] = 'gpt-5.1-chat-latest';
         $migrated = true;
         $migration_message = sprintf(
-            __('Your chatbot model has been automatically updated from %s to GPT-5.1 Chat Latest due to OpenAI deprecating older models.', 'mxchat'),
+            'Your chatbot model has been automatically updated from %s to GPT-5.1 Chat Latest due to OpenAI deprecating older models.',
             $current_model
         );
     }
@@ -769,7 +769,7 @@ function mxchat_migrate_deprecated_models() {
         $options['model'] = 'gpt-5-mini';
         $migrated = true;
         $migration_message = sprintf(
-            __('Your chatbot model has been automatically updated from %s to GPT-5 Mini due to OpenAI deprecating GPT-4 series models.', 'mxchat'),
+            'Your chatbot model has been automatically updated from %s to GPT-5 Mini due to OpenAI deprecating GPT-4 series models.',
             $current_model
         );
     }
@@ -838,11 +838,24 @@ function mxchat_activate() {
         PRIMARY KEY (id)
     ) $charset_collate;";
 
+    // Individual Intent Phrases Table - each phrase gets its own embedding vector
+    $intent_phrases_table = $wpdb->prefix . 'mxchat_intent_phrases';
+    $sql_intent_phrases_table = "CREATE TABLE $intent_phrases_table (
+        id BIGINT(20) UNSIGNED NOT NULL AUTO_INCREMENT,
+        intent_id BIGINT(20) UNSIGNED NOT NULL,
+        phrase TEXT NOT NULL,
+        embedding_vector LONGTEXT NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL,
+        PRIMARY KEY (id),
+        KEY intent_id (intent_id)
+    ) $charset_collate;";
+
     require_once ABSPATH . 'wp-admin/includes/upgrade.php';
 
     // Create other tables
     dbDelta($sql_system_prompt);
     dbDelta($sql_intents_table);
+    dbDelta($sql_intent_phrases_table);
 
     // Create URL click tracking table
     mxchat_create_url_clicks_table();
@@ -1248,7 +1261,7 @@ function mxchat_handle_theme_migration_notice() {
     if (version_compare($current_version, $target_version, '<') && !$update_handled) {
         // Check if Pro is activated - only show to Pro users
         $license_status = get_option('mxchat_license_status', 'inactive');
-        $is_pro = ($license_status === 'active' || $license_status === esc_html__('active', 'mxchat'));
+        $is_pro = ($license_status === 'active');
 
         if ($is_pro) {
             // Set flag to show the theme migration notification banner

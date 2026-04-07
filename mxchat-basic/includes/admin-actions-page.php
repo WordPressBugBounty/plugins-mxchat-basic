@@ -362,9 +362,17 @@ function mxchat_render_actions_page($admin_instance, $page_data) {
                                     </div>
 
                                     <div class="mxch-form-group">
-                                        <label for="mxch-action-phrases"><?php esc_html_e('Trigger Phrases', 'mxchat'); ?></label>
-                                        <textarea id="mxch-action-phrases" name="phrases" rows="4" required placeholder="<?php esc_attr_e('sign me up, subscribe me, I want to join, add me to the newsletter', 'mxchat'); ?>"></textarea>
-                                        <p class="mxch-form-hint"><?php esc_html_e('Comma-separated phrases that will trigger this action.', 'mxchat'); ?></p>
+                                        <label><?php esc_html_e('Trigger Phrases', 'mxchat'); ?></label>
+                                        <div class="mxch-phrase-input-wrapper">
+                                            <div class="mxch-phrase-tags" id="mxch-phrase-tags">
+                                                <!-- Phrase pills rendered dynamically -->
+                                            </div>
+                                            <div class="mxch-phrase-add-row">
+                                                <input type="text" id="mxch-phrase-input" placeholder="<?php esc_attr_e('Type a trigger phrase and press Enter', 'mxchat'); ?>">
+                                                <button type="button" class="mxch-btn mxch-btn-sm" id="mxch-add-phrase-btn"><?php esc_html_e('Add', 'mxchat'); ?></button>
+                                            </div>
+                                        </div>
+                                        <p class="mxch-form-hint"><?php esc_html_e('Each phrase gets its own embedding vector for more accurate matching.', 'mxchat'); ?></p>
                                     </div>
 
                                     <div class="mxch-form-group">

@@ -371,8 +371,7 @@ public function mxchat_save_setting_callback() {
                 'contextual_awareness_toggle',
                 'citation_links_toggle',
                 'enable_email_block',
-                'enable_name_field',
-                'show_frontend_debugger'
+                'enable_name_field'
             ])) {
                 //error_log('MXChat Save: Processing toggle: ' . $field_name);
                 $options[$field_name] = ($value === 'on') ? 'on' : 'off';

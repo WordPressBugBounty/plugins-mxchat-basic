@@ -5,7 +5,7 @@ Tags: ai chatbot, chatgpt, woocommerce, customer support, content generation
 Requires at least: 5.0
 Tested up to: 6.9
 Requires PHP: 7.2
-Stable tag: 3.1.7
+Stable tag: 3.1.8
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -42,12 +42,12 @@ Extend the free plugin with these optional premium features:
 
 👉 [Visit our website to view all add-ons](https://mxchat.ai)
 
-## 🔥 What's New in Version 3.1.5
+## 🔥 What's New in Version 3.1.8
 
-- **Smarter RAG Defaults** — Lowered default sources limit to 3 and added a per-source chunk cap of 5 to reduce token usage and prevent any single document from dominating context.
-- **RAG Chunks Limit Setting** — New slider to control max total chunks sent to AI (8–20, default 15) for fine-tuning context quality vs. token cost.
-- **Page-Level Chatbot Visibility** — Show, hide, or inherit the global setting on any page or post via the meta box.
-- **Enhanced Debugging** — Frontend debugger and transcripts now display actual sources and chunks used counts.
+- **Admin Testing Tab** — Embedded chatbot replica with a real-time debug panel showing similarity scores, action matches, approved URLs, system prompt, and debug log.
+- **Smarter Action Matching** — Each trigger phrase now gets its own embedding vector for more accurate action matching.
+- **Chat Initialization Loader** — Loading indicator displayed while chat history loads, preventing content from popping in.
+- **Filtered Delete All** — "Delete All" in Knowledge Base now respects the active content type filter instead of deleting everything.
 
 ## Core Features That Set MxChat Apart
 
@@ -308,6 +308,13 @@ Yes. MxChat is available for free on the WordPress plugin repository with full A
 *(Note: Screenshots will be added in future updates)*
 
 == Changelog ==
+
+= 3.1.8 - April 6, 2026 =
+- New: Loading indicator displayed while chat is initializing
+- New: Individual trigger phrase embeddings — each key phrase now gets its own vector for more accurate action matching
+- Improved: Existing actions remain fully backwards compatible with grouped legacy phrases
+- New: Admin Testing Tab - embedded chatbot replica with real-time debug panel showing similarity scores, action matches, approved URLs, system prompt, and debug log
+- Improved: "Delete All" in Knowledge Base now respects the active content type filter — only deletes the filtered type (e.g. Pages) instead of everything
 
 = 3.1.7 - April 1, 2026 =
 - Fixed: Chat history not appearing for returning visitors until first message sent when chat persistence is enabled and email collection is off
@@ -923,8 +930,8 @@ Yes. MxChat is available for free on the WordPress plugin repository with full A
 
 == Upgrade Notice ==
 
-= 3.1.7 =
-Fixes chat persistence bug where returning visitors didn't see history until sending a message, lead capture form not showing for new visitors, and legacy knowledge base editing issue. Adds Google Drive PDF link support.
+= 3.1.8 =
+Adds Admin Testing Tab with real-time debug panel, individual trigger phrase embeddings for more accurate action matching, chat initialization loader, and filtered Delete All in Knowledge Base.
 
 == License & Warranty ==
 

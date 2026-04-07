@@ -994,8 +994,16 @@ public function mxchat_handle_sitemap_submission() {
         exit;
     }
 
-    // Fetch URL
-    $response = wp_remote_get($submitted_url, array('timeout' => 30));
+    // Fetch URL — use browser-like headers so servers with bot protection don't block us
+    $response = wp_remote_get($submitted_url, array(
+        'timeout' => 30,
+        'sslverify' => false,
+        'user-agent' => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+        'headers' => array(
+            'Accept' => 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'Accept-Language' => 'en-US,en;q=0.9',
+        ),
+    ));
 
     if (is_wp_error($response) || wp_remote_retrieve_response_code($response) !== 200) {
         $error_message = is_wp_error($response) ? $response->get_error_message() : 'HTTP Status: ' . wp_remote_retrieve_response_code($response);
@@ -2831,9 +2839,10 @@ public function ajax_mxchat_detect_sitemaps() {
         $url = trailingslashit($site_url) . $path;
 
         $response = wp_remote_head($url, array(
-            'timeout' => 3,  // Short timeout
+            'timeout' => 10,
             'sslverify' => false,
-            'redirection' => 1
+            'redirection' => 1,
+            'user-agent' => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
         ));
 
         if (!is_wp_error($response) && wp_remote_retrieve_response_code($response) === 200) {
@@ -2893,8 +2902,13 @@ private function parse_sitemap_index($url) {
     $sub_sitemaps = array();
 
     $response = wp_remote_get($url, array(
-        'timeout' => 5,
-        'sslverify' => false
+        'timeout' => 30,
+        'sslverify' => false,
+        'user-agent' => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+        'headers' => array(
+            'Accept' => 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'Accept-Language' => 'en-US,en;q=0.9',
+        ),
     ));
 
     if (is_wp_error($response)) {
@@ -2947,8 +2961,13 @@ private function parse_sitemap_index($url) {
  */
 private function get_sitemap_url_count($url) {
     $response = wp_remote_get($url, array(
-        'timeout' => 10,
-        'sslverify' => false
+        'timeout' => 30,
+        'sslverify' => false,
+        'user-agent' => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+        'headers' => array(
+            'Accept' => 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'Accept-Language' => 'en-US,en;q=0.9',
+        ),
     ));
 
     if (is_wp_error($response)) {
@@ -2973,8 +2992,9 @@ private function get_sitemaps_from_robots($site_url) {
     $robots_url = trailingslashit($site_url) . 'robots.txt';
 
     $response = wp_remote_get($robots_url, array(
-        'timeout' => 5,
-        'sslverify' => false
+        'timeout' => 15,
+        'sslverify' => false,
+        'user-agent' => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
     ));
 
     if (is_wp_error($response)) {

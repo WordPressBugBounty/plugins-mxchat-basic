@@ -849,13 +849,37 @@ function mxchat_render_knowledge_base_section($admin_instance, $knowledge_manage
                     <!-- Delete Button Container - transforms between Delete All and Delete Selected -->
                     <div class="mxchat-delete-container" id="mxchat-delete-container">
                         <!-- Delete All Form (shown when nothing selected) -->
-                        <form method="post" action="<?php echo esc_url(admin_url('admin-post.php?action=mxchat_delete_all_prompts')); ?>" id="mxchat-delete-all-form" onsubmit="return confirm('<?php esc_attr_e('Are you sure you want to delete all knowledge?', 'mxchat'); ?>');">
+                        <?php
+                        // Build confirm message and button text based on active filter
+                        $delete_all_label = __('Delete All', 'mxchat');
+                        $delete_all_confirm = __('Are you sure you want to delete all knowledge?', 'mxchat');
+                        if (!empty($content_type_filter)) {
+                            $filter_display = $content_type_filter;
+                            // Try to get a human-readable label
+                            $pt_obj = get_post_type_object($content_type_filter);
+                            if ($pt_obj) {
+                                $filter_display = $pt_obj->label;
+                            } elseif ($content_type_filter === 'pdf') {
+                                $filter_display = 'PDFs';
+                            } elseif ($content_type_filter === 'url') {
+                                $filter_display = 'URLs';
+                            }
+                            /* translators: %s: content type label (e.g. "Pages", "PDFs") */
+                            $delete_all_label = sprintf(__('Delete All %s', 'mxchat'), $filter_display);
+                            /* translators: %s: content type label */
+                            $delete_all_confirm = sprintf(__('Are you sure you want to delete all %s from the knowledge base?', 'mxchat'), $filter_display);
+                        }
+                        ?>
+                        <form method="post" action="<?php echo esc_url(admin_url('admin-post.php?action=mxchat_delete_all_prompts')); ?>" id="mxchat-delete-all-form" onsubmit="return confirm('<?php echo esc_attr($delete_all_confirm); ?>');">
                             <?php wp_nonce_field('mxchat_delete_all_prompts_action', 'mxchat_delete_all_prompts_nonce'); ?>
                             <input type="hidden" name="data_source" value="<?php echo esc_attr($data_source); ?>" />
                             <input type="hidden" name="bot_id" value="<?php echo esc_attr($current_bot_id); ?>" />
+                            <?php if (!empty($content_type_filter)) : ?>
+                                <input type="hidden" name="content_type_filter" value="<?php echo esc_attr($content_type_filter); ?>" />
+                            <?php endif; ?>
                             <button type="submit" class="mxch-btn mxch-btn-secondary mxch-btn-sm" style="color: var(--mxch-error);">
                                 <span class="dashicons dashicons-trash" style="font-size: 14px;"></span>
-                                <?php esc_html_e('Delete All', 'mxchat'); ?>
+                                <?php echo esc_html($delete_all_label); ?>
                             </button>
                         </form>
                         <!-- Delete Selected Button (shown when items selected) -->
