@@ -5,7 +5,7 @@ Tags: ai chatbot, chatgpt, woocommerce, customer support, content generation
 Requires at least: 5.0
 Tested up to: 6.9
 Requires PHP: 7.2
-Stable tag: 3.1.8
+Stable tag: 3.1.9
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -308,6 +308,9 @@ Yes. MxChat is available for free on the WordPress plugin repository with full A
 *(Note: Screenshots will be added in future updates)*
 
 == Changelog ==
+
+= 3.1.9 - April 9, 2026 =
+- Fixed: Session ownership issues that were causing "session expired" errors
 
 = 3.1.8 - April 6, 2026 =
 - New: Loading indicator displayed while chat is initializing
@@ -930,8 +933,8 @@ Yes. MxChat is available for free on the WordPress plugin repository with full A
 
 == Upgrade Notice ==
 
-= 3.1.8 =
-Adds Admin Testing Tab with real-time debug panel, individual trigger phrase embeddings for more accurate action matching, chat initialization loader, and filtered Delete All in Knowledge Base.
+= 3.1.9 =
+Minor update: Fixed session ownership issues that were causing "session expired" errors.
 
 == License & Warranty ==
 

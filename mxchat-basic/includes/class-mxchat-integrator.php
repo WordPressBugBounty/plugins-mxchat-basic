@@ -164,18 +164,9 @@ function mxchat_fetch_conversation_history() {
     // Check if this session has an owner recorded
     $session_owner = get_option("mxchat_session_owner_{$session_id}");
 
-    // If session has an owner and it doesn't match current user, trigger session reset
-    if ($session_owner && $session_owner !== $current_user_identifier) {
-        wp_send_json_error([
-            'message' => esc_html__('Your session has expired. Starting a new conversation.', 'mxchat'),
-            'code' => 'session_expired',
-            'action' => 'reset_session'
-        ]);
-        wp_die();
-    }
-    
-    // If no owner is set yet, claim ownership (for legacy sessions)
-    if (!$session_owner) {
+    // Update session owner if it changed (e.g. IP changed due to network switch)
+    // The session ID itself is the authentication — if the client has it, they own it
+    if (!$session_owner || $session_owner !== $current_user_identifier) {
         update_option("mxchat_session_owner_{$session_id}", $current_user_identifier, 'no');
     }
     
@@ -1159,19 +1150,13 @@ public function mxchat_handle_chat_request() {
         wp_die();
     }
 
-    // SECURITY FIX: Verify session ownership before processing chat request
-    // If IP/user changed, signal frontend to reset session instead of blocking
+    // Update session owner if it changed (e.g. IP changed due to network switch)
+    // The session ID itself is the authentication — if the client has it, they own it
     $current_user_identifier = MxChat_User::mxchat_get_user_identifier();
     $session_owner = get_option("mxchat_session_owner_{$session_id}");
 
-    if ($session_owner && $session_owner !== $current_user_identifier) {
-        // Instead of blocking, tell frontend to start a fresh session
-        wp_send_json_error([
-            'message' => esc_html__('Your session has expired. Starting a new conversation.', 'mxchat'),
-            'code' => 'session_expired',
-            'action' => 'reset_session'
-        ]);
-        wp_die();
+    if (!$session_owner || $session_owner !== $current_user_identifier) {
+        update_option("mxchat_session_owner_{$session_id}", $current_user_identifier, 'no');
     }
 
     // Validate and sanitize the incoming message
@@ -3330,13 +3315,12 @@ public function handle_pdf_upload() {
     $session_id = sanitize_text_field($_POST['session_id']);
     $original_filename = sanitize_text_field($file['name']);
 
-    // SECURITY FIX: Verify session ownership before allowing upload
+    // Update session owner if it changed (e.g. IP changed due to network switch)
     $current_user_identifier = MxChat_User::mxchat_get_user_identifier();
     $session_owner = get_option("mxchat_session_owner_{$session_id}");
-    
-    if ($session_owner && $session_owner !== $current_user_identifier) {
-        wp_send_json_error(esc_html__('Unauthorized access.', 'mxchat'));
-        return;
+
+    if (!$session_owner || $session_owner !== $current_user_identifier) {
+        update_option("mxchat_session_owner_{$session_id}", $current_user_identifier, 'no');
     }
 
     $file_type = wp_check_filetype($file['name'], ['pdf' => 'application/pdf']);

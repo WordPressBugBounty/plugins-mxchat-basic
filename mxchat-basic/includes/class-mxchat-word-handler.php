@@ -36,13 +36,12 @@ class MXChat_Word_Handler {
         $session_id = sanitize_text_field($_POST['session_id']);
         $original_filename = sanitize_text_field($file['name']);
         
-        // SECURITY FIX: Verify session ownership before allowing upload
+        // Update session owner if it changed (e.g. IP changed due to network switch)
         $current_user_identifier = MxChat_User::mxchat_get_user_identifier();
         $session_owner = get_option("mxchat_session_owner_{$session_id}");
-        
-        if ($session_owner && $session_owner !== $current_user_identifier) {
-            wp_send_json_error(esc_html__('Unauthorized access.', 'mxchat'));
-            return;
+
+        if (!$session_owner || $session_owner !== $current_user_identifier) {
+            update_option("mxchat_session_owner_{$session_id}", $current_user_identifier, 'no');
         }
         
         // Check file type
