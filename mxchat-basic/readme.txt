@@ -5,7 +5,7 @@ Tags: ai chatbot, chatgpt, woocommerce, customer support, content generation
 Requires at least: 5.0
 Tested up to: 6.9
 Requires PHP: 7.2
-Stable tag: 3.1.9
+Stable tag: 3.2.0
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -42,12 +42,10 @@ Extend the free plugin with these optional premium features:
 
 👉 [Visit our website to view all add-ons](https://mxchat.ai)
 
-## 🔥 What's New in Version 3.1.8
+## 🔥 What's New in Version 3.2.0
 
-- **Admin Testing Tab** — Embedded chatbot replica with a real-time debug panel showing similarity scores, action matches, approved URLs, system prompt, and debug log.
-- **Smarter Action Matching** — Each trigger phrase now gets its own embedding vector for more accurate action matching.
-- **Chat Initialization Loader** — Loading indicator displayed while chat history loads, preventing content from popping in.
-- **Filtered Delete All** — "Delete All" in Knowledge Base now respects the active content type filter instead of deleting everything.
+- **New Similarity Results Filter Hook** — Added `mxchat_similarity_results` filter that fires after similarity search completes, giving add-ons access to matched sources and their URLs for deeper customization.
+- **Cache & Optimization Plugin Compatibility** — Removed the `data-no-optimize` attribute injection on MxChat CSS/JS tags, resolving conflicts with third-party cache and optimization plugins.
 
 ## Core Features That Set MxChat Apart
 
@@ -309,7 +307,11 @@ Yes. MxChat is available for free on the WordPress plugin repository with full A
 
 == Changelog ==
 
-= 3.1.9 - April 9, 2026 =
+= 3.2.0 - April 15, 2026 =
+- Added: `mxchat_similarity_results` filter hook after similarity search completes, allowing add-ons to access matched sources and their URLs
+- Removed: `data-no-optimize` attribute injection on MxChat CSS/JS tags, which was conflicting with third-party cache and optimization plugins
+
+= 3.1.9 - April 7, 2026 =
 - Fixed: Session ownership issues that were causing "session expired" errors
 
 = 3.1.8 - April 6, 2026 =
@@ -933,8 +935,8 @@ Yes. MxChat is available for free on the WordPress plugin repository with full A
 
 == Upgrade Notice ==
 
-= 3.1.9 =
-Minor update: Fixed session ownership issues that were causing "session expired" errors.
+= 3.2.0 =
+Added `mxchat_similarity_results` filter hook for add-ons and removed `data-no-optimize` attribute injection that conflicted with cache/optimization plugins.
 
 == License & Warranty ==
 

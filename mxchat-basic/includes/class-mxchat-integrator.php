@@ -4731,9 +4731,6 @@ private function mxchat_find_relevant_content($user_embedding, $bot_id = 'defaul
 private function find_relevant_content_wordpress($user_embedding, $bot_id = 'default') {
     global $wpdb;
     $system_prompt_table = $wpdb->prefix . 'mxchat_system_prompt_content';
-    $cache_key = 'mxchat_system_prompt_embeddings_' . $bot_id;
-    $batch_size = 500;
-
     // Initialize similarity analysis storage
     $this->last_similarity_analysis = [
         'knowledge_base_type' => 'WordPress Database',
@@ -4750,158 +4747,230 @@ private function find_relevant_content_wordpress($user_embedding, $bot_id = 'def
     $bot_options = $this->get_bot_options($bot_id);
     $current_options = !empty($bot_options) ? $bot_options : $this->options;
 
-    // Retrieve embeddings from cache or database
-    $embeddings = wp_cache_get($cache_key, 'mxchat_system_prompts');
-    if ($embeddings === false) {
-        // Cache miss - load embeddings from database WITH CONTENT and ROLE RESTRICTION for testing
-        $embeddings = [];
-        $offset = 0;
-
-        do {
-            // Add bot_id filter if not default and if bot_metadata column exists
-            $bot_filter = '';
-            if ($bot_id !== 'default') {
-                // Check if bot_metadata column exists
-                $column_exists = $wpdb->get_var("SHOW COLUMNS FROM {$system_prompt_table} LIKE 'bot_metadata'");
-                if ($column_exists) {
-                    $bot_filter = $wpdb->prepare(" AND (bot_metadata = %s OR bot_metadata IS NULL OR bot_metadata = '')", $bot_id);
-                }
-            }
-
-            $query = $wpdb->prepare(
-                "SELECT id, embedding_vector, article_content, source_url, role_restriction
-                FROM {$system_prompt_table}
-                WHERE 1=1 {$bot_filter}
-                LIMIT %d OFFSET %d",
-                $batch_size,
-                $offset
-            );
-
-            $batch = $wpdb->get_results($query);
-            if (empty($batch)) {
-                break;
-            }
-
-            $embeddings = array_merge($embeddings, $batch);
-            $offset += $batch_size;
-            unset($batch);
-        } while (true);
-
-        if (empty($embeddings)) {
-            // Store empty array for valid URLs since no content found
-            $this->current_valid_urls = [];
-            return '';
-        }
-        
-        // Cache embeddings for future use (but note: this now includes content and role restrictions)
-        wp_cache_set($cache_key, $embeddings, 'mxchat_system_prompts', 3600);
-    }
-
     // Get knowledge manager instance for role checking
     $knowledge_manager = MxChat_Knowledge_Manager::get_instance();
 
     // Get base similarity threshold from bot options or default options
-    $similarity_threshold = isset($current_options['similarity_threshold']) 
-        ? ((int) $current_options['similarity_threshold']) / 100 
+    $similarity_threshold = isset($current_options['similarity_threshold'])
+        ? ((int) $current_options['similarity_threshold']) / 100
         : 0.35;
-        
     $this->last_similarity_analysis['threshold_used'] = $similarity_threshold;
-    
-    // Calculate similarities and build results array
-    $all_similarities = [];
-    $url_groups = array(); // NEW: Group by source_url for chunk reassembly
 
-    foreach ($embeddings as $embedding) {
-        $database_embedding = $embedding->embedding_vector
-            ? unserialize($embedding->embedding_vector, ['allowed_classes' => false])
-            : null;
+    // Precompute bot_filter once, outside the streaming loop
+    $bot_filter = '';
+    if ($bot_id !== 'default') {
+        $column_exists = $wpdb->get_var("SHOW COLUMNS FROM {$system_prompt_table} LIKE 'bot_metadata'");
+        if ($column_exists) {
+            $bot_filter = $wpdb->prepare(" AND (bot_metadata = %s OR bot_metadata IS NULL OR bot_metadata = '')", $bot_id);
+        }
+    }
 
-        if (is_array($database_embedding) && is_array($user_embedding)) {
-            $similarity = $this->mxchat_calculate_cosine_similarity($user_embedding, $database_embedding);
+    // ===== STREAMING TOP-K PASS =====
+    // Stream rows in small batches, compute cosine similarity per row, and keep only:
+    //   - top 10 by raw similarity (for the testing/debug display panel)
+    //   - candidates above threshold with access (capped) for context assembly
+    // This bounds peak memory regardless of knowledge base size and avoids loading
+    // article_content for every row. article_content is fetched in Phase 2 for winners only.
+    $batch_size = 250;
+    $max_candidates = 200; // safety cap, well above rag_sources_limit * max_chunks_per_source
+    $top_display = [];
+    $candidates = [];
+    $total_checked = 0;
+    $offset = 0;
 
-            // Check role access
-            $role_restriction = $embedding->role_restriction ?? 'public';
-            $has_access = $knowledge_manager->mxchat_user_has_content_access($role_restriction);
+    do {
+        $batch = $wpdb->get_results($wpdb->prepare(
+            "SELECT id, embedding_vector, source_url, role_restriction
+             FROM {$system_prompt_table}
+             WHERE 1=1 {$bot_filter}
+             LIMIT %d OFFSET %d",
+            $batch_size,
+            $offset
+        ));
 
-            // Store ALL similarities for testing (top 10)
-            $source_display = '';
-            $source_url = $embedding->source_url ?? '';
-            if (!empty($source_url) && $source_url !== '#') {
-                $source_display = $source_url;
-            } else {
-                $content_preview = strip_tags($embedding->article_content ?? '');
-                $content_preview = preg_replace('/\s+/', ' ', $content_preview);
-                $source_display = substr(trim($content_preview), 0, 50) . '...';
-            }
-
-            // Parse chunk metadata for display
-            $article_content_for_parse = $embedding->article_content ?? '';
-            $parsed_for_display = MxChat_Chunker::parse_stored_chunk($article_content_for_parse);
-            $is_chunk = $parsed_for_display['is_chunked'];
-            $chunk_meta = $parsed_for_display['metadata'];
-
-            $all_similarities[] = [
-                'document_id' => $embedding->id,
-                'similarity' => $similarity,
-                'similarity_percentage' => round($similarity * 100, 2),
-                'above_threshold' => $similarity >= $similarity_threshold,
-                'source_display' => $source_display,
-                'content_preview' => substr(strip_tags($parsed_for_display['text'] ?? ''), 0, 100) . '...',
-                'used_for_context' => false,
-                'role_restriction' => $role_restriction,
-                'has_access' => $has_access,
-                'filtered_out' => !$has_access,
-                'is_chunk' => $is_chunk,
-                'chunk_index' => $is_chunk ? ($chunk_meta['chunk_index'] ?? 0) : null,
-                'total_chunks' => $is_chunk ? ($chunk_meta['total_chunks'] ?? 1) : null
-            ];
-
-            // Only consider results above threshold AND with access for content retrieval
-            if ($similarity >= $similarity_threshold && $has_access) {
-                // Parse chunk metadata if present
-                $article_content = $embedding->article_content ?? '';
-                $parsed = MxChat_Chunker::parse_stored_chunk($article_content);
-                $is_chunked = $parsed['is_chunked'];
-                $chunk_index = $parsed['metadata']['chunk_index'] ?? 0;
-                $text_content = $parsed['text'];
-
-                // Use a unique key for manual entries without a source URL
-                $group_key = !empty($source_url) ? $source_url : '_manual_' . $embedding->id;
-
-                // Group by source URL (or unique key for manual entries)
-                if (!isset($url_groups[$group_key])) {
-                    $url_groups[$group_key] = array(
-                        'source_url' => $source_url,
-                        'best_score' => 0,
-                        'is_chunked' => $is_chunked,
-                        'chunks' => array(),
-                        'single_text' => '',
-                        'single_id' => null
-                    );
-                }
-
-                // Track best score for this group
-                if ($similarity > $url_groups[$group_key]['best_score']) {
-                    $url_groups[$group_key]['best_score'] = $similarity;
-                }
-
-                // Store chunk info or single text
-                if ($is_chunked) {
-                    $url_groups[$group_key]['is_chunked'] = true;
-                    $url_groups[$group_key]['chunks'][] = array(
-                        'id' => $embedding->id,
-                        'score' => $similarity,
-                        'chunk_index' => $chunk_index,
-                        'text' => $text_content
-                    );
-                } else {
-                    $url_groups[$group_key]['single_text'] = $text_content;
-                    $url_groups[$group_key]['single_id'] = $embedding->id;
-                }
-            }
+        if (empty($batch)) {
+            break;
         }
 
-        unset($database_embedding);
+        foreach ($batch as $row) {
+            $database_embedding = $row->embedding_vector
+                ? unserialize($row->embedding_vector, ['allowed_classes' => false])
+                : null;
+
+            if (!is_array($database_embedding) || !is_array($user_embedding)) {
+                unset($database_embedding);
+                continue;
+            }
+
+            $similarity = $this->mxchat_calculate_cosine_similarity($user_embedding, $database_embedding);
+            unset($database_embedding);
+
+            $role_restriction = $row->role_restriction ?? 'public';
+            $has_access = $knowledge_manager->mxchat_user_has_content_access($role_restriction);
+            $source_url = $row->source_url ?? '';
+
+            // Maintain top 10 display buffer (insert-if-beats-worst)
+            if (count($top_display) < 10) {
+                $top_display[] = [
+                    'id' => $row->id,
+                    'similarity' => $similarity,
+                    'source_url' => $source_url,
+                    'role_restriction' => $role_restriction,
+                    'has_access' => $has_access,
+                ];
+                usort($top_display, function ($a, $b) {
+                    return $b['similarity'] <=> $a['similarity'];
+                });
+            } elseif ($similarity > $top_display[9]['similarity']) {
+                $top_display[9] = [
+                    'id' => $row->id,
+                    'similarity' => $similarity,
+                    'source_url' => $source_url,
+                    'role_restriction' => $role_restriction,
+                    'has_access' => $has_access,
+                ];
+                usort($top_display, function ($a, $b) {
+                    return $b['similarity'] <=> $a['similarity'];
+                });
+            }
+
+            // Track candidates for context assembly (above threshold + has access)
+            if ($similarity >= $similarity_threshold && $has_access) {
+                $candidates[] = [
+                    'id' => $row->id,
+                    'similarity' => $similarity,
+                    'source_url' => $source_url,
+                ];
+            }
+
+            $total_checked++;
+        }
+
+        unset($batch);
+
+        // Trim candidates periodically to cap memory during long scans
+        if (count($candidates) > $max_candidates) {
+            usort($candidates, function ($a, $b) {
+                return $b['similarity'] <=> $a['similarity'];
+            });
+            $candidates = array_slice($candidates, 0, $max_candidates);
+        }
+
+        $offset += $batch_size;
+    } while (true);
+
+    if ($total_checked === 0) {
+        $this->current_valid_urls = [];
+        return '';
+    }
+
+    // Final candidates sort (best first)
+    if (count($candidates) > 1) {
+        usort($candidates, function ($a, $b) {
+            return $b['similarity'] <=> $a['similarity'];
+        });
+    }
+
+    // ===== PHASE 2: FETCH ARTICLE CONTENT ONLY FOR WINNERS =====
+    // Gather unique IDs we actually need (top_display + candidates) and pull
+    // article_content in bounded IN() batches. This avoids loading content for
+    // every row during the similarity scan.
+    $needed_ids = [];
+    foreach ($top_display as $item) {
+        $needed_ids[$item['id']] = true;
+    }
+    foreach ($candidates as $item) {
+        $needed_ids[$item['id']] = true;
+    }
+    $needed_ids = array_keys($needed_ids);
+
+    $content_map = [];
+    if (!empty($needed_ids)) {
+        foreach (array_chunk($needed_ids, 250) as $chunk_ids) {
+            $placeholders = implode(',', array_fill(0, count($chunk_ids), '%d'));
+            $rows = $wpdb->get_results($wpdb->prepare(
+                "SELECT id, article_content FROM {$system_prompt_table} WHERE id IN ($placeholders)",
+                ...$chunk_ids
+            ));
+            foreach ($rows as $r) {
+                $content_map[$r->id] = $r->article_content;
+            }
+            unset($rows);
+        }
+    }
+
+    // Build the all_similarities display array from the top 10
+    $all_similarities = [];
+    foreach ($top_display as $item) {
+        $article_content_for_parse = $content_map[$item['id']] ?? '';
+        $parsed_for_display = MxChat_Chunker::parse_stored_chunk($article_content_for_parse);
+        $is_chunk = $parsed_for_display['is_chunked'];
+        $chunk_meta = $parsed_for_display['metadata'];
+
+        if (!empty($item['source_url']) && $item['source_url'] !== '#') {
+            $source_display = $item['source_url'];
+        } else {
+            $content_preview = strip_tags($article_content_for_parse);
+            $content_preview = preg_replace('/\s+/', ' ', $content_preview);
+            $source_display = substr(trim($content_preview), 0, 50) . '...';
+        }
+
+        $all_similarities[] = [
+            'document_id' => $item['id'],
+            'similarity' => $item['similarity'],
+            'similarity_percentage' => round($item['similarity'] * 100, 2),
+            'above_threshold' => $item['similarity'] >= $similarity_threshold,
+            'source_display' => $source_display,
+            'content_preview' => substr(strip_tags($parsed_for_display['text'] ?? ''), 0, 100) . '...',
+            'used_for_context' => false,
+            'role_restriction' => $item['role_restriction'],
+            'has_access' => $item['has_access'],
+            'filtered_out' => !$item['has_access'],
+            'is_chunk' => $is_chunk,
+            'chunk_index' => $is_chunk ? ($chunk_meta['chunk_index'] ?? 0) : null,
+            'total_chunks' => $is_chunk ? ($chunk_meta['total_chunks'] ?? 1) : null
+        ];
+    }
+
+    // Build url_groups from candidates for chunk reassembly
+    $url_groups = array();
+    foreach ($candidates as $cand) {
+        $article_content = $content_map[$cand['id']] ?? '';
+        $parsed = MxChat_Chunker::parse_stored_chunk($article_content);
+        $is_chunked = $parsed['is_chunked'];
+        $chunk_index = $parsed['metadata']['chunk_index'] ?? 0;
+        $text_content = $parsed['text'];
+
+        $source_url = $cand['source_url'];
+        $group_key = !empty($source_url) ? $source_url : '_manual_' . $cand['id'];
+
+        if (!isset($url_groups[$group_key])) {
+            $url_groups[$group_key] = array(
+                'source_url' => $source_url,
+                'best_score' => 0,
+                'is_chunked' => $is_chunked,
+                'chunks' => array(),
+                'single_text' => '',
+                'single_id' => null
+            );
+        }
+
+        if ($cand['similarity'] > $url_groups[$group_key]['best_score']) {
+            $url_groups[$group_key]['best_score'] = $cand['similarity'];
+        }
+
+        if ($is_chunked) {
+            $url_groups[$group_key]['is_chunked'] = true;
+            $url_groups[$group_key]['chunks'][] = array(
+                'id' => $cand['id'],
+                'score' => $cand['similarity'],
+                'chunk_index' => $chunk_index,
+                'text' => $text_content
+            );
+        } else {
+            $url_groups[$group_key]['single_text'] = $text_content;
+            $url_groups[$group_key]['single_id'] = $cand['id'];
+        }
     }
 
     // Sort ALL similarities for testing display (highest first)
@@ -4941,7 +5010,7 @@ private function find_relevant_content_wordpress($user_embedding, $bot_id = 'def
 
     // Store top 10 for testing panel
     $this->last_similarity_analysis['top_matches'] = array_slice($all_similarities, 0, 10);
-    $this->last_similarity_analysis['total_checked'] = count($embeddings);
+    $this->last_similarity_analysis['total_checked'] = $total_checked;
 
     // Initialize final content
     $content = '';
@@ -5045,6 +5114,9 @@ private function find_relevant_content_wordpress($user_embedding, $bot_id = 'def
     // Store sources and chunks counts for testing/transcript display
     $this->last_similarity_analysis['sources_used'] = $matches_used;
     $this->last_similarity_analysis['total_chunks_used'] = $total_chunks_used;
+
+    // Allow add-ons to act on similarity results (e.g. WooCommerce product card display)
+    do_action('mxchat_similarity_results', $this->last_similarity_analysis['top_matches'], $bot_id);
 
     // Add response guidelines
     if (empty($top_urls)) {
@@ -5503,7 +5575,10 @@ private function find_relevant_content_pinecone($user_embedding, $bot_id = 'defa
 
     // NEW: Store unique valid URLs for validation
     $this->current_valid_urls = array_unique($valid_urls);
-    
+
+    // Allow add-ons to act on similarity results (e.g. WooCommerce product card display)
+    do_action('mxchat_similarity_results', $this->last_similarity_analysis['top_matches'], $bot_id);
+
     // Add response guidelines
     if ($matches_used === 0) {
         $content = "No reference information was found for this query.\n\n";
@@ -5993,6 +6068,9 @@ private function find_relevant_content_openai_vectorstore($user_query, $bot_id =
     // Store unique valid URLs for validation
     $this->current_valid_urls = array_unique($valid_urls);
 
+    // Allow add-ons to act on similarity results (e.g. WooCommerce product card display)
+    do_action('mxchat_similarity_results', $this->last_similarity_analysis['top_matches'], $bot_id);
+
     //error_log("MXCHAT VECTORSTORE: ========== SEARCH COMPLETE ==========");
     //error_log("MXCHAT VECTORSTORE: Matches used: " . $matches_used);
     //error_log("MXCHAT VECTORSTORE: All matches count: " . count($all_matches));
@@ -6097,71 +6175,73 @@ private function mxchat_find_relevant_products($user_embedding) {
 private function find_relevant_products_wordpress($user_embedding) {
     global $wpdb;
     $system_prompt_table = $wpdb->prefix . 'mxchat_system_prompt_content';
-    $cache_key = 'mxchat_system_prompt_embeddings';
-    $batch_size = 500;
 
-    // Original WordPress database search logic
-    // [Previous implementation remains the same]
-    $embeddings = wp_cache_get($cache_key, 'mxchat_system_prompts');
-    if ($embeddings === false) {
-        $embeddings = [];
-        $offset = 0;
+    if (!is_array($user_embedding)) {
+        return '';
+    }
 
-        do {
-            $query = $wpdb->prepare(
-                "SELECT id, embedding_vector
-                FROM {$system_prompt_table}
-                LIMIT %d OFFSET %d",
-                $batch_size,
-                $offset
-            );
+    // Streaming top-K pass: scan rows in small batches, keep only the top 3
+    // results above the similarity threshold. Peak memory is bounded by
+    // $batch_size embedding rows plus a 3-element top list.
+    $batch_size = 250;
+    $similarity_threshold = 0.85;
+    $top_k = 3;
+    $top_results = [];
+    $offset = 0;
 
-            $batch = $wpdb->get_results($query);
-            if (empty($batch)) {
-                break;
+    do {
+        $batch = $wpdb->get_results($wpdb->prepare(
+            "SELECT id, embedding_vector
+             FROM {$system_prompt_table}
+             LIMIT %d OFFSET %d",
+            $batch_size,
+            $offset
+        ));
+
+        if (empty($batch)) {
+            break;
+        }
+
+        foreach ($batch as $row) {
+            $database_embedding = $row->embedding_vector
+                ? unserialize($row->embedding_vector, ['allowed_classes' => false])
+                : null;
+
+            if (!is_array($database_embedding)) {
+                unset($database_embedding);
+                continue;
             }
 
-            $embeddings = array_merge($embeddings, $batch);
-            $offset += $batch_size;
-
-            unset($batch);
-
-        } while (true);
-
-        if (empty($embeddings)) {
-            return '';
-        }
-        wp_cache_set($cache_key, $embeddings, 'mxchat_system_prompts', 3600);
-    }
-
-    $relevant_results = [];
-    foreach ($embeddings as $embedding) {
-        $database_embedding = $embedding->embedding_vector
-            ? unserialize($embedding->embedding_vector, ['allowed_classes' => false])
-            : null;
-        if (is_array($database_embedding) && is_array($user_embedding)) {
             $similarity = $this->mxchat_calculate_cosine_similarity($user_embedding, $database_embedding);
-            $relevant_results[] = [
-                'id' => $embedding->id,
-                'similarity' => $similarity
-            ];
+            unset($database_embedding);
+
+            if ($similarity < $similarity_threshold) {
+                continue;
+            }
+
+            // Insert into bounded top-K (kept sorted descending)
+            if (count($top_results) < $top_k) {
+                $top_results[] = ['id' => $row->id, 'similarity' => $similarity];
+                usort($top_results, function ($a, $b) {
+                    return $b['similarity'] <=> $a['similarity'];
+                });
+            } elseif ($similarity > $top_results[$top_k - 1]['similarity']) {
+                $top_results[$top_k - 1] = ['id' => $row->id, 'similarity' => $similarity];
+                usort($top_results, function ($a, $b) {
+                    return $b['similarity'] <=> $a['similarity'];
+                });
+            }
         }
-        unset($database_embedding);
+
+        unset($batch);
+        $offset += $batch_size;
+    } while (true);
+
+    if (empty($top_results)) {
+        return '';
     }
 
-    // Use fixed threshold for products
-    $similarity_threshold = 0.85;
-
-    $relevant_results = array_filter($relevant_results, function ($result) use ($similarity_threshold) {
-        return $result['similarity'] >= $similarity_threshold;
-    });
-    usort($relevant_results, function ($a, $b) {
-        return $b['similarity'] <=> $a['similarity'];
-    });
-
-    $top_results = array_slice($relevant_results, 0, 3);
     $content = '';
-
     foreach ($top_results as $result) {
         $chunk_content = $this->fetch_content_with_product_links($result['id']);
         $content .= $chunk_content . "\n\n";
@@ -9369,15 +9449,6 @@ public function mxchat_enqueue_scripts_styles() {
         MXCHAT_VERSION
     );
 
-    // Protect MxChat CSS from LiteSpeed UCSS/CCSS stripping via data-no-optimize attribute
-    add_filter('style_loader_tag', function($tag, $handle) {
-        if ($handle === 'mxchat-chat-css' || strpos($handle, 'mxchat') !== false) {
-            $tag = str_replace("rel='stylesheet'", "rel='stylesheet' data-no-optimize='1'", $tag);
-            $tag = str_replace('rel="stylesheet"', 'rel="stylesheet" data-no-optimize="1"', $tag);
-        }
-        return $tag;
-    }, 10, 2);
-
     // Handle script loading based on strategy
     if ($loading_strategy === 'default' || $loading_strategy === 'defer') {
         // Enqueue the script normally
@@ -9399,13 +9470,6 @@ public function mxchat_enqueue_scripts_styles() {
         add_action('wp_footer', array($this, 'mxchat_output_delayed_script_loader'), 99);
     }
 
-    // Protect MxChat JS from LiteSpeed optimization stripping via data-no-optimize attribute
-    add_filter('script_loader_tag', function($tag, $handle) {
-        if ($handle === 'mxchat-chat-js' || strpos($handle, 'mxchat') !== false) {
-            $tag = str_replace('<script ', '<script data-no-optimize="1" ', $tag);
-        }
-        return $tag;
-    }, 10, 2);
     $prompts_options = get_option('mxchat_prompts_options', array());
 
     // Check if AI theme is active - if so, skip inline colors in JavaScript
