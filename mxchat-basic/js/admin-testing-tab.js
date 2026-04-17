@@ -77,7 +77,7 @@
             var self = this;
 
             // Store reference globally so interception can find us
-            window.mxchatAdminTestPanel = self;
+            window.mxchatTestPanelInstance = self;
 
             // Intercept jQuery AJAX calls
             if (window.jQuery) {
@@ -108,7 +108,7 @@
                 };
             }
 
-            // Intercept fetch API calls (for streaming)
+            // Intercept fetch API calls (for both JSON and SSE streaming)
             var originalFetch = window.fetch;
 
             window.fetch = function() {
@@ -116,8 +116,10 @@
                 return originalFetch.apply(this, args).then(function(response) {
                     if (args[0] && typeof args[0] === 'string' &&
                         (args[0].includes('admin-ajax.php') || args[0].includes('mxchat'))) {
-                        var contentType = response.headers.get('content-type');
-                        if (contentType && contentType.includes('application/json')) {
+                        var contentType = response.headers.get('content-type') || '';
+
+                        if (contentType.includes('application/json')) {
+                            // Non-streaming: parse the full JSON response
                             response.clone().json().then(function(data) {
                                 if (self && data && data.testing_data) {
                                     self.handleTestingData(data.testing_data);
@@ -125,6 +127,55 @@
                                     self.handleTestingData(data.data.testing_data);
                                 }
                             }).catch(function() {});
+                        } else if (contentType.includes('text/event-stream') || contentType.includes('text/plain')) {
+                            // Streaming (SSE): read just enough to find the testing_data event
+                            // Using clone() so the original stream is unaffected for chat-script.js
+                            try {
+                                var clonedResponse = response.clone();
+                                var reader = clonedResponse.body.getReader();
+                                var decoder = new TextDecoder();
+                                var sseBuffer = '';
+                                var found = false;
+
+                                function readChunk() {
+                                    reader.read().then(function(result) {
+                                        if (result.done || found) {
+                                            reader.cancel().catch(function() {});
+                                            return;
+                                        }
+
+                                        sseBuffer += decoder.decode(result.value, { stream: true });
+                                        var sseLines = sseBuffer.split('\n');
+
+                                        for (var i = 0; i < sseLines.length; i++) {
+                                            var sseLine = sseLines[i];
+                                            if (sseLine.indexOf('data: ') === 0) {
+                                                var payload = sseLine.substring(6);
+                                                try {
+                                                    var parsed = JSON.parse(payload);
+                                                    if (parsed && parsed.testing_data) {
+                                                        self.handleTestingData(parsed.testing_data);
+                                                        found = true;
+                                                        reader.cancel().catch(function() {});
+                                                        return;
+                                                    }
+                                                } catch (e) {}
+                                            }
+                                        }
+
+                                        // Keep reading until we find testing_data or hit a limit
+                                        if (sseBuffer.length < 50000) {
+                                            readChunk();
+                                        } else {
+                                            reader.cancel().catch(function() {});
+                                        }
+                                    }).catch(function() {
+                                        // Stream read error — safe to ignore
+                                    });
+                                }
+
+                                readChunk();
+                            } catch (e) {}
                         }
                     }
                     return response;

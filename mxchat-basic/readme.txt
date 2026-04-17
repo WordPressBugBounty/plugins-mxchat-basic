@@ -5,7 +5,7 @@ Tags: ai chatbot, chatgpt, woocommerce, customer support, content generation
 Requires at least: 5.0
 Tested up to: 6.9
 Requires PHP: 7.2
-Stable tag: 3.2.0
+Stable tag: 3.2.1
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -42,10 +42,10 @@ Extend the free plugin with these optional premium features:
 
 👉 [Visit our website to view all add-ons](https://mxchat.ai)
 
-## 🔥 What's New in Version 3.2.0
+## 🔥 What's New in Version 3.2.1
 
-- **New Similarity Results Filter Hook** — Added `mxchat_similarity_results` filter that fires after similarity search completes, giving add-ons access to matched sources and their URLs for deeper customization.
-- **Cache & Optimization Plugin Compatibility** — Removed the `data-no-optimize` attribute injection on MxChat CSS/JS tags, resolving conflicts with third-party cache and optimization plugins.
+- **Admin Testing Tab Fixes** — Resolved issues preventing the debug panel from displaying similarity scores, action matches, and source data — including when web search and streaming are both enabled.
+- **Web Search Transcript Sources** — Chat transcripts now correctly show the "sources" link for responses generated with OpenAI web search enabled in both streaming and non-streaming modes.
 
 ## Core Features That Set MxChat Apart
 
@@ -306,6 +306,10 @@ Yes. MxChat is available for free on the WordPress plugin repository with full A
 *(Note: Screenshots will be added in future updates)*
 
 == Changelog ==
+
+= 3.2.1 - April 17, 2026 =
+- Fixed: Admin Testing Tab debug panel not displaying similarity scores, action matches, or source data — including when web search + streaming are both enabled
+- Fixed: Web search responses (streaming and non-streaming) not saving RAG context to chat transcripts, causing the "sources" link to be missing
 
 = 3.2.0 - April 15, 2026 =
 - Added: `mxchat_similarity_results` filter hook after similarity search completes, allowing add-ons to access matched sources and their URLs
@@ -935,8 +939,8 @@ Yes. MxChat is available for free on the WordPress plugin repository with full A
 
 == Upgrade Notice ==
 
-= 3.2.0 =
-Added `mxchat_similarity_results` filter hook for add-ons and removed `data-no-optimize` attribute injection that conflicted with cache/optimization plugins.
+= 3.2.1 =
+Fixed Admin Testing Tab debug panel and web search transcript sources not displaying correctly.
 
 == License & Warranty ==
 

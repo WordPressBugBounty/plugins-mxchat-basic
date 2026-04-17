@@ -7399,10 +7399,8 @@ private function mxchat_web_search_non_streaming_response($request_body, $api_ke
         }
     }
 
-    // Save to transcript
-    if (!empty($output_text) && !empty($session_id)) {
-        $this->mxchat_save_chat_message($session_id, 'bot', $output_text);
-    }
+    // Transcript save is handled by the main handler (mxchat_handle_chat_request)
+    // which includes rag_context for the "sources" link in transcripts.
 
     return $output_text;
 }
@@ -7557,9 +7555,29 @@ private function mxchat_web_search_streaming_response($request_body, $api_key, $
 
     curl_close($ch);
 
-    // Save the complete response
+    // Save the complete response with RAG context so the "sources" link
+    // appears in transcripts — mirrors the pattern used by Claude/OpenAI streaming.
     if (!empty($full_response) && !empty($session_id)) {
-        $this->mxchat_save_chat_message($session_id, 'bot', $full_response);
+        $rag_context_for_storage = null;
+        $has_rag_data = $this->last_similarity_analysis !== null && !empty($this->last_similarity_analysis['top_matches']);
+        $has_action_data = isset($this->last_action_analysis) && !empty($this->last_action_analysis);
+
+        if ($has_rag_data || $has_action_data) {
+            $rag_context_for_storage = [];
+
+            if ($has_rag_data) {
+                $rag_context_for_storage['top_matches'] = $this->last_similarity_analysis['top_matches'];
+                $rag_context_for_storage['approved_urls'] = $this->current_valid_urls ?? [];
+                $rag_context_for_storage['similarity_threshold'] = $this->last_similarity_analysis['threshold_used'] ?? 0.35;
+                $rag_context_for_storage['knowledge_base_type'] = $this->last_similarity_analysis['knowledge_base_type'] ?? 'WordPress Database';
+                $rag_context_for_storage['total_documents_checked'] = $this->last_similarity_analysis['total_checked'] ?? 0;
+            }
+
+            if ($has_action_data) {
+                $rag_context_for_storage['action_analysis'] = $this->last_action_analysis;
+            }
+        }
+        $this->mxchat_save_chat_message($session_id, 'bot', $full_response, null, $rag_context_for_storage);
     }
 
     return true;
