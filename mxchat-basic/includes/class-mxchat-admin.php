@@ -55,6 +55,12 @@ class MxChat_Admin {
         add_action('admin_post_mxchat_delete_intent', array($this, 'mxchat_handle_delete_intent'));
         add_action('admin_post_mxchat_edit_intent', array($this, 'mxchat_handle_edit_intent'));
         add_action('wp_ajax_mxchat_export_transcripts', array($this, 'export_chat_transcripts'));
+
+        // Leads tab (inside Transcripts)
+        add_action('wp_ajax_mxchat_fetch_leads', array($this, 'mxchat_fetch_leads'));
+        add_action('wp_ajax_mxchat_delete_leads', array($this, 'mxchat_delete_leads'));
+        add_action('wp_ajax_mxchat_export_leads', array($this, 'mxchat_export_leads'));
+
         add_action('admin_init', array($this, 'mxchat_transcripts_page_init'));
         add_action('wp_ajax_dismiss_live_agent_notice', array($this, 'dismiss_live_agent_notice'));
         add_action('wp_ajax_dismiss_theme_migration_notice', array($this, 'dismiss_theme_migration_notice'));
@@ -1505,6 +1511,760 @@ public function export_chat_transcripts() {
     wp_die();
 }
 
+// ============================================================================
+// Leads tab (inside Transcripts)
+//
+// Leads are derived from existing data — no dedicated table. Primary source:
+// wp_mxchat_chat_transcripts rows where user_email is populated. Secondary
+// source: wp_options entries `mxchat_email_{session_id}` / `mxchat_name_{sid}`
+// for "orphan" leads who submitted the pre-chat form but never chatted.
+// ============================================================================
+
+/**
+ * Fetch leads: dedup-by-email rows, stats strip, and top pages in one call.
+ */
+public function mxchat_fetch_leads() {
+    if (!current_user_can('manage_options')) {
+        wp_send_json_error(['message' => 'Insufficient permissions']);
+        wp_die();
+    }
+
+    global $wpdb;
+    $table = $wpdb->prefix . 'mxchat_chat_transcripts';
+
+    $page           = isset($_POST['page']) ? max(1, absint($_POST['page'])) : 1;
+    $per_page       = isset($_POST['per_page']) ? min(100, max(10, absint($_POST['per_page']))) : 25;
+    $offset         = ($page - 1) * $per_page;
+    $search         = isset($_POST['search']) ? sanitize_text_field(wp_unslash($_POST['search'])) : '';
+    $date_range     = isset($_POST['date_range']) ? sanitize_key($_POST['date_range']) : 'all';
+    $status         = isset($_POST['status']) ? sanitize_key($_POST['status']) : 'all';
+    $page_filter    = isset($_POST['page_url']) ? esc_url_raw(wp_unslash($_POST['page_url'])) : '';
+    $sort           = isset($_POST['sort']) ? sanitize_key($_POST['sort']) : 'last_seen';
+    $sort_dir       = (isset($_POST['sort_dir']) && $_POST['sort_dir'] === 'asc') ? 'ASC' : 'DESC';
+
+    $date_cutoff = self::mxchat_leads_date_cutoff($date_range);
+    $has_page_url_column = !empty($wpdb->get_results("SHOW COLUMNS FROM $table LIKE 'originating_page_url'"));
+
+    // Base WHERE for transcripts leads.
+    $where_clauses = ["user_email IS NOT NULL", "user_email != ''"];
+    $where_params  = [];
+
+    if ($date_cutoff) {
+        $where_clauses[] = 'timestamp >= %s';
+        $where_params[]  = $date_cutoff;
+    }
+    if ($page_filter && $has_page_url_column) {
+        $where_clauses[] = 'originating_page_url = %s';
+        $where_params[]  = $page_filter;
+    }
+    if ($search !== '') {
+        $like = '%' . $wpdb->esc_like($search) . '%';
+        $where_clauses[] = '(user_email LIKE %s OR user_name LIKE %s)';
+        $where_params[]  = $like;
+        $where_params[]  = $like;
+    }
+    $where_sql = 'WHERE ' . implode(' AND ', $where_clauses);
+
+    // Aggregate query grouped by email.
+    $select_sql = $has_page_url_column
+        ? "SELECT user_email, MAX(timestamp) AS last_seen, MIN(timestamp) AS first_seen,
+                  COUNT(DISTINCT session_id) AS conversation_count"
+        : "SELECT user_email, MAX(timestamp) AS last_seen, MIN(timestamp) AS first_seen,
+                  COUNT(DISTINCT session_id) AS conversation_count";
+
+    $order_column = in_array($sort, ['last_seen', 'conversation_count', 'first_seen'], true) ? $sort : 'last_seen';
+    $group_order_limit = " GROUP BY user_email ORDER BY {$order_column} {$sort_dir} LIMIT %d OFFSET %d";
+
+    $transcripts_sql = $wpdb->prepare(
+        "{$select_sql} FROM {$table} {$where_sql}{$group_order_limit}",
+        array_merge($where_params, [$per_page, $offset])
+    );
+    $transcript_rows = $wpdb->get_results($transcripts_sql);
+
+    // Count of unique transcript-based leads under the same filters.
+    $count_sql = $wpdb->prepare(
+        "SELECT COUNT(DISTINCT user_email) FROM {$table} {$where_sql}",
+        $where_params
+    );
+    $transcripts_lead_count = (int) $wpdb->get_var($count_sql);
+
+    // Hydrate each row: name, latest_session_id, top page.
+    $leads = [];
+    foreach ($transcript_rows as $row) {
+        $detail = $has_page_url_column
+            ? $wpdb->get_row($wpdb->prepare(
+                "SELECT session_id, user_name, originating_page_url, originating_page_title
+                 FROM {$table} WHERE user_email = %s ORDER BY timestamp DESC LIMIT 1",
+                $row->user_email
+            ))
+            : $wpdb->get_row($wpdb->prepare(
+                "SELECT session_id, user_name FROM {$table}
+                 WHERE user_email = %s ORDER BY timestamp DESC LIMIT 1",
+                $row->user_email
+            ));
+
+        $leads[] = [
+            'email'              => $row->user_email,
+            'name'               => isset($detail->user_name) ? (string) $detail->user_name : '',
+            'conversation_count' => (int) $row->conversation_count,
+            'last_seen'          => $row->last_seen,
+            'last_seen_display'  => self::mxchat_leads_format_relative($row->last_seen),
+            'first_seen'         => $row->first_seen,
+            'latest_session_id'  => isset($detail->session_id) ? $detail->session_id : '',
+            'top_page_url'       => isset($detail->originating_page_url) ? $detail->originating_page_url : '',
+            'top_page_title'     => isset($detail->originating_page_title) ? $detail->originating_page_title : '',
+            'is_orphan'          => false,
+            'status'             => 'active',
+        ];
+    }
+
+    // Non-transcript lead sources. Built once here, then filtered/merged based on the
+    // status filter below. Deduplication priority when the same email appears in multiple
+    // sources: transcripts > chat_deleted > orphan.
+    $transcripts_emails_seen = array_flip(array_map(
+        function ($r) { return strtolower($r['email']); },
+        $leads
+    ));
+
+    // Chat-deleted leads: had a conversation that an admin removed. Preserved via
+    // mxchat_lead_del_* options, with timestamps so they respect date filters.
+    $chat_deleted_leads_all = [];
+    if ($status === 'all' || $status === 'chat_deleted') {
+        $chat_deleted_leads_all = self::mxchat_collect_chat_deleted_leads($search, $date_cutoff);
+        // Dedup: drop any chat_deleted row whose email is already in the transcripts set.
+        $chat_deleted_leads_all = array_values(array_filter(
+            $chat_deleted_leads_all,
+            function ($row) use ($transcripts_emails_seen) {
+                return !isset($transcripts_emails_seen[strtolower($row['email'])]);
+            }
+        ));
+        foreach ($chat_deleted_leads_all as $row) {
+            $transcripts_emails_seen[strtolower($row['email'])] = true;
+        }
+    }
+
+    // Orphans: pre-chat form captures with no conversation. No timestamp, so skipped
+    // when a date filter is active.
+    $orphan_leads_all = [];
+    if (($status === 'all' || $status === 'orphan') && !$date_cutoff && !$page_filter) {
+        $orphan_leads_all = self::mxchat_collect_orphan_leads($search);
+        $orphan_leads_all = array_values(array_filter(
+            $orphan_leads_all,
+            function ($row) use ($transcripts_emails_seen) {
+                return !isset($transcripts_emails_seen[strtolower($row['email'])]);
+            }
+        ));
+    }
+
+    // Apply status filter to the transcripts-derived list.
+    if ($status === 'orphan' || $status === 'chat_deleted') {
+        $leads = [];
+        $transcripts_lead_count = 0;
+    }
+
+    // Stitch the current page from the three buckets in priority order.
+    $total_count = $transcripts_lead_count + count($chat_deleted_leads_all) + count($orphan_leads_all);
+    $remaining_slots = $per_page - count($leads);
+
+    if ($remaining_slots > 0 && !empty($chat_deleted_leads_all)) {
+        $start = max(0, ($page - 1) * $per_page - $transcripts_lead_count);
+        if ($start < count($chat_deleted_leads_all)) {
+            $leads = array_merge($leads, array_slice($chat_deleted_leads_all, $start, $remaining_slots));
+            $remaining_slots = $per_page - count($leads);
+        }
+    }
+
+    if ($remaining_slots > 0 && !empty($orphan_leads_all)) {
+        $before = $transcripts_lead_count + count($chat_deleted_leads_all);
+        $start = max(0, ($page - 1) * $per_page - $before);
+        if ($start < count($orphan_leads_all)) {
+            $leads = array_merge($leads, array_slice($orphan_leads_all, $start, $remaining_slots));
+        }
+    }
+
+    $total_pages = $per_page > 0 ? (int) ceil($total_count / $per_page) : 1;
+
+    // Stats strip: always computed over full dataset, unaffected by filters.
+    $stats = self::mxchat_leads_stats($table, $has_page_url_column);
+
+    // Top pages: top 5 by distinct emails captured.
+    $top_pages = [];
+    if ($has_page_url_column) {
+        $top_pages_rows = $wpdb->get_results(
+            "SELECT originating_page_url AS url,
+                    MAX(originating_page_title) AS title,
+                    COUNT(DISTINCT user_email) AS lead_count
+             FROM {$table}
+             WHERE user_email IS NOT NULL AND user_email != ''
+               AND originating_page_url IS NOT NULL AND originating_page_url != ''
+             GROUP BY originating_page_url
+             ORDER BY lead_count DESC, url ASC
+             LIMIT 5"
+        );
+        foreach ($top_pages_rows as $p) {
+            $top_pages[] = [
+                'url'        => $p->url,
+                'title'      => $p->title ?: $p->url,
+                'lead_count' => (int) $p->lead_count,
+            ];
+        }
+    }
+
+    wp_send_json([
+        'success'        => true,
+        'leads'          => $leads,
+        'page'           => $page,
+        'per_page'       => $per_page,
+        'total_count'    => $total_count,
+        'total_pages'    => $total_pages,
+        'showing_start'  => $total_count === 0 ? 0 : ($offset + 1),
+        'showing_end'    => min($offset + $per_page, $total_count),
+        'stats'          => $stats,
+        'top_pages'      => $top_pages,
+    ]);
+    wp_die();
+}
+
+/**
+ * Delete one or more leads by email. Removes every transcripts row for that
+ * email and cleans up related wp_options (mxchat_email_{sid}, mxchat_name_{sid},
+ * mxchat_history_{sid}) and any orphan option entries matching the email.
+ */
+public function mxchat_delete_leads() {
+    if (!current_user_can('manage_options')) {
+        wp_send_json_error(['message' => 'Insufficient permissions']);
+        wp_die();
+    }
+    check_ajax_referer('mxchat_delete_leads', 'security');
+
+    $emails_raw = isset($_POST['emails']) ? (array) wp_unslash($_POST['emails']) : [];
+    $emails = [];
+    foreach ($emails_raw as $e) {
+        $clean = sanitize_email((string) $e);
+        if ($clean) {
+            $emails[] = $clean;
+        }
+    }
+    if (empty($emails)) {
+        wp_send_json_error(['message' => 'No emails provided']);
+        wp_die();
+    }
+
+    $summary = self::mxchat_wipe_leads_by_email($emails);
+
+    wp_send_json([
+        'success'           => true,
+        'deleted_leads'     => count($emails),
+        'deleted_sessions'  => $summary['deleted_sessions'],
+        'deleted_rows'      => $summary['deleted_rows'],
+    ]);
+    wp_die();
+}
+
+/**
+ * Fully wipe one or more leads by email: every transcripts row, every related wp_options
+ * entry (history, pre-chat capture, chat_deleted preservation, agent name, translations).
+ *
+ * Shared between the Leads-tab Delete button and the transcript-delete opt-in checkbox.
+ * Input emails must already be sanitized with sanitize_email().
+ */
+private static function mxchat_wipe_leads_by_email(array $emails) {
+    global $wpdb;
+    $table = $wpdb->prefix . 'mxchat_chat_transcripts';
+    $translations_table = $wpdb->prefix . 'mxchat_transcript_translations';
+    $has_translations = $wpdb->get_var("SHOW TABLES LIKE '$translations_table'") === $translations_table;
+
+    $deleted_sessions = 0;
+    $deleted_rows = 0;
+    $emails_lc = array_map('strtolower', $emails);
+
+    foreach ($emails as $email) {
+        $session_ids = $wpdb->get_col($wpdb->prepare(
+            "SELECT DISTINCT session_id FROM {$table} WHERE user_email = %s",
+            $email
+        ));
+
+        $rows_removed = $wpdb->delete($table, ['user_email' => $email], ['%s']);
+        if ($rows_removed !== false) {
+            $deleted_rows += (int) $rows_removed;
+        }
+
+        foreach ($session_ids as $sid) {
+            $deleted_sessions++;
+            wp_cache_delete('chat_session_' . $sid, 'mxchat_chat_sessions');
+            delete_option('mxchat_history_' . $sid);
+            delete_option('mxchat_email_' . $sid);
+            delete_option('mxchat_name_' . $sid);
+            delete_option('mxchat_agent_name_' . $sid);
+            delete_option('mxchat_lead_del_email_' . $sid);
+            delete_option('mxchat_lead_del_name_' . $sid);
+            delete_option('mxchat_lead_del_ts_' . $sid);
+            if ($has_translations) {
+                $wpdb->delete($translations_table, ['session_id' => $sid], ['%s']);
+            }
+        }
+    }
+
+    // Clean up any lingering option entries (orphan pre-chat captures + chat_deleted
+    // preservations) whose stored value matches one of the emails being wiped.
+    $lingering = $wpdb->get_results(
+        "SELECT option_name, option_value FROM {$wpdb->options}
+         WHERE option_name LIKE 'mxchat_email_%' OR option_name LIKE 'mxchat_lead_del_email_%'"
+    );
+    foreach ($lingering as $opt) {
+        if (!in_array(strtolower(trim($opt->option_value)), $emails_lc, true)) {
+            continue;
+        }
+        if (strpos($opt->option_name, 'mxchat_lead_del_email_') === 0) {
+            $sid = substr($opt->option_name, strlen('mxchat_lead_del_email_'));
+            delete_option('mxchat_lead_del_email_' . $sid);
+            delete_option('mxchat_lead_del_name_' . $sid);
+            delete_option('mxchat_lead_del_ts_' . $sid);
+        } else {
+            $sid = substr($opt->option_name, strlen('mxchat_email_'));
+            delete_option('mxchat_email_' . $sid);
+            delete_option('mxchat_name_' . $sid);
+        }
+    }
+
+    wp_cache_delete('all_chat_sessions', 'mxchat_chat_sessions');
+
+    return [
+        'deleted_sessions' => $deleted_sessions,
+        'deleted_rows'     => $deleted_rows,
+    ];
+}
+
+/**
+ * Stream a leads CSV. scope=all exports every lead under current filters is not
+ * supported to keep semantics simple; caller either exports all leads or a
+ * specific set of selected emails.
+ */
+public function mxchat_export_leads() {
+    if (!current_user_can('manage_options')) {
+        wp_die(esc_html__('You do not have sufficient permissions to access this page.', 'mxchat'));
+    }
+    check_ajax_referer('mxchat_export_leads', 'security');
+
+    $scope       = isset($_POST['scope']) ? sanitize_key($_POST['scope']) : 'all';
+    $fields_mode = isset($_POST['fields']) ? sanitize_key($_POST['fields']) : 'email_and_name';
+    $emails_in   = isset($_POST['emails']) ? (array) wp_unslash($_POST['emails']) : [];
+
+    $emails_in_clean = [];
+    foreach ($emails_in as $e) {
+        $clean = sanitize_email((string) $e);
+        if ($clean) {
+            $emails_in_clean[] = $clean;
+        }
+    }
+
+    global $wpdb;
+    $table = $wpdb->prefix . 'mxchat_chat_transcripts';
+    $has_page_url_column = !empty($wpdb->get_results("SHOW COLUMNS FROM $table LIKE 'originating_page_url'"));
+
+    // Collect leads from transcripts.
+    $transcripts_sql = "SELECT user_email AS email,
+                               MAX(timestamp) AS last_seen,
+                               COUNT(DISTINCT session_id) AS conversation_count
+                        FROM {$table}
+                        WHERE user_email IS NOT NULL AND user_email != ''";
+    $params = [];
+    if ($scope === 'selected' && !empty($emails_in_clean)) {
+        $placeholders = implode(',', array_fill(0, count($emails_in_clean), '%s'));
+        $transcripts_sql .= " AND user_email IN ({$placeholders})";
+        $params = $emails_in_clean;
+    }
+    $transcripts_sql .= " GROUP BY user_email ORDER BY last_seen DESC";
+
+    $rows = !empty($params)
+        ? $wpdb->get_results($wpdb->prepare($transcripts_sql, $params))
+        : $wpdb->get_results($transcripts_sql);
+
+    // Hydrate each row with name + top page.
+    $export_rows = [];
+    foreach ($rows as $row) {
+        $detail = $has_page_url_column
+            ? $wpdb->get_row($wpdb->prepare(
+                "SELECT user_name, originating_page_url FROM {$table}
+                 WHERE user_email = %s ORDER BY timestamp DESC LIMIT 1",
+                $row->email
+            ))
+            : $wpdb->get_row($wpdb->prepare(
+                "SELECT user_name FROM {$table}
+                 WHERE user_email = %s ORDER BY timestamp DESC LIMIT 1",
+                $row->email
+            ));
+        $export_rows[] = [
+            'email'              => $row->email,
+            'name'               => isset($detail->user_name) ? (string) $detail->user_name : '',
+            'conversation_count' => (int) $row->conversation_count,
+            'last_seen'          => $row->last_seen,
+            'top_page_url'       => isset($detail->originating_page_url) ? $detail->originating_page_url : '',
+        ];
+    }
+
+    // Include orphan + chat_deleted leads when exporting all.
+    if ($scope === 'all') {
+        $transcripts_emails_lc = array_flip(array_map(
+            function ($r) { return strtolower($r['email']); },
+            $export_rows
+        ));
+        foreach (self::mxchat_collect_chat_deleted_leads('') as $cd) {
+            if (isset($transcripts_emails_lc[strtolower($cd['email'])])) continue;
+            $transcripts_emails_lc[strtolower($cd['email'])] = true;
+            $export_rows[] = [
+                'email'              => $cd['email'],
+                'name'               => $cd['name'],
+                'conversation_count' => 0,
+                'last_seen'          => $cd['last_seen'],
+                'top_page_url'       => '',
+            ];
+        }
+        foreach (self::mxchat_collect_orphan_leads('') as $orphan) {
+            if (isset($transcripts_emails_lc[strtolower($orphan['email'])])) continue;
+            $transcripts_emails_lc[strtolower($orphan['email'])] = true;
+            $export_rows[] = [
+                'email'              => $orphan['email'],
+                'name'               => $orphan['name'],
+                'conversation_count' => 0,
+                'last_seen'          => '',
+                'top_page_url'       => '',
+            ];
+        }
+    }
+
+    if (empty($export_rows)) {
+        wp_send_json_error(['message' => 'No leads to export.']);
+        wp_die();
+    }
+
+    $filename = 'mxchat-leads-' . date('Y-m-d') . '.csv';
+    header('Content-Type: text/csv');
+    header('Content-Disposition: attachment; filename="' . $filename . '"');
+    header('Pragma: no-cache');
+    header('Expires: 0');
+
+    $output = fopen('php://output', 'w');
+    fputs($output, "\xEF\xBB\xBF"); // UTF-8 BOM for Excel
+
+    if ($fields_mode === 'email_only') {
+        fputcsv($output, ['Email']);
+        foreach ($export_rows as $r) {
+            fputcsv($output, [$r['email']]);
+        }
+    } else {
+        fputcsv($output, ['Email', 'Name', 'Conversations', 'Last seen', 'Top page']);
+        foreach ($export_rows as $r) {
+            fputcsv($output, [
+                $r['email'],
+                $r['name'],
+                $r['conversation_count'],
+                $r['last_seen'],
+                $r['top_page_url'],
+            ]);
+        }
+    }
+
+    fclose($output);
+    wp_die();
+}
+
+/**
+ * Stats strip payload (independent of filters).
+ */
+private static function mxchat_leads_stats($table, $has_page_url_column) {
+    global $wpdb;
+
+    $total_transcripts_emails = (int) $wpdb->get_var(
+        "SELECT COUNT(DISTINCT user_email) FROM {$table}
+         WHERE user_email IS NOT NULL AND user_email != ''"
+    );
+
+    $new_this_week = (int) $wpdb->get_var($wpdb->prepare(
+        "SELECT COUNT(*) FROM (
+            SELECT user_email FROM {$table}
+            WHERE user_email IS NOT NULL AND user_email != ''
+            GROUP BY user_email
+            HAVING MIN(timestamp) >= %s
+         ) AS new_leads",
+        gmdate('Y-m-d H:i:s', strtotime('-7 days'))
+    ));
+
+    $total_convos = (int) $wpdb->get_var(
+        "SELECT COUNT(DISTINCT session_id) FROM {$table}
+         WHERE user_email IS NOT NULL AND user_email != ''"
+    );
+
+    $orphan_count = count(self::mxchat_collect_orphan_leads(''));
+    $chat_deleted_count = self::mxchat_count_chat_deleted_leads();
+
+    // Total leads = unique emails across all three sources (dedup priority: transcripts > chat_deleted > orphan
+    // is already enforced at collection time in mxchat_fetch_leads; stats re-apply it here).
+    $total_leads = $total_transcripts_emails + $chat_deleted_count + $orphan_count;
+
+    $avg = $total_transcripts_emails > 0
+        ? round($total_convos / $total_transcripts_emails, 1)
+        : 0;
+
+    // Orphan % reflects *true* orphans only (pre-chat dropoffs). Chat-deleted leads are
+    // excluded so the metric stays meaningful — admins shouldn't see their cleanups
+    // inflate this number.
+    $orphan_pct = $total_leads > 0
+        ? (int) round(($orphan_count / $total_leads) * 100)
+        : 0;
+
+    return [
+        'total_leads'         => $total_leads,
+        'new_this_week'       => $new_this_week,
+        'avg_convos'          => $avg,
+        'orphan_pct'          => $orphan_pct,
+        'orphan_count'        => $orphan_count,
+        'chat_deleted_count'  => $chat_deleted_count,
+    ];
+}
+
+/**
+ * Collect leads who had a conversation that an admin later deleted (preserved via
+ * mxchat_lead_del_* options). Returns rows tagged status='chat_deleted' with the
+ * original last-seen timestamp so they still sort and filter sensibly.
+ *
+ * @param string $search      Optional email/name substring filter.
+ * @param string $date_cutoff Optional 'Y-m-d H:i:s' cutoff — only rows with last_ts >= cutoff.
+ * @return array
+ */
+private static function mxchat_collect_chat_deleted_leads($search = '', $date_cutoff = '') {
+    global $wpdb;
+    $table = $wpdb->prefix . 'mxchat_chat_transcripts';
+
+    $rows = $wpdb->get_results(
+        "SELECT option_name, option_value FROM {$wpdb->options}
+         WHERE option_name LIKE 'mxchat_lead_del_email_%'"
+    );
+    if (empty($rows)) {
+        return [];
+    }
+
+    // Emails that currently have transcripts rows should not appear as chat_deleted —
+    // they've come back and chatted, so they're active leads again.
+    $emails_in_transcripts = array_map(
+        'strtolower',
+        (array) $wpdb->get_col(
+            "SELECT DISTINCT user_email FROM {$table}
+             WHERE user_email IS NOT NULL AND user_email != ''"
+        )
+    );
+    $emails_in_transcripts = array_flip($emails_in_transcripts);
+
+    $needle = strtolower(trim((string) $search));
+    $by_email = [];
+
+    foreach ($rows as $opt) {
+        $email = sanitize_email(trim((string) $opt->option_value));
+        if (!$email) {
+            continue;
+        }
+        if (isset($emails_in_transcripts[strtolower($email)])) {
+            continue;
+        }
+        $sid = substr($opt->option_name, strlen('mxchat_lead_del_email_'));
+        if (!$sid) {
+            continue;
+        }
+        $name = (string) get_option('mxchat_lead_del_name_' . $sid, '');
+        $ts   = (string) get_option('mxchat_lead_del_ts_' . $sid, '');
+
+        if ($date_cutoff !== '' && ($ts === '' || $ts < $date_cutoff)) {
+            continue;
+        }
+        if ($needle !== '') {
+            $hay = strtolower($email . ' ' . $name);
+            if (strpos($hay, $needle) === false) {
+                continue;
+            }
+        }
+
+        $key = strtolower($email);
+        if (!isset($by_email[$key]) || (isset($by_email[$key]['last_seen']) && $ts > $by_email[$key]['last_seen'])) {
+            $by_email[$key] = [
+                'email'              => $email,
+                'name'               => $name,
+                'conversation_count' => 0,
+                'last_seen'          => $ts,
+                'last_seen_display'  => $ts ? self::mxchat_leads_format_relative($ts) : __('Chat deleted', 'mxchat'),
+                'first_seen'         => $ts,
+                'latest_session_id'  => '',
+                'top_page_url'       => '',
+                'top_page_title'     => '',
+                'is_orphan'          => false,
+                'status'             => 'chat_deleted',
+            ];
+        }
+    }
+
+    // Newest chat_deleted first.
+    usort($by_email, function ($a, $b) {
+        return strcmp((string) $b['last_seen'], (string) $a['last_seen']);
+    });
+    return array_values($by_email);
+}
+
+/**
+ * Count unique emails preserved as "chat deleted" (for the stats strip).
+ */
+private static function mxchat_count_chat_deleted_leads() {
+    global $wpdb;
+    $table = $wpdb->prefix . 'mxchat_chat_transcripts';
+
+    $emails = $wpdb->get_col(
+        "SELECT DISTINCT option_value FROM {$wpdb->options}
+         WHERE option_name LIKE 'mxchat_lead_del_email_%'"
+    );
+    if (empty($emails)) {
+        return 0;
+    }
+
+    $transcripts_emails = array_map(
+        'strtolower',
+        (array) $wpdb->get_col(
+            "SELECT DISTINCT user_email FROM {$table}
+             WHERE user_email IS NOT NULL AND user_email != ''"
+        )
+    );
+    $transcripts_emails = array_flip($transcripts_emails);
+
+    $count = 0;
+    $seen = [];
+    foreach ($emails as $raw) {
+        $email = strtolower(trim((string) $raw));
+        if (!$email || isset($seen[$email]) || isset($transcripts_emails[$email])) {
+            continue;
+        }
+        $seen[$email] = true;
+        $count++;
+    }
+    return $count;
+}
+
+/**
+ * Find leads who submitted the pre-chat form but never produced a transcripts row.
+ * Returned rows have no conversation_count, no timestamp.
+ *
+ * @param string $search  Optional email/name substring filter.
+ * @return array
+ */
+private static function mxchat_collect_orphan_leads($search = '') {
+    global $wpdb;
+    $table = $wpdb->prefix . 'mxchat_chat_transcripts';
+
+    $option_rows = $wpdb->get_results(
+        "SELECT option_name, option_value FROM {$wpdb->options}
+         WHERE option_name LIKE 'mxchat_email_%'"
+    );
+    if (empty($option_rows)) {
+        return [];
+    }
+
+    // Collect all session_ids that have real transcripts rows so we can exclude them.
+    $session_ids_with_rows = $wpdb->get_col(
+        "SELECT DISTINCT session_id FROM {$table}
+         WHERE user_email IS NOT NULL AND user_email != ''"
+    );
+    $session_ids_with_rows = array_flip($session_ids_with_rows);
+
+    // Seen emails in transcripts (so orphans only include truly never-chatted leads).
+    $emails_in_transcripts = array_map(
+        'strtolower',
+        (array) $wpdb->get_col(
+            "SELECT DISTINCT user_email FROM {$table}
+             WHERE user_email IS NOT NULL AND user_email != ''"
+        )
+    );
+    $emails_in_transcripts = array_flip($emails_in_transcripts);
+
+    $orphans_by_email = [];
+    $needle = strtolower(trim((string) $search));
+
+    foreach ($option_rows as $opt) {
+        $email = sanitize_email(trim((string) $opt->option_value));
+        if (!$email) {
+            continue;
+        }
+        $sid = substr($opt->option_name, strlen('mxchat_email_'));
+        if (!$sid) {
+            continue;
+        }
+        // Exclude leads who have any transcripts rows (they appear in the main list).
+        if (isset($emails_in_transcripts[strtolower($email)])) {
+            continue;
+        }
+        if (isset($session_ids_with_rows[$sid])) {
+            continue;
+        }
+
+        $name_option = get_option('mxchat_name_' . $sid, '');
+        $name = is_string($name_option) ? trim($name_option) : '';
+
+        if ($needle !== '') {
+            $hay = strtolower($email . ' ' . $name);
+            if (strpos($hay, $needle) === false) {
+                continue;
+            }
+        }
+
+        $key = strtolower($email);
+        if (!isset($orphans_by_email[$key])) {
+            $orphans_by_email[$key] = [
+                'email'              => $email,
+                'name'               => $name,
+                'conversation_count' => 0,
+                'last_seen'          => '',
+                'last_seen_display'  => __('No conversation yet', 'mxchat'),
+                'first_seen'         => '',
+                'latest_session_id'  => '',
+                'top_page_url'       => '',
+                'top_page_title'     => '',
+                'is_orphan'          => true,
+                'status'             => 'orphan',
+            ];
+        }
+    }
+
+    return array_values($orphans_by_email);
+}
+
+/**
+ * Map a date_range key to a SQL-comparable cutoff string, or '' for all-time.
+ */
+private static function mxchat_leads_date_cutoff($date_range) {
+    switch ($date_range) {
+        case 'today':   return gmdate('Y-m-d H:i:s', strtotime('-24 hours'));
+        case '7d':      return gmdate('Y-m-d H:i:s', strtotime('-7 days'));
+        case '30d':     return gmdate('Y-m-d H:i:s', strtotime('-30 days'));
+        case '90d':     return gmdate('Y-m-d H:i:s', strtotime('-90 days'));
+        case 'all':
+        default:        return '';
+    }
+}
+
+/**
+ * Turn a UTC timestamp into a short relative display like "2h ago" or "Apr 12".
+ */
+private static function mxchat_leads_format_relative($timestamp) {
+    if (!$timestamp) {
+        return '';
+    }
+    $ts = strtotime($timestamp . ' UTC');
+    if (!$ts) {
+        return '';
+    }
+    $diff = time() - $ts;
+    if ($diff < 60)       return __('just now', 'mxchat');
+    if ($diff < 3600)     return floor($diff / 60) . __('m ago', 'mxchat');
+    if ($diff < 86400)    return floor($diff / 3600) . __('h ago', 'mxchat');
+    if ($diff < 604800)   return floor($diff / 86400) . __('d ago', 'mxchat');
+    return wp_date('M j', $ts);
+}
+
 /**
  * Handle translation of chat messages via AJAX
  */
@@ -2726,51 +3486,101 @@ public function mxchat_delete_chat_history() {
         wp_die();
     }
     check_ajax_referer('mxchat_delete_chat_history', 'security');
-    global $wpdb;
-    $table_name = $wpdb->prefix . 'mxchat_chat_transcripts';
 
-    if (isset($_POST['delete_session_ids']) && is_array($_POST['delete_session_ids'])) {
-        $deleted_count = 0;
-        $translations_table = $wpdb->prefix . 'mxchat_transcript_translations';
-
-        foreach ($_POST['delete_session_ids'] as $session_id) {
-            $session_id_sanitized = sanitize_text_field($session_id);
-
-            // Clear relevant cache before deletion
-            $cache_key = 'chat_session_' . $session_id_sanitized;
-            wp_cache_delete($cache_key, 'mxchat_chat_sessions');
-
-            // Perform the deletion from the database table
-            $wpdb->delete($table_name, ['session_id' => $session_id_sanitized]);
-
-            // Delete any saved translations for this session
-            if ($wpdb->get_var("SHOW TABLES LIKE '$translations_table'") === $translations_table) {
-                $wpdb->delete($translations_table, ['session_id' => $session_id_sanitized]);
-            }
-
-            // Delete the corresponding option entry from wp_options table
-            delete_option("mxchat_history_" . $session_id_sanitized);
-
-            // Delete any associated metadata options
-            delete_option("mxchat_email_" . $session_id_sanitized);
-            delete_option("mxchat_agent_name_" . $session_id_sanitized);
-
-            $deleted_count++;
-        }
-
-        // Optionally, clear a general cache if you have one
-        wp_cache_delete('all_chat_sessions', 'mxchat_chat_sessions');
-
-        echo wp_json_encode([
-            'success' => sprintf(
-                esc_html__('%d chat session(s) have been deleted from all storage locations.', 'mxchat'),
-                $deleted_count
-            )
-        ]);
-    } else {
+    if (!isset($_POST['delete_session_ids']) || !is_array($_POST['delete_session_ids'])) {
         echo wp_json_encode(['error' => esc_html__('No chat sessions selected for deletion.', 'mxchat')]);
+        wp_die();
     }
 
+    global $wpdb;
+    $table_name = $wpdb->prefix . 'mxchat_chat_transcripts';
+    $translations_table = $wpdb->prefix . 'mxchat_transcript_translations';
+    $has_translations = $wpdb->get_var("SHOW TABLES LIKE '$translations_table'") === $translations_table;
+
+    // When true, any lead attached to these sessions is fully wiped (all their sessions,
+    // across the whole table). Default false: the chat rows go away but the lead is
+    // preserved as a separate "chat deleted" lead in the Leads tab.
+    $also_delete_lead = !empty($_POST['also_delete_lead']) && $_POST['also_delete_lead'] !== 'false';
+
+    $deleted_count = 0;
+    $preserved_as_deleted_leads = 0;
+    $emails_to_fully_wipe = [];
+
+    foreach ((array) $_POST['delete_session_ids'] as $session_id) {
+        $session_id_sanitized = sanitize_text_field($session_id);
+        if ($session_id_sanitized === '') {
+            continue;
+        }
+
+        // Capture the lead info attached to this session *before* we delete the rows.
+        $lead_row = $wpdb->get_row($wpdb->prepare(
+            "SELECT user_email, user_name, MAX(timestamp) AS last_ts
+             FROM {$table_name}
+             WHERE session_id = %s AND user_email IS NOT NULL AND user_email != ''
+             GROUP BY user_email, user_name
+             ORDER BY last_ts DESC LIMIT 1",
+            $session_id_sanitized
+        ));
+
+        wp_cache_delete('chat_session_' . $session_id_sanitized, 'mxchat_chat_sessions');
+        $wpdb->delete($table_name, ['session_id' => $session_id_sanitized]);
+
+        if ($has_translations) {
+            $wpdb->delete($translations_table, ['session_id' => $session_id_sanitized]);
+        }
+
+        delete_option('mxchat_history_' . $session_id_sanitized);
+        delete_option('mxchat_agent_name_' . $session_id_sanitized);
+
+        if ($lead_row && !empty($lead_row->user_email)) {
+            if ($also_delete_lead) {
+                // Full-wipe requested — queue the email so that all their sessions and
+                // related options get swept below. Also clear this session's pre-chat
+                // capture options (they're no longer meaningful).
+                $emails_to_fully_wipe[strtolower($lead_row->user_email)] = $lead_row->user_email;
+                delete_option('mxchat_email_' . $session_id_sanitized);
+                delete_option('mxchat_name_' . $session_id_sanitized);
+            } else {
+                // Preserve the lead in a "Chat deleted" state via distinct option keys so
+                // they stay out of the orphan bucket (orphan = pre-chat form dropoff).
+                update_option('mxchat_lead_del_email_' . $session_id_sanitized, $lead_row->user_email, false);
+                if (!empty($lead_row->user_name)) {
+                    update_option('mxchat_lead_del_name_' . $session_id_sanitized, $lead_row->user_name, false);
+                }
+                if (!empty($lead_row->last_ts)) {
+                    update_option('mxchat_lead_del_ts_' . $session_id_sanitized, $lead_row->last_ts, false);
+                }
+                // Clean up pre-chat capture options for this session — chat_deleted supersedes.
+                delete_option('mxchat_email_' . $session_id_sanitized);
+                delete_option('mxchat_name_' . $session_id_sanitized);
+                $preserved_as_deleted_leads++;
+            }
+        } else {
+            // No lead attached — nothing to preserve. Clean up any orphan options anyway.
+            delete_option('mxchat_email_' . $session_id_sanitized);
+            delete_option('mxchat_name_' . $session_id_sanitized);
+        }
+
+        $deleted_count++;
+    }
+
+    // Opt-in full-lead wipe: sweep every remaining row + every option key (including
+    // chat_deleted preservation) for each affected email. Reuses the same internal
+    // helper as the Leads-tab Delete button for consistency.
+    if (!empty($emails_to_fully_wipe)) {
+        self::mxchat_wipe_leads_by_email(array_values($emails_to_fully_wipe));
+    }
+
+    wp_cache_delete('all_chat_sessions', 'mxchat_chat_sessions');
+
+    echo wp_json_encode([
+        'success' => sprintf(
+            esc_html__('%d chat session(s) have been deleted.', 'mxchat'),
+            $deleted_count
+        ),
+        'preserved_as_deleted_leads' => $preserved_as_deleted_leads,
+        'leads_fully_wiped' => count($emails_to_fully_wipe),
+    ]);
     wp_die();
 }
 

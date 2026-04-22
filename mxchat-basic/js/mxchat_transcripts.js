@@ -179,7 +179,9 @@ jQuery(document).ready(function($) {
 
         if (isChecked) {
             $('.mxch-chat-item').each(function() {
-                selectedSessions.add($(this).data('session-id'));
+                // Use .attr() — jQuery's .data() coerces "null"/"true"/numeric strings to JS types,
+                // which causes fetch/delete of those sessions to silently fail.
+                selectedSessions.add($(this).attr('data-session-id'));
                 $(this).addClass('selected');
             });
             $('#mxch-chat-list').addClass('selection-mode');
@@ -222,26 +224,53 @@ jQuery(document).ready(function($) {
         loadChatList(currentPage, $('#mxch-search-transcripts').val());
     });
 
-    // Delete selected button
+    // Delete selected button — opens the shared confirm modal with the "also delete lead" checkbox.
     $('#mxch-delete-selected').on('click', function() {
         const count = selectedSessions.size;
         if (count === 0) return;
+        openTranscriptConfirm(Array.from(selectedSessions), count);
+    });
 
-        if (!confirm('Are you sure you want to delete ' + count + ' conversation(s)? This action cannot be undone.')) {
-            return;
-        }
+    // Transcript delete confirm (shared by bulk + individual) ---------------------------
+    let transcriptConfirmSessionIds = [];
 
-        deleteMultipleSessions(Array.from(selectedSessions));
+    function openTranscriptConfirm(sessionIds, count) {
+        transcriptConfirmSessionIds = sessionIds.slice();
+        const n = count || sessionIds.length;
+        $('#mxch-transcript-confirm-title').text(n === 1 ? 'Delete conversation?' : 'Delete ' + n + ' conversations?');
+        $('#mxch-transcript-confirm-body').text(
+            n === 1
+                ? 'This removes the conversation and its messages.'
+                : 'This removes ' + n + ' conversations and their messages.'
+        );
+        $('#mxch-transcript-also-delete-lead').prop('checked', false);
+        $('#mxch-transcript-confirm').fadeIn(120);
+    }
+
+    function closeTranscriptConfirm() {
+        $('#mxch-transcript-confirm').fadeOut(120);
+        transcriptConfirmSessionIds = [];
+    }
+
+    $(document).on('click', '[data-mxch-transcript-close]', closeTranscriptConfirm);
+
+    $('#mxch-transcript-confirm-go').on('click', function() {
+        const ids = transcriptConfirmSessionIds.slice();
+        if (!ids.length) { closeTranscriptConfirm(); return; }
+        const alsoDeleteLead = $('#mxch-transcript-also-delete-lead').is(':checked');
+        closeTranscriptConfirm();
+        deleteMultipleSessions(ids, alsoDeleteLead);
     });
 
     // Delete multiple sessions
-    function deleteMultipleSessions(sessionIds) {
+    function deleteMultipleSessions(sessionIds, alsoDeleteLead) {
         $.ajax({
             url: ajaxurl,
             type: 'POST',
             data: {
                 action: 'mxchat_delete_chat_history',
                 delete_session_ids: sessionIds,
+                also_delete_lead: alsoDeleteLead ? '1' : '0',
                 security: $('#mxchat_delete_chat_nonce').val()
             },
             success: function(response) {
@@ -264,6 +293,11 @@ jQuery(document).ready(function($) {
 
                         // Reload list
                         loadChatList(currentPage, $('#mxch-search-transcripts').val());
+
+                        // The Leads tab shares this data (Chat deleted pill, nav badge,
+                        // stats) — invalidate it so switching tabs re-fetches instead of
+                        // showing stale "active lead" rows.
+                        invalidateLeadsData();
                     } else if (jsonResponse.error) {
                         alert('Error: ' + jsonResponse.error);
                     }
@@ -346,7 +380,7 @@ jQuery(document).ready(function($) {
         $('.mxch-chat-checkbox').on('click', function(e) {
             e.stopPropagation(); // Prevent triggering chat item click
             const $item = $(this).closest('.mxch-chat-item');
-            const sessionId = $item.data('session-id');
+            const sessionId = $item.attr('data-session-id');
 
             if ($(this).is(':checked')) {
                 selectedSessions.add(sessionId);
@@ -364,7 +398,7 @@ jQuery(document).ready(function($) {
             // Don't trigger if clicking on checkbox
             if ($(e.target).is('.mxch-chat-checkbox')) return;
 
-            const sessionId = $(this).data('session-id');
+            const sessionId = $(this).attr('data-session-id');
             selectChat(sessionId);
 
             // Update active state
@@ -562,25 +596,21 @@ jQuery(document).ready(function($) {
         }
     });
 
-    // Delete current chat
+    // Delete current chat — opens the shared confirm modal.
     $('#mxch-delete-current').on('click', function() {
         if (!currentSessionId) return;
-
-        if (!confirm('Are you sure you want to delete this conversation? This action cannot be undone.')) {
-            return;
-        }
-
-        deleteSession(currentSessionId);
+        openTranscriptConfirm([currentSessionId], 1);
     });
 
     // Delete session function
-    function deleteSession(sessionId) {
+    function deleteSession(sessionId, alsoDeleteLead) {
         $.ajax({
             url: ajaxurl,
             type: 'POST',
             data: {
                 action: 'mxchat_delete_chat_history',
                 delete_session_ids: [sessionId],
+                also_delete_lead: alsoDeleteLead ? '1' : '0',
                 security: $('#mxchat_delete_chat_nonce').val()
             },
             success: function(response) {
@@ -1275,5 +1305,479 @@ jQuery(document).ready(function($) {
         resizeTimeout = setTimeout(function() {
             initActivityChart();
         }, 250);
+    });
+
+    // ==========================================================================
+    // Leads Tab
+    // ==========================================================================
+
+    const leadsState = {
+        loaded: false,
+        page: 1,
+        perPage: 25,
+        totalPages: 1,
+        totalCount: 0,
+        selected: new Set(),
+        filters: {
+            search: '',
+            dateRange: 'all',
+            status: 'all',
+            pageUrl: '',
+            pageTitle: ''
+        },
+        pendingDelete: [],
+        leadsRows: [] // last-rendered rows for quick lookup
+    };
+
+    function $leads() { return $('#leads'); }
+
+    // Called after a transcript delete from the All Chats side. Marks the Leads tab
+    // data stale so the next tab visit re-fetches, and refreshes immediately if the
+    // Leads tab happens to already be visible.
+    function invalidateLeadsData() {
+        leadsState.loaded = false;
+        if ($('#leads').hasClass('active')) {
+            loadLeads(1);
+        }
+    }
+
+    function escapeHtmlLeads(s) {
+        if (s === null || typeof s === 'undefined') return '';
+        return String(s)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#039;');
+    }
+
+    function leadsFiltersActive() {
+        const f = leadsState.filters;
+        return f.search !== '' || f.dateRange !== 'all' || f.status !== 'all' || f.pageUrl !== '';
+    }
+
+    function updateClearFiltersButton() {
+        if (leadsFiltersActive()) {
+            $('#mxch-leads-clear-filters').show();
+        } else {
+            $('#mxch-leads-clear-filters').hide();
+        }
+    }
+
+    function setPageFilterChip(url, title) {
+        leadsState.filters.pageUrl = url || '';
+        leadsState.filters.pageTitle = title || url || '';
+        const $chip = $('#mxch-leads-active-page-filter');
+        if (url) {
+            $chip.find('.mxch-leads-page-chip-label').text('Page: ' + (title || url));
+            $chip.show();
+        } else {
+            $chip.hide();
+        }
+        updateClearFiltersButton();
+    }
+
+    function loadLeads(page) {
+        if (typeof page === 'number') leadsState.page = page;
+
+        const $tbody = $('#mxch-leads-tbody');
+        $tbody.html('<tr><td colspan="6" class="mxch-leads-loading"><span class="spinner is-active"></span></td></tr>');
+
+        $.ajax({
+            url: ajaxurl,
+            type: 'POST',
+            data: {
+                action: 'mxchat_fetch_leads',
+                page: leadsState.page,
+                per_page: leadsState.perPage,
+                search: leadsState.filters.search,
+                date_range: leadsState.filters.dateRange,
+                status: leadsState.filters.status,
+                page_url: leadsState.filters.pageUrl
+            },
+            success: function(response) {
+                leadsState.loaded = true;
+                if (!response || !response.success) {
+                    $tbody.html('<tr><td colspan="7" class="mxch-leads-empty">Error loading leads</td></tr>');
+                    return;
+                }
+                leadsState.totalPages = response.total_pages || 1;
+                leadsState.totalCount = response.total_count || 0;
+                leadsState.leadsRows = response.leads || [];
+
+                renderLeadsStats(response.stats || {});
+                renderLeadsTopPages(response.top_pages || []);
+                renderLeadsTable(response.leads || []);
+                renderLeadsCount(response.showing_start, response.showing_end, response.total_count);
+                renderLeadsPagination(response.page, response.total_pages);
+
+                // Nav badge
+                if (response.stats && typeof response.stats.total_leads === 'number') {
+                    const $badge = $('#mxch-leads-nav-badge');
+                    if (response.stats.total_leads > 0) {
+                        $badge.text(response.stats.total_leads).show();
+                    } else {
+                        $badge.hide();
+                    }
+                }
+            },
+            error: function() {
+                $tbody.html('<tr><td colspan="7" class="mxch-leads-empty">Error loading leads</td></tr>');
+            }
+        });
+    }
+
+    function renderLeadsStats(stats) {
+        $('#mxch-leads-stat-total').text(stats.total_leads || 0);
+        $('#mxch-leads-stat-new').text(stats.new_this_week || 0);
+        $('#mxch-leads-stat-avg').text(stats.avg_convos || 0);
+        const pct = stats.orphan_pct || 0;
+        $('#mxch-leads-stat-orphan').text(pct + '%');
+        const orphanCount = stats.orphan_count || 0;
+        $('#mxch-leads-stat-orphan-sub').text(orphanCount + (orphanCount === 1 ? ' lead captured but never chatted' : ' leads captured but never chatted'));
+    }
+
+    function renderLeadsTopPages(pages) {
+        const $wrap = $('#mxch-leads-toppages-list');
+        if (!pages || pages.length === 0) {
+            $wrap.html('<div class="mxch-leads-empty-mini">No page data yet.</div>');
+            return;
+        }
+        let html = '';
+        pages.forEach(function(p) {
+            const isActive = leadsState.filters.pageUrl === p.url ? ' is-active' : '';
+            html += `
+                <button type="button" class="mxch-leads-toppage-row${isActive}" data-url="${escapeHtmlLeads(p.url)}" data-title="${escapeHtmlLeads(p.title)}">
+                    <span class="mxch-leads-toppage-title">${escapeHtmlLeads(p.title || p.url)}</span>
+                    <span class="mxch-leads-toppage-count">${p.lead_count}</span>
+                </button>
+            `;
+        });
+        $wrap.html(html);
+    }
+
+    function renderLeadsTable(rows) {
+        const $tbody = $('#mxch-leads-tbody');
+        if (!rows || rows.length === 0) {
+            $tbody.html(`
+                <tr><td colspan="6" class="mxch-leads-empty">
+                    <div class="mxch-leads-empty-wrap">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="8" y1="12" x2="16" y2="12"/></svg>
+                        <p>No leads match the current filters.</p>
+                    </div>
+                </td></tr>
+            `);
+            return;
+        }
+
+        let html = '';
+        rows.forEach(function(r) {
+            const emailKey = (r.email || '').toLowerCase();
+            const isChecked = leadsState.selected.has(emailKey) ? ' checked' : '';
+            // Status: 'active' (has conversations), 'chat_deleted' (admin removed the chat), 'orphan' (no chat ever).
+            const status = r.status || (r.is_orphan ? 'orphan' : 'active');
+            const isOrphan = (status === 'orphan');
+            const isChatDeleted = (status === 'chat_deleted');
+            const nameLine = r.name
+                ? `<span class="mxch-leads-lead-name">${escapeHtmlLeads(r.name)}</span>`
+                : '';
+            const leadCell = `
+                <div class="mxch-leads-lead-cell">
+                    <span class="mxch-leads-lead-email" title="${escapeHtmlLeads(r.email)}">${escapeHtmlLeads(r.email)}</span>
+                    ${nameLine}
+                </div>`;
+            let countCell;
+            if (isOrphan) {
+                countCell = `<span class="mxch-leads-pill mxch-leads-pill-orphan">Orphan</span>`;
+            } else if (isChatDeleted) {
+                countCell = `<span class="mxch-leads-pill mxch-leads-pill-deleted" title="Chat was deleted by an admin">Chat deleted</span>`;
+            } else {
+                countCell = `<span class="mxch-leads-pill">${r.conversation_count}</span>`;
+            }
+            const lastCell = escapeHtmlLeads(r.last_seen_display || (isOrphan ? 'No conversation yet' : ''));
+            const pageCell = r.top_page_url
+                ? `<a href="${escapeHtmlLeads(r.top_page_url)}" target="_blank" rel="noopener" class="mxch-leads-page-link" title="${escapeHtmlLeads(r.top_page_url)}">${escapeHtmlLeads(r.top_page_title || r.top_page_url)}</a>`
+                : '<span class="mxch-leads-muted">—</span>';
+            // View Convo only for active leads (orphans and chat_deleted have no viewable session).
+            const viewBtn = (status === 'active' && r.latest_session_id)
+                ? `<button type="button" class="mxch-btn mxch-btn-ghost mxch-btn-sm mxch-leads-view" data-session-id="${escapeHtmlLeads(r.latest_session_id)}" title="View latest conversation">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                        <span>View convo</span>
+                    </button>`
+                : '';
+            const deleteBtn = `<button type="button" class="mxch-btn mxch-btn-ghost mxch-btn-sm mxch-btn-danger-ghost mxch-leads-delete-row" data-email="${escapeHtmlLeads(r.email)}" title="Delete lead">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+                </button>`;
+
+            const rowStateClass = isOrphan ? ' is-orphan' : (isChatDeleted ? ' is-chat-deleted' : '');
+            html += `
+                <tr class="mxch-leads-row${rowStateClass}" data-email="${escapeHtmlLeads(r.email)}">
+                    <td class="mxch-leads-col-check"><input type="checkbox" class="mxch-leads-rowcheck"${isChecked}></td>
+                    <td class="mxch-leads-col-lead">${leadCell}</td>
+                    <td class="mxch-leads-col-count">${countCell}</td>
+                    <td class="mxch-leads-col-last">${lastCell}</td>
+                    <td class="mxch-leads-col-page">${pageCell}</td>
+                    <td class="mxch-leads-col-actions">${viewBtn}${deleteBtn}</td>
+                </tr>
+            `;
+        });
+
+        $tbody.html(html);
+        updateLeadsSelectionUI();
+    }
+
+    function renderLeadsCount(start, end, total) {
+        if (!total) {
+            $('#mxch-leads-count').text('0 leads');
+        } else {
+            $('#mxch-leads-count').text(start + '-' + end + ' / ' + total + ' leads');
+        }
+    }
+
+    function renderLeadsPagination(currentPage, totalPages) {
+        const $c = $('#mxch-leads-pagination');
+        if (!totalPages || totalPages <= 1) { $c.html(''); return; }
+        let html = '<div class="mxch-pagination-btns">';
+        if (currentPage > 1) {
+            html += `<button class="mxch-page-btn" data-page="${currentPage - 1}">&laquo;</button>`;
+        }
+        html += `<span class="mxch-page-info">${currentPage} / ${totalPages}</span>`;
+        if (currentPage < totalPages) {
+            html += `<button class="mxch-page-btn" data-page="${currentPage + 1}">&raquo;</button>`;
+        }
+        html += '</div>';
+        $c.html(html);
+    }
+
+    function updateLeadsSelectionUI() {
+        const count = leadsState.selected.size;
+        const $countEl = $('#mxch-leads-selected-count');
+        const $del = $('#mxch-leads-delete-selected');
+        if (count > 0) {
+            $countEl.text(count + ' selected').addClass('has-selection');
+            $del.prop('disabled', false);
+        } else {
+            $countEl.text('0').removeClass('has-selection');
+            $del.prop('disabled', true);
+        }
+        // Selected-scope export menu items
+        $('#mxch-leads-export-menu button[data-scope="selected"]').prop('disabled', count === 0);
+
+        // Select-all checkbox state
+        const $checks = $('.mxch-leads-rowcheck');
+        const checked = $checks.filter(':checked').length;
+        const total = $checks.length;
+        $('#mxch-leads-select-all').prop('checked', total > 0 && checked === total);
+        $('#mxch-leads-select-all').prop('indeterminate', checked > 0 && checked < total);
+    }
+
+    // Trigger leads load when switching to the tab (works alongside the main nav handler above).
+    $('.mxch-nav-link[data-target="leads"], .mxch-mobile-nav-link[data-target="leads"]').on('click', function() {
+        if (!leadsState.loaded) {
+            loadLeads(1);
+        }
+    });
+
+    // Filter: search (debounced)
+    let leadsSearchTimer;
+    $('#mxch-leads-search').on('input', function() {
+        clearTimeout(leadsSearchTimer);
+        const val = $(this).val();
+        leadsSearchTimer = setTimeout(function() {
+            leadsState.filters.search = (val || '').trim();
+            updateClearFiltersButton();
+            loadLeads(1);
+        }, 300);
+    });
+
+    // Filter: date range
+    $('#mxch-leads-date-range').on('change', function() {
+        leadsState.filters.dateRange = $(this).val();
+        updateClearFiltersButton();
+        loadLeads(1);
+    });
+
+    // Filter: status
+    $('#mxch-leads-status').on('change', function() {
+        leadsState.filters.status = $(this).val();
+        updateClearFiltersButton();
+        loadLeads(1);
+    });
+
+    // Clear filters
+    $('#mxch-leads-clear-filters').on('click', function() {
+        leadsState.filters = { search: '', dateRange: 'all', status: 'all', pageUrl: '', pageTitle: '' };
+        $('#mxch-leads-search').val('');
+        $('#mxch-leads-date-range').val('all');
+        $('#mxch-leads-status').val('all');
+        setPageFilterChip('', '');
+        loadLeads(1);
+    });
+
+    // Remove page chip
+    $leads().on('click', '.mxch-leads-page-chip-remove', function() {
+        setPageFilterChip('', '');
+        loadLeads(1);
+    });
+
+    // Top Pages click -> set filter
+    $leads().on('click', '.mxch-leads-toppage-row', function() {
+        const url = $(this).data('url') || '';
+        const title = $(this).data('title') || '';
+        setPageFilterChip(url, title);
+        loadLeads(1);
+    });
+
+    // Pagination click
+    $leads().on('click', '#mxch-leads-pagination .mxch-page-btn', function() {
+        const p = parseInt($(this).data('page'), 10);
+        if (p > 0) loadLeads(p);
+    });
+
+    // Select-all
+    $('#mxch-leads-select-all').on('change', function() {
+        const on = $(this).is(':checked');
+        $('.mxch-leads-rowcheck').prop('checked', on);
+        $('.mxch-leads-row').each(function() {
+            const email = ($(this).data('email') || '').toString().toLowerCase();
+            if (on) {
+                leadsState.selected.add(email);
+            } else {
+                leadsState.selected.delete(email);
+            }
+        });
+        updateLeadsSelectionUI();
+    });
+
+    // Row checkbox
+    $leads().on('change', '.mxch-leads-rowcheck', function() {
+        const email = ($(this).closest('.mxch-leads-row').data('email') || '').toString().toLowerCase();
+        if ($(this).is(':checked')) {
+            leadsState.selected.add(email);
+        } else {
+            leadsState.selected.delete(email);
+        }
+        updateLeadsSelectionUI();
+    });
+
+    // View convo -> jump to All Chats tab and open the session
+    $leads().on('click', '.mxch-leads-view', function() {
+        const sid = $(this).attr('data-session-id');
+        if (!sid) return;
+        $('.mxch-nav-link[data-target="all-chats"]').trigger('click');
+        // selectChat is defined earlier in this closure
+        if (typeof selectChat === 'function') {
+            setTimeout(function() { selectChat(sid); }, 30);
+        }
+    });
+
+    // Row delete -> confirm for one
+    $leads().on('click', '.mxch-leads-delete-row', function() {
+        const email = $(this).data('email');
+        if (!email) return;
+        openLeadsConfirm([String(email)]);
+    });
+
+    // Bulk delete -> confirm for N
+    $('#mxch-leads-delete-selected').on('click', function() {
+        if (leadsState.selected.size === 0) return;
+        openLeadsConfirm(Array.from(leadsState.selected));
+    });
+
+    function openLeadsConfirm(emails) {
+        leadsState.pendingDelete = emails;
+        const count = emails.length;
+        const msg = count === 1
+            ? 'Delete lead "' + emails[0] + '" and all of their conversations?'
+            : 'Delete ' + count + ' leads and all of their conversations?';
+        $('#mxch-leads-confirm-body').text(msg);
+        $('#mxch-leads-confirm').fadeIn(120);
+    }
+
+    function closeLeadsConfirm() {
+        $('#mxch-leads-confirm').fadeOut(120);
+        leadsState.pendingDelete = [];
+    }
+
+    $leads().on('click', '[data-mxch-leads-close]', closeLeadsConfirm);
+
+    $('#mxch-leads-confirm-go').on('click', function() {
+        const emails = leadsState.pendingDelete.slice();
+        if (!emails.length) { closeLeadsConfirm(); return; }
+
+        const $btn = $(this).prop('disabled', true).text('Deleting...');
+
+        $.ajax({
+            url: ajaxurl,
+            type: 'POST',
+            data: {
+                action: 'mxchat_delete_leads',
+                security: $('#mxchat_leads_delete_nonce').val(),
+                emails: emails
+            },
+            success: function(response) {
+                $btn.prop('disabled', false).text('Delete permanently');
+                closeLeadsConfirm();
+                if (response && response.success) {
+                    emails.forEach(function(e) { leadsState.selected.delete(e.toLowerCase()); });
+                    loadLeads(leadsState.page);
+                } else {
+                    alert((response && response.data && response.data.message) || 'Failed to delete leads.');
+                }
+            },
+            error: function() {
+                $btn.prop('disabled', false).text('Delete permanently');
+                alert('Network error while deleting.');
+            }
+        });
+    });
+
+    // Export dropdown
+    $('#mxch-leads-export-btn').on('click', function(e) {
+        e.stopPropagation();
+        $('#mxch-leads-export-menu').toggleClass('is-open');
+    });
+
+    $(document).on('click', function() {
+        $('#mxch-leads-export-menu').removeClass('is-open');
+    });
+
+    $('#mxch-leads-export-menu').on('click', function(e) { e.stopPropagation(); });
+
+    $('#mxch-leads-export-menu button').on('click', function() {
+        if ($(this).prop('disabled')) return;
+        const scope = $(this).data('scope') || 'all';
+        const fields = $(this).data('fields') || 'email_and_name';
+        submitLeadsExport(scope, fields);
+        $('#mxch-leads-export-menu').removeClass('is-open');
+    });
+
+    function submitLeadsExport(scope, fields) {
+        const $form = $('<form>', { method: 'POST', action: ajaxurl, style: 'display:none;' });
+        $form.append($('<input>', { type: 'hidden', name: 'action', value: 'mxchat_export_leads' }));
+        $form.append($('<input>', { type: 'hidden', name: 'security', value: $('#mxchat_leads_export_nonce').val() }));
+        $form.append($('<input>', { type: 'hidden', name: 'scope', value: scope }));
+        $form.append($('<input>', { type: 'hidden', name: 'fields', value: fields }));
+        if (scope === 'selected') {
+            Array.from(leadsState.selected).forEach(function(e) {
+                $form.append($('<input>', { type: 'hidden', name: 'emails[]', value: e }));
+            });
+        }
+        $form.appendTo('body').submit().remove();
+    }
+
+    // Preload leads metadata on page load (for the nav badge count only) without rendering.
+    // We keep this light — the full fetch only runs when the tab is clicked.
+    $.ajax({
+        url: ajaxurl,
+        type: 'POST',
+        data: { action: 'mxchat_fetch_leads', page: 1, per_page: 1 },
+        success: function(response) {
+            if (response && response.success && response.stats) {
+                const total = response.stats.total_leads || 0;
+                const $badge = $('#mxch-leads-nav-badge');
+                if (total > 0) $badge.text(total).show();
+            }
+        }
     });
 });

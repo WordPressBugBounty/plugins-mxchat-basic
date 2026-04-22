@@ -61,6 +61,10 @@ function mxchat_render_transcripts_page($admin_instance, $page_data) {
                         <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
                         <span><?php esc_html_e('All Chats', 'mxchat'); ?></span>
                     </button>
+                    <button class="mxch-mobile-nav-link" data-target="leads">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><polyline points="17 11 19 13 23 9"/></svg>
+                        <span><?php esc_html_e('Leads', 'mxchat'); ?></span>
+                    </button>
                 </div>
                 <!-- Settings Section -->
                 <div class="mxch-mobile-nav-section">
@@ -119,6 +123,16 @@ function mxchat_render_transcripts_page($admin_instance, $page_data) {
                             </span>
                             <span class="mxch-nav-link-text"><?php esc_html_e('All Chats', 'mxchat'); ?></span>
                             <span class="mxch-nav-link-badge"><?php echo esc_html($total_chats); ?></span>
+                        </button>
+                    </div>
+
+                    <div class="mxch-nav-item" data-section="leads">
+                        <button class="mxch-nav-link" data-target="leads">
+                            <span class="mxch-nav-link-icon">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><polyline points="17 11 19 13 23 9"/></svg>
+                            </span>
+                            <span class="mxch-nav-link-text"><?php esc_html_e('Leads', 'mxchat'); ?></span>
+                            <span class="mxch-nav-link-badge" id="mxch-leads-nav-badge" style="display:none;">0</span>
                         </button>
                     </div>
                 </div>
@@ -522,6 +536,199 @@ function mxchat_render_transcripts_page($admin_instance, $page_data) {
                 </div>
 
                 <?php wp_nonce_field('mxchat_delete_chat_history', 'mxchat_delete_chat_nonce'); ?>
+
+                <!-- Transcript delete confirm modal (shared by bulk + individual delete) -->
+                <div id="mxch-transcript-confirm" class="mxch-modal-overlay" style="display:none;">
+                    <div class="mxch-modal-content mxch-leads-confirm-box">
+                        <div class="mxch-modal-header">
+                            <h2 id="mxch-transcript-confirm-title"><?php esc_html_e('Delete conversation?', 'mxchat'); ?></h2>
+                            <button type="button" class="mxch-modal-close" data-mxch-transcript-close>&times;</button>
+                        </div>
+                        <div class="mxch-modal-body">
+                            <p id="mxch-transcript-confirm-body"></p>
+                            <label class="mxch-transcript-confirm-check">
+                                <input type="checkbox" id="mxch-transcript-also-delete-lead">
+                                <span>
+                                    <strong><?php esc_html_e('Also remove the lead from the Leads tab', 'mxchat'); ?></strong>
+                                    <em class="mxch-transcript-confirm-sublabel"><?php esc_html_e('By default, leads are kept and marked "Chat deleted" so your contact list is preserved.', 'mxchat'); ?></em>
+                                </span>
+                            </label>
+                            <p class="mxch-leads-confirm-warning"><?php esc_html_e('This cannot be undone.', 'mxchat'); ?></p>
+                        </div>
+                        <div class="mxch-leads-confirm-actions">
+                            <button type="button" class="mxch-btn mxch-btn-secondary" data-mxch-transcript-close><?php esc_html_e('Cancel', 'mxchat'); ?></button>
+                            <button type="button" class="mxch-btn mxch-btn-danger" id="mxch-transcript-confirm-go"><?php esc_html_e('Delete', 'mxchat'); ?></button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Leads Section -->
+            <div id="leads" class="mxch-section">
+                <div class="mxch-content-header">
+                    <h1 class="mxch-content-title"><?php esc_html_e('Leads', 'mxchat'); ?></h1>
+                    <p class="mxch-content-subtitle"><?php esc_html_e('Captured visitor emails and names from the lead-capture form, grouped by unique lead.', 'mxchat'); ?></p>
+                </div>
+
+                <!-- Stats strip -->
+                <div class="mxch-leads-stats">
+                    <div class="mxch-stat-card">
+                        <div class="mxch-stat-icon mxch-stat-icon-primary">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+                        </div>
+                        <div class="mxch-stat-content">
+                            <span class="mxch-stat-value" id="mxch-leads-stat-total">0</span>
+                            <span class="mxch-stat-label"><?php esc_html_e('Total Leads', 'mxchat'); ?></span>
+                        </div>
+                    </div>
+                    <div class="mxch-stat-card">
+                        <div class="mxch-stat-icon mxch-stat-icon-success">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/></svg>
+                        </div>
+                        <div class="mxch-stat-content">
+                            <span class="mxch-stat-value" id="mxch-leads-stat-new">0</span>
+                            <span class="mxch-stat-label"><?php esc_html_e('New This Week', 'mxchat'); ?></span>
+                        </div>
+                    </div>
+                    <div class="mxch-stat-card">
+                        <div class="mxch-stat-icon mxch-stat-icon-info">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+                        </div>
+                        <div class="mxch-stat-content">
+                            <span class="mxch-stat-value" id="mxch-leads-stat-avg">0</span>
+                            <span class="mxch-stat-label"><?php esc_html_e('Avg Convos / Lead', 'mxchat'); ?></span>
+                        </div>
+                    </div>
+                    <div class="mxch-stat-card">
+                        <div class="mxch-stat-icon mxch-stat-icon-warning">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+                        </div>
+                        <div class="mxch-stat-content">
+                            <span class="mxch-stat-value" id="mxch-leads-stat-orphan">0%</span>
+                            <span class="mxch-stat-label"><?php esc_html_e('Orphan Leads', 'mxchat'); ?></span>
+                            <span class="mxch-stat-sublabel" id="mxch-leads-stat-orphan-sub"><?php esc_html_e('Captured but never chatted', 'mxchat'); ?></span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Top pages card -->
+                <div class="mxch-card mxch-leads-toppages">
+                    <div class="mxch-card-header">
+                        <h3 class="mxch-card-title">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3h18v18H3z"/><path d="M3 9h18"/><path d="M9 21V9"/></svg>
+                            <?php esc_html_e('Top Pages Capturing Leads', 'mxchat'); ?>
+                        </h3>
+                        <span class="mxch-leads-toppages-hint"><?php esc_html_e('Click a page to filter the list below', 'mxchat'); ?></span>
+                    </div>
+                    <div class="mxch-card-body">
+                        <div class="mxch-leads-toppages-list" id="mxch-leads-toppages-list">
+                            <div class="mxch-leads-empty-mini"><?php esc_html_e('No page data yet.', 'mxchat'); ?></div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Leads toolbar + table -->
+                <div class="mxch-card mxch-leads-card">
+                    <div class="mxch-leads-toolbar">
+                        <div class="mxch-leads-toolbar-left">
+                            <label class="mxch-bulk-select-all">
+                                <input type="checkbox" id="mxch-leads-select-all">
+                                <span><?php esc_html_e('All', 'mxchat'); ?></span>
+                            </label>
+                            <span class="mxch-selected-count" id="mxch-leads-selected-count">0</span>
+                            <button type="button" class="mxch-bulk-btn mxch-bulk-delete" id="mxch-leads-delete-selected" disabled title="<?php esc_attr_e('Delete Selected', 'mxchat'); ?>">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+                                <span><?php esc_html_e('Delete', 'mxchat'); ?></span>
+                            </button>
+                        </div>
+                        <div class="mxch-leads-toolbar-right">
+                            <div class="mxch-leads-export" id="mxch-leads-export-wrap">
+                                <button type="button" class="mxch-btn mxch-btn-secondary mxch-btn-sm" id="mxch-leads-export-btn">
+                                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                                    <?php esc_html_e('Export', 'mxchat'); ?>
+                                    <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+                                </button>
+                                <div class="mxch-leads-export-menu" id="mxch-leads-export-menu">
+                                    <button type="button" data-fields="email_and_name" data-scope="all"><?php esc_html_e('All leads — email + name', 'mxchat'); ?></button>
+                                    <button type="button" data-fields="email_only" data-scope="all"><?php esc_html_e('All leads — email only', 'mxchat'); ?></button>
+                                    <button type="button" data-fields="email_and_name" data-scope="selected" disabled><?php esc_html_e('Selected — email + name', 'mxchat'); ?></button>
+                                    <button type="button" data-fields="email_only" data-scope="selected" disabled><?php esc_html_e('Selected — email only', 'mxchat'); ?></button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="mxch-leads-filters">
+                        <div class="mxch-search-wrapper">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+                            <input type="text" id="mxch-leads-search" class="mxch-search-input" placeholder="<?php esc_attr_e('Search by email or name...', 'mxchat'); ?>">
+                        </div>
+                        <select id="mxch-leads-date-range" class="mxch-select">
+                            <option value="all"><?php esc_html_e('All time', 'mxchat'); ?></option>
+                            <option value="today"><?php esc_html_e('Last 24 hours', 'mxchat'); ?></option>
+                            <option value="7d"><?php esc_html_e('Last 7 days', 'mxchat'); ?></option>
+                            <option value="30d"><?php esc_html_e('Last 30 days', 'mxchat'); ?></option>
+                            <option value="90d"><?php esc_html_e('Last 90 days', 'mxchat'); ?></option>
+                        </select>
+                        <select id="mxch-leads-status" class="mxch-select">
+                            <option value="all"><?php esc_html_e('All leads', 'mxchat'); ?></option>
+                            <option value="with"><?php esc_html_e('With conversation', 'mxchat'); ?></option>
+                            <option value="chat_deleted"><?php esc_html_e('Chat deleted', 'mxchat'); ?></option>
+                            <option value="orphan"><?php esc_html_e('Orphan (no chat)', 'mxchat'); ?></option>
+                        </select>
+                        <button type="button" class="mxch-btn mxch-btn-ghost mxch-btn-sm" id="mxch-leads-clear-filters" style="display:none;">
+                            <?php esc_html_e('Clear filters', 'mxchat'); ?>
+                        </button>
+                        <span class="mxch-leads-active-page-filter" id="mxch-leads-active-page-filter" style="display:none;">
+                            <span class="mxch-leads-page-chip-label"></span>
+                            <button type="button" class="mxch-leads-page-chip-remove" aria-label="<?php esc_attr_e('Remove page filter', 'mxchat'); ?>">&times;</button>
+                        </span>
+                    </div>
+
+                    <div class="mxch-leads-table-wrap">
+                        <table class="mxch-leads-table" id="mxch-leads-table">
+                            <thead>
+                                <tr>
+                                    <th class="mxch-leads-col-check"></th>
+                                    <th class="mxch-leads-col-lead"><?php esc_html_e('Lead', 'mxchat'); ?></th>
+                                    <th class="mxch-leads-col-count"><?php esc_html_e('Conversations', 'mxchat'); ?></th>
+                                    <th class="mxch-leads-col-last"><?php esc_html_e('Last seen', 'mxchat'); ?></th>
+                                    <th class="mxch-leads-col-page"><?php esc_html_e('Top page', 'mxchat'); ?></th>
+                                    <th class="mxch-leads-col-actions"></th>
+                                </tr>
+                            </thead>
+                            <tbody id="mxch-leads-tbody">
+                                <tr><td colspan="6" class="mxch-leads-loading"><span class="spinner is-active"></span></td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <div class="mxch-panel-footer">
+                        <span class="mxch-leads-count" id="mxch-leads-count">0 leads</span>
+                        <div class="mxch-pagination-simple" id="mxch-leads-pagination"></div>
+                    </div>
+                </div>
+
+                <!-- Delete confirm modal -->
+                <div id="mxch-leads-confirm" class="mxch-modal-overlay" style="display:none;">
+                    <div class="mxch-modal-content mxch-leads-confirm-box">
+                        <div class="mxch-modal-header">
+                            <h2><?php esc_html_e('Delete leads', 'mxchat'); ?></h2>
+                            <button type="button" class="mxch-modal-close" data-mxch-leads-close>&times;</button>
+                        </div>
+                        <div class="mxch-modal-body">
+                            <p id="mxch-leads-confirm-body"></p>
+                            <p class="mxch-leads-confirm-warning"><?php esc_html_e('This cannot be undone.', 'mxchat'); ?></p>
+                        </div>
+                        <div class="mxch-leads-confirm-actions">
+                            <button type="button" class="mxch-btn mxch-btn-secondary" data-mxch-leads-close><?php esc_html_e('Cancel', 'mxchat'); ?></button>
+                            <button type="button" class="mxch-btn mxch-btn-danger" id="mxch-leads-confirm-go"><?php esc_html_e('Delete permanently', 'mxchat'); ?></button>
+                        </div>
+                    </div>
+                </div>
+
+                <?php wp_nonce_field('mxchat_delete_leads', 'mxchat_leads_delete_nonce'); ?>
+                <?php wp_nonce_field('mxchat_export_leads', 'mxchat_leads_export_nonce'); ?>
             </div>
 
             <!-- Notifications Section -->

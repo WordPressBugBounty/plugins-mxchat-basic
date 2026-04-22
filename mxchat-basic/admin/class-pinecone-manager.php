@@ -15,8 +15,6 @@ class MxChat_Pinecone_Manager {
      * Constructor
      */
     public function __construct() {
-        // Hook into WordPress actions if needed
-        add_action('mxchat_delete_content', array($this, 'mxchat_delete_from_pinecone_by_url'), 10, 1);
     }
 
     // ========================================
@@ -1680,50 +1678,6 @@ public function mxchat_delete_from_pinecone_by_vector_id($vector_id, $api_key, $
         'message' => 'Vector deleted successfully from Pinecone'
     );
 }
-
-    /**
-     * Deletes data from Pinecone using a source URL
-     */
-     public function mxchat_delete_from_pinecone_by_url($source_url, $pinecone_options) {
-         $host = $pinecone_options['mxchat_pinecone_host'] ?? '';
-         $api_key = $pinecone_options['mxchat_pinecone_api_key'] ?? '';
-
-         if (empty($host) || empty($api_key)) {
-             //error_log('MXChat: Pinecone deletion failed - missing configuration');
-             return false;
-         }
-
-         $api_endpoint = "https://{$host}/vectors/delete";
-         $vector_id = md5($source_url);
-
-         $request_body = array(
-             'ids' => array($vector_id)
-         );
-
-         $response = wp_remote_post($api_endpoint, array(
-             'headers' => array(
-                 'Api-Key' => $api_key,
-                 'accept' => 'application/json',
-                 'content-type' => 'application/json'
-             ),
-             'body' => wp_json_encode($request_body),
-             'timeout' => 30
-         ));
-
-         if (is_wp_error($response)) {
-             //error_log('MXChat: Pinecone deletion error - ' . $response->get_error_message());
-             return false;
-         }
-
-         $response_code = wp_remote_retrieve_response_code($response);
-         if ($response_code !== 200) {
-             //error_log('MXChat: Pinecone deletion failed with status ' . $response_code);
-             return false;
-         }
-
-         return true;
-     }
-
 
     /**
      * Deletes data from Pinecone index using API key

@@ -4984,7 +4984,7 @@ private function find_relevant_content_wordpress($user_embedding, $bot_id = 'def
     });
 
     // Get RAG sources limit from options (default 6, min 3, max 10)
-    $rag_sources_limit = isset($options['rag_sources_limit']) ? intval($options['rag_sources_limit']) : 3;
+    $rag_sources_limit = isset($current_options['rag_sources_limit']) ? intval($current_options['rag_sources_limit']) : 3;
     if ($rag_sources_limit < 3) $rag_sources_limit = 3;
     if ($rag_sources_limit > 10) $rag_sources_limit = 10;
 
@@ -5016,7 +5016,7 @@ private function find_relevant_content_wordpress($user_embedding, $bot_id = 'def
     $content = '';
     $matches_used = 0;
     $total_chunks_used = 0;
-    $max_total_chunks = isset($options['rag_chunks_limit']) ? intval($options['rag_chunks_limit']) : 15;
+    $max_total_chunks = isset($current_options['rag_chunks_limit']) ? intval($current_options['rag_chunks_limit']) : 15;
     if ($max_total_chunks < 8) $max_total_chunks = 8;
     if ($max_total_chunks > 20) $max_total_chunks = 20;
     $max_chunks_per_source = 5; // Cap per individual source to limit token usage

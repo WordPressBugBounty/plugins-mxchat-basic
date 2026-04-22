@@ -805,29 +805,32 @@ private static function delete_pinecone_chunks_by_url($source_url, $bot_id) {
     // Add the original single-vector ID (for non-chunked content)
     $vectors_to_delete[] = $base_vector_id;
 
-    // Use Pinecone list API to find all chunk vectors with this prefix
-    $list_url = "https://{$host}/vectors/list";
-
-    $list_body = array(
+    // Pinecone /vectors/list is a GET endpoint with query-string parameters; a POST here returns a
+    // non-200 silently and we end up only deleting the base vector, leaving chunks orphaned.
+    $query_params = array(
         'prefix' => $base_vector_id . '_chunk_',
-        'limit' => 100
+        'limit' => 100,
     );
-
     if (!empty($namespace)) {
-        $list_body['namespace'] = $namespace;
+        $query_params['namespace'] = $namespace;
     }
 
-    $list_response = wp_remote_post($list_url, array(
-        'headers' => array(
-            'Api-Key' => $api_key,
-            'accept' => 'application/json',
-            'content-type' => 'application/json'
-        ),
-        'body' => wp_json_encode($list_body),
-        'timeout' => 30
-    ));
+    $list_url = "https://{$host}/vectors/list?" . http_build_query($query_params);
 
-    if (!is_wp_error($list_response)) {
+    // Paginate in case a URL has more than 100 chunks.
+    do {
+        $list_response = wp_remote_get($list_url, array(
+            'headers' => array(
+                'Api-Key' => $api_key,
+                'accept' => 'application/json',
+            ),
+            'timeout' => 30,
+        ));
+
+        if (is_wp_error($list_response) || wp_remote_retrieve_response_code($list_response) !== 200) {
+            break;
+        }
+
         $list_data = json_decode(wp_remote_retrieve_body($list_response), true);
         if (!empty($list_data['vectors'])) {
             foreach ($list_data['vectors'] as $vector) {
@@ -836,7 +839,15 @@ private static function delete_pinecone_chunks_by_url($source_url, $bot_id) {
                 }
             }
         }
-    }
+
+        $next_token = $list_data['pagination']['next'] ?? '';
+        if (empty($next_token)) {
+            break;
+        }
+
+        $query_params['paginationToken'] = $next_token;
+        $list_url = "https://{$host}/vectors/list?" . http_build_query($query_params);
+    } while (true);
 
     if (empty($vectors_to_delete)) {
         //error_log('[MXCHAT-CHUNK-DELETE] No vectors found to delete');

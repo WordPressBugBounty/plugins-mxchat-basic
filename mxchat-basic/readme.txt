@@ -5,7 +5,7 @@ Tags: ai chatbot, chatgpt, woocommerce, customer support, content generation
 Requires at least: 5.0
 Tested up to: 6.9
 Requires PHP: 7.2
-Stable tag: 3.2.1
+Stable tag: 3.2.2
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -42,14 +42,16 @@ Extend the free plugin with these optional premium features:
 
 👉 [Visit our website to view all add-ons](https://mxchat.ai)
 
-## 🔥 What's New in Version 3.2.1
+## 🔥 What's New in Version 3.2.2
 
-- **Admin Testing Tab Fixes** — Resolved issues preventing the debug panel from displaying similarity scores, action matches, and source data — including when web search and streaming are both enabled.
-- **Web Search Transcript Sources** — Chat transcripts now correctly show the "sources" link for responses generated with OpenAI web search enabled in both streaming and non-streaming modes.
+- **NEW: Lead Management Dashboard** — A dedicated Leads tab inside Transcripts shows every captured email and name deduplicated into a clean, sortable list with conversation count, last-seen time, and the page that captured them. Includes filters, bulk delete, one-click CSV export, and "View convo" to jump straight to each lead's latest conversation.
+- **Pinecone Chunked Deletion Fixed** — Orphaned chunk vectors are no longer left behind when posts or products are unpublished, trashed, deleted, or slug-renamed. Deletion is now chunk-aware across every sync path.
+- **Source & Chunk Count Settings Fixed** — Configured values now apply everywhere instead of silently falling back to defaults on certain paths.
 
 ## Core Features That Set MxChat Apart
 
 🟢 **100+ AI Models** – Access ChatGPT, Claude, Gemini, Grok, DeepSeek, and 100+ models from OpenRouter with a single plugin
+🟢 **Lead Management Dashboard** – Dedicated Leads tab inside Transcripts shows every captured email and name deduplicated by lead, with filters, bulk delete, CSV export, and one-click jump to each lead's latest conversation
 🟢 **Chat Transcripts Dashboard** – Review all conversations, analyze chat history, track user engagement, and see exactly which knowledge sources the AI used for each response
 🟢 **WooCommerce Product Training** – Train your AI chatbot on your entire product catalog including descriptions, pricing, SKUs, and categories for intelligent shopping assistance
 🟢 **Live Agent Handoff** – Seamlessly escalate conversations from AI to human support via Slack when customers need personal assistance
@@ -76,6 +78,23 @@ Grok-4, Grok-3, Grok-3 Fast, Grok-3 Mini, Grok-3 Mini Fast, Grok-2, **Grok 4.1 F
 Gemini 3 Pro Preview, Gemini 3 Flash Preview, Gemini 2.5 Pro, Gemini 2.5 Flash, Gemini 2.5 Flash-Lite, Gemini 2.0 Flash, Gemini 2.0 Flash-Lite, Gemini 1.5 Pro, Gemini 1.5 Flash
 **DeepSeek**:  
 DeepSeek V3
+
+## Lead Management Dashboard — Turn Chat Traffic Into a Real Lead List
+
+Every email and name your chatbot captures now lands in one clean, sortable dashboard — so you can finally see your leads as a list instead of hunting through individual transcripts.
+
+**What You Get:**
+
+- **One Row Per Lead** — emails captured across multiple sessions are automatically deduplicated, so each lead appears once with a conversation count and a "last seen" timestamp
+- **Top Pages Capturing Leads** — instantly see which pages on your site are driving the most lead captures; click any page to filter the list to leads from that page only
+- **Powerful Filtering** — search by email or name, filter by date range (24h / 7d / 30d / 90d / all-time), or filter by status (leads with a conversation vs. orphan leads who submitted the form but never chatted)
+- **Orphan Lead Tracking** — visitors who drop their email in the pre-chat form but never send a message are surfaced separately so you never lose a captured contact
+- **One-Click View Conversation** — jump from any lead straight into their latest full conversation in the transcripts viewer
+- **Bulk Delete + CSV Export** — select multiple leads to delete or export in one action; CSV export supports email-only or email + name + conversation count + last-seen + top page
+- **Clean, Responsive, Native** — works beautifully on desktop, tablet, and phone with the same polished dashboard feel as the rest of MxChat
+- **Zero Setup, Zero Migration** — uses your existing chat data, no new database tables, no configuration — turn on lead capture and the dashboard just works
+
+**Perfect for** sales teams managing inbound leads, agencies reporting to clients, and anyone who wants to see the actual ROI of their chatbot at a glance without digging through individual conversations.
 
 ## AI Content Generator — Create Blog Posts & Landing Pages with AI
 
@@ -306,6 +325,11 @@ Yes. MxChat is available for free on the WordPress plugin repository with full A
 *(Note: Screenshots will be added in future updates)*
 
 == Changelog ==
+
+= 3.2.2 - April 22, 2026 =
+- NEW: Lead Management Dashboard — dedicated Leads tab inside Transcripts that deduplicates captured emails into a single list with conversation count, last-seen, and the page that captured them. Includes top-pages analytics, search + date/status/page filters, bulk delete with two-step confirm, CSV export (email-only or email + name), and one-click "View convo" to jump to each lead's latest conversation.
+- Fixed: Orphaned Pinecone chunk vectors left behind when posts or products were unpublished, trashed, deleted, or had their slugs renamed — deletion is now chunk-aware across all sync paths
+- Fixed: Source count and chunk count settings were being ignored on certain paths and silently fell back to default values — the configured values now apply everywhere
 
 = 3.2.1 - April 17, 2026 =
 - Fixed: Admin Testing Tab debug panel not displaying similarity scores, action matches, or source data — including when web search + streaming are both enabled
@@ -939,8 +963,8 @@ Yes. MxChat is available for free on the WordPress plugin repository with full A
 
 == Upgrade Notice ==
 
-= 3.2.1 =
-Fixed Admin Testing Tab debug panel and web search transcript sources not displaying correctly.
+= 3.2.2 =
+New Lead Management Dashboard groups captured emails into a sortable, filterable list with CSV export and one-click access to each lead's conversation. Plus Pinecone chunked-deletion fixes and a fix for the source and chunk limit settings not applying on all paths.
 
 == License & Warranty ==
 

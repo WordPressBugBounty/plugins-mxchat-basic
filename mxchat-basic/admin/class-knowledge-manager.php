@@ -60,9 +60,6 @@ private function mxchat_init_hooks() {
     add_action('wp_ajax_mxchat_get_entry_content', array($this, 'ajax_mxchat_get_entry_content'));
     add_action('wp_ajax_mxchat_save_entry_content', array($this, 'ajax_mxchat_save_entry_content'));
 
-    // Hook for content deletion
-    add_action('mxchat_delete_content', array($this, 'mxchat_delete_from_pinecone_by_url'), 10, 1);
-    
     // WordPress post management hooks
     add_action('pre_post_update', array($this, 'mxchat_store_pre_update_status'), 10, 2);
     add_action('post_updated', array($this, 'mxchat_handle_post_update'), 10, 3);
@@ -5185,38 +5182,31 @@ public function mxchat_handle_post_update($post_id, $post, $update) {
     if ($previous_status === 'publish' && $post->post_status !== 'publish') {
         // Use the stored URL from when it was published, or fall back to current permalink
         $source_url = $previous_url ?: get_permalink($post_id);
-        
-        if ($source_url) {
-            // Check if Pinecone is enabled
-            $pinecone_options = get_option('mxchat_pinecone_addon_options', array());
-            $use_pinecone = ($pinecone_options['mxchat_use_pinecone'] ?? '0') === '1';
 
-            if ($use_pinecone && !empty($pinecone_options['mxchat_pinecone_api_key'])) {
-                // Delete from Pinecone
-                $this->mxchat_delete_from_pinecone_by_url($source_url, $pinecone_options);
-            } else {
-                // Delete from WordPress DB
-                global $wpdb;
-                $table_name = $wpdb->prefix . 'mxchat_system_prompt_content';
-                
-                $result = $wpdb->delete(
-                    $table_name,
-                    array('source_url' => $source_url),
-                    array('%s')
-                );
-            }
+        if ($source_url) {
+            // Chunk-aware deletion (routes to Pinecone or WP DB and removes base + all chunks)
+            MxChat_Utils::delete_chunks_for_url($source_url, 'default');
         }
-        
+
         // Clean up the transients and exit early
         delete_transient($previous_status_key);
         delete_transient($previous_url_key);
         return;
     }
-    
+
+    // Slug/permalink rename while still published: delete the old vectors before upserting new ones.
+    // Without this, md5(old_url) vectors (base + chunks) would be orphaned under the stale URL.
+    if ($post->post_status === 'publish' && !empty($previous_url)) {
+        $current_url = get_permalink($post_id);
+        if ($current_url && $current_url !== $previous_url) {
+            MxChat_Utils::delete_chunks_for_url($previous_url, 'default');
+        }
+    }
+
     // Store the current status for next time (if this is an update)
     if ($update) {
         set_transient($previous_status_key, $post->post_status, DAY_IN_SECONDS);
-        
+
         // If the post is currently published, also store its URL
         if ($post->post_status === 'publish') {
             $current_url = get_permalink($post_id);
@@ -5448,10 +5438,12 @@ public function mxchat_handle_post_delete($post_id) {
         return;
     }
 
-    // Get the URL before post is deleted
-    $source_url = get_permalink($post_id);
+    // Resolve the pre-trash URL. wp_trash_post renames the slug with "__trashed" before firing
+    // this hook, so get_permalink() here would return the trashed URL and md5() would miss the
+    // real vector IDs stored under the original URL.
+    $source_url = $this->mxchat_resolve_pre_trash_url($post_id);
     if (!$source_url) {
-        //error_log('MXChat: Failed to get permalink for post ' . $post_id);
+        //error_log('MXChat: Failed to resolve source URL for post ' . $post_id);
         return;
     }
 
@@ -5461,51 +5453,31 @@ public function mxchat_handle_post_delete($post_id) {
     if (is_wp_error($delete_result)) {
         //error_log('MXChat: Chunk-aware deletion failed for URL: ' . $source_url . ' - ' . $delete_result->get_error_message());
     }
+
+    delete_transient('mxchat_prev_url_' . $post_id);
+    delete_transient('mxchat_prev_status_' . $post_id);
 }
 
+/**
+ * Resolve the source URL for a post being trashed/deleted.
+ *
+ * Why: wp_trash_post appends "__trashed" to the slug before the wp_trash_post action fires, so
+ * get_permalink() returns a URL whose md5() won't match the vector IDs stored in Pinecone or
+ * the source_url rows in the WP DB. Prefer the URL captured by mxchat_store_pre_update_status
+ * (runs on pre_post_update, before the rename); fall back to stripping the __trashed suffix.
+ */
+private function mxchat_resolve_pre_trash_url($post_id) {
+    $previous_url = get_transient('mxchat_prev_url_' . $post_id);
+    if (!empty($previous_url)) {
+        return $previous_url;
+    }
 
-    /**
-     * Deletes data from Pinecone using a source URL
-     */
-     public function mxchat_delete_from_pinecone_by_url($source_url, $pinecone_options) {
-         $host = $pinecone_options['mxchat_pinecone_host'] ?? '';
-         $api_key = $pinecone_options['mxchat_pinecone_api_key'] ?? '';
-
-         if (empty($host) || empty($api_key)) {
-             //error_log('MXChat: Pinecone deletion failed - missing configuration');
-             return false;
-         }
-
-         $api_endpoint = "https://{$host}/vectors/delete";
-         $vector_id = md5($source_url);
-
-         $request_body = array(
-             'ids' => array($vector_id)
-         );
-
-         $response = wp_remote_post($api_endpoint, array(
-             'headers' => array(
-                 'Api-Key' => $api_key,
-                 'accept' => 'application/json',
-                 'content-type' => 'application/json'
-             ),
-             'body' => wp_json_encode($request_body),
-             'timeout' => 30
-         ));
-
-         if (is_wp_error($response)) {
-             //error_log('MXChat: Pinecone deletion error - ' . $response->get_error_message());
-             return false;
-         }
-
-         $response_code = wp_remote_retrieve_response_code($response);
-         if ($response_code !== 200) {
-             //error_log('MXChat: Pinecone deletion failed with status ' . $response_code);
-             return false;
-         }
-
-         return true;
-     }
+    $current = get_permalink($post_id);
+    if (!$current) {
+        return '';
+    }
+    return preg_replace('#__trashed(/?)$#', '$1', $current);
+}
 
 
 
@@ -5662,26 +5634,16 @@ public function mxchat_handle_product_delete($post_id) {
         return;
     }
 
-    $source_url = get_permalink($post_id);
-
-    // Check if Pinecone is enabled
-    $pinecone_options = get_option('mxchat_pinecone_addon_options', array());
-    $use_pinecone = ($pinecone_options['mxchat_use_pinecone'] ?? '0') === '1';
-
-    if ($use_pinecone && !empty($pinecone_options['mxchat_pinecone_api_key'])) {
-        // Delete from Pinecone
-        $this->mxchat_delete_from_pinecone_by_url($source_url, $pinecone_options);
-    } else {
-        // Delete from WordPress DB
-        global $wpdb;
-        $table_name = $wpdb->prefix . 'mxchat_system_prompt_content';
-        
-        $wpdb->delete(
-            $table_name,
-            array('source_url' => $source_url),
-            array('%s')
-        );
+    $source_url = $this->mxchat_resolve_pre_trash_url($post_id);
+    if (!$source_url) {
+        return;
     }
+
+    // Chunk-aware deletion (routes to Pinecone or WP DB and removes base + all chunks)
+    MxChat_Utils::delete_chunks_for_url($source_url, 'default');
+
+    delete_transient('mxchat_prev_url_' . $post_id);
+    delete_transient('mxchat_prev_status_' . $post_id);
 }
 
 /**
