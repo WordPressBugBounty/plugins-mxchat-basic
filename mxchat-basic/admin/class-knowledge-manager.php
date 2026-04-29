@@ -603,9 +603,10 @@ public function mxchat_save_inline_prompt() {
                     'article_content'   => $article_content,
                     'embedding_vector'  => $embedding_vector_serialized,
                     'source_url'        => $article_url,
+                    'embedding_model'   => MxChat_Utils::get_active_embedding_model(),
                 ),
                 array('id' => $prompt_id),
-                array('%s', '%s', '%s'),
+                array('%s', '%s', '%s', '%s'),
                 array('%d')
             );
             if ($updated !== false) {

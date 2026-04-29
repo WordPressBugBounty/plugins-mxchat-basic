@@ -166,10 +166,10 @@ function mxchat_render_pro_page($admin_instance, $addons_config) {
             <?php if (!$is_activated): ?>
             <div class="mxch-pro-banner">
                 <div class="mxch-pro-banner-content">
-                    <h3 class="mxch-pro-banner-title"><?php esc_html_e('Unlock All Premium Features', 'mxchat'); ?></h3>
-                    <p class="mxch-pro-banner-text"><?php esc_html_e('Get MxChat Pro for unlimited access to 14+ powerful add-ons including Chat with GSC, WooCommerce, Chatbot Themes, Forms Builder, and more!', 'mxchat'); ?></p>
+                    <h3 class="mxch-pro-banner-title"><?php esc_html_e('Stop paying $50–200/month for AI chatbot tools.', 'mxchat'); ?></h3>
+                    <p class="mxch-pro-banner-text"><?php esc_html_e('One payment unlocks every MxChat Pro add-on for life — WooCommerce sales, Google Search Console insights, AI-generated chatbot themes, lead-capture forms, unlimited bots, image analysis, and more. No renewals. No surprise bills.', 'mxchat'); ?></p>
                 </div>
-                <a href="https://mxchat.ai/" target="_blank" class="mxch-pro-banner-btn"><span><?php esc_html_e('Get Pro', 'mxchat'); ?></span></a>
+                <a href="https://mxchat.ai/" target="_blank" class="mxch-pro-banner-btn"><span><?php esc_html_e('Get Lifetime Access →', 'mxchat'); ?></span></a>
             </div>
             <?php endif; ?>
 

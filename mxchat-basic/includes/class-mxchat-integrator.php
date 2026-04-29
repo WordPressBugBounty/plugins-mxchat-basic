@@ -1145,6 +1145,15 @@ public function mxchat_handle_chat_request() {
     // Rest of your existing code...
     $session_id = isset($_POST['session_id']) ? sanitize_text_field($_POST['session_id']) : '';
 
+    // Treat the literal strings 'null' / 'undefined' as missing too. Browser edge cases
+    // (Safari ITP, private mode, cross-origin iframes with partitioned storage) can cause
+    // the frontend FormData.append() to stringify a null session_id into the literal
+    // "null", which would otherwise pass empty() and pollute the transcripts table with
+    // ghost sessions that group every visitor's first message under one row.
+    if ($session_id === 'null' || $session_id === 'undefined') {
+        $session_id = '';
+    }
+
     if (empty($session_id)) {
         wp_send_json_error(esc_html__('Session ID is missing.', 'mxchat'));
         wp_die();
@@ -5076,7 +5085,8 @@ private function find_relevant_content_wordpress($user_embedding, $bot_id = 'def
             }
 
             // Use numbered reference for URL-based entries, plain info label for manual entries
-            if (!empty($source_url) && $source_url !== '#') {
+            // Manual entries are stored with an internal mxchat:// placeholder URL — never expose them as citations
+            if (!empty($source_url) && $source_url !== '#' && strpos($source_url, 'mxchat://') !== 0) {
                 $matches_used++;
                 $content .= "## Reference " . $matches_used . " ##\n";
                 $content .= $full_text . "\n\n";
@@ -5486,7 +5496,8 @@ private function find_relevant_content_pinecone($user_embedding, $bot_id = 'defa
             }
 
             // Use numbered reference for URL-based entries, plain info label for manual entries
-            if (!empty($source_url) && $source_url !== '#') {
+            // Manual entries are stored with an internal mxchat:// placeholder URL — never expose them as citations
+            if (!empty($source_url) && $source_url !== '#' && strpos($source_url, 'mxchat://') !== 0) {
                 $matches_used++;
                 $content .= "## Reference " . $matches_used . " ##\n";
                 $content .= $full_text . "\n\n";

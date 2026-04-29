@@ -61,8 +61,8 @@ jQuery(document).ready(function($) {
         },
 
         // Session management per bot
-        // Returns existing session ID from cookie or localStorage, or null if none exists.
-        // Does NOT create a new session — use ensureSession() for that.
+        // Returns existing session ID from cookie or localStorage (with in-memory fallback),
+        // or null if none exists. Does NOT create a new session — use ensureSession() for that.
         getChatSession: function(botId) {
             var cookieName = 'mxchat_session_id_' + botId;
             var storageKey = 'mxchat_session_id_' + botId;
@@ -71,6 +71,19 @@ jQuery(document).ready(function($) {
             // Fallback to localStorage if cookie is missing (e.g. cleared by browser/consent)
             if (!sessionId) {
                 try { sessionId = localStorage.getItem(storageKey); } catch (e) {}
+            }
+
+            // Fallback to in-memory instance when cookie AND localStorage are both blocked
+            // (Safari ITP, strict tracking prevention, cross-origin iframes with partitioned
+            // storage). Without this, ensureSession() can generate and store an ID that
+            // getChatSession() then can't read back, causing null session_ids on send.
+            if (!sessionId && this.instances[botId] && this.instances[botId].sessionId) {
+                sessionId = this.instances[botId].sessionId;
+            }
+
+            // Guard against stored sentinel values that indicate earlier broken writes.
+            if (sessionId === 'null' || sessionId === 'undefined') {
+                sessionId = null;
             }
 
             // Re-sync cookie from localStorage if cookie was lost
@@ -600,11 +613,21 @@ function callMxChat(message, callback, botId) {
     // Get instance for session start timestamp (used when persistence is OFF)
     var instance = MxChatInstances.get(botId);
 
+    // Guarantee a non-null session_id before the AJAX leaves. ensureSession() is idempotent
+    // and returns the guaranteed-present session id from the in-memory instance even when
+    // cookie/localStorage writes are silently blocked by the browser.
+    var sessionId = MxChatInstances.ensureSession(botId);
+    if (!sessionId || sessionId === 'null' || sessionId === 'undefined') {
+        // Last-resort generation to ensure we never POST a null marker.
+        sessionId = generateSessionId();
+        MxChatInstances.setChatSession(botId, sessionId);
+    }
+
     // Prepare AJAX data
     const ajaxData = {
         action: 'mxchat_handle_chat_request',
         message: message,
-        session_id: getChatSession(botId),
+        session_id: sessionId,
         nonce: mxchatChat.nonce,
         current_page_url: window.location.href,
         current_page_title: document.title,
@@ -839,10 +862,20 @@ function callMxChatStream(message, callback, botId) {
     // Get instance for session start timestamp (used when persistence is OFF)
     var instance = MxChatInstances.get(botId);
 
+    // Guarantee a non-null session_id before the fetch. FormData.append() stringifies any
+    // non-string value via String(), so passing `null` would POST the literal string "null"
+    // and land in the transcripts table as a ghost session. ensureSession() always returns
+    // a real string even when cookies/localStorage are blocked.
+    var streamSessionId = MxChatInstances.ensureSession(botId);
+    if (!streamSessionId || streamSessionId === 'null' || streamSessionId === 'undefined') {
+        streamSessionId = generateSessionId();
+        MxChatInstances.setChatSession(botId, streamSessionId);
+    }
+
     const formData = new FormData();
     formData.append('action', 'mxchat_stream_chat');
     formData.append('message', message);
-    formData.append('session_id', getChatSession(botId));
+    formData.append('session_id', streamSessionId);
     formData.append('nonce', mxchatChat.nonce);
     formData.append('current_page_url', window.location.href);
     formData.append('current_page_title', document.title);

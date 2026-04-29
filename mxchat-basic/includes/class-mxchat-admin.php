@@ -97,6 +97,142 @@ class MxChat_Admin {
         // Translation handlers
         add_action('wp_ajax_mxchat_translate_messages', array($this, 'mxchat_translate_messages'));
         add_action('wp_ajax_mxchat_get_transcript_translation', array($this, 'mxchat_get_transcript_translation'));
+
+        // 3.2.3: Embedding model switch protection
+        add_action('wp_ajax_mxchat_check_embedding_switch', array($this, 'mxchat_check_embedding_switch_ajax'));
+        add_action('wp_ajax_mxchat_dismiss_embedding_mismatch', array($this, 'mxchat_dismiss_embedding_mismatch_ajax'));
+        add_action('admin_notices', array($this, 'mxchat_embedding_mismatch_notice'));
+    }
+
+    /**
+     * 3.2.3: Preflight check before allowing the embedding model dropdown to
+     * switch. Pure option comparison — no counts, no DB queries beyond the
+     * cached options. The dialog is shown whenever the user has previously
+     * embedded with a different model than the one they're switching to.
+     */
+    public function mxchat_check_embedding_switch_ajax() {
+        check_ajax_referer('mxchat_admin_nonce', 'security');
+        if (!current_user_can('manage_options')) {
+            wp_send_json_error(__('Unauthorized', 'mxchat'));
+        }
+
+        $new_model = isset($_POST['new_model']) ? sanitize_text_field(wp_unslash($_POST['new_model'])) : '';
+        $active_model = MxChat_Utils::get_active_embedding_model();
+
+        $is_mismatch = !empty($active_model) && !empty($new_model) && $active_model !== $new_model;
+
+        $active_dims = MxChat_Utils::embedding_model_dimensions($active_model);
+        $new_dims = MxChat_Utils::embedding_model_dimensions($new_model);
+
+        wp_send_json_success(array(
+            'is_mismatch'  => $is_mismatch,
+            'active_model' => $active_model,
+            'active_label' => MxChat_Utils::embedding_model_label($active_model),
+            'new_model'    => $new_model,
+            'new_label'    => MxChat_Utils::embedding_model_label($new_model),
+            'dims_differ'  => ($active_dims > 0 && $new_dims > 0 && $active_dims !== $new_dims),
+            'active_dims'  => $active_dims,
+            'new_dims'     => $new_dims,
+        ));
+    }
+
+    /**
+     * 3.2.3: Dismiss the persistent mismatch banner. Tied to the active+selected
+     * pair so the banner reappears on the next switch event.
+     */
+    public function mxchat_dismiss_embedding_mismatch_ajax() {
+        check_ajax_referer('mxchat_admin_nonce', 'security');
+        if (!current_user_can('manage_options')) {
+            wp_send_json_error(__('Unauthorized', 'mxchat'));
+        }
+
+        $options = get_option('mxchat_options', array());
+        $selected = $options['embedding_model'] ?? '';
+        $active = MxChat_Utils::get_active_embedding_model();
+        update_option('mxchat_dismissed_embedding_mismatch', $active . '|' . $selected, false);
+        wp_send_json_success();
+    }
+
+    /**
+     * 3.2.3: Persistent admin banner shown whenever the active embedding model
+     * (last used to actually embed something) differs from the currently
+     * selected model. Pure option comparison — no DB queries on every page
+     * load. The banner auto-clears once both match again, i.e. after a delete
+     * + re-embed cycle.
+     */
+    public function mxchat_embedding_mismatch_notice() {
+        if (!current_user_can('manage_options')) {
+            return;
+        }
+
+        $options = get_option('mxchat_options', array());
+        $selected = $options['embedding_model'] ?? '';
+        $active = MxChat_Utils::get_active_embedding_model();
+
+        if (empty($active) || empty($selected) || $active === $selected) {
+            return;
+        }
+
+        $dismissed = get_option('mxchat_dismissed_embedding_mismatch', '');
+        if ($dismissed === $active . '|' . $selected) {
+            return;
+        }
+
+        $active_label = MxChat_Utils::embedding_model_label($active);
+        $selected_label = MxChat_Utils::embedding_model_label($selected);
+        $active_dims = MxChat_Utils::embedding_model_dimensions($active);
+        $selected_dims = MxChat_Utils::embedding_model_dimensions($selected);
+        $dims_differ = ($active_dims > 0 && $selected_dims > 0 && $active_dims !== $selected_dims);
+
+        $kb_url = admin_url('admin.php?page=mxchat-prompts');
+        $actions_url = admin_url('admin.php?page=mxchat-actions');
+
+        ?>
+        <div class="notice notice-error is-dismissible mxchat-embedding-mismatch-notice"
+             data-active="<?php echo esc_attr($active); ?>"
+             data-selected="<?php echo esc_attr($selected); ?>">
+            <p><strong><?php esc_html_e('MxChat: Embedding model mismatch detected', 'mxchat'); ?></strong></p>
+            <p>
+                <?php
+                printf(
+                    /* translators: 1: previously-used model name, 2: currently-selected model name */
+                    esc_html__('Your knowledge base and actions were embedded with %1$s, but %2$s is now selected. Similarity matching will return inaccurate or empty results until you delete all existing embeddings and re-embed your content with the new model.', 'mxchat'),
+                    '<code>' . esc_html($active_label) . '</code>',
+                    '<code>' . esc_html($selected_label) . '</code>'
+                );
+                ?>
+            </p>
+            <?php if ($dims_differ) : ?>
+                <p>
+                    <strong><?php esc_html_e('Dimension mismatch:', 'mxchat'); ?></strong>
+                    <?php
+                    printf(
+                        /* translators: 1: old dim count, 2: new dim count */
+                        esc_html__('Existing vectors are %1$d-dimensional but the new model produces %2$d-dimensional vectors. If you use Pinecone, your index will reject queries entirely until re-embedded.', 'mxchat'),
+                        (int) $active_dims,
+                        (int) $selected_dims
+                    );
+                    ?>
+                </p>
+            <?php endif; ?>
+            <p>
+                <?php esc_html_e('To fix this:', 'mxchat'); ?>
+                <a href="<?php echo esc_url($kb_url); ?>"><?php esc_html_e('Delete all knowledge base entries', 'mxchat'); ?></a> ·
+                <a href="<?php echo esc_url($actions_url); ?>"><?php esc_html_e('Delete all actions', 'mxchat'); ?></a> ·
+                <?php esc_html_e('then re-import / re-add them with the new model selected.', 'mxchat'); ?>
+            </p>
+        </div>
+        <script>
+        (function($){
+            $(document).on('click', '.mxchat-embedding-mismatch-notice .notice-dismiss', function(){
+                $.post(ajaxurl, {
+                    action: 'mxchat_dismiss_embedding_mismatch',
+                    security: '<?php echo esc_js(wp_create_nonce('mxchat_admin_nonce')); ?>'
+                });
+            });
+        })(jQuery);
+        </script>
+        <?php
     }
 
 private function is_license_active() {
@@ -4458,11 +4594,12 @@ public function mxchat_handle_edit_intent() {
             'phrases' => implode(', ', $phrases_array),
             'embedding_vector' => $serialized_vector,
             'similarity_threshold' => $similarity_threshold,
-            'enabled_bots' => $enabled_bots_json  //  Include enabled_bots in update
+            'enabled_bots' => $enabled_bots_json,  //  Include enabled_bots in update
+            'embedding_model' => MxChat_Utils::get_active_embedding_model()
         ),
         array('id' => $intent_id),
-        array('%s', '%s', '%s', '%f', '%s'), // Format: string, string, string, float, string
-        array('%d')                          // Where format: integer
+        array('%s', '%s', '%s', '%f', '%s', '%s'), // Format: string, string, string, float, string, string
+        array('%d')                                // Where format: integer
     );
 
     if (false === $result) {
@@ -4577,7 +4714,8 @@ public function mxchat_handle_add_intent() {
         'embedding_vector'     => $serialized_vector,
         'callback_function'    => $callback_function,
         'similarity_threshold' => $similarity_threshold,
-        'enabled_bots'         => $enabled_bots_json  // NEW field
+        'enabled_bots'         => $enabled_bots_json,  // NEW field
+        'embedding_model'      => MxChat_Utils::get_active_embedding_model()
     ]);
     
     if ($result === false) {
@@ -4872,6 +5010,7 @@ public function mxchat_add_intent_ajax() {
                     'intent_id' => $intent_id,
                     'phrase' => $phrase,
                     'embedding_vector' => maybe_serialize($embedding_vector),
+                    'embedding_model' => MxChat_Utils::get_active_embedding_model(),
                 )
             );
         }
@@ -4909,6 +5048,7 @@ public function mxchat_add_intent_ajax() {
                 'callback_function' => $callback_function,
                 'enabled' => 1,
                 'enabled_bots' => $enabled_bots_json,
+                'embedding_model' => MxChat_Utils::get_active_embedding_model(),
             )
         );
 
@@ -4984,6 +5124,7 @@ public function mxchat_edit_intent_ajax() {
                 'similarity_threshold' => $similarity_threshold,
                 'callback_function' => $callback_function,
                 'enabled_bots' => json_encode($enabled_bots),
+                'embedding_model' => MxChat_Utils::get_active_embedding_model(),
             );
         }
     }
@@ -5081,6 +5222,7 @@ public function mxchat_add_phrase_ajax() {
             'intent_id' => $intent_id,
             'phrase' => $phrase,
             'embedding_vector' => maybe_serialize($embedding_vector),
+            'embedding_model' => MxChat_Utils::get_active_embedding_model(),
         )
     );
 
@@ -7090,6 +7232,7 @@ public function embedding_model_callback() {
         echo '<span style="color: #d63638;">⚠ ' . esc_html__('No API key for Google Gemini detected. Please enter API key in API Keys tab.', 'mxchat') . '</span>';
     }
     echo '</p>';
+
 }
 
 
@@ -9431,6 +9574,7 @@ public function mxchat_handle_delete_all_prompts() {
                      //error_log('[MXCHAT-EMBED] Warning: Unexpected Gemini embedding dimensions: ' . $embedding_dimensions);
                  }
 
+                 MxChat_Utils::stamp_active_embedding_model($selected_model);
                  return $response_data['embedding']['values'];
              } else {
                  //error_log('[MXCHAT-EMBED] Error: No embedding found in Gemini response');
@@ -9458,6 +9602,7 @@ public function mxchat_handle_delete_all_prompts() {
                      //error_log('[MXCHAT-EMBED] Warning: Unexpected embedding dimensions');
                  }
 
+                 MxChat_Utils::stamp_active_embedding_model($selected_model);
                  return $response_data['data'][0]['embedding'];
              } else {
                  //error_log('[MXCHAT-EMBED] Error: No embedding found in response');

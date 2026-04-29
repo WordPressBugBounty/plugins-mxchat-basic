@@ -5,11 +5,11 @@ Tags: ai chatbot, chatgpt, woocommerce, customer support, content generation
 Requires at least: 5.0
 Tested up to: 6.9
 Requires PHP: 7.2
-Stable tag: 3.2.2
+Stable tag: 3.2.3
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
-The best free AI chatbot and content generation plugin for WordPress. Train ChatGPT, Claude, Gemini, or Grok on your website content. Generate full blog posts and landing pages with AI. WooCommerce ready with RAG knowledge base, live chat handoff, and 100+ AI models.
+MxChat is the best free AI chatbot and content generation plugin for WordPress in 2026. Train ChatGPT, Claude, Gemini, or Grok on your website content. Generate full blog posts and landing pages with AI. WooCommerce ready with RAG knowledge base, live chat handoff, and 100+ AI models.
 
 == Description ==
 
@@ -42,11 +42,12 @@ Extend the free plugin with these optional premium features:
 
 👉 [Visit our website to view all add-ons](https://mxchat.ai)
 
-## 🔥 What's New in Version 3.2.2
+## 🔥 What's New in Version 3.2.3
 
-- **NEW: Lead Management Dashboard** — A dedicated Leads tab inside Transcripts shows every captured email and name deduplicated into a clean, sortable list with conversation count, last-seen time, and the page that captured them. Includes filters, bulk delete, one-click CSV export, and "View convo" to jump straight to each lead's latest conversation.
-- **Pinecone Chunked Deletion Fixed** — Orphaned chunk vectors are no longer left behind when posts or products are unpublished, trashed, deleted, or slug-renamed. Deletion is now chunk-aware across every sync path.
-- **Source & Chunk Count Settings Fixed** — Configured values now apply everywhere instead of silently falling back to defaults on certain paths.
+- **NEW: Embedding Model Switch Protection** — Changing your embedding model when content is already embedded silently breaks similarity matching. MxChat now warns you with a confirmation dialog before the switch and surfaces a persistent admin notice until the mismatch is resolved, so you never accidentally corrupt your knowledge base.
+- **Richer Landing Pages** — The Landing Page Generator now plans more sections and writes substantially more copy per section by default, producing fuller, more conversion-ready pages out of the box.
+- **Full Width Fix for Block Themes** — "Full Width" landing pages now render edge-to-edge on Twenty Twenty-Two through Twenty Twenty-Five and other block themes that previously constrained content via theme.json.
+- **Cleaner Manual-Entry Citations** — Chat responses no longer leak internal `mxchat://` placeholder URLs when citing manually submitted knowledge entries.
 
 ## Core Features That Set MxChat Apart
 
@@ -326,7 +327,13 @@ Yes. MxChat is available for free on the WordPress plugin repository with full A
 
 == Changelog ==
 
-= 3.2.2 - April 22, 2026 =
+= 3.2.3 - April 29, 2026 =
+- New: Embedding model switch protection — warning dialog when changing embedding models with content already embedded, plus a persistent admin notice while the active and selected models don't match. Each new embedding is now stamped with the model that produced it (KB, actions, action phrases, and Pinecone metadata) so mismatches are detectable
+- Improved: Landing Page Generator now plans more sections and writes substantially more copy per section, producing fuller, more conversion-ready pages by default
+- Fixed: Landing Page "Full Width" option not honored on WordPress block themes (Twenty Twenty-Two through Twenty Twenty-Five) — content was constrained by the theme.json layout system
+- Fixed: Chatbot citing manually submitted knowledge entries with internal `mxchat://` placeholder URLs — placeholders are now correctly treated as manual entries with no citation across both WordPress-DB and Pinecone retrieval paths
+
+= 3.2.2 - April 21, 2026 =
 - NEW: Lead Management Dashboard — dedicated Leads tab inside Transcripts that deduplicates captured emails into a single list with conversation count, last-seen, and the page that captured them. Includes top-pages analytics, search + date/status/page filters, bulk delete with two-step confirm, CSV export (email-only or email + name), and one-click "View convo" to jump to each lead's latest conversation.
 - Fixed: Orphaned Pinecone chunk vectors left behind when posts or products were unpublished, trashed, deleted, or had their slugs renamed — deletion is now chunk-aware across all sync paths
 - Fixed: Source count and chunk count settings were being ignored on certain paths and silently fell back to default values — the configured values now apply everywhere
@@ -963,8 +970,8 @@ Yes. MxChat is available for free on the WordPress plugin repository with full A
 
 == Upgrade Notice ==
 
-= 3.2.2 =
-New Lead Management Dashboard groups captured emails into a sortable, filterable list with CSV export and one-click access to each lead's conversation. Plus Pinecone chunked-deletion fixes and a fix for the source and chunk limit settings not applying on all paths.
+= 3.2.3 =
+New: warns you before switching embedding models so you don't accidentally break your knowledge base. Plus richer Landing Pages, a Full Width fix for block themes, and the chatbot no longer shows broken citations for manual knowledge entries.
 
 == License & Warranty ==
 

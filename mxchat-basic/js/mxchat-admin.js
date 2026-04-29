@@ -1618,6 +1618,69 @@ function displayOpenRouterModels(models) {
 
 }
 
+// 3.2.3: Confirmation dialog shown when the user attempts to switch embedding
+// models after they've already embedded content with a different model. Mixing
+// embeddings from two models silently breaks similarity matching.
+function showEmbeddingSwitchWarning(data, newValue, onChoice) {
+    $('#mxchat_embedding_switch_warning').remove();
+
+    const dimsBlock = data.dims_differ ? `
+        <div class="mxchat-embed-warn-dims">
+            <strong>Dimension mismatch:</strong>
+            Existing vectors are ${data.active_dims}-dimensional, but ${data.new_label}
+            produces ${data.new_dims}-dimensional vectors.
+            If you use Pinecone, your index will reject queries entirely until you re-embed.
+        </div>` : '';
+
+    const $modal = $(`
+        <div id="mxchat_embedding_switch_warning" class="mxchat-embed-warn-overlay">
+            <div class="mxchat-embed-warn-dialog">
+                <div class="mxchat-embed-warn-header">
+                    <span class="mxchat-embed-warn-icon">⚠️</span>
+                    <h3>Switching embedding models will break similarity matching</h3>
+                </div>
+                <div class="mxchat-embed-warn-body">
+                    <p>
+                        Your knowledge base and actions are currently embedded with
+                        <code>${data.active_label}</code>. Switching to
+                        <code>${data.new_label}</code> means new queries are embedded with
+                        a different model than the stored vectors — the chatbot will return
+                        inaccurate results or fail to match anything.
+                    </p>
+                    ${dimsBlock}
+                    <p><strong>To switch safely:</strong></p>
+                    <ol>
+                        <li>Go to <em>Knowledge Base</em> and delete all existing entries.</li>
+                        <li>Go to <em>Actions</em> and delete all existing actions.</li>
+                        <li>Come back here, switch the model, then re-import your content and re-add your actions.</li>
+                    </ol>
+                </div>
+                <div class="mxchat-embed-warn-footer">
+                    <button type="button" class="button button-secondary" id="mxchat_embed_warn_cancel">Cancel — keep ${data.active_label}</button>
+                    <button type="button" class="button button-primary mxchat-embed-warn-danger" id="mxchat_embed_warn_continue">Switch anyway (I'll handle it)</button>
+                </div>
+            </div>
+        </div>
+    `);
+
+    $('body').append($modal);
+
+    let resolved = false;
+    function resolve(confirmed) {
+        if (resolved) return;
+        resolved = true;
+        $modal.remove();
+        if (typeof onChoice === 'function') onChoice(confirmed);
+    }
+
+    // Click on the overlay background dismisses (cancel)
+    $modal.on('click', function(e) {
+        if (e.target === $modal[0]) resolve(false);
+    });
+    $modal.find('#mxchat_embed_warn_cancel').on('click', function() { resolve(false); });
+    $modal.find('#mxchat_embed_warn_continue').on('click', function() { resolve(true); });
+}
+
 // Embedding model selector - completely separate from chat model selector
 function setupMxChatEmbeddingModelSelector() {
     const $embeddingModelSelect = $('#embedding_model');
@@ -1800,23 +1863,51 @@ function setupMxChatEmbeddingModelSelector() {
         populateEmbeddingModelsGrid(searchTerm, activeCategory);
     });
     
+    // 3.2.3: Commit a model change — same as the original click handler, just
+    // factored out so it can be invoked from both the safe path and the
+    // post-confirmation path.
+    function commitEmbeddingModelChange(modelValue) {
+        $embeddingModelSelect.val(modelValue);
+        const changeEvent = new Event('change', { bubbles: true });
+        $embeddingModelSelect[0].dispatchEvent(changeEvent);
+        updateButtonText();
+        $('#' + embeddingModalId).hide();
+    }
+
     // Use a direct selector to avoid conflicts with other card elements
     $(document).on('click.embeddingModelSelector', '.mxchat-embedding-model-selector-grid .mxchat-embedding-model-selector-card', function(e) {
         e.stopPropagation(); // Prevent event bubbling
         const modelValue = $(this).data('value');
-        
-        // Important: Only update this specific select element
-        $embeddingModelSelect.val(modelValue);
-        
-        // Manually trigger change only on this element
-        const changeEvent = new Event('change', { bubbles: true });
-        $embeddingModelSelect[0].dispatchEvent(changeEvent);
-        
-        // Update button text
-        updateButtonText();
-        
-        // Hide modal
-        $('#' + embeddingModalId).hide();
+        const previousValue = $embeddingModelSelect.val();
+
+        // No-op if the user clicked the already-selected card
+        if (modelValue === previousValue) {
+            $('#' + embeddingModalId).hide();
+            return;
+        }
+
+        // 3.2.3: Preflight — if the user has content embedded with a different
+        // model, surface a confirmation dialog before committing the switch.
+        $.post(ajaxurl, {
+            action: 'mxchat_check_embedding_switch',
+            security: (typeof mxchatAdmin !== 'undefined' ? mxchatAdmin.nonce : ''),
+            new_model: modelValue
+        }).done(function(resp) {
+            if (resp && resp.success && resp.data && resp.data.is_mismatch) {
+                showEmbeddingSwitchWarning(resp.data, modelValue, function(confirmed) {
+                    if (confirmed) {
+                        commitEmbeddingModelChange(modelValue);
+                    }
+                });
+            } else {
+                commitEmbeddingModelChange(modelValue);
+            }
+        }).fail(function() {
+            // If preflight fails, fall back to the original behavior so a network
+            // hiccup doesn't block legitimate model switches.
+            commitEmbeddingModelChange(modelValue);
+        });
+        return;
     });
     
     // Close modal when clicking outside - use namespaced events

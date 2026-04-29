@@ -6,6 +6,49 @@ if (!defined('ABSPATH')) {
 class MxChat_Utils {
 
 /**
+ * Centralized embedding model registry. Single source of truth for dimensions
+ * and provider, so model-switch protection logic doesn't drift across files.
+ */
+public static function embedding_model_registry() {
+    return array(
+        'text-embedding-ada-002' => array('dims' => 1536, 'provider' => 'openai',  'label' => 'Ada 2'),
+        'text-embedding-3-small' => array('dims' => 1536, 'provider' => 'openai',  'label' => 'TE3 Small'),
+        'text-embedding-3-large' => array('dims' => 3072, 'provider' => 'openai',  'label' => 'TE3 Large'),
+        'voyage-3-large'         => array('dims' => 2048, 'provider' => 'voyage',  'label' => 'Voyage-3 Large'),
+        'gemini-embedding-001'   => array('dims' => 1536, 'provider' => 'gemini',  'label' => 'Gemini Embedding'),
+    );
+}
+
+public static function embedding_model_dimensions($model) {
+    $registry = self::embedding_model_registry();
+    return isset($registry[$model]) ? (int) $registry[$model]['dims'] : 0;
+}
+
+public static function embedding_model_label($model) {
+    $registry = self::embedding_model_registry();
+    return isset($registry[$model]) ? $registry[$model]['label'] : $model;
+}
+
+/**
+ * Returns the model that was last used to actually write embeddings into the
+ * KB. Differs from the user-selected setting once a switch has happened but
+ * no re-embed has occurred yet — that's the mismatch state we warn about.
+ */
+public static function get_active_embedding_model() {
+    return get_option('mxchat_active_embedding_model', '');
+}
+
+/**
+ * Stamp the model that produced the most recent successful embedding. Called
+ * from generate_embedding() right after the API responds with a valid vector.
+ */
+public static function stamp_active_embedding_model($model) {
+    if (!empty($model) && $model !== self::get_active_embedding_model()) {
+        update_option('mxchat_active_embedding_model', $model, false);
+    }
+}
+
+/**
  * UPDATED: Submit or update content (and its embedding) in the database.
  * Stores in Pinecone if enabled, otherwise stores in WordPress DB.
  *
@@ -213,6 +256,8 @@ private static function store_in_wordpress_db($safe_content, $source_url, $embed
     $current_content = $safe_content;
     $result = false;
 
+    $active_model = self::get_active_embedding_model();
+
     while ($attempt <= $max_attempts && $result === false) {
         try {
             if ($existing_id) {
@@ -227,10 +272,11 @@ private static function store_in_wordpress_db($safe_content, $source_url, $embed
                         'embedding_vector' => $embedding_vector_serialized,
                         'source_url'       => $source_url,
                         'content_type'     => $content_type,
+                        'embedding_model'  => $active_model,
                         'timestamp'        => current_time('mysql'),
                     ),
                     array('id' => $existing_id),
-                    array('%s','%s','%s','%s','%s','%s'),
+                    array('%s','%s','%s','%s','%s','%s','%s'),
                     array('%d')
                 );
             } else {
@@ -246,9 +292,10 @@ private static function store_in_wordpress_db($safe_content, $source_url, $embed
                         'embedding_vector' => $embedding_vector_serialized,
                         'source_url'       => $source_url, // Now unique for manual content
                         'content_type'     => $content_type,
+                        'embedding_model'  => $active_model,
                         'timestamp'        => current_time('mysql'),
                     ),
-                    array('%s','%s','%s','%s','%s','%s')
+                    array('%s','%s','%s','%s','%s','%s','%s')
                 );
             }
             
@@ -372,7 +419,8 @@ private static function store_in_pinecone_main($embedding_vector, $content, $url
         'type' => $content_type, // Now supports: post, page, pdf, url, manual, product, etc.
         'last_updated' => time(),
         'created_at' => time(), // Add creation timestamp
-        'bot_id' => $bot_id // Add bot identification
+        'bot_id' => $bot_id, // Add bot identification
+        'embedding_model' => self::get_active_embedding_model() // 3.2.3: track which model produced this vector
     );
     
     $vector_data = array(
@@ -522,6 +570,7 @@ private static function generate_embedding($text, $api_key, $bot_id = 'default')
     if (strpos($selected_model, 'gemini-embedding') === 0) {
         // Gemini API response format
         if (isset($response_body['embedding']['values']) && is_array($response_body['embedding']['values'])) {
+            self::stamp_active_embedding_model($selected_model);
             return $response_body['embedding']['values'];
         } else {
             //error_log('Invalid response received from Gemini embedding API for bot ' . $bot_id . ': ' . wp_json_encode($response_body));
@@ -530,6 +579,7 @@ private static function generate_embedding($text, $api_key, $bot_id = 'default')
     } else {
         // OpenAI/Voyage API response format
         if (isset($response_body['data'][0]['embedding']) && is_array($response_body['data'][0]['embedding'])) {
+            self::stamp_active_embedding_model($selected_model);
             return $response_body['data'][0]['embedding'];
         } else {
             //error_log('Invalid response received from embedding API for bot ' . $bot_id . ': ' . wp_json_encode($response_body));
@@ -687,7 +737,8 @@ private static function store_chunk_in_pinecone($embedding_vector, $chunk_text, 
         'parent_url_hash' => $chunk_metadata['parent_url_hash'],
         'last_updated' => time(),
         'created_at' => time(),
-        'bot_id' => $bot_id
+        'bot_id' => $bot_id,
+        'embedding_model' => self::get_active_embedding_model()
     );
 
     $vector_data = array(
@@ -742,9 +793,10 @@ private static function store_chunk_in_wordpress_db($content_with_metadata, $sou
             'embedding_vector' => $embedding_vector_serialized,
             'source_url' => $source_url,
             'content_type' => $content_type,
+            'embedding_model' => self::get_active_embedding_model(),
             'timestamp' => current_time('mysql')
         ),
-        array('%s', '%s', '%s', '%s', '%s', '%s')
+        array('%s', '%s', '%s', '%s', '%s', '%s', '%s')
     );
 
     if ($result === false) {

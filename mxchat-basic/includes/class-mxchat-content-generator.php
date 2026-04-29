@@ -726,7 +726,7 @@ class MxChat_Content_Generator {
     private function plan_content($prompt, $content_type) {
         $type_label = ($content_type === 'page') ? 'landing page' : 'blog post';
 
-        $system_prompt = "You are a professional content strategist. The user wants to create a {$type_label}. Analyze their request and create a detailed content plan.\n\nYou MUST respond with ONLY valid JSON (no markdown, no code fences, no commentary). Use this exact structure:\n\n{\"title\": \"SEO-optimized title\", \"slug\": \"url-friendly-slug\", \"meta_description\": \"155 character meta description for SEO\", \"keywords\": [\"keyword1\", \"keyword2\", \"keyword3\", \"keyword4\", \"keyword5\"], \"links\": [{\"label\": \"Button or link text\", \"url\": \"https://example.com/page\"}], \"sections\": [{\"type\": \"hero\", \"heading\": \"Main heading\", \"subheading\": \"Supporting text\", \"needs_image\": true, \"image_prompt\": \"Detailed prompt for hero image\"}, {\"type\": \"content\", \"heading\": \"Section heading\", \"key_points\": [\"point 1\", \"point 2\"], \"needs_image\": true, \"image_prompt\": \"Detailed prompt for section image\"}, {\"type\": \"content\", \"heading\": \"Another section\", \"key_points\": [\"point 1\", \"point 2\"], \"needs_image\": false, \"image_prompt\": \"\"}, {\"type\": \"cta\", \"heading\": \"Call to action heading\", \"subheading\": \"CTA supporting text\", \"needs_image\": false, \"image_prompt\": \"\"}]}\n\nGuidelines:\n- Create 5-8 sections for blog posts, 4-6 for landing pages\n- Include 2-4 sections that need images\n- Image prompts should be detailed, descriptive, and suitable for AI image generation\n- Image prompts should describe photorealistic or illustrative images relevant to the content\n- Keywords should be relevant long-tail SEO keywords\n- Title should be compelling and SEO-friendly\n- IMPORTANT: If the user specifies any URLs or links (for buttons, CTAs, navigation, etc.), you MUST capture every one of them in the \"links\" array with its label and exact URL. If no URLs are mentioned, use an empty array [].";
+        $system_prompt = "You are a professional content strategist. The user wants to create a {$type_label}. Analyze their request and create a detailed content plan.\n\nYou MUST respond with ONLY valid JSON (no markdown, no code fences, no commentary). Use this exact structure:\n\n{\"title\": \"SEO-optimized title\", \"slug\": \"url-friendly-slug\", \"meta_description\": \"155 character meta description for SEO\", \"keywords\": [\"keyword1\", \"keyword2\", \"keyword3\", \"keyword4\", \"keyword5\"], \"links\": [{\"label\": \"Button or link text\", \"url\": \"https://example.com/page\"}], \"sections\": [{\"type\": \"hero\", \"heading\": \"Main heading\", \"subheading\": \"Supporting text\", \"needs_image\": true, \"image_prompt\": \"Detailed prompt for hero image\"}, {\"type\": \"content\", \"heading\": \"Section heading\", \"key_points\": [\"point 1\", \"point 2\"], \"needs_image\": true, \"image_prompt\": \"Detailed prompt for section image\"}, {\"type\": \"content\", \"heading\": \"Another section\", \"key_points\": [\"point 1\", \"point 2\"], \"needs_image\": false, \"image_prompt\": \"\"}, {\"type\": \"cta\", \"heading\": \"Call to action heading\", \"subheading\": \"CTA supporting text\", \"needs_image\": false, \"image_prompt\": \"\"}]}\n\nGuidelines:\n- Create 5-9 sections for blog posts, 7-11 for landing pages — add more if the user's request warrants extensive coverage\n- For landing pages, draw from sections like: hero, problem/solution, features, benefits, how-it-works, use cases, testimonials/social proof, pricing or comparison, FAQ, and final CTA — pick whichever fit the request\n- Each content section should include 3-5 substantive key_points (full descriptive sentences, not one-word labels) so the HTML generator has enough material to write meaningful copy\n- Include 2-4 sections that need images\n- Image prompts should be detailed, descriptive, and suitable for AI image generation\n- Image prompts should describe photorealistic or illustrative images relevant to the content\n- Keywords should be relevant long-tail SEO keywords\n- Title should be compelling and SEO-friendly\n- IMPORTANT: If the user specifies any URLs or links (for buttons, CTAs, navigation, etc.), you MUST capture every one of them in the \"links\" array with its label and exact URL. If no URLs are mentioned, use an empty array [].";
 
         $messages = array(
             array('role' => 'user', 'content' => "Create a {$type_label} about: {$prompt}"),
@@ -1591,6 +1591,8 @@ CONTENT SECTIONS:
 - Two-column layouts alternating content left/right
 - Card grids for features/benefits
 - Each section gets its own mxg- class for unique styling
+- Write substantive copy in every section — expand each plan key_point into a full sentence or short paragraph (roughly 80-180 words per content section). Do NOT condense the plan into one-line bullets
+- Vary the structure across sections: paragraphs, feature card grids, numbered steps, stat callouts, testimonial quotes, comparison tables, or FAQ blocks where they fit the content
 
 TYPOGRAPHY:
 - Hero heading: 3rem desktop, scales down in your media queries
@@ -1906,6 +1908,23 @@ article .entry-content,
     padding: 0 !important;
     max-width: 100% !important;
     width: 100% !important;
+}
+/* WordPress Block Themes (Twenty Twenty-Two → Twenty Twenty-Five)
+   These use theme.json layout constraints rather than classic .entry-content,
+   so the selectors above do not apply — neutralize them here. */
+.wp-site-blocks,
+.wp-block-post-content,
+.wp-block-group.has-global-padding,
+.has-global-padding {
+    padding-left: 0 !important;
+    padding-right: 0 !important;
+    max-width: 100% !important;
+}
+.is-layout-constrained > :where(:not(.alignleft):not(.alignright):not(.alignfull)),
+.wp-block-post-content > :where(:not(.alignleft):not(.alignright):not(.alignfull)) {
+    max-width: 100% !important;
+    margin-left: 0 !important;
+    margin-right: 0 !important;
 }
 ';
     }
