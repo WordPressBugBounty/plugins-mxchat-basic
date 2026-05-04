@@ -285,7 +285,7 @@ class MxChat_Meta_Box {
         // Enqueue the JavaScript file
         wp_enqueue_script(
             'mxchat-meta-box',
-            plugin_dir_url(__FILE__) . 'js/meta-box.js',
+            plugin_dir_url(__FILE__) . '../js/meta-box.js',
             array('wp-edit-post', 'wp-element', 'wp-components', 'wp-data', 'wp-plugins'),
             '1.0.0',
             true

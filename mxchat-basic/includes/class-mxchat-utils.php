@@ -256,8 +256,6 @@ private static function store_in_wordpress_db($safe_content, $source_url, $embed
     $current_content = $safe_content;
     $result = false;
 
-    $active_model = self::get_active_embedding_model();
-
     while ($attempt <= $max_attempts && $result === false) {
         try {
             if ($existing_id) {
@@ -272,11 +270,10 @@ private static function store_in_wordpress_db($safe_content, $source_url, $embed
                         'embedding_vector' => $embedding_vector_serialized,
                         'source_url'       => $source_url,
                         'content_type'     => $content_type,
-                        'embedding_model'  => $active_model,
                         'timestamp'        => current_time('mysql'),
                     ),
                     array('id' => $existing_id),
-                    array('%s','%s','%s','%s','%s','%s','%s'),
+                    array('%s','%s','%s','%s','%s','%s'),
                     array('%d')
                 );
             } else {
@@ -292,10 +289,9 @@ private static function store_in_wordpress_db($safe_content, $source_url, $embed
                         'embedding_vector' => $embedding_vector_serialized,
                         'source_url'       => $source_url, // Now unique for manual content
                         'content_type'     => $content_type,
-                        'embedding_model'  => $active_model,
                         'timestamp'        => current_time('mysql'),
                     ),
-                    array('%s','%s','%s','%s','%s','%s','%s')
+                    array('%s','%s','%s','%s','%s','%s')
                 );
             }
             
@@ -420,7 +416,6 @@ private static function store_in_pinecone_main($embedding_vector, $content, $url
         'last_updated' => time(),
         'created_at' => time(), // Add creation timestamp
         'bot_id' => $bot_id, // Add bot identification
-        'embedding_model' => self::get_active_embedding_model() // 3.2.3: track which model produced this vector
     );
     
     $vector_data = array(
@@ -738,7 +733,6 @@ private static function store_chunk_in_pinecone($embedding_vector, $chunk_text, 
         'last_updated' => time(),
         'created_at' => time(),
         'bot_id' => $bot_id,
-        'embedding_model' => self::get_active_embedding_model()
     );
 
     $vector_data = array(
@@ -793,10 +787,9 @@ private static function store_chunk_in_wordpress_db($content_with_metadata, $sou
             'embedding_vector' => $embedding_vector_serialized,
             'source_url' => $source_url,
             'content_type' => $content_type,
-            'embedding_model' => self::get_active_embedding_model(),
             'timestamp' => current_time('mysql')
         ),
-        array('%s', '%s', '%s', '%s', '%s', '%s', '%s')
+        array('%s', '%s', '%s', '%s', '%s', '%s')
     );
 
     if ($result === false) {

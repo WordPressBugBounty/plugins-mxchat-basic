@@ -3,7 +3,7 @@
  * Plugin Name: MxChat
  * Plugin URI: https://mxchat.ai/
  * Description: AI chatbot for WordPress with OpenAI, Claude, xAI, DeepSeek, live agent, PDF uploads, WooCommerce, and training on website data.
- * Version: 3.2.3
+ * Version: 3.2.4
  * Author: MxChat
  * Author URI: https://mxchat.ai
  * License: GPLv2 or later
@@ -609,49 +609,28 @@ function mxchat_migrate_add_content_type_column() {
 }
 
 /**
- * 3.2.3: Add embedding_model column to KB and intent tables so we can detect
- * when the active embedding model is changed while content is already embedded.
+ * 3.2.4: Backfill the active embedding model option for installs that already
+ * have KB content but no stamped model. The mismatch warning compares this
+ * against the user's currently selected model — no per-row column needed.
  */
-function mxchat_add_embedding_model_columns() {
+function mxchat_backfill_active_embedding_model() {
     global $wpdb;
 
-    $migration_version = get_option('mxchat_embedding_model_migration_version', '0');
-    if (version_compare($migration_version, '3.2.3', '>=')) {
+    if (get_option('mxchat_active_embedding_model', '') !== '') {
         return;
     }
 
-    $tables = array(
-        $wpdb->prefix . 'mxchat_system_prompt_content',
-        $wpdb->prefix . 'mxchat_intents',
-        $wpdb->prefix . 'mxchat_intent_phrases',
-    );
-
-    foreach ($tables as $table) {
-        if ($wpdb->get_var("SHOW TABLES LIKE '{$table}'") !== $table) {
-            continue;
-        }
-        $col_exists = $wpdb->get_results("SHOW COLUMNS FROM {$table} LIKE 'embedding_model'");
-        if (empty($col_exists)) {
-            $wpdb->query("ALTER TABLE {$table} ADD COLUMN embedding_model VARCHAR(64) DEFAULT NULL");
-        }
+    $kb_table = $wpdb->prefix . 'mxchat_system_prompt_content';
+    if ($wpdb->get_var("SHOW TABLES LIKE '{$kb_table}'") !== $kb_table) {
+        return;
     }
 
-    // Best-effort backfill: if any existing content lacks a stamped model, assume
-    // it was embedded with whatever model is currently selected. This is the
-    // safest assumption for installations upgrading to 3.2.3 — if it was wrong
-    // already, the mismatch detection will surface it on the next switch.
-    $options = get_option('mxchat_options', array());
-    $current_model = $options['embedding_model'] ?? 'text-embedding-ada-002';
-
-    if (get_option('mxchat_active_embedding_model', '') === '') {
-        $kb_table = $wpdb->prefix . 'mxchat_system_prompt_content';
-        $kb_count = (int) $wpdb->get_var("SELECT COUNT(*) FROM {$kb_table}");
-        if ($kb_count > 0) {
-            update_option('mxchat_active_embedding_model', $current_model, false);
-        }
+    $kb_count = (int) $wpdb->get_var("SELECT COUNT(*) FROM {$kb_table}");
+    if ($kb_count > 0) {
+        $options = get_option('mxchat_options', array());
+        $current_model = $options['embedding_model'] ?? 'text-embedding-ada-002';
+        update_option('mxchat_active_embedding_model', $current_model, false);
     }
-
-    update_option('mxchat_embedding_model_migration_version', '3.2.3');
 }
 
 /**
@@ -865,7 +844,6 @@ function mxchat_activate() {
         source_url TEXT DEFAULT NULL,
         role_restriction VARCHAR(50) DEFAULT 'public',
         content_type VARCHAR(50) DEFAULT 'content',
-        embedding_model VARCHAR(64) DEFAULT NULL,
         timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL,
         PRIMARY KEY (id),
         KEY content_type (content_type)
@@ -882,7 +860,6 @@ function mxchat_activate() {
         similarity_threshold FLOAT DEFAULT 0.85,
         enabled TINYINT(1) NOT NULL DEFAULT 1,
         enabled_bots LONGTEXT DEFAULT NULL,
-        embedding_model VARCHAR(64) DEFAULT NULL,
         PRIMARY KEY (id)
     ) $charset_collate;";
 
@@ -893,7 +870,6 @@ function mxchat_activate() {
         intent_id BIGINT(20) UNSIGNED NOT NULL,
         phrase TEXT NOT NULL,
         embedding_vector LONGTEXT NOT NULL,
-        embedding_model VARCHAR(64) DEFAULT NULL,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL,
         PRIMARY KEY (id),
         KEY intent_id (intent_id)
@@ -962,8 +938,8 @@ function mxchat_activate() {
     // Run migration for existing installations
     mxchat_migrate_pinecone_roles_add_bot_id();
 
-    // 3.2.3: Add embedding_model column to KB and intent tables
-    mxchat_add_embedding_model_columns();
+    // 3.2.4: Backfill active embedding model option (replaces 3.2.3 column-based tracking)
+    mxchat_backfill_active_embedding_model();
 
     // Setup cron jobs
     mxchat_setup_cron_jobs();
@@ -1141,9 +1117,10 @@ function mxchat_check_for_update() {
                 delete_option('mxchat_name_null');
             }
 
-            // 3.2.3: Add embedding_model tracking columns and backfill active model
-            if (version_compare($current_version, '3.2.3', '<')) {
-                mxchat_add_embedding_model_columns();
+            // 3.2.4: Backfill active embedding model option for the warning UI
+            // (replaces the per-row column tracking from 3.2.3, which was reverted)
+            if (version_compare($current_version, '3.2.4', '<')) {
+                mxchat_backfill_active_embedding_model();
             }
 
             // Run full activation to ensure everything is up to date

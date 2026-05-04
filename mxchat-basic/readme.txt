@@ -5,7 +5,7 @@ Tags: ai chatbot, chatgpt, woocommerce, customer support, content generation
 Requires at least: 5.0
 Tested up to: 6.9
 Requires PHP: 7.2
-Stable tag: 3.2.3
+Stable tag: 3.2.4
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -326,6 +326,10 @@ Yes. MxChat is available for free on the WordPress plugin repository with full A
 *(Note: Screenshots will be added in future updates)*
 
 == Changelog ==
+
+= 3.2.4 - May 3, 2026 =
+- Fixed: WooCommerce product Short Description Visual tab broken by a 404 on the Gutenberg meta-box script
+- Fixed: User's last message now scrolls to the top of the chat after streaming replies, matching non-streaming behavior
 
 = 3.2.3 - April 29, 2026 =
 - New: Embedding model switch protection — warning dialog when changing embedding models with content already embedded, plus a persistent admin notice while the active and selected models don't match. Each new embedding is now stamped with the model that produced it (KB, actions, action phrases, and Pinecone metadata) so mismatches are detectable
@@ -970,8 +974,8 @@ Yes. MxChat is available for free on the WordPress plugin repository with full A
 
 == Upgrade Notice ==
 
-= 3.2.3 =
-New: warns you before switching embedding models so you don't accidentally break your knowledge base. Plus richer Landing Pages, a Full Width fix for block themes, and the chatbot no longer shows broken citations for manual knowledge entries.
+= 3.2.4 =
+Fixes the WooCommerce Short Description Visual editor and restores scroll-to-top of the user's last message on streaming replies.
 
 == License & Warranty ==
 

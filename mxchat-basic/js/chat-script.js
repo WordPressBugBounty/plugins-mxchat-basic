@@ -977,6 +977,14 @@ function callMxChatStream(message, callback, botId) {
                     // Re-enable chat input when stream ends with content
                     enableChatInput(botId);
 
+                    // Scroll the user's last message to the top now that the
+                    // bot's full reply has rendered (gives max reading room).
+                    var $chatBoxDone = getElement(botId, 'chat-box');
+                    var $lastUserMsgDone = $chatBoxDone.find('.user-message').last();
+                    if ($lastUserMsgDone.length) {
+                        scrollElementToTop($lastUserMsgDone, botId);
+                    }
+
                     if (callback) {
                         callback(accumulatedContent);
                     }
@@ -1000,6 +1008,14 @@ function callMxChatStream(message, callback, botId) {
 
                             // Re-enable chat input after streaming completes
                             enableChatInput(botId);
+
+                            // Scroll the user's last message to the top now
+                            // that the bot's full reply has rendered.
+                            var $chatBoxStreamDone = getElement(botId, 'chat-box');
+                            var $lastUserMsgStreamDone = $chatBoxStreamDone.find('.user-message').last();
+                            if ($lastUserMsgStreamDone.length) {
+                                scrollElementToTop($lastUserMsgStreamDone, botId);
+                            }
 
                             if (callback) {
                                 callback(accumulatedContent);
@@ -2007,11 +2023,12 @@ function convertNewlinesToBreaks(text) {
         }
     }
 
-    function scrollElementToTop(element, botId) {
+    function scrollElementToTop(element, botId, topOffset) {
         botId = botId || 'default';
+        topOffset = (typeof topOffset === 'number') ? topOffset : 2;
         var chatBox = getElement(botId, 'chat-box');
         var elementTop = element.position().top + chatBox.scrollTop();
-        chatBox.animate({ scrollTop: elementTop }, 500);
+        chatBox.animate({ scrollTop: Math.max(0, elementTop - topOffset) }, 500);
     }
 
     function showChatWidget(botId) {

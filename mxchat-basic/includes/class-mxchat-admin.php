@@ -4595,11 +4595,10 @@ public function mxchat_handle_edit_intent() {
             'embedding_vector' => $serialized_vector,
             'similarity_threshold' => $similarity_threshold,
             'enabled_bots' => $enabled_bots_json,  //  Include enabled_bots in update
-            'embedding_model' => MxChat_Utils::get_active_embedding_model()
         ),
         array('id' => $intent_id),
-        array('%s', '%s', '%s', '%f', '%s', '%s'), // Format: string, string, string, float, string, string
-        array('%d')                                // Where format: integer
+        array('%s', '%s', '%s', '%f', '%s'), // Format: string, string, string, float, string
+        array('%d')                          // Where format: integer
     );
 
     if (false === $result) {
@@ -4715,7 +4714,6 @@ public function mxchat_handle_add_intent() {
         'callback_function'    => $callback_function,
         'similarity_threshold' => $similarity_threshold,
         'enabled_bots'         => $enabled_bots_json,  // NEW field
-        'embedding_model'      => MxChat_Utils::get_active_embedding_model()
     ]);
     
     if ($result === false) {
@@ -5010,7 +5008,6 @@ public function mxchat_add_intent_ajax() {
                     'intent_id' => $intent_id,
                     'phrase' => $phrase,
                     'embedding_vector' => maybe_serialize($embedding_vector),
-                    'embedding_model' => MxChat_Utils::get_active_embedding_model(),
                 )
             );
         }
@@ -5048,7 +5045,6 @@ public function mxchat_add_intent_ajax() {
                 'callback_function' => $callback_function,
                 'enabled' => 1,
                 'enabled_bots' => $enabled_bots_json,
-                'embedding_model' => MxChat_Utils::get_active_embedding_model(),
             )
         );
 
@@ -5124,7 +5120,6 @@ public function mxchat_edit_intent_ajax() {
                 'similarity_threshold' => $similarity_threshold,
                 'callback_function' => $callback_function,
                 'enabled_bots' => json_encode($enabled_bots),
-                'embedding_model' => MxChat_Utils::get_active_embedding_model(),
             );
         }
     }
@@ -5222,7 +5217,6 @@ public function mxchat_add_phrase_ajax() {
             'intent_id' => $intent_id,
             'phrase' => $phrase,
             'embedding_vector' => maybe_serialize($embedding_vector),
-            'embedding_model' => MxChat_Utils::get_active_embedding_model(),
         )
     );
 
