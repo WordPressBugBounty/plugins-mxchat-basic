@@ -231,11 +231,23 @@ public function render_chatbot_shortcode($atts) {
                 echo '<span class="chat-mode-indicator" id="chat-mode-indicator-' . esc_attr($bot_id) . '" data-ai-text="' . esc_attr($ai_agent_text) . '"' . ($skip_inline_colors ? '' : ' style="color: ' . esc_attr($mode_indicator_font_color) . '; background-color: ' . esc_attr($mode_indicator_bg_color) . ';"') . '>' . esc_html($ai_agent_text) . '</span>';
             }
             echo '      </div>';
-            echo '      <button class="exit-chat" type="button" aria-label="' . esc_attr__('Minimize', 'mxchat') . '"' . ($skip_inline_colors ? '' : ' style="color: ' . esc_attr($close_button_color) . ';"') . '>';
-            echo '          <svg xmlns="http://www.w3.org/2000/svg" height="24" viewBox="0 0 24 24" width="24" id="ic-minimize"' . ($skip_inline_colors ? '' : ' style="fill: ' . esc_attr($close_button_color) . ';"') . '>';
-            echo '              <path d="M11.67 3.87L9.9 2.1 0 12l9.9 9.9 1.77-1.77L3.54 12z"></path>';
+            // Overflow menu (3-dot) trigger + dropdown container.
+            // Sibling of .exit-chat, rendered to its left. JS hides the trigger
+            // if no menu items are enabled; outer click + Escape close the menu.
+            echo '      <div class="mxchat-header-menu-wrap" data-bot-id="' . esc_attr($bot_id) . '"' . ($skip_inline_colors ? '' : ' style="--mxchat-menu-bg: ' . esc_attr($bot_message_bg_color) . '; --mxchat-menu-fg: ' . esc_attr($bot_message_font_color) . ';"') . '>';
+            echo '          <button class="mxchat-header-btn mxchat-menu-trigger" type="button" aria-haspopup="menu" aria-expanded="false" aria-label="' . esc_attr__('More options', 'mxchat') . '"' . ($skip_inline_colors ? '' : ' style="color: ' . esc_attr($close_button_color) . ';"') . '>';
+            echo '              <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">';
+            echo '                  <circle cx="12" cy="5" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="12" cy="19" r="2"/>';
+            echo '              </svg>';
+            echo '          </button>';
+            echo '          <div class="mxchat-header-menu" role="menu" aria-hidden="true" hidden></div>';
+            echo '      </div>';
+            echo '      <button class="exit-chat" type="button" aria-label="' . esc_attr__('Close', 'mxchat') . '"' . ($skip_inline_colors ? '' : ' style="color: ' . esc_attr($close_button_color) . ';"') . '>';
+            echo '          <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" id="ic-close" aria-hidden="true">';
+            echo '              <line x1="6" y1="6" x2="18" y2="18"></line>';
+            echo '              <line x1="18" y1="6" x2="6" y2="18"></line>';
             echo '          </svg>';
-            echo '          <span>' . esc_html__('Minimize', 'mxchat') . '</span>';
+            echo '          <span>' . esc_html__('Close', 'mxchat') . '</span>';
             echo '      </button>';
             echo '  </div>';
 

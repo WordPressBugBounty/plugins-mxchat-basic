@@ -9542,7 +9542,10 @@ public function mxchat_enqueue_scripts_styles() {
         'skip_email_check' => true,
         'pinecone_enabled' => isset($prompts_options['mxchat_use_pinecone']) && $prompts_options['mxchat_use_pinecone'] === '1',
         'skip_inline_colors' => $skip_inline_colors,
-        'bot_theme_assignments' => $theme_options['bot_theme_assignments'] ?? array()
+        'bot_theme_assignments' => $theme_options['bot_theme_assignments'] ?? array(),
+        'print_button_enabled' => $this->options['print_button_enabled'] ?? 'on',
+        'print_button_label' => esc_html__('Download Transcript', 'mxchat'),
+        'print_header_title' => esc_html(get_bloginfo('name')) . ' — ' . esc_html__('Chat transcript', 'mxchat'),
     );
 
     // For normal/defer loading, use wp_localize_script
@@ -9604,7 +9607,10 @@ public function mxchat_output_delayed_script_loader() {
         'skip_email_check' => true,
         'pinecone_enabled' => isset($prompts_options['mxchat_use_pinecone']) && $prompts_options['mxchat_use_pinecone'] === '1',
         'skip_inline_colors' => $skip_inline_colors,
-        'bot_theme_assignments' => $theme_options['bot_theme_assignments'] ?? array()
+        'bot_theme_assignments' => $theme_options['bot_theme_assignments'] ?? array(),
+        'print_button_enabled' => $this->options['print_button_enabled'] ?? 'on',
+        'print_button_label' => esc_html__('Download Transcript', 'mxchat'),
+        'print_header_title' => esc_html(get_bloginfo('name')) . ' — ' . esc_html__('Chat transcript', 'mxchat'),
     );
 
     // Determine delay time based on strategy

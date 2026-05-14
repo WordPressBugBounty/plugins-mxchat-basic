@@ -38,6 +38,10 @@ class MxChat_Admin {
 
         // Add admin menu and initialize settings
         add_action('admin_menu', array($this, 'mxchat_add_plugin_page'));
+        // Pro & Extensions registers at priority 30 so it always lands last in
+        // the sidebar — below API Access (priority 20) and below any other
+        // submenu that hooks at default priority 10.
+        add_action('admin_menu', array($this, 'mxchat_add_pro_extensions_page'), 30);
         add_action('admin_init', array($this, 'mxchat_page_init'));
         add_action('admin_init', array($this, 'mxchat_prompts_page_init'));
         add_action('admin_enqueue_scripts', array($this, 'mxchat_enqueue_admin_assets'));
@@ -427,7 +431,14 @@ public function mxchat_add_plugin_page() {
         array($this, 'mxchat_create_content_page')
     );
 
-    // Consolidated Pro & Extensions page (replaces separate Add Ons and Pro Upgrade pages)
+}
+
+/**
+ * Register the Pro & Extensions submenu on a later admin_menu priority so it
+ * always renders as the bottom-most item in the MxChat sidebar — below
+ * configuration pages like API Access (priority 20).
+ */
+public function mxchat_add_pro_extensions_page() {
     add_submenu_page(
         'mxchat-max',
         esc_html__('Pro & Extensions', 'mxchat'),
@@ -1397,6 +1408,37 @@ public function mxchat_auto_delete_transcripts_callback() {
     <?php
 }
 
+/**
+ * Custom retention-days input. When > 0 it overrides the bucket dropdown above
+ * and deletes transcripts older than the given number of days. Set to 0 to fall
+ * back to the dropdown (or "Never" if the dropdown is also Never).
+ *
+ * Devs can override the final day count via the `mxchat_transcript_retention_days`
+ * filter — runs in `cleanup_old_transcripts()` after this option is read.
+ *
+ * (plan-mxchat-20260509-9b80b1)
+ */
+public function mxchat_retention_days_callback() {
+    $options = get_option('mxchat_transcripts_options', array());
+    $days = isset($options['mxchat_retention_days']) ? (int) $options['mxchat_retention_days'] : 0;
+    ?>
+    <input type="number"
+           id="mxchat_retention_days"
+           name="mxchat_transcripts_options[mxchat_retention_days]"
+           value="<?php echo esc_attr($days); ?>"
+           min="0"
+           max="3650"
+           step="1"
+           style="width: 90px;" />
+    <p class="description">
+        <?php esc_html_e('Number of days to retain transcripts. When set to a value greater than 0, this overrides the dropdown above. Set to 0 to use the dropdown. Maximum 3650 (10 years). A daily wp-cron task removes anything older, cascading to translations and click-tracking rows.', 'mxchat'); ?>
+        <br>
+        <code>apply_filters( 'mxchat_transcript_retention_days', $days )</code>
+        <?php esc_html_e('lets developers override the final day count programmatically.', 'mxchat'); ?>
+    </p>
+    <?php
+}
+
 public function mxchat_auto_email_transcript_callback() {
     $options = get_option('mxchat_transcripts_options', array());
     $enabled = isset($options['mxchat_auto_email_transcript_enabled']) ? $options['mxchat_auto_email_transcript_enabled'] : 0;
@@ -1474,13 +1516,27 @@ public function sanitize_transcripts_options($input) {
         $sanitized['mxchat_auto_delete_transcripts'] = 'never';
     }
 
-    // Get old value to check if auto-delete setting changed
+    // Sanitize custom retention-days override (plan-9b80b1).
+    if (isset($input['mxchat_retention_days'])) {
+        $days = (int) $input['mxchat_retention_days'];
+        $sanitized['mxchat_retention_days'] = max(0, min(3650, $days));
+    } else {
+        $sanitized['mxchat_retention_days'] = 0;
+    }
+
+    // Get old values to check if auto-delete or retention-days changed.
     $old_options = get_option('mxchat_transcripts_options');
     $old_interval = isset($old_options['mxchat_auto_delete_transcripts']) ? $old_options['mxchat_auto_delete_transcripts'] : 'never';
-    
-    // If the auto-delete setting changed, reschedule the cron job
-    if ($old_interval !== $sanitized['mxchat_auto_delete_transcripts']) {
-        $this->schedule_transcript_cleanup($sanitized['mxchat_auto_delete_transcripts']);
+    $old_retention = isset($old_options['mxchat_retention_days']) ? (int) $old_options['mxchat_retention_days'] : 0;
+
+    // If either setting changed, reschedule the cron job. The schedule_transcript_cleanup
+    // helper now treats "any active retention" (dropdown != never OR custom days > 0) as a
+    // reason to keep the daily cron registered.
+    $interval_changed  = ($old_interval !== $sanitized['mxchat_auto_delete_transcripts']);
+    $retention_changed = ($old_retention !== $sanitized['mxchat_retention_days']);
+    if ($interval_changed || $retention_changed) {
+        $any_active = ($sanitized['mxchat_auto_delete_transcripts'] !== 'never') || ($sanitized['mxchat_retention_days'] > 0);
+        $this->schedule_transcript_cleanup($any_active ? 'active' : 'never');
     }
 
     // Sanitize auto-email transcript settings
@@ -1510,8 +1566,11 @@ public function schedule_transcript_cleanup($interval) {
     if ($timestamp) {
         wp_unschedule_event($timestamp, 'mxchat_cleanup_old_transcripts');
     }
-    
-    // Schedule new event if not set to "never"
+
+    // Schedule new event whenever retention is active. "active" is the canonical
+    // value passed by sanitize_transcripts_options when either the dropdown != never
+    // OR the custom retention-days > 0; "never" turns the cron off. Any other value
+    // (the legacy "1week" / "2weeks" / "1month" strings) is also treated as active.
     if ($interval !== 'never') {
         // Schedule to run daily at 3 AM
         $next_run = strtotime('tomorrow 3:00 AM');
@@ -1523,56 +1582,72 @@ public function schedule_transcript_cleanup($interval) {
  * Delete old transcripts based on the configured interval
  */
 public function cleanup_old_transcripts() {
-    $options = get_option('mxchat_transcripts_options', array());
-    $interval = isset($options['mxchat_auto_delete_transcripts']) ? $options['mxchat_auto_delete_transcripts'] : 'never';
-    
-    // If set to never, don't delete anything
-    if ($interval === 'never') {
+    $options       = get_option('mxchat_transcripts_options', array());
+    $interval      = isset($options['mxchat_auto_delete_transcripts']) ? $options['mxchat_auto_delete_transcripts'] : 'never';
+    $custom_days   = isset($options['mxchat_retention_days']) ? (int) $options['mxchat_retention_days'] : 0;
+
+    // Custom retention-days (plan-9b80b1) takes precedence over the bucket dropdown.
+    $days = 0;
+    if ($custom_days > 0) {
+        $days = $custom_days;
+    } else {
+        switch ($interval) {
+            case '1week':  $days = 7;  break;
+            case '2weeks': $days = 14; break;
+            case '1month': $days = 30; break;
+            case 'never':
+            default:
+                $days = 0;
+        }
+    }
+
+    // Devs can override the final day count programmatically.
+    $days = (int) apply_filters('mxchat_transcript_retention_days', $days);
+
+    if ($days <= 0) {
+        return; // Retention disabled — bail.
+    }
+
+    global $wpdb;
+    $transcripts_table  = $wpdb->prefix . 'mxchat_chat_transcripts';
+    $translations_table = $wpdb->prefix . 'mxchat_transcript_translations';
+    $url_clicks_table   = $wpdb->prefix . 'mxchat_url_clicks';
+
+    // Defensive: if the main table doesn't exist (fresh-ish install), bail.
+    if ($wpdb->get_var($wpdb->prepare("SHOW TABLES LIKE %s", $transcripts_table)) !== $transcripts_table) {
         return;
     }
-    
-    // Calculate the cutoff date
-    $days = 0;
-    switch ($interval) {
-        case '1week':
-            $days = 7;
-            break;
-        case '2weeks':
-            $days = 14;
-            break;
-        case '1month':
-            $days = 30;
-            break;
-        default:
-            return; // Invalid interval, don't delete anything
-    }
-    
-    global $wpdb;
-    $table_name = $wpdb->prefix . 'mxchat_chat_transcripts';
-    $translations_table = $wpdb->prefix . 'mxchat_transcript_translations';
 
-    // Calculate the cutoff timestamp
-    $cutoff_date = date('Y-m-d H:i:s', strtotime("-{$days} days"));
+    $cutoff_date = gmdate('Y-m-d H:i:s', time() - ($days * DAY_IN_SECONDS));
 
-    // First, get the session IDs that will be deleted (to clean up translations too)
+    // Cap at 5000 session_ids per run so a large unattended site doesn't OOM —
+    // the cron will pick up where it left off on the next tick (within hours).
+    $batch_cap = (int) apply_filters('mxchat_transcript_retention_batch_cap', 5000);
+
     $sessions_to_delete = $wpdb->get_col(
         $wpdb->prepare(
-            "SELECT DISTINCT session_id FROM {$table_name} WHERE timestamp < %s",
-            $cutoff_date
+            "SELECT DISTINCT session_id FROM {$transcripts_table} WHERE timestamp IS NOT NULL AND timestamp < %s LIMIT %d",
+            $cutoff_date,
+            $batch_cap
         )
     );
 
-    // Delete transcripts older than the cutoff date
-    $deleted = $wpdb->query(
+    if (empty($sessions_to_delete)) {
+        return;
+    }
+
+    $placeholders = implode(',', array_fill(0, count($sessions_to_delete), '%s'));
+
+    // phpcs:disable WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+    // $placeholders is a server-built list of literal "%s" tokens.
+    $deleted_transcripts = (int) $wpdb->query(
         $wpdb->prepare(
-            "DELETE FROM {$table_name} WHERE timestamp < %s",
-            $cutoff_date
+            "DELETE FROM {$transcripts_table} WHERE session_id IN ($placeholders)",
+            $sessions_to_delete
         )
     );
 
-    // Also delete any translations for the deleted sessions
-    if (!empty($sessions_to_delete) && $wpdb->get_var("SHOW TABLES LIKE '$translations_table'") === $translations_table) {
-        $placeholders = implode(',', array_fill(0, count($sessions_to_delete), '%s'));
+    if ($wpdb->get_var($wpdb->prepare("SHOW TABLES LIKE %s", $translations_table)) === $translations_table) {
         $wpdb->query(
             $wpdb->prepare(
                 "DELETE FROM {$translations_table} WHERE session_id IN ($placeholders)",
@@ -1581,10 +1656,18 @@ public function cleanup_old_transcripts() {
         );
     }
 
-    // Log the cleanup action
-    if ($deleted !== false && $deleted > 0) {
-        //error_log(sprintf('MXChat: Auto-deleted %d transcripts older than %d days', $deleted, $days));
+    if ($wpdb->get_var($wpdb->prepare("SHOW TABLES LIKE %s", $url_clicks_table)) === $url_clicks_table) {
+        $wpdb->query(
+            $wpdb->prepare(
+                "DELETE FROM {$url_clicks_table} WHERE session_id IN ($placeholders)",
+                $sessions_to_delete
+            )
+        );
     }
+    // phpcs:enable
+
+    update_option('mxchat_retention_last_swept_at', time(), false);
+    update_option('mxchat_retention_rows_last_deleted', $deleted_transcripts, false);
 }
 
 public function export_chat_transcripts() {
@@ -6398,6 +6481,14 @@ public function mxchat_transcripts_page_init() {
     );
 
     add_settings_field(
+        'mxchat_retention_days',
+        esc_html__('Custom Retention (Days)', 'mxchat'),
+        array($this, 'mxchat_retention_days_callback'),
+        'mxchat-transcripts',
+        'mxchat_transcripts_notification_section'
+    );
+
+    add_settings_field(
         'mxchat_auto_email_transcript',
         esc_html__('Auto-Email Full Transcript', 'mxchat'),
         array($this, 'mxchat_auto_email_transcript_callback'),
@@ -8234,6 +8325,11 @@ private function enqueue_page_specific_assets($current_page, $plugin_url, $versi
             wp_enqueue_style('mxchat-content-css', $plugin_url . 'css/admin-content.css', array('mxchat-admin-sidebar-css'), $version);
             // Load content page JavaScript
             wp_enqueue_script('mxchat-content-js', $plugin_url . 'js/mxchat-content.js', array('jquery'), $version, true);
+            break;
+
+        case 'mxchat-api-access':
+            // Shared sidebar styles — page handles its own tab switching inline.
+            wp_enqueue_style('mxchat-admin-sidebar-css', $plugin_url . 'css/admin-sidebar.css', array(), $version);
             break;
        default:
             wp_enqueue_script(

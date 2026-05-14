@@ -5,7 +5,7 @@ Tags: ai chatbot, chatgpt, woocommerce, customer support, content generation
 Requires at least: 5.0
 Tested up to: 6.9
 Requires PHP: 7.2
-Stable tag: 3.2.4
+Stable tag: 3.2.5
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -42,12 +42,13 @@ Extend the free plugin with these optional premium features:
 
 👉 [Visit our website to view all add-ons](https://mxchat.ai)
 
-## 🔥 What's New in Version 3.2.3
+## 🔥 What's New in Version 3.2.5
 
-- **NEW: Embedding Model Switch Protection** — Changing your embedding model when content is already embedded silently breaks similarity matching. MxChat now warns you with a confirmation dialog before the switch and surfaces a persistent admin notice until the mismatch is resolved, so you never accidentally corrupt your knowledge base.
-- **Richer Landing Pages** — The Landing Page Generator now plans more sections and writes substantially more copy per section by default, producing fuller, more conversion-ready pages out of the box.
-- **Full Width Fix for Block Themes** — "Full Width" landing pages now render edge-to-edge on Twenty Twenty-Two through Twenty Twenty-Five and other block themes that previously constrained content via theme.json.
-- **Cleaner Manual-Entry Citations** — Chat responses no longer leak internal `mxchat://` placeholder URLs when citing manually submitted knowledge entries.
+- **NEW: REST API** — Bearer-token-authenticated endpoints to read chat transcripts (`GET /wp-json/mxchat/v1/transcripts`), push content into the knowledge base (`POST /wp-json/mxchat/v1/knowledge`), and bulk-delete sessions (`DELETE /wp-json/mxchat/v1/transcripts`) from external tools — analytics dashboards, automations (n8n / Zapier / Make), data exports, GDPR right-to-erasure flows, custom RAG pipelines, or your own agents. Disabled by default; generate a token from the new **MxChat → API Access** admin page when you're ready to use it. Includes filters for date range, role, session, and "no-RAG-context" answers (perfect for finding gaps in your knowledge base).
+- **NEW: Redesigned chat-widget header** — A clean stroke-based X-close icon replaces the old minimize arrow, paired with a 3-dot kebab menu that opens a keyboard-accessible dropdown for future actions. Title, "AI Agent" pill, and 32×32 icon buttons sit on a single tidy baseline for a more modern, native feel.
+- **NEW: Download Transcript** — A new menu item in the chat header saves the conversation as a clean Markdown file with sender labels and a timestamp, replacing the old print-dialog flow. Toggleable from MxChat settings.
+- **NEW: Custom Transcript Retention** — Set any retention window from 1 to 3650 days under Transcripts settings; the daily cron sweep deletes older transcripts and cascades the delete to translations and URL-click tracking. Capped at 5000 sessions per run for large-site safety, with a new `mxchat_transcript_retention_days` filter for developer overrides.
+- **IMPROVED: Content Generator SEO** — Generated posts now write the SEO title to Rank Math, Yoast, and AIOSEO metadata, and inline `<img alt="...">` text is synced into each attachment's `_wp_attachment_image_alt` so the media library, schema markup, and SEO plugins all pick up the right alt text.
 
 ## Core Features That Set MxChat Apart
 
@@ -64,6 +65,7 @@ Extend the free plugin with these optional premium features:
 🟢 **AI Content Generator** – Create full blog posts and landing pages from a prompt with AI images, SEO metadata, real-time preview, and inline AI editing via chat
 🟢 **Image Generation** – OpenAI GPT Image and Google Imagen for visual content creation within chat conversations
 🟢 **Streaming Responses** – Real-time response streaming for OpenAI, Claude, and Grok models for the fastest possible chat experience
+🟢 **REST API** – Bearer-token endpoints to read transcripts, push knowledge, and bulk-delete sessions — wire MxChat into n8n, Zapier, analytics dashboards, GDPR workflows, or your own agents
 
 ## Choose from 100+ Premium AI Models
 Access the world's most advanced AI models based on your specific needs:
@@ -326,6 +328,14 @@ Yes. MxChat is available for free on the WordPress plugin repository with full A
 *(Note: Screenshots will be added in future updates)*
 
 == Changelog ==
+
+= 3.2.5 - May 11, 2026 =
+* New: REST API with bearer-token auth — `GET /wp-json/mxchat/v1/transcripts` (read), `POST /wp-json/mxchat/v1/knowledge` (push), `DELETE /wp-json/mxchat/v1/transcripts` (bulk-delete sessions with cascade to translations and URL-click tracking, capped at 1000 session_ids/call), plus a public `/health` endpoint; disabled by default, with constant-time token comparison and prepared statements throughout.
+* New: API Access admin page styled to match the rest of the MxChat admin UI — sidebar navigation, branded header, themed buttons, status pill, copy-to-clipboard on newly rotated tokens, and a "Last rotated" indicator.
+* New: Chat-widget header redesign — replaced the minimize arrow with a stroke-based X-close icon and a 3-dot kebab menu (keyboard-accessible dropdown), with refined alignment so the title, "AI Agent" pill, and equal-sized 32×32 icon buttons share a single 48px baseline.
+* New: **Download Transcript** menu item — saves a clean Markdown file of the conversation with sender labels and a timestamped header
+* New: Content Generator now writes Rank Math / Yoast / AIOSEO SEO-title meta and syncs each inline `<img alt="...">` into the attachment's `_wp_attachment_image_alt` postmeta, so SEO plugins, schema markup, and the media library see the alt text instead of only the inline body HTML.
+* New: Transcript retention — "Custom Retention (Days)" field (1–3650) under Transcripts settings; the daily cron sweep deletes older transcripts with cascade to translations and URL-click tracking, capped at 5000 sessions per run, with a new `mxchat_transcript_retention_days` filter for programmatic overrides.
 
 = 3.2.4 - May 3, 2026 =
 - Fixed: WooCommerce product Short Description Visual tab broken by a 404 on the Gutenberg meta-box script
@@ -974,8 +984,8 @@ Yes. MxChat is available for free on the WordPress plugin repository with full A
 
 == Upgrade Notice ==
 
-= 3.2.4 =
-Fixes the WooCommerce Short Description Visual editor and restores scroll-to-top of the user's last message on streaming replies.
+= 3.2.5 =
+Major release: REST API with bearer-token auth (transcripts read/delete, knowledge push, health), new API Access admin page, redesigned chat header with 3-dot menu and Download Transcript, SEO improvements to Content Generator (rank_math_title and image alt sync), and custom transcript retention (1–3650 days).
 
 == License & Warranty ==
 

@@ -1328,6 +1328,245 @@ $(document).on('keypress', '.chat-input', function(e) {
 });
 
     
+// Tags the chat-box transcript so the print stylesheet can target it,
+// and lazily initializes the header overflow menu for this bot if the
+// markup is present but not yet wired (covers dynamically-rendered widgets).
+// Idempotent; safe to call on every appended message.
+function mxchatEnsurePrintRoot(botId) {
+    var $chatBox = getElement(botId, 'chat-box');
+    if (!$chatBox || !$chatBox.length) return;
+    $chatBox.addClass('mxchat-conversation-print-root');
+    if (!$chatBox.attr('data-print-title')) {
+        var nowStr = new Date().toLocaleString();
+        var headerTitle = ((typeof mxchatChat !== 'undefined' && mxchatChat.print_header_title) || 'Chat transcript') + ' — ' + nowStr;
+        $chatBox.attr('data-print-title', headerTitle);
+    }
+    if (typeof mxchatInitHeaderMenu === 'function') {
+        mxchatInitHeaderMenu(botId);
+    }
+}
+
+// Builds the list of overflow-menu items for a given bot.
+// Adding a future item is one push to this array — do NOT hardcode "only download."
+function mxchatGetHeaderMenuItems(botId) {
+    var items = [];
+    var settings = (typeof mxchatChat !== 'undefined') ? mxchatChat : {};
+
+    // The `print_button_*` keys still gate this item for back-compat with
+    // existing user options. The action is now a transcript download, not print.
+    if (settings.print_button_enabled === 'on') {
+        items.push({
+            id: 'download-transcript',
+            label: settings.print_button_label || 'Download Transcript',
+            icon: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>',
+            action: function() {
+                mxchatDownloadTranscript(botId);
+            }
+        });
+    }
+
+    return items;
+}
+
+// Builds a clean markdown transcript of the current conversation and triggers
+// a file download. Used by the "Download Transcript" menu item.
+function mxchatDownloadTranscript(botId) {
+    var $chatBox = getElement(botId, 'chat-box');
+    if (!$chatBox || !$chatBox.length) return;
+
+    var settings = (typeof mxchatChat !== 'undefined') ? mxchatChat : {};
+    var headerTitle = settings.print_header_title || 'Chat transcript';
+    var now = new Date();
+    var stamp = now.toLocaleString();
+
+    var lines = [];
+    lines.push('# ' + headerTitle);
+    lines.push('');
+    lines.push('Exported: ' + stamp);
+    lines.push('');
+    lines.push('---');
+    lines.push('');
+
+    $chatBox.find('.user-message, .bot-message, .agent-message').each(function() {
+        var $msg = $(this);
+        // Skip thinking placeholders and any in-flight temporary messages.
+        if ($msg.find('.thinking-dots').length) return;
+        if ($msg.hasClass('temporary-message')) return;
+
+        var sender;
+        if ($msg.hasClass('user-message')) sender = 'User';
+        else if ($msg.hasClass('agent-message')) sender = 'Live Agent';
+        else sender = 'AI Agent';
+
+        // Strip interactive UI from the cloned message so we get the conversation text.
+        var $clone = $msg.clone();
+        $clone.find('.copy-button, .message-toolbar, .mxchat-copy, button, script, style').remove();
+        var text = $clone.text().replace(/ /g, ' ').replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
+        if (!text) return;
+
+        lines.push('**' + sender + '**');
+        lines.push('');
+        lines.push(text);
+        lines.push('');
+    });
+
+    var content = lines.join('\n');
+    var iso = now.toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    var fname = 'mxchat-transcript-' + iso + '.md';
+    var blob = new Blob([content], { type: 'text/markdown;charset=utf-8' });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url;
+    a.download = fname;
+    a.style.display = 'none';
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(function() {
+        if (a.parentNode) a.parentNode.removeChild(a);
+        URL.revokeObjectURL(url);
+    }, 100);
+}
+
+// Reads the bot bubble's actual computed bg+fg and writes them as CSS vars
+// on the menu wrap, so the dropdown matches whatever paints the bubble —
+// saved options, AI theme CSS, or the mxchat-theme add-on.
+function mxchatSyncMenuColors(botId, $wrap) {
+    if (!$wrap || !$wrap.length) return;
+    var $bot = $wrap.closest('.mxchat-chatbot-wrapper').find('.bot-message').not('.temporary-message').first();
+    if (!$bot.length) return;
+    var cs = window.getComputedStyle($bot[0]);
+    if (cs.backgroundColor && cs.backgroundColor !== 'rgba(0, 0, 0, 0)' && cs.backgroundColor !== 'transparent') {
+        $wrap[0].style.setProperty('--mxchat-menu-bg', cs.backgroundColor);
+    }
+    // Bot text color usually lives on a child div, not .bot-message itself.
+    var $textChild = $bot.find('[style*="color"]').first();
+    var fg = ($textChild.length ? window.getComputedStyle($textChild[0]).color : cs.color);
+    if (fg) $wrap[0].style.setProperty('--mxchat-menu-fg', fg);
+}
+
+// One-time per-widget init: renders menu items, wires open/close,
+// outside-click, Escape, and arrow-key navigation. If no items, hides the trigger.
+function mxchatInitHeaderMenu(botId) {
+    var $wrap = $('.mxchat-header-menu-wrap[data-bot-id="' + botId + '"]').first();
+    if (!$wrap.length || $wrap.data('mxchatMenuReady')) return;
+
+    var $trigger = $wrap.find('.mxchat-menu-trigger');
+    var $menu = $wrap.find('.mxchat-header-menu');
+    var items = mxchatGetHeaderMenuItems(botId);
+
+    // Initial color sync — covers normal page load.
+    mxchatSyncMenuColors(botId, $wrap);
+
+    if (!items.length) {
+        $trigger.hide();
+        $menu.hide();
+        $wrap.data('mxchatMenuReady', true);
+        return;
+    }
+
+    // Build the menu items.
+    $menu.empty();
+    items.forEach(function(item, idx) {
+        var $btn = $('<button>', {
+            type: 'button',
+            'class': 'mxchat-menu-item',
+            'role': 'menuitem',
+            'tabindex': '-1',
+            'data-menu-id': item.id,
+            html: '<span class="mxchat-menu-item-icon">' + item.icon + '</span>' +
+                  '<span class="mxchat-menu-item-label"></span>'
+        });
+        $btn.find('.mxchat-menu-item-label').text(item.label);
+        $btn.on('click', function(e) {
+            e.preventDefault();
+            e.stopPropagation();
+            closeMenu();
+            try { item.action(); } catch (err) { /* no-op */ }
+        });
+        $menu.append($btn);
+    });
+
+    function openMenu() {
+        // Re-sync each open in case the active theme changed since init.
+        mxchatSyncMenuColors(botId, $wrap);
+        $menu.prop('hidden', false).attr('aria-hidden', 'false').addClass('is-open');
+        $trigger.attr('aria-expanded', 'true');
+        // Focus the first item for keyboard users
+        setTimeout(function() {
+            $menu.find('.mxchat-menu-item').first().attr('tabindex', '0').trigger('focus');
+        }, 0);
+    }
+    function closeMenu(returnFocus) {
+        $menu.prop('hidden', true).attr('aria-hidden', 'true').removeClass('is-open');
+        $trigger.attr('aria-expanded', 'false');
+        $menu.find('.mxchat-menu-item').attr('tabindex', '-1');
+        if (returnFocus) $trigger.trigger('focus');
+    }
+
+    // Toggle on trigger click — stop propagation so the .chatbot-top-bar
+    // click-to-collapse handler does not fire.
+    $trigger.on('click', function(e) {
+        e.preventDefault();
+        e.stopPropagation();
+        if ($menu.hasClass('is-open')) closeMenu();
+        else openMenu();
+    });
+
+    // Don't let clicks inside the menu bubble to the top-bar collapse handler.
+    $menu.on('click', function(e) {
+        e.stopPropagation();
+    });
+
+    // Outside click closes the menu.
+    $(document).on('click.mxchatMenu-' + botId, function(e) {
+        if (!$menu.hasClass('is-open')) return;
+        if ($wrap.has(e.target).length || $wrap.is(e.target)) return;
+        closeMenu();
+    });
+
+    // Keyboard: Escape closes and returns focus; arrow keys move focus; Enter activates.
+    $menu.on('keydown', '.mxchat-menu-item', function(e) {
+        var $items = $menu.find('.mxchat-menu-item');
+        var idx = $items.index(this);
+        if (e.key === 'Escape') {
+            e.preventDefault();
+            closeMenu(true);
+        } else if (e.key === 'ArrowDown') {
+            e.preventDefault();
+            var $next = $items.eq((idx + 1) % $items.length);
+            $items.attr('tabindex', '-1');
+            $next.attr('tabindex', '0').trigger('focus');
+        } else if (e.key === 'ArrowUp') {
+            e.preventDefault();
+            var $prev = $items.eq((idx - 1 + $items.length) % $items.length);
+            $items.attr('tabindex', '-1');
+            $prev.attr('tabindex', '0').trigger('focus');
+        } else if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            $(this).trigger('click');
+        }
+    });
+    $trigger.on('keydown', function(e) {
+        if (e.key === 'Escape' && $menu.hasClass('is-open')) {
+            e.preventDefault();
+            closeMenu(true);
+        } else if ((e.key === 'ArrowDown' || e.key === 'Enter' || e.key === ' ') && !$menu.hasClass('is-open')) {
+            e.preventDefault();
+            openMenu();
+        }
+    });
+
+    $wrap.data('mxchatMenuReady', true);
+}
+
+// Initialize header menus for every rendered widget on DOM ready.
+$(function() {
+    $('.mxchat-header-menu-wrap').each(function() {
+        var botId = $(this).data('bot-id');
+        if (botId) mxchatInitHeaderMenu(botId);
+    });
+});
+
 function appendMessage(sender, messageText = '', messageHtml = '', images = [], isTemporary = false, botId = 'default') {
     try {
         // Determine styles based on sender type
@@ -1420,6 +1659,10 @@ function appendMessage(sender, messageText = '', messageHtml = '', images = [], 
                 if (lastUserMessage.length) {
                     scrollElementToTop(lastUserMessage, botId);
                 }
+            }
+
+            if ((sender === "bot" || sender === "agent") && !isTemporary) {
+                mxchatEnsurePrintRoot(botId);
             }
         });
 
@@ -1569,6 +1812,10 @@ function replaceLastMessage(sender, responseText, responseHtml = '', images = []
 
         // Re-enable chat input after response is displayed
         enableChatInput(botId);
+
+        if (sender === "bot" || sender === "agent") {
+            mxchatEnsurePrintRoot(botId);
+        }
     } else {
         appendMessage(sender, responseText, responseHtml, images, false, botId);
         // Re-enable chat input after response is displayed

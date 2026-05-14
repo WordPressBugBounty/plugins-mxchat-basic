@@ -512,6 +512,12 @@ class MxChat_Content_Generator {
             update_post_meta($post_id, '_mxchat_image_ids', $image_ids);
         }
 
+        // Sync the inline `<img alt="...">` text from the generated body HTML
+        // into each attachment's _wp_attachment_image_alt postmeta so RankMath,
+        // schema markup, and the media library all see the alt text — not just
+        // the inline body HTML. (plan-mxchat-20260510-2be2da)
+        $this->sync_image_alts_from_content($full_content, $image_urls);
+
         // Apply fullwidth/title settings via theme-specific post meta
         $this->apply_layout_settings($post_id, $layout, $title_display);
 
@@ -2143,6 +2149,75 @@ article .entry-content,
 
         $this->set_meta_description($post_id, $meta_description);
         $this->set_focus_keyword($post_id, !empty($focus_keyword) ? $focus_keyword : $keywords_string);
+        $this->set_seo_title($post_id, $plan['title'] ?? '');
+    }
+
+    /**
+     * Write the SEO title to the active SEO plugin's title postmeta so
+     * RankMath / Yoast / AIOSEO don't fall back to the bare post_title.
+     * (plan-mxchat-20260510-b89332)
+     *
+     * v1: use the generated post_title as the SEO title. A future plan may
+     * add a separately-generated 50-58 char SEO-optimized title.
+     */
+    private function set_seo_title($post_id, $title) {
+        $title = sanitize_text_field($title);
+        if (empty($title)) {
+            return;
+        }
+        $plugin = $this->get_seo_plugin();
+        $keys = array(
+            'rankmath' => 'rank_math_title',
+            'yoast'    => '_yoast_wpseo_title',
+            'aioseo'   => '_aioseo_title',
+        );
+        if (isset($keys[$plugin])) {
+            update_post_meta($post_id, $keys[$plugin], $title);
+        }
+    }
+
+    /**
+     * Walk the rendered body HTML and copy the inline `<img alt="...">` text
+     * for each generated image into its attachment's _wp_attachment_image_alt
+     * postmeta. Matches inline images to attachments by URL.
+     * (plan-mxchat-20260510-2be2da)
+     */
+    private function sync_image_alts_from_content($content, $image_urls) {
+        if (empty($content) || empty($image_urls)) {
+            return;
+        }
+
+        // Build a url => attachment_id lookup for fast matching.
+        $by_url = array();
+        foreach ($image_urls as $img) {
+            if (!empty($img['url']) && !empty($img['attachment_id'])) {
+                $by_url[$img['url']] = (int) $img['attachment_id'];
+            }
+        }
+        if (empty($by_url)) {
+            return;
+        }
+
+        if (!preg_match_all('/<img\b[^>]*>/i', $content, $matches)) {
+            return;
+        }
+
+        foreach ($matches[0] as $img_tag) {
+            if (!preg_match('/\bsrc\s*=\s*"([^"]+)"/i', $img_tag, $src_match)) {
+                continue;
+            }
+            $src = html_entity_decode($src_match[1], ENT_QUOTES);
+            if (!isset($by_url[$src])) {
+                continue;
+            }
+            if (!preg_match('/\balt\s*=\s*"([^"]*)"/i', $img_tag, $alt_match)) {
+                continue;
+            }
+            $alt = sanitize_text_field(html_entity_decode($alt_match[1], ENT_QUOTES));
+            if ($alt !== '') {
+                update_post_meta($by_url[$src], '_wp_attachment_image_alt', $alt);
+            }
+        }
     }
 
     // ─── AI Model Caller ────────────────────────────────────────────────

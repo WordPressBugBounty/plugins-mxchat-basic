@@ -3,7 +3,7 @@
  * Plugin Name: MxChat
  * Plugin URI: https://mxchat.ai/
  * Description: AI chatbot for WordPress with OpenAI, Claude, xAI, DeepSeek, live agent, PDF uploads, WooCommerce, and training on website data.
- * Version: 3.2.4
+ * Version: 3.2.5
  * Author: MxChat
  * Author URI: https://mxchat.ai
  * License: GPLv2 or later
@@ -263,6 +263,7 @@ function mxchat_include_classes() {
         'includes/class-mxchat-chunker.php',
         'includes/class-mxchat-word-handler.php',
         'includes/class-mxchat-content-generator.php',
+        'includes/class-rest-api.php',
         'admin/class-ajax-handler.php',
         'admin/class-pinecone-manager.php',
         'admin/class-knowledge-manager.php'
@@ -274,6 +275,14 @@ function mxchat_include_classes() {
             require_once $file_path;
         } else {
             //error_log('MxChat: Missing class file - ' . $file);
+        }
+    }
+
+    // Admin pages that aren't classes (procedural include).
+    if (is_admin()) {
+        $admin_api_page = plugin_dir_path(__FILE__) . 'includes/admin-api-page.php';
+        if (file_exists($admin_api_page)) {
+            require_once $admin_api_page;
         }
     }
 }
@@ -977,11 +986,12 @@ function mxchat_setup_cron_jobs() {
         delete_option('mxchat_use_fallback_rate_limits');
     }
     
-    // Schedule transcript cleanup if configured
+    // Schedule transcript cleanup if configured (bucket dropdown OR custom retention-days > 0)
     $transcript_options = get_option('mxchat_transcripts_options', array());
     $cleanup_interval = isset($transcript_options['mxchat_auto_delete_transcripts']) ? $transcript_options['mxchat_auto_delete_transcripts'] : 'never';
-    
-    if ($cleanup_interval !== 'never') {
+    $custom_retention = isset($transcript_options['mxchat_retention_days']) ? (int) $transcript_options['mxchat_retention_days'] : 0;
+
+    if ($cleanup_interval !== 'never' || $custom_retention > 0) {
         // Check if not already scheduled
         if (!wp_next_scheduled('mxchat_cleanup_old_transcripts')) {
             // Schedule to run daily at 3 AM
@@ -1347,6 +1357,14 @@ function mxchat_init() {
         // for frontend CSS injection, plus wp_ajax_ hooks for admin.
         if (class_exists('MxChat_Content_Generator')) {
             new MxChat_Content_Generator();
+        }
+
+        // Initialize REST API globally — endpoints must be registered on
+        // every request (admin and frontend) so they're reachable via /wp-json/.
+        // Endpoints are auth-gated and locked until the site owner generates
+        // a token in MxChat → API Access.
+        if (class_exists('MxChat_Rest_Api')) {
+            new MxChat_Rest_Api();
         }
 
         // Initialize public classes
