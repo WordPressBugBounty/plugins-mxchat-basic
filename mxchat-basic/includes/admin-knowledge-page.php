@@ -1247,6 +1247,17 @@ function mxchat_render_auto_sync_section($knowledge_manager) {
                     </div>
                 </div>
 
+                <div class="mxch-field" style="margin-top: 24px; padding-top: 20px; border-top: 1px solid var(--mxch-card-border);">
+                    <div style="display: flex; align-items: center; gap: 12px;">
+                        <label class="mxchat-toggle-switch">
+                            <input type="checkbox" name="mxchat_auto_sync_acf_pdfs" class="mxchat-autosave-field" value="1" data-nonce="<?php echo wp_create_nonce('mxchat_prompts_setting_nonce'); ?>" <?php checked(get_option('mxchat_auto_sync_acf_pdfs', '0'), '1'); ?>>
+                            <span class="mxchat-toggle-slider"></span>
+                        </label>
+                        <span style="font-weight: 500;"><?php esc_html_e('Extract text from PDFs in ACF fields on save', 'mxchat'); ?></span>
+                    </div>
+                    <p class="mxch-field-description" style="margin-top: 8px;"><?php esc_html_e('When ON, editor saves re-extract every PDF referenced in ACF fields. Default OFF — saves stay fast and don\'t re-parse the same PDFs on every edit. The manual content selector has its own per-batch checkbox; this setting only controls the auto-sync path.', 'mxchat'); ?></p>
+                </div>
+
                 <div style="margin-top: 24px;">
                     <button id="mxchat-custom-post-types-toggle" class="mxch-btn mxch-btn-secondary">
                         <?php esc_html_e('Advanced Custom Post Sync Settings', 'mxchat'); ?>
@@ -1766,6 +1777,13 @@ function mxchat_render_content_selector_modal() {
             </div>
             <div class="mxchat-kb-modal-footer">
                 <div class="mxchat-kb-pagination"></div>
+                <div class="mxchat-kb-acf-pdf-option" style="display:flex; align-items:flex-start; gap:8px; padding:8px 0; font-size:12px; color: var(--mxch-text-secondary, #64748b);">
+                    <input type="checkbox" id="mxchat-kb-acf-pdf-extract" style="margin-top:2px;">
+                    <label for="mxchat-kb-acf-pdf-extract" style="cursor:pointer; line-height:1.4;">
+                        <strong style="color: var(--mxch-text-primary, #1a1a2e);"><?php esc_html_e('Also extract text from PDFs linked in ACF File/Image fields', 'mxchat'); ?></strong><br>
+                        <span><?php esc_html_e('Adds 200-500ms per post and ~30 KB to each KB entry. Recommended only if your ACF setup uses PDF attachments for primary content.', 'mxchat'); ?></span>
+                    </label>
+                </div>
                 <div class="mxchat-kb-footer-actions">
                     <button type="button" id="mxchat-kb-process-selected" class="mxchat-kb-button-primary" disabled>
                         <?php esc_html_e('Process Selected Content', 'mxchat'); ?>

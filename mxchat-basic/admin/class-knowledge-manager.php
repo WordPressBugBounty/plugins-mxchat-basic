@@ -3483,7 +3483,20 @@ public function ajax_mxchat_process_selected_content() {
     
     //  Get bot_id from request
     $bot_id = isset($_POST['bot_id']) ? sanitize_key($_POST['bot_id']) : 'default';
-    
+
+    // ACF→PDF extraction is opt-in per import batch. Persist the last-used value so users
+    // don't re-check on every batch; the default is OFF for installs that haven't set it.
+    $extract_acf_pdfs = !empty($_POST['extract_acf_pdfs']) && $_POST['extract_acf_pdfs'] !== 'false';
+    $mxchat_options = get_option('mxchat_options', array());
+    if (!is_array($mxchat_options)) {
+        $mxchat_options = array();
+    }
+    $prior_default = !empty($mxchat_options['acf_pdf_extract_default']);
+    if ($prior_default !== $extract_acf_pdfs) {
+        $mxchat_options['acf_pdf_extract_default'] = $extract_acf_pdfs ? 1 : 0;
+        update_option('mxchat_options', $mxchat_options);
+    }
+
     // Process only ONE post at a time to avoid request size issues
     $post_id = reset($post_ids);
     $post = get_post($post_id);
@@ -3591,20 +3604,54 @@ public function ajax_mxchat_process_selected_content() {
 
     // ADD ACF FIELDS SUPPORT
     $acf_fields = $this->mxchat_get_acf_fields_for_post($post_id);
+    $pdf_extracted_count = 0;
     if (!empty($acf_fields)) {
         $acf_content_parts = array();
-        
+        $pdf_attachment_ids = array();
+
         foreach ($acf_fields as $field_name => $field_value) {
             $formatted_value = $this->mxchat_format_acf_field_value($field_value, $field_name, $post_id);
-            
+
             if (!empty($formatted_value)) {
                 $field_label = ucwords(str_replace('_', ' ', $field_name));
                 $acf_content_parts[] = $field_label . ": " . $formatted_value;
             }
+
+            // Walk this field's value tree for any PDF attachment references and queue them for extraction.
+            // Only when the user opted into ACF→PDF extraction for this batch; otherwise the ACF text
+            // still lands in the KB but the heavier PDF parsing is skipped.
+            if ($extract_acf_pdfs) {
+                $this->mxchat_collect_pdf_attachment_ids_from_acf_value($field_value, $pdf_attachment_ids);
+            }
         }
-        
+
         if (!empty($acf_content_parts)) {
             $content .= "\n\n" . implode("\n", $acf_content_parts);
+        }
+
+        // Extract text from each unique PDF found in ACF fields and append as a labeled section
+        if ($extract_acf_pdfs && !empty($pdf_attachment_ids)) {
+            $pdf_attachment_ids = array_unique(array_filter(array_map('intval', $pdf_attachment_ids)));
+            $pdf_sections = array();
+            foreach ($pdf_attachment_ids as $att_id) {
+                $pdf_text = $this->mxchat_extract_pdf_text_by_attachment_id($att_id);
+                if (!empty($pdf_text)) {
+                    $pdf_title = get_the_title($att_id);
+                    $pdf_url = wp_get_attachment_url($att_id);
+                    $header = 'PDF Attachment';
+                    if (!empty($pdf_title)) {
+                        $header .= ': ' . $pdf_title;
+                    }
+                    if (!empty($pdf_url)) {
+                        $header .= ' (' . $pdf_url . ')';
+                    }
+                    $pdf_sections[] = $header . "\n" . $pdf_text;
+                    $pdf_extracted_count++;
+                }
+            }
+            if (!empty($pdf_sections)) {
+                $content .= "\n\nAttached PDFs:\n" . implode("\n\n", $pdf_sections);
+            }
         }
     }
 
@@ -3737,6 +3784,7 @@ public function ajax_mxchat_process_selected_content() {
         'operation_type' => $operation_type,
         'vector_id' => $vector_id,
         'acf_fields_found' => $acf_field_count,
+        'pdf_extracted_count' => (int) $pdf_extracted_count,
         'content_preview' => substr($content, 0, 100) . '...',
         'bot_id' => $bot_id
     ));
@@ -5073,6 +5121,195 @@ private function mxchat_extract_text_from_acf_array($array) {
 }
 
 /**
+ * Walk an ACF field value tree and collect attachment IDs for any value that
+ * resolves to a PDF in the WordPress media library. Handles the three shapes
+ * ACF returns for File/Image/URL fields (array with ID+url, integer attachment ID,
+ * plain URL string), and recurses through repeater/group/flexible content.
+ *
+ * @param mixed $value      The ACF field value (any depth)
+ * @param array $out        Accumulator (passed by reference) for attachment IDs
+ * @param int   $depth      Recursion guard
+ */
+private function mxchat_collect_pdf_attachment_ids_from_acf_value($value, &$out, $depth = 0) {
+    if ($depth > 6) {
+        return; // prevent runaway recursion on circular/very-deep structures
+    }
+
+    if (empty($value)) {
+        return;
+    }
+
+    // Array shapes: ACF File/Image return value=array; repeaters/groups are arrays of arrays
+    if (is_array($value)) {
+        // Direct File/Image-style array (has 'url' and usually 'ID' + 'mime_type')
+        $looks_like_attachment = isset($value['url']) || isset($value['ID']) || isset($value['id']);
+        if ($looks_like_attachment) {
+            $att_id = 0;
+            if (!empty($value['ID']) && is_numeric($value['ID'])) {
+                $att_id = (int) $value['ID'];
+            } elseif (!empty($value['id']) && is_numeric($value['id'])) {
+                $att_id = (int) $value['id'];
+            } elseif (!empty($value['url']) && is_string($value['url'])) {
+                $att_id = (int) attachment_url_to_postid($value['url']);
+            }
+
+            $is_pdf = false;
+            if (!empty($value['mime_type']) && $value['mime_type'] === 'application/pdf') {
+                $is_pdf = true;
+            } elseif (!empty($value['subtype']) && strtolower((string) $value['subtype']) === 'pdf') {
+                $is_pdf = true;
+            } elseif (!empty($value['url']) && is_string($value['url']) && $this->mxchat_url_looks_like_pdf($value['url'])) {
+                $is_pdf = true;
+            } elseif ($att_id && get_post_mime_type($att_id) === 'application/pdf') {
+                $is_pdf = true;
+            }
+
+            if ($is_pdf && $att_id && get_post_mime_type($att_id) === 'application/pdf') {
+                $out[] = $att_id;
+            }
+            // An array node that represents one attachment doesn't contain other
+            // attachments inside it — done with this branch.
+            return;
+        }
+
+        // Recurse: repeater rows, flexible-content layouts, groups, etc.
+        foreach ($value as $sub) {
+            $this->mxchat_collect_pdf_attachment_ids_from_acf_value($sub, $out, $depth + 1);
+        }
+        return;
+    }
+
+    // Plain numeric attachment ID (ACF File field set to "Return: ID")
+    if (is_numeric($value)) {
+        $att_id = (int) $value;
+        if ($att_id > 0 && get_post_mime_type($att_id) === 'application/pdf') {
+            $out[] = $att_id;
+        }
+        return;
+    }
+
+    // Plain string — URL pointing at a PDF (ACF File field set to "Return: URL", or a custom URL/text field)
+    if (is_string($value)) {
+        $trimmed = trim($value);
+        if ($trimmed !== '' && $this->mxchat_url_looks_like_pdf($trimmed)) {
+            $att_id = (int) attachment_url_to_postid($trimmed);
+            if ($att_id > 0 && get_post_mime_type($att_id) === 'application/pdf') {
+                $out[] = $att_id;
+            }
+        }
+        return;
+    }
+}
+
+/**
+ * Heuristic: does this URL/string look like a PDF reference?
+ * Tolerates query strings and fragments (#page=2).
+ */
+private function mxchat_url_looks_like_pdf($url) {
+    if (!is_string($url) || $url === '') {
+        return false;
+    }
+    // Strip query + fragment before checking extension
+    $path = preg_replace('/[?#].*$/', '', $url);
+    return (bool) preg_match('/\.pdf$/i', $path);
+}
+
+/**
+ * Extract text from a PDF attachment by ID using the bundled Smalot parser.
+ * Reads the file directly from disk via get_attached_file (no HTTP fetch).
+ * Result is cached on the attachment as post_meta keyed by file mtime so we
+ * only parse the same PDF once unless the file changes on disk.
+ *
+ * @param int $attachment_id
+ * @return string Extracted plain text, or '' on failure.
+ */
+private function mxchat_extract_pdf_text_by_attachment_id($attachment_id) {
+    $attachment_id = (int) $attachment_id;
+    if ($attachment_id <= 0) {
+        return '';
+    }
+    if (get_post_mime_type($attachment_id) !== 'application/pdf') {
+        return '';
+    }
+
+    $pdf_path = get_attached_file($attachment_id);
+    if (empty($pdf_path) || !file_exists($pdf_path) || !is_readable($pdf_path)) {
+        return '';
+    }
+
+    // Raw-file size cap. Parsing very large PDFs can OOM the request; skip with a log entry
+    // and let the rest of the ACF content land in the KB. Filterable for users who need it bigger.
+    $default_max_bytes = 25 * 1024 * 1024;
+    $max_bytes = (int) apply_filters('mxchat_acf_pdf_max_bytes', $default_max_bytes, $attachment_id, $pdf_path);
+    if ($max_bytes > 0) {
+        $file_size = @filesize($pdf_path);
+        if ($file_size !== false && $file_size > $max_bytes) {
+            error_log(sprintf(
+                '[mxchat] ACF PDF skipped (over size cap): attachment %d "%s" %d bytes > cap %d',
+                $attachment_id,
+                basename($pdf_path),
+                $file_size,
+                $max_bytes
+            ));
+            return '';
+        }
+    }
+
+    $mtime = @filemtime($pdf_path);
+    $cache_meta_key = '_mxchat_acf_pdf_text_v1';
+    $cached = get_post_meta($attachment_id, $cache_meta_key, true);
+    if (is_array($cached) && isset($cached['mtime'], $cached['text']) && (int) $cached['mtime'] === (int) $mtime) {
+        return (string) $cached['text'];
+    }
+
+    $text = '';
+    try {
+        if (function_exists('mxchat_load_pdf_parser')) {
+            mxchat_load_pdf_parser();
+        }
+        if (!class_exists('\\Smalot\\PdfParser\\Parser')) {
+            return '';
+        }
+        $parser = new \Smalot\PdfParser\Parser();
+        $pdf = $parser->parseFile($pdf_path);
+        $pages = $pdf->getPages();
+        $page_texts = array();
+        foreach ($pages as $page) {
+            $page_text = '';
+            try {
+                $page_text = $page->getText();
+            } catch (\Exception $e) {
+                $page_text = '';
+            }
+            if (!empty($page_text)) {
+                $page_texts[] = $page_text;
+            }
+        }
+        $text = trim(implode("\n\n", $page_texts));
+    } catch (\Exception $e) {
+        error_log('[mxchat] ACF PDF extraction failed for attachment ' . $attachment_id . ': ' . $e->getMessage());
+        return '';
+    } catch (\Throwable $e) {
+        error_log('[mxchat] ACF PDF extraction error for attachment ' . $attachment_id . ': ' . $e->getMessage());
+        return '';
+    }
+
+    // Cap per-PDF text to avoid blowing up the embedding payload on enormous PDFs.
+    // The chunker downstream will still split this into multiple vectors.
+    $max_len = (int) apply_filters('mxchat_acf_pdf_text_max_length', 50000);
+    if ($max_len > 0 && strlen($text) > $max_len) {
+        $text = substr($text, 0, $max_len);
+    }
+
+    update_post_meta($attachment_id, $cache_meta_key, array(
+        'mtime' => (int) $mtime,
+        'text'  => $text,
+    ));
+
+    return $text;
+}
+
+/**
  * Handle ACF save - fires after ACF fields are saved
  * This ensures ACF field data is available when syncing to knowledge base
  */
@@ -5317,6 +5554,7 @@ public function mxchat_handle_post_update($post_id, $post, $update) {
         $acf_fields = $this->mxchat_get_acf_fields_for_post($post_id);
         if (!empty($acf_fields)) {
             $acf_content_parts = array();
+            $pdf_attachment_ids = array();
 
             foreach ($acf_fields as $field_name => $field_value) {
                 $formatted_value = $this->mxchat_format_acf_field_value($field_value, $field_name, $post_id);
@@ -5325,10 +5563,41 @@ public function mxchat_handle_post_update($post_id, $post, $update) {
                     $field_label = ucwords(str_replace(['_', '-'], ' ', $field_name));
                     $acf_content_parts[] = $field_label . ": " . $formatted_value;
                 }
+
+                $this->mxchat_collect_pdf_attachment_ids_from_acf_value($field_value, $pdf_attachment_ids);
             }
 
             if (!empty($acf_content_parts)) {
                 $final_content .= "\n\n" . implode("\n", $acf_content_parts);
+            }
+
+            // Gate the auto-sync PDF-extraction loop behind an opt-in option.
+            // Mirrors the per-batch checkbox the manual content selector has; the
+            // 25 MB size cap lives in the shared extractor so it applies in both
+            // paths regardless. Default OFF — re-parsing every ACF PDF on every
+            // editor save is expensive and most sites don't want it.
+            $autosync_extract_acf_pdfs = get_option('mxchat_auto_sync_acf_pdfs', '0') === '1';
+            if ($autosync_extract_acf_pdfs && !empty($pdf_attachment_ids)) {
+                $pdf_attachment_ids = array_unique(array_filter(array_map('intval', $pdf_attachment_ids)));
+                $pdf_sections = array();
+                foreach ($pdf_attachment_ids as $att_id) {
+                    $pdf_text = $this->mxchat_extract_pdf_text_by_attachment_id($att_id);
+                    if (!empty($pdf_text)) {
+                        $pdf_title = get_the_title($att_id);
+                        $pdf_url = wp_get_attachment_url($att_id);
+                        $header = 'PDF Attachment';
+                        if (!empty($pdf_title)) {
+                            $header .= ': ' . $pdf_title;
+                        }
+                        if (!empty($pdf_url)) {
+                            $header .= ' (' . $pdf_url . ')';
+                        }
+                        $pdf_sections[] = $header . "\n" . $pdf_text;
+                    }
+                }
+                if (!empty($pdf_sections)) {
+                    $final_content .= "\n\nAttached PDFs:\n" . implode("\n\n", $pdf_sections);
+                }
             }
         }
 

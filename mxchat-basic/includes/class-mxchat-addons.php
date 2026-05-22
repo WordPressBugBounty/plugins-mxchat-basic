@@ -19,6 +19,45 @@ class MxChat_Addons {
     public function __construct() {
         $this->addons_config = array(
 
+            'mxchat-mcp' => array(
+                'title' => __('MxChat MCP Server', 'mxchat'),
+                'sidebar_title' => __('MCP Server', 'mxchat'),
+                'description' => __('Turn your MxChat install into a Model Context Protocol server so Claude, ChatGPT, and Claude Code can list transcripts, push knowledge, and inspect bots directly — no per-message fees, no middleman API.', 'mxchat'),
+                'key_benefits' => array(
+                    __('JSON-RPC 2.0 MCP endpoint with OAuth + bearer auth', 'mxchat'),
+                    __('One-click connect snippets for Claude Code, ChatGPT, mcp-inspector', 'mxchat'),
+                    __('WooCommerce-aware tools: products, orders, customers', 'mxchat')
+                ),
+                'license' => 'MxChat PRO',
+                'accent' => '#7873f5',
+                'url' => 'https://mxchat.ai/add-ons/mxchat-mcp/',
+                'download_url' => 'https://mxchat.ai/add-ons/mxchat-mcp/',
+                'plugin_file' => 'mxchat-mcp/mxchat-mcp.php',
+                'config_page' => 'mxchat-mcp',
+                'hero_features' => array(
+                    array(
+                        'icon' => '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>',
+                        'title' => __('Open Protocol', 'mxchat'),
+                        'desc' => __('Standards-based MCP over Streamable HTTP', 'mxchat'),
+                    ),
+                    array(
+                        'icon' => '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>',
+                        'title' => __('OAuth + Bearer', 'mxchat'),
+                        'desc' => __('Reuses your MxChat REST token', 'mxchat'),
+                    ),
+                    array(
+                        'icon' => '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>',
+                        'title' => __('Chatbot Ops Tools', 'mxchat'),
+                        'desc' => __('Transcripts, knowledge, bots, search', 'mxchat'),
+                    ),
+                    array(
+                        'icon' => '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="21" r="1"/><circle cx="20" cy="21" r="1"/><path d="M1 1h4l2.68 13.39a2 2 0 0 0 2 1.61h9.72a2 2 0 0 0 2-1.61L23 6H6"/></svg>',
+                        'title' => __('WooCommerce Aware', 'mxchat'),
+                        'desc' => __('Products, orders, customer lookups', 'mxchat'),
+                    ),
+                ),
+            ),
+
             'mxchat-advanced-content' => array(
                 'title' => __('MxChat Advanced Content Editor', 'mxchat'),
                 'sidebar_title' => __('Content Gen.', 'mxchat'),
@@ -30,8 +69,8 @@ class MxChat_Addons {
                 ),
                 'license' => 'MxChat PRO',
                 'accent' => '#6366f1',
-                'url' => 'https://mxchat.ai/documentation-bot/',
-                'download_url' => 'https://mxchat.ai/advanced-content-editor/',
+                'url' => 'https://mxchat.ai/add-ons/mxchat-advanced-content/',
+                'download_url' => 'https://mxchat.ai/add-ons/mxchat-advanced-content/',
                 'plugin_file' => 'mxchat-advanced-content/mxchat-advanced-content.php',
                 'config_page' => 'mxchat-content',
                 'hero_features' => array(
@@ -68,7 +107,7 @@ class MxChat_Addons {
                 ),
                 'license' => 'MxChat PRO',
                 'accent' => '#fa73e6',
-                'url' => 'https://mxchat.ai/ai-theme-customizer/',
+                'url' => 'https://mxchat.ai/add-ons/mxchat-theme/',
                 'plugin_file' => 'mxchat-theme/mxchat-theme.php',
                 'config_page' => 'mxchat-theme-settings',
                 'hero_features' => array(
@@ -105,7 +144,7 @@ class MxChat_Addons {
                 ),
                 'license' => 'MxChat PRO',
                 'accent' => '#fa73e6',
-                'url' => 'https://mxchat.ai/ai-admin-assistant/',
+                'url' => 'https://mxchat.ai/add-ons/mxchat-admin-chat/',
                 'plugin_file' => 'mxchat-admin-chat/mxchat-admin-chat.php',
                 'config_page' => 'mxchat-admin-chat',
                 'hero_features' => array(
@@ -142,7 +181,7 @@ class MxChat_Addons {
                 ),
                 'license' => 'MxChat PRO',
                 'accent' => '#ff6b35',
-                'url' => 'https://mxchat.ai/mxchat-veo-video-generation/',
+                'url' => 'https://mxchat.ai/add-ons/mxchat-veo/',
                 'plugin_file' => 'mxchat-veo/mxchat-veo.php',
                 'config_page' => 'mxchat-veo',
                 'hero_features' => array(
@@ -179,7 +218,7 @@ class MxChat_Addons {
                 ),
                 'license' => 'MxChat PRO',
                 'accent' => '#fa73e6',
-                'url' => 'https://mxchat.ai/image-analysis/',
+                'url' => 'https://mxchat.ai/add-ons/mxchat-vision/',
                 'plugin_file' => 'mxchat-vision/mxchat-vision.php',
                 'config_page' => 'mxchat-vision',
                 'hero_features' => array(
@@ -216,7 +255,7 @@ class MxChat_Addons {
                 ),
                 'license' => 'MxChat PRO',
                 'accent' => '#fa73e6',
-                'url' => 'https://mxchat.ai/forms-action/',
+                'url' => 'https://mxchat.ai/add-ons/mxchat-forms/',
                 'plugin_file' => 'mxchat-forms/mxchat-forms.php',
                 'config_page' => 'mxchat-forms',
                 'hero_features' => array(
@@ -253,7 +292,7 @@ class MxChat_Addons {
                 ),
                 'license' => 'MxChat PRO',
                 'accent' => '#8b5cf6',
-                'url' => 'https://mxchat.ai/multi-bot/',
+                'url' => 'https://mxchat.ai/add-ons/mxchat-multi-bot/',
                 'plugin_file' => 'mxchat-multi-bot/mxchat-multi-bot.php',
                 'config_page' => 'mxchat-multi-bot',
                 'hero_features' => array(
@@ -290,7 +329,7 @@ class MxChat_Addons {
                 ),
                 'license' => 'MxChat PRO',
                 'accent' => '#3ac9d1',
-                'url' => 'https://mxchat.ai/triggers/',
+                'url' => 'https://mxchat.ai/add-ons/mxchat-trigger/',
                 'plugin_file' => 'mxchat-trigger/mxchat-trigger.php',
                 'config_page' => 'mxchat-triggers',
                 'hero_features' => array(
@@ -328,8 +367,8 @@ class MxChat_Addons {
                 ),
                 'license' => 'MxChat PRO',
                 'accent' => '#10b981',
-                'url' => 'https://mxchat.ai/mxchat-anywhere-deploy-your-ai-chatbot-on-any-website-with-one-script-tag/',
-                'download_url' => 'https://mxchat.ai/mxchat-anywhere-deploy-your-ai-chatbot-on-any-website-with-one-script-tag/',
+                'url' => 'https://mxchat.ai/add-ons/mxchat-embed/',
+                'download_url' => 'https://mxchat.ai/add-ons/mxchat-embed/',
                 'plugin_file' => 'mxchat-embed/mxchat-embed.php',
                 'config_page' => 'mxchat-embed',
                 'hero_features' => array(
@@ -366,7 +405,7 @@ class MxChat_Addons {
                 ),
                 'license' => 'MxChat PRO',
                 'accent' => '#fa73e6',
-                'url' => 'https://mxchat.ai/woocommerce/',
+                'url' => 'https://mxchat.ai/add-ons/mxchat-woo/',
                 'plugin_file' => 'mxchat-woo/mxchat-woo.php',
                 'config_page' => 'mxchat-woo',
                 'hero_features' => array(
@@ -393,43 +432,6 @@ class MxChat_Addons {
                 ),
             ),
 
-            'mxchat-assistant-api' => array(
-                'title' => __('MxChat Assistant API', 'mxchat'),
-                'description' => __('Unlock the full power of OpenAI Assistants. Bypass MxChat\'s knowledge base and connect directly to your custom OpenAI Assistant for advanced AI capabilities and specialized responses.', 'mxchat'),
-                'key_benefits' => array(
-                    __('Custom OpenAI Assistant integration', 'mxchat'),
-                    __('Advanced AI capabilities', 'mxchat'),
-                    __('24-hour conversation persistence', 'mxchat')
-                ),
-                'license' => 'MxChat PRO',
-                'accent' => '#00d4aa',
-                'url' => 'https://mxchat.ai/openai-assistants-api/',
-                'plugin_file' => 'mxchat-assistant-api/mxchat-assistant-api.php',
-                'config_page' => 'mxchat-assistant-api',
-                'hero_features' => array(
-                    array(
-                        'icon' => '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>',
-                        'title' => __('OpenAI Assistants', 'mxchat'),
-                        'desc' => __('Connect your custom Assistant', 'mxchat'),
-                    ),
-                    array(
-                        'icon' => '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>',
-                        'title' => __('Advanced AI', 'mxchat'),
-                        'desc' => __('Full Assistant API capabilities', 'mxchat'),
-                    ),
-                    array(
-                        'icon' => '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>',
-                        'title' => __('24hr Persistence', 'mxchat'),
-                        'desc' => __('Conversations persist all day', 'mxchat'),
-                    ),
-                    array(
-                        'icon' => '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>',
-                        'title' => __('Direct Connect', 'mxchat'),
-                        'desc' => __('Bypass MxChat knowledge base', 'mxchat'),
-                    ),
-                ),
-            ),
-
             'mxchat-perplexity' => array(
                 'title' => __('MxChat Perplexity', 'mxchat'),
                 'description' => __('Give your chatbot real-time knowledge. Add powerful web search capabilities so your bot can answer questions about current events and time-sensitive information.', 'mxchat'),
@@ -440,7 +442,7 @@ class MxChat_Addons {
                 ),
                 'license' => 'MxChat PRO',
                 'accent' => '#fa73e6',
-                'url' => 'https://quickdeploywp.com/plugin/mxchat-perplexity/',
+                'url' => 'https://mxchat.ai/add-ons/mxchat-perplexity/',
                 'plugin_file' => 'mxchat-perplexity/mxchat-perplexity.php',
                 'config_page' => 'mxchat-perplexity',
                 'hero_features' => array(
@@ -477,7 +479,7 @@ class MxChat_Addons {
                 ),
                 'license' => 'MxChat PRO',
                 'accent' => '#fa73e6',
-                'url' => 'https://quickdeploywp.com/plugin/mxchat-moderation/',
+                'url' => 'https://mxchat.ai/add-ons/mxchat-moderation/',
                 'plugin_file' => 'mxchat-moderation/mx-chat-moderation.php',
                 'config_page' => 'mx-chat-moderation',
                 'hero_features' => array(

@@ -3,7 +3,7 @@
  * Plugin Name: MxChat
  * Plugin URI: https://mxchat.ai/
  * Description: AI chatbot for WordPress with OpenAI, Claude, xAI, DeepSeek, live agent, PDF uploads, WooCommerce, and training on website data.
- * Version: 3.2.5
+ * Version: 3.2.6
  * Author: MxChat
  * Author URI: https://mxchat.ai
  * License: GPLv2 or later
@@ -249,6 +249,59 @@ add_filter('wpsc_rejected_uri', function($rejected) {
     if (!is_array($rejected)) $rejected = array();
     $rejected[] = 'wp-admin/admin-ajax.php';
     return $rejected;
+});
+
+// ── Page-cache bypass for chat AJAX (companion to the 3.2.6 nonce-race hotfix)
+// Each cache plugin gets its own filter export so that visitors hitting an
+// edge-cached page never receive cached chat-AJAX responses. The chat send /
+// stream send / file upload all POST to /wp-admin/admin-ajax.php with
+// `action=mxchat_*`. Without these exports, a cache plugin can stale a response
+// and break the per-session nonce flow on the first message.
+
+// WP Rocket — `rocket_cache_reject_uri` takes a flat array of regex strings.
+add_filter('rocket_cache_reject_uri', function($uris) {
+    if (!is_array($uris)) $uris = array();
+    $uris[] = '/wp-admin/admin-ajax\.php\?action=mxchat_.*';
+    return $uris;
+});
+
+// LiteSpeed Cache — `litespeed_cache_no_cache_for_request` short-circuits
+// caching when the request matches our chat-AJAX pattern.
+add_filter('litespeed_cache_no_cache_for_request', function($no_cache) {
+    if ($no_cache) return $no_cache;
+    if (!empty($_SERVER['REQUEST_URI']) &&
+        strpos($_SERVER['REQUEST_URI'], '/wp-admin/admin-ajax.php') !== false &&
+        !empty($_REQUEST['action']) &&
+        strpos((string) $_REQUEST['action'], 'mxchat_') === 0) {
+        return true;
+    }
+    return $no_cache;
+});
+
+// W3 Total Cache — `w3tc_pgcache_request_skip_uri` flips page-cache off when
+// the URI matches.
+add_filter('w3tc_pgcache_request_skip_uri', function($skip) {
+    if ($skip) return $skip;
+    if (!empty($_SERVER['REQUEST_URI']) &&
+        strpos($_SERVER['REQUEST_URI'], '/wp-admin/admin-ajax.php') !== false &&
+        !empty($_REQUEST['action']) &&
+        strpos((string) $_REQUEST['action'], 'mxchat_') === 0) {
+        return true;
+    }
+    return $skip;
+});
+
+// FlyingPress — `flying_press_cacheable` takes a boolean and is run per
+// request. Same pattern as LiteSpeed / W3TC.
+add_filter('flying_press_cacheable', function($cacheable) {
+    if (!$cacheable) return $cacheable;
+    if (!empty($_SERVER['REQUEST_URI']) &&
+        strpos($_SERVER['REQUEST_URI'], '/wp-admin/admin-ajax.php') !== false &&
+        !empty($_REQUEST['action']) &&
+        strpos((string) $_REQUEST['action'], 'mxchat_') === 0) {
+        return false;
+    }
+    return $cacheable;
 });
 
 // Include classes with error handling
@@ -716,6 +769,32 @@ function mxchat_create_translations_table() {
 }
 
 /**
+ * Create per-session satisfaction ratings table (v3.2.6)
+ * Stores one 👍/👎 rating + optional feedback per chat session.
+ */
+function mxchat_create_session_ratings_table() {
+    global $wpdb;
+    $charset_collate = $wpdb->get_charset_collate();
+
+    $table_name = $wpdb->prefix . 'mxchat_session_ratings';
+    $sql = "CREATE TABLE $table_name (
+        id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
+        session_id varchar(255) NOT NULL,
+        bot_id varchar(50) NOT NULL DEFAULT 'default',
+        rating_value tinyint(1) NOT NULL,
+        rating_feedback text DEFAULT NULL,
+        created_at datetime NOT NULL,
+        PRIMARY KEY  (id),
+        UNIQUE KEY session_id (session_id),
+        KEY bot_id (bot_id),
+        KEY created_at (created_at)
+    ) $charset_collate;";
+
+    require_once(ABSPATH . 'wp-admin/includes/upgrade.php');
+    dbDelta($sql);
+}
+
+/**
  * 2.5.2: Fix URL column size to support long URLs (especially with UTF-8 encoding)
  * This fixes "url, source_url. The supplied values may be too long" errors
  */
@@ -902,6 +981,9 @@ function mxchat_activate() {
 
     // Create transcript translations table
     mxchat_create_translations_table();
+
+    // Create per-session satisfaction ratings table (v3.2.6)
+    mxchat_create_session_ratings_table();
 
     // Ensure additional columns in system prompt table
     $existing_system_columns = $wpdb->get_results("SHOW COLUMNS FROM $system_prompt_table");
@@ -1413,6 +1495,20 @@ function mxchat_check_and_run_migrations() {
     mxchat_migrate_pinecone_roles_add_bot_id();
     mxchat_migrate_add_content_type_column();
     mxchat_migrate_add_translations_table();
+    mxchat_migrate_add_session_ratings_table();
+}
+
+/**
+ * Migration: Create per-session satisfaction ratings table (v3.2.6)
+ * For users upgrading from versions before 3.2.6
+ */
+function mxchat_migrate_add_session_ratings_table() {
+    $migration_key = 'mxchat_session_ratings_table_created';
+    if (get_option($migration_key)) {
+        return;
+    }
+    mxchat_create_session_ratings_table();
+    update_option($migration_key, '3.2.6');
 }
 
 /**
@@ -1461,3 +1557,65 @@ add_filter('cron_schedules', function($schedules) {
 
 // Register deactivation hook
 register_deactivation_hook(__FILE__, 'mxchat_deactivate');
+
+/**
+ * Per-session satisfaction rating: AJAX save handler (v3.2.6).
+ * Records one 👍/👎 + optional feedback per chat session. The UNIQUE KEY on
+ * session_id makes this naturally idempotent — only the first rating per
+ * session is stored; duplicate POSTs are silent no-ops.
+ */
+function mxchat_save_session_rating() {
+    global $wpdb;
+
+    $session_id = isset($_POST['session_id']) ? sanitize_text_field(wp_unslash($_POST['session_id'])) : '';
+    $bot_id     = isset($_POST['bot_id']) ? sanitize_text_field(wp_unslash($_POST['bot_id'])) : 'default';
+    $rating_raw = isset($_POST['rating']) ? (int) $_POST['rating'] : 0;
+    $feedback   = isset($_POST['feedback']) ? sanitize_textarea_field(wp_unslash($_POST['feedback'])) : '';
+
+    if ($session_id === '' || ($rating_raw !== 1 && $rating_raw !== -1)) {
+        wp_send_json_error(array('message' => 'invalid_input'), 400);
+    }
+
+    if (strlen($feedback) > 1000) {
+        $feedback = substr($feedback, 0, 1000);
+    }
+
+    $table_name = $wpdb->prefix . 'mxchat_session_ratings';
+    $existing = $wpdb->get_var($wpdb->prepare(
+        "SELECT id FROM $table_name WHERE session_id = %s LIMIT 1",
+        $session_id
+    ));
+
+    if ($existing) {
+        if ($feedback !== '') {
+            $wpdb->update(
+                $table_name,
+                array('rating_feedback' => $feedback),
+                array('id' => (int) $existing),
+                array('%s'),
+                array('%d')
+            );
+        }
+        wp_send_json_success(array('updated' => true));
+    }
+
+    $inserted = $wpdb->insert(
+        $table_name,
+        array(
+            'session_id'      => $session_id,
+            'bot_id'          => $bot_id !== '' ? $bot_id : 'default',
+            'rating_value'    => $rating_raw,
+            'rating_feedback' => $feedback !== '' ? $feedback : null,
+            'created_at'      => current_time('mysql'),
+        ),
+        array('%s', '%s', '%d', '%s', '%s')
+    );
+
+    if ($inserted === false) {
+        wp_send_json_error(array('message' => 'db_insert_failed'), 500);
+    }
+
+    wp_send_json_success(array('saved' => true));
+}
+add_action('wp_ajax_mxchat_save_rating', 'mxchat_save_session_rating');
+add_action('wp_ajax_nopriv_mxchat_save_rating', 'mxchat_save_session_rating');

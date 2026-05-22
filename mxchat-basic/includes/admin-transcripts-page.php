@@ -322,6 +322,63 @@ function mxchat_render_transcripts_page($admin_instance, $page_data) {
                     </div>
                 </div>
 
+                <!-- Satisfaction (last 30 days) — plan-a5b006 -->
+                <div class="mxch-card mxch-satisfaction-card">
+                    <div class="mxch-card-header">
+                        <h3 class="mxch-card-title">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 10v12"/><path d="M15 5.88 14 10h5.83a2 2 0 0 1 1.92 2.56l-2.33 8A2 2 0 0 1 17.5 22H7"/><path d="M3 10h4"/></svg>
+                            <?php esc_html_e('Satisfaction (last 30 days)', 'mxchat'); ?>
+                        </h3>
+                    </div>
+                    <div class="mxch-card-body">
+                        <?php
+                        $satisfaction_stats = isset($satisfaction_stats) && is_array($satisfaction_stats) ? $satisfaction_stats : array();
+                        if (empty($satisfaction_stats)) :
+                            ?>
+                            <p class="mxch-satisfaction-empty">
+                                <?php esc_html_e('No ratings yet. The widget shows the prompt after a conversation has had at least two bot replies and the visitor goes idle for 60 seconds.', 'mxchat'); ?>
+                            </p>
+                            <?php
+                        else :
+                            ?>
+                            <ul class="mxch-satisfaction-list">
+                                <?php foreach ($satisfaction_stats as $row) :
+                                    $bot_label = $row['bot_id'] === 'default'
+                                        ? esc_html__('Default bot', 'mxchat')
+                                        : esc_html($row['bot_id']);
+                                    ?>
+                                    <li class="mxch-satisfaction-row">
+                                        <span class="mxch-satisfaction-bot"><?php echo $bot_label; ?></span>
+                                        <span class="mxch-satisfaction-meta">
+                                            <span class="mxch-satisfaction-total"><?php
+                                                echo esc_html(sprintf(
+                                                    /* translators: %d: number of rated sessions */
+                                                    _n('%d rated session', '%d rated sessions', $row['total'], 'mxchat'),
+                                                    $row['total']
+                                                ));
+                                            ?></span>
+                                            <span class="mxch-satisfaction-bar" aria-hidden="true">
+                                                <span class="mxch-satisfaction-bar-up" style="width: <?php echo esc_attr($row['positive_pct']); ?>%;"></span>
+                                                <span class="mxch-satisfaction-bar-down" style="width: <?php echo esc_attr($row['negative_pct']); ?>%;"></span>
+                                            </span>
+                                            <span class="mxch-satisfaction-pct mxch-satisfaction-pct-up" title="<?php esc_attr_e('Positive ratings', 'mxchat'); ?>">
+                                                <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 10v12"/><path d="M15 5.88 14 10h5.83a2 2 0 0 1 1.92 2.56l-2.33 8A2 2 0 0 1 17.5 22H7"/><path d="M3 10h4"/></svg>
+                                                <?php echo esc_html($row['positive_pct']); ?>%
+                                            </span>
+                                            <span class="mxch-satisfaction-pct mxch-satisfaction-pct-down" title="<?php esc_attr_e('Negative ratings', 'mxchat'); ?>">
+                                                <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 14V2"/><path d="M9 18.12 10 14H4.17a2 2 0 0 1-1.92-2.56l2.33-8A2 2 0 0 1 6.5 2H17"/><path d="M21 14h-4"/></svg>
+                                                <?php echo esc_html($row['negative_pct']); ?>%
+                                            </span>
+                                        </span>
+                                    </li>
+                                <?php endforeach; ?>
+                            </ul>
+                            <?php
+                        endif;
+                        ?>
+                    </div>
+                </div>
+
                 <!-- Activity Chart -->
                 <div class="mxch-card mxch-activity-chart-card">
                     <div class="mxch-card-header">
@@ -473,6 +530,10 @@ function mxchat_render_transcripts_page($admin_instance, $page_data) {
                                     <div class="mxch-detail-row" id="mxch-detail-email-row" style="display: none;">
                                         <span class="mxch-detail-label"><?php esc_html_e('Email', 'mxchat'); ?></span>
                                         <span class="mxch-detail-value" id="mxch-detail-email">-</span>
+                                    </div>
+                                    <div class="mxch-detail-row" id="mxch-detail-feedback-row" style="display: none;">
+                                        <span class="mxch-detail-label"><?php esc_html_e('Feedback', 'mxchat'); ?></span>
+                                        <span class="mxch-detail-value mxch-detail-feedback-value" id="mxch-detail-feedback">-</span>
                                     </div>
                                 </div>
                                 <div class="mxch-details-section" id="mxch-clicked-section" style="display: none;">

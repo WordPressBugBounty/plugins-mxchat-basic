@@ -225,7 +225,7 @@ function mxchat_render_settings_page($admin_instance) {
             <div class="mxch-pro-banner">
                 <div class="mxch-pro-banner-content">
                     <h3 class="mxch-pro-banner-title"><?php esc_html_e('Stop paying $50–200/month for AI chatbot tools.', 'mxchat'); ?></h3>
-                    <p class="mxch-pro-banner-text"><?php esc_html_e('One payment unlocks every MxChat Pro add-on for life — WooCommerce sales, Google Search Console insights, AI-generated chatbot themes, lead-capture forms, unlimited bots, image analysis, and more. No renewals. No surprise bills.', 'mxchat'); ?></p>
+                    <p class="mxch-pro-banner-text"><?php esc_html_e('One payment unlocks every MxChat Pro add-on for life — MCP server access for Claude / ChatGPT / Claude Code, WooCommerce sales, Google Search Console insights, AI-generated chatbot themes, lead-capture forms, unlimited bots, image analysis, and more. No renewals. No surprise bills.', 'mxchat'); ?></p>
                 </div>
                 <a href="https://mxchat.ai/" target="_blank" class="mxch-pro-banner-btn"><span><?php esc_html_e('Get Lifetime Access →', 'mxchat'); ?></span></a>
             </div>
@@ -314,6 +314,14 @@ function mxchat_render_settings_page($admin_instance) {
                             $admin_instance->mxchat_citation_links_toggle_callback();
                         }, __('Allow the AI to include citation links from your knowledge database in responses. If disabled, ensure your AI Behavior settings do not mention links or the AI may fabricate URLs.', 'mxchat'));
 
+                        // Satisfaction Rating Prompt
+                        // The toggle callback inline-renders the 5 customization
+                        // fields inside a single sub-options wrapper (plan-29caac).
+                        // No separate customization group needed — the wrapper handles
+                        // its own server-side display state based on the toggle value.
+                        mxchat_render_field_wrapper('satisfaction_rating', __('Satisfaction Rating Prompt', 'mxchat'), function() use ($admin_instance) {
+                            $admin_instance->mxchat_satisfaction_rating_toggle_callback();
+                        }, __('Show a 👍 / 👎 prompt after a conversation has had a couple of bot replies and the visitor has been idle for a moment. Disable to hide the prompt site-wide.', 'mxchat'));
                         ?>
                     </div>
                 </div>
@@ -599,6 +607,59 @@ function mxchat_render_settings_page($admin_instance) {
                                     <li><strong><?php esc_html_e('On User Interaction:', 'mxchat'); ?></strong> <?php esc_html_e('Script loads when user scrolls, moves mouse, or touches screen. Best for Core Web Vitals but chat appears with slight delay.', 'mxchat'); ?></li>
                                 </ul>
                             </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Page Cache Compatibility Card -->
+                <div class="mxch-card">
+                    <div class="mxch-card-header">
+                        <h3 class="mxch-card-title">
+                            <svg class="mxch-card-title-icon" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>
+                            <?php esc_html_e('Page Cache Compatibility', 'mxchat'); ?>
+                        </h3>
+                    </div>
+                    <div class="mxch-card-body">
+                        <p class="mxch-field-description" style="margin-top: 0;"><?php esc_html_e('MxChat\'s chat send (and stream send, plus PDF / Word upload) all POST to /wp-admin/admin-ajax.php. Page-cache plugins occasionally cache those responses, which breaks the per-session nonce flow on the first message. MxChat auto-tells the five most common cache plugins to never cache chat AJAX via their own filter APIs — no setup needed for those. For other cache plugins (or Cloudflare APO), copy the manual exclusion string into your cache plugin\'s exclusion list.', 'mxchat'); ?></p>
+
+                        <?php
+                        $mxch_cache_rows = array(
+                            array('name' => 'WP Rocket',        'state' => 'auto', 'exclusion' => '/wp-admin/admin-ajax\\.php\\?action=mxchat_.*'),
+                            array('name' => 'LiteSpeed Cache',  'state' => 'auto', 'exclusion' => '/wp-admin/admin-ajax.php?action=mxchat_*'),
+                            array('name' => 'W3 Total Cache',   'state' => 'auto', 'exclusion' => '/wp-admin/admin-ajax.php?action=mxchat_*'),
+                            array('name' => 'FlyingPress',      'state' => 'auto', 'exclusion' => '/wp-admin/admin-ajax.php?action=mxchat_*'),
+                            array('name' => 'WP Super Cache',   'state' => 'auto', 'exclusion' => 'wp-admin/admin-ajax.php'),
+                            array('name' => 'Cloudflare APO',   'state' => 'manual', 'exclusion' => 'Page Rule / Cache Rule: URI Path contains "/wp-admin/admin-ajax.php" → Bypass Cache'),
+                        );
+                        ?>
+
+                        <div class="mxch-cache-compat-grid" style="display: grid; grid-template-columns: 1fr; gap: 12px; margin-top: 16px;">
+                            <?php foreach ($mxch_cache_rows as $row) :
+                                $is_auto = ($row['state'] === 'auto');
+                                $pill_class = $is_auto ? 'mxch-status-pill-active' : 'mxch-status-pill-warning';
+                                $pill_label = $is_auto ? __('Auto-handled', 'mxchat') : __('Manual', 'mxchat');
+                                ?>
+                                <div class="mxch-cache-compat-row" style="display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 14px; background: #f8fafc; border: 1px solid var(--mxch-card-border); border-radius: var(--mxch-radius-md);">
+                                    <div style="display: flex; align-items: center; gap: 10px; min-width: 0; flex: 0 0 auto;">
+                                        <span style="font-weight: 500;"><?php echo esc_html($row['name']); ?></span>
+                                        <span class="mxch-status-pill <?php echo esc_attr($pill_class); ?>">
+                                            <span class="mxch-status-dot"></span>
+                                            <?php echo esc_html($pill_label); ?>
+                                        </span>
+                                    </div>
+                                    <div style="display: flex; align-items: center; gap: 8px; flex: 1 1 auto; min-width: 0;">
+                                        <code style="background: #fff; border: 1px solid var(--mxch-card-border); padding: 4px 8px; border-radius: var(--mxch-radius-sm); font-size: 12px; color: var(--mxch-text-secondary); flex: 1 1 auto; overflow-x: auto; white-space: nowrap; min-width: 0;"><?php echo esc_html($row['exclusion']); ?></code>
+                                        <button type="button" class="mxch-btn mxch-btn-secondary mxch-btn-sm" data-mxch-copy="<?php echo esc_attr($row['exclusion']); ?>" style="flex: 0 0 auto;">
+                                            <?php esc_html_e('Copy', 'mxchat'); ?>
+                                        </button>
+                                    </div>
+                                </div>
+                            <?php endforeach; ?>
+                        </div>
+
+                        <div class="mxch-notice mxch-notice-info" style="margin-top: 16px;">
+                            <svg class="mxch-notice-icon" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+                            <span><?php esc_html_e('Auto-handled plugins receive a filter from MxChat that excludes chat AJAX from their cache. Even so, having the exclusion in your own exclusion list is harmless and acts as a belt-and-suspenders guarantee.', 'mxchat'); ?></span>
                         </div>
                     </div>
                 </div>

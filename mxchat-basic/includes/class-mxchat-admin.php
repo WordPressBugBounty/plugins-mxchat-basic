@@ -292,6 +292,12 @@ private function initialize_default_options() {
         'post_type_visibility_list' => array(), // Array of post type slugs
         'contextual_awareness_toggle' => 'off',
         'citation_links_toggle' => 'on',
+        'satisfaction_rating_enabled' => 'off',
+        'satisfaction_rating_idle_seconds' => 60,
+        'satisfaction_rating_question' => '',
+        'satisfaction_rating_thanks' => '',
+        'satisfaction_rating_placeholder' => '',
+        'satisfaction_rating_saved' => '',
         'close_button_color' => esc_html__('#fff', 'mxchat'),
         'chatbot_bg_color' => esc_html__('#fff', 'mxchat'),
         'user_message_bg_color' => esc_html__('#fff', 'mxchat'),
@@ -1271,6 +1277,9 @@ public function mxchat_create_transcripts_page() {
         }
     }
 
+    // Satisfaction rating rollup — last 30 days, grouped by bot (plan-a5b006).
+    $satisfaction_stats = $this->get_satisfaction_rating_stats(30);
+
     // Prepare page data for the template
     $page_data = array(
         'total_chats' => $total_chats,
@@ -1287,11 +1296,54 @@ public function mxchat_create_transcripts_page() {
         'chart_labels' => $chart_labels,
         'chart_chats' => $chart_chats,
         'chart_messages' => $chart_messages,
+        'satisfaction_stats' => $satisfaction_stats,
     );
 
     // Include and render the new template
     require_once plugin_dir_path(__FILE__) . 'admin-transcripts-page.php';
     mxchat_render_transcripts_page($this, $page_data);
+}
+
+/**
+ * Per-bot satisfaction rating rollup over the last $days days. Used by the
+ * Satisfaction card on the Transcripts dashboard (plan-a5b006).
+ *
+ * @param int $days Window in days.
+ * @return array Each entry: ['bot_id', 'total', 'positive', 'negative', 'positive_pct', 'negative_pct'].
+ */
+public function get_satisfaction_rating_stats($days = 30) {
+    global $wpdb;
+    $table = $wpdb->prefix . 'mxchat_session_ratings';
+    if ($wpdb->get_var($wpdb->prepare("SHOW TABLES LIKE %s", $table)) !== $table) {
+        return array();
+    }
+    $days = max(1, (int) $days);
+    $rows = $wpdb->get_results($wpdb->prepare(
+        "SELECT bot_id,
+                COUNT(*) AS total,
+                SUM(CASE WHEN rating_value = 1  THEN 1 ELSE 0 END) AS positive,
+                SUM(CASE WHEN rating_value = -1 THEN 1 ELSE 0 END) AS negative
+         FROM {$table}
+         WHERE created_at >= DATE_SUB(NOW(), INTERVAL %d DAY)
+         GROUP BY bot_id
+         ORDER BY total DESC",
+        $days
+    ));
+    $out = array();
+    foreach ((array) $rows as $row) {
+        $total    = (int) $row->total;
+        $positive = (int) $row->positive;
+        $negative = (int) $row->negative;
+        $out[] = array(
+            'bot_id'       => $row->bot_id ?: 'default',
+            'total'        => $total,
+            'positive'     => $positive,
+            'negative'     => $negative,
+            'positive_pct' => $total > 0 ? (int) round(($positive / $total) * 100) : 0,
+            'negative_pct' => $total > 0 ? (int) round(($negative / $total) * 100) : 0,
+        );
+    }
+    return $out;
 }
 
 /**
@@ -2972,7 +3024,18 @@ public function mxchat_fetch_chat_history() {
     $per_page = isset($_POST['per_page']) ? absint($_POST['per_page']) : 50;
     $offset = ($page - 1) * $per_page;
     $search = isset($_POST['search']) ? sanitize_text_field($_POST['search']) : '';
-    $sort_order = isset($_POST['sort_order']) && $_POST['sort_order'] === 'asc' ? 'ASC' : 'DESC';
+    $sort_raw = isset($_POST['sort_order']) ? sanitize_key($_POST['sort_order']) : 'desc';
+    $allowed_sorts = array('asc', 'desc', 'rating_positive', 'rating_negative');
+    if (!in_array($sort_raw, $allowed_sorts, true)) { $sort_raw = 'desc'; }
+    $sort_order = ($sort_raw === 'asc') ? 'ASC' : 'DESC';
+    $ratings_table = $wpdb->prefix . 'mxchat_session_ratings';
+    $ratings_join = '';
+    $rating_table_exists = ($wpdb->get_var($wpdb->prepare("SHOW TABLES LIKE %s", $ratings_table)) === $ratings_table);
+    if ($rating_table_exists && ($sort_raw === 'rating_positive' || $sort_raw === 'rating_negative')) {
+        // We sort by rating then recency. Wrap rating_value so NULL sorts last.
+        $rating_dir = ($sort_raw === 'rating_positive') ? 'DESC' : 'ASC';
+        $ratings_join = " LEFT JOIN {$ratings_table} r ON r.session_id = t.session_id ";
+    }
 
     // Build search condition
     $search_condition = '';
@@ -2994,16 +3057,22 @@ public function mxchat_fetch_chat_history() {
         : "SELECT COUNT(DISTINCT session_id) FROM {$table_name}";
     $total_sessions = (int) $wpdb->get_var($count_query);
 
-    // Get session IDs for current page (sorted by newest or oldest)
+    // Get session IDs for current page. Default sort is recency; rating sorts join the ratings table
+    // and order by rating value (NULLs last) with recency as tiebreaker.
+    if ($ratings_join) {
+        $order_by = "ORDER BY (r.rating_value IS NULL), r.rating_value {$rating_dir}, MAX(t.timestamp) DESC";
+    } else {
+        $order_by = "ORDER BY MAX(t.timestamp) {$sort_order}";
+    }
     $session_query = !empty($search)
         ? $wpdb->prepare(
-            "SELECT DISTINCT t.session_id FROM {$table_name} t {$search_condition}
-             GROUP BY t.session_id ORDER BY MAX(t.timestamp) {$sort_order} LIMIT %d OFFSET %d",
+            "SELECT DISTINCT t.session_id FROM {$table_name} t {$ratings_join} {$search_condition}
+             GROUP BY t.session_id {$order_by} LIMIT %d OFFSET %d",
             array_merge($search_params, [$per_page, $offset])
         )
         : $wpdb->prepare(
-            "SELECT DISTINCT session_id FROM {$table_name}
-             GROUP BY session_id ORDER BY MAX(timestamp) {$sort_order} LIMIT %d OFFSET %d",
+            "SELECT DISTINCT t.session_id FROM {$table_name} t {$ratings_join}
+             GROUP BY t.session_id {$order_by} LIMIT %d OFFSET %d",
             $per_page, $offset
         );
     $session_ids = $wpdb->get_col($session_query);
@@ -3026,6 +3095,22 @@ public function mxchat_fetch_chat_history() {
     // Check for optional columns/tables
     $url_table_exists = $wpdb->get_var("SHOW TABLES LIKE '$url_clicks_table'") === $url_clicks_table;
     $originating_columns_exist = !empty($wpdb->get_results("SHOW COLUMNS FROM $table_name LIKE 'originating_page_url'"));
+
+    // Batch-fetch session ratings for this page (plan-a5b006).
+    $ratings_map = array();
+    if ($rating_table_exists && !empty($session_ids)) {
+        $placeholders = implode(',', array_fill(0, count($session_ids), '%s'));
+        $rating_rows = $wpdb->get_results($wpdb->prepare(
+            "SELECT session_id, rating_value, rating_feedback FROM {$ratings_table} WHERE session_id IN ($placeholders)",
+            $session_ids
+        ));
+        foreach ($rating_rows as $row) {
+            $ratings_map[$row->session_id] = array(
+                'value'    => (int) $row->rating_value,
+                'feedback' => (string) $row->rating_feedback,
+            );
+        }
+    }
 
     // Build session list data
     $sessions = [];
@@ -3085,6 +3170,10 @@ public function mxchat_fetch_chat_history() {
             $initials = strtoupper(substr($parts[0], 0, 1) . substr(end($parts), 0, 1));
         }
 
+        $rating_entry    = isset($ratings_map[$session_id]) ? $ratings_map[$session_id] : null;
+        $rating_value    = $rating_entry ? $rating_entry['value'] : null;
+        $rating_feedback = $rating_entry ? $rating_entry['feedback'] : '';
+
         $sessions[] = [
             'session_id' => $session_id,
             'display_name' => $display_name,
@@ -3093,7 +3182,9 @@ public function mxchat_fetch_chat_history() {
             'preview' => $preview,
             'message_count' => (int) $message_stats->count,
             'time_display' => $time_display,
-            'timestamp' => $message_stats->latest
+            'timestamp' => $message_stats->latest,
+            'rating_value' => $rating_value,
+            'rating_feedback' => $rating_feedback,
         ];
     }
 
@@ -3233,6 +3324,16 @@ public function mxchat_fetch_conversation() {
     // First message timestamp for "started" display
     $started = !empty($messages) ? wp_date('M j, Y g:i A', strtotime($messages[0]->timestamp . ' UTC')) : '-';
 
+    // Pull rating_feedback for this session (if any) so the details drawer can show it.
+    $rating_feedback   = '';
+    $ratings_table_det = $wpdb->prefix . 'mxchat_session_ratings';
+    if ($wpdb->get_var("SHOW TABLES LIKE '$ratings_table_det'") === $ratings_table_det) {
+        $rating_feedback = (string) $wpdb->get_var($wpdb->prepare(
+            "SELECT rating_feedback FROM {$ratings_table_det} WHERE session_id = %s LIMIT 1",
+            $session_id
+        ));
+    }
+
     wp_send_json([
         'success' => true,
         'session_id' => $session_id,
@@ -3250,7 +3351,8 @@ public function mxchat_fetch_conversation() {
         'clicked_urls' => $clicked_urls,
         'messages' => $formatted_messages,
         'message_count' => count($messages),
-        'started' => $started
+        'started' => $started,
+        'rating_feedback' => $rating_feedback
     ]);
     wp_die();
 }
@@ -5870,6 +5972,15 @@ public function mxchat_page_init() {
         'mxchat_api_keys_section'
     );
 
+    // Custom (OpenAI-compatible) Provider — for Ollama, LM Studio, vLLM, llama.cpp, Azure OpenAI, etc.
+    add_settings_field(
+        'custom_provider',
+        esc_html__('Custom Provider (OpenAI-compatible)', 'mxchat'),
+        array($this, 'custom_provider_callback'),
+        'mxchat-api-keys',
+        'mxchat_api_keys_section'
+    );
+
     // Loops API Key
     add_settings_field(
         'loops_api_key',
@@ -5938,6 +6049,19 @@ public function mxchat_page_init() {
         'mxchat-chatbot',
         'mxchat_chatbot_section'
     );
+
+    // Satisfaction rating toggle (plan-a5b006).
+    add_settings_field(
+        'satisfaction_rating_enabled',
+        esc_html__('Satisfaction Rating Prompt', 'mxchat'),
+        array($this, 'mxchat_satisfaction_rating_toggle_callback'),
+        'mxchat-chatbot',
+        'mxchat_chatbot_section'
+    );
+
+    // Satisfaction rating customization (plan-141a12, plan-29caac):
+    // the 5 customization fields are now inline-rendered inside
+    // mxchat_satisfaction_rating_toggle_callback's sub-options wrapper.
 
     add_settings_field(
         'enable_streaming_toggle',
@@ -6790,6 +6914,118 @@ public function openrouter_api_key_callback() {
     echo '</div>';
 }
 
+// Custom (OpenAI-compatible) Provider — Ollama, LM Studio, vLLM, llama.cpp, Azure OpenAI, etc.
+public function custom_provider_callback() {
+    $base_url      = isset($this->options['custom_provider_base_url']) ? esc_attr($this->options['custom_provider_base_url']) : '';
+    $api_key       = isset($this->options['custom_provider_api_key']) ? esc_attr($this->options['custom_provider_api_key']) : '';
+    $model_name    = isset($this->options['custom_provider_model']) ? esc_attr($this->options['custom_provider_model']) : '';
+    $auth_scheme   = isset($this->options['custom_provider_auth_scheme']) ? esc_attr($this->options['custom_provider_auth_scheme']) : 'bearer';
+    $api_version   = isset($this->options['custom_provider_api_version']) ? esc_attr($this->options['custom_provider_api_version']) : '';
+    $use_embed     = !empty($this->options['custom_provider_for_embeddings']) && $this->options['custom_provider_for_embeddings'] === 'on';
+    $use_images    = !empty($this->options['custom_provider_for_images']) && $this->options['custom_provider_for_images'] === 'on';
+    $embed_model   = isset($this->options['custom_provider_embedding_model']) ? esc_attr($this->options['custom_provider_embedding_model']) : '';
+    $nonce         = wp_create_nonce('mxchat_autosave_nonce');
+    $test_nonce    = wp_create_nonce('mxchat_test_custom_provider');
+
+    echo '<style>
+        .mxchat-cp { max-width: 680px; }
+        .mxchat-cp .mxchat-cp-intro { margin: 0 0 16px; color: #50575e; font-size: 13px; line-height: 1.5; }
+        .mxchat-cp .mxchat-cp-row { display: block; margin: 0 0 18px; }
+        .mxchat-cp .mxchat-cp-row > label { display: block; font-weight: 600; margin: 0 0 6px; color: #1d2327; font-size: 13px; }
+        .mxchat-cp .mxchat-cp-row > input[type="text"],
+        .mxchat-cp .mxchat-cp-row > input[type="password"],
+        .mxchat-cp .mxchat-cp-row > select { display: block; width: 100%; max-width: 480px; margin: 0; }
+        .mxchat-cp .mxchat-cp-row > .description { display: block; margin: 6px 0 0; color: #646970; font-size: 12px; line-height: 1.5; max-width: 480px; }
+        .mxchat-cp .mxchat-cp-test { margin-top: 4px; padding-top: 14px; border-top: 1px solid #e5e7eb; }
+        .mxchat-cp .mxchat-cp-test .mxchat-cp-test-status { display: inline-block; margin-left: 10px; vertical-align: middle; font-size: 13px; }
+    </style>';
+
+    echo '<div class="api-key-wrapper mxchat-cp">';
+    echo '<p class="mxchat-cp-intro">' . esc_html__('Point MxChat at any OpenAI-compatible /v1/chat/completions endpoint: Ollama, LM Studio, vLLM, llama.cpp, LocalAI, Azure OpenAI, etc. Then select "Custom (OpenAI-compatible)" in the model picker.', 'mxchat') . '</p>';
+
+    echo '<div class="mxchat-cp-row">';
+    echo '<label for="custom_provider_base_url">' . esc_html__('Base URL', 'mxchat') . '</label>';
+    echo '<input type="text" id="custom_provider_base_url" name="custom_provider_base_url" value="' . $base_url . '" class="regular-text mxchat-autosave-field" placeholder="http://localhost:11434/v1" autocomplete="off" data-lpignore="true" data-form-type="other" data-nonce="' . $nonce . '" />';
+    echo '<p class="description">' . esc_html__('Examples: Ollama http://localhost:11434/v1  ·  LM Studio http://localhost:1234/v1  ·  vLLM http://gpu:8000/v1  ·  Azure https://<resource>.openai.azure.com/openai/deployments/<deployment>', 'mxchat') . '</p>';
+    echo '</div>';
+
+    echo '<div class="mxchat-cp-row">';
+    echo '<label for="custom_provider_api_key">' . esc_html__('API Key (optional)', 'mxchat') . '</label>';
+    echo '<input type="password" id="custom_provider_api_key" name="custom_provider_api_key" value="' . $api_key . '" class="regular-text mxchat-autosave-field mxchat-api-key-field" autocomplete="new-password" data-lpignore="true" data-form-type="other" data-nonce="' . $nonce . '" />';
+    echo '<p class="description">' . esc_html__('Leave empty for unauthenticated local servers. Required for Azure / vLLM / hosted endpoints.', 'mxchat') . '</p>';
+    echo '</div>';
+
+    echo '<div class="mxchat-cp-row">';
+    echo '<label for="custom_provider_model">' . esc_html__('Model Name', 'mxchat') . '</label>';
+    echo '<input type="text" id="custom_provider_model" name="custom_provider_model" value="' . $model_name . '" class="regular-text mxchat-autosave-field" placeholder="llama3.2" autocomplete="off" data-lpignore="true" data-nonce="' . $nonce . '" />';
+    echo '<p class="description">' . esc_html__('The model identifier the upstream server expects (e.g. llama3.2, mistral, gpt-oss). For Azure this is the deployment ID — leave empty if the Base URL already includes /deployments/<deployment>.', 'mxchat') . '</p>';
+    echo '</div>';
+
+    echo '<div class="mxchat-cp-row">';
+    echo '<label for="custom_provider_auth_scheme">' . esc_html__('Auth Scheme', 'mxchat') . '</label>';
+    echo '<select id="custom_provider_auth_scheme" name="custom_provider_auth_scheme" class="mxchat-autosave-field" data-nonce="' . $nonce . '">';
+    echo '<option value="bearer"' . selected($auth_scheme, 'bearer', false) . '>' . esc_html__('Authorization: Bearer (OpenAI / Ollama / vLLM / LM Studio)', 'mxchat') . '</option>';
+    echo '<option value="api-key"' . selected($auth_scheme, 'api-key', false) . '>' . esc_html__('api-key header (Azure OpenAI)', 'mxchat') . '</option>';
+    echo '</select>';
+    echo '<p class="description">' . esc_html__('Most OpenAI-compatible servers use Bearer. Azure OpenAI uses the api-key header.', 'mxchat') . '</p>';
+    echo '</div>';
+
+    echo '<div class="mxchat-cp-row">';
+    echo '<label for="custom_provider_api_version">' . esc_html__('API Version (Azure only)', 'mxchat') . '</label>';
+    echo '<input type="text" id="custom_provider_api_version" name="custom_provider_api_version" value="' . $api_version . '" class="regular-text mxchat-autosave-field" placeholder="2024-08-01-preview" autocomplete="off" data-lpignore="true" data-nonce="' . $nonce . '" />';
+    echo '<p class="description">' . esc_html__('Appended as ?api-version=... on the request URL. Leave empty for non-Azure providers.', 'mxchat') . '</p>';
+    echo '</div>';
+
+    // Extended-use checkboxes — opt-in routing of other dispatcher paths through the custom provider.
+    echo '<div class="mxchat-cp-row">';
+    echo '<label style="font-weight:600; display:block; margin:0 0 6px; color:#1d2327; font-size:13px;">' . esc_html__('Extended routing (opt-in)', 'mxchat') . '</label>';
+    echo '<label style="display:block; margin:0 0 6px; font-weight:400;"><input type="checkbox" id="custom_provider_for_embeddings" name="custom_provider_for_embeddings" value="on"' . checked($use_embed, true, false) . ' class="mxchat-autosave-field" data-nonce="' . $nonce . '" /> ' . esc_html__('Use custom provider for embeddings', 'mxchat') . '</label>';
+    echo '<label style="display:block; margin:0 0 0; font-weight:400;"><input type="checkbox" id="custom_provider_for_images" name="custom_provider_for_images" value="on"' . checked($use_images, true, false) . ' class="mxchat-autosave-field" data-nonce="' . $nonce . '" /> ' . esc_html__('Use custom provider for image generation', 'mxchat') . '</label>';
+    echo '<p class="description">' . esc_html__('When off, embeddings and image generation continue to use OpenAI (current behavior). Turn on only if your endpoint exposes OpenAI-compatible /embeddings or /images/generations routes (e.g. Ollama, vLLM, LocalAI).', 'mxchat') . '</p>';
+    echo '</div>';
+
+    echo '<div class="mxchat-cp-row">';
+    echo '<label for="custom_provider_embedding_model">' . esc_html__('Custom Embedding Model', 'mxchat') . '</label>';
+    echo '<input type="text" id="custom_provider_embedding_model" name="custom_provider_embedding_model" value="' . $embed_model . '" class="regular-text mxchat-autosave-field" placeholder="nomic-embed-text" autocomplete="off" data-lpignore="true" data-nonce="' . $nonce . '" />';
+    echo '<p class="description">' . esc_html__('Only used when "Use custom provider for embeddings" is on. The embedding model name is separate from the chat model name above (e.g. Ollama embedding models: nomic-embed-text, mxbai-embed-large). Leave blank to fall back to the chat model name.', 'mxchat') . '</p>';
+    echo '</div>';
+
+    echo '<div class="mxchat-cp-test">';
+    echo '<button type="button" class="button" id="mxchat-test-custom-provider" data-nonce="' . $test_nonce . '">' . esc_html__('Test Connection', 'mxchat') . '</button>';
+    echo '<span id="mxchat-test-custom-provider-result" class="mxchat-cp-test-status"></span>';
+    echo '</div>';
+
+    echo '<script>(function(){
+        var btn = document.getElementById("mxchat-test-custom-provider");
+        if (!btn || btn._wired) { return; } btn._wired = true;
+        btn.addEventListener("click", function(){
+            var out = document.getElementById("mxchat-test-custom-provider-result");
+            out.textContent = "' . esc_js(__('Testing...', 'mxchat')) . '";
+            out.style.color = "#646970";
+            var fd = new FormData();
+            fd.append("action", "mxchat_test_custom_provider");
+            fd.append("_wpnonce", btn.getAttribute("data-nonce"));
+            fetch(ajaxurl, { method:"POST", credentials:"same-origin", body: fd })
+                .then(function(r){ return r.json(); })
+                .then(function(j){
+                    if (j && j.success) {
+                        out.textContent = "✓ " + (j.data && j.data.message ? j.data.message : "' . esc_js(__('OK', 'mxchat')) . '");
+                        out.style.color = "#00a32a";
+                    } else {
+                        out.textContent = "⚠ " + (j && j.data && j.data.message ? j.data.message : "' . esc_js(__('Failed', 'mxchat')) . '");
+                        out.style.color = "#d63638";
+                    }
+                })
+                .catch(function(){
+                    out.textContent = "⚠ ' . esc_js(__('Request failed', 'mxchat')) . '";
+                    out.style.color = "#d63638";
+                });
+        });
+    })();</script>';
+
+    echo '</div>';
+}
+
 // Voyage API Key
 public function voyage_api_key_callback() {
     $apiKey = isset($this->options['voyage_api_key']) ? esc_attr($this->options['voyage_api_key']) : '';
@@ -7030,6 +7266,7 @@ public function mxchat_model_callback() {
             'deepseek-chat' => esc_html__('DeepSeek-V3', 'mxchat'),
         ),
         esc_html__('Claude Models', 'mxchat') => array(
+            'claude-opus-4-7' => esc_html__('Claude Opus 4.7 (Latest Flagship)', 'mxchat'),
             'claude-opus-4-6' => esc_html__('Claude Opus 4.6 (Most Capable - Recommended)', 'mxchat'),
             'claude-sonnet-4-6' => esc_html__('Claude Sonnet 4.6 (Latest Sonnet - Fast & Capable)', 'mxchat'),
             'claude-opus-4-5' => esc_html__('Claude Opus 4.5 (Highly Capable)', 'mxchat'),
@@ -7039,7 +7276,11 @@ public function mxchat_model_callback() {
             'claude-opus-4-20250514' => esc_html__('Claude 4 Opus (Complex Tasks)', 'mxchat'),
             'claude-sonnet-4-20250514' => esc_html__('Claude 4 Sonnet (High Performance)', 'mxchat'),
         ),
+        esc_html__('Custom (OpenAI-compatible)', 'mxchat') => array(
+            'custom-provider' => esc_html__('Custom Provider (configure in API Keys tab)', 'mxchat'),
+        ),
         esc_html__('OpenAI Models', 'mxchat') => array(
+            'gpt-5.5' => esc_html__('GPT-5.5 (Latest Flagship)', 'mxchat'),
             'gpt-5.4' => esc_html__('GPT-5.4 (Flagship Reasoning & Coding)', 'mxchat'),
             'gpt-5.4-mini' => esc_html__('GPT-5.4 Mini (Fast, 400K Context)', 'mxchat'),
             'gpt-5.4-nano' => esc_html__('GPT-5.4 Nano (Fastest & Cheapest)', 'mxchat'),
@@ -7552,6 +7793,123 @@ public function mxchat_citation_links_toggle_callback() {
     );
     echo '<span class="slider"></span>';
     echo '</label>';
+}
+
+/**
+ * Toggle for the end-of-session satisfaction rating prompt (plan-a5b006).
+ * Default ON. The widget reads this through the localized object; the
+ * mxchat_satisfaction_rating_enabled filter still lets developers force
+ * the value site-wide.
+ *
+ * The 5 customization fields (idle/question/thanks/placeholder/saved) are
+ * rendered inline here inside a single wrapper div whose initial display
+ * is set server-side from the toggle value (plan-29caac). Mirrors the
+ * auto-display chatbot pattern at mxchat_append_to_body_callback — no
+ * DOMContentLoaded race because rows exist as direct children of this
+ * callback's output, and the wrapper's display: none is inline at render
+ * time so refresh shows the correct state with no flash.
+ */
+public function mxchat_satisfaction_rating_toggle_callback() {
+    $options = $this->options;
+    $value   = isset($options['satisfaction_rating_enabled']) ? $options['satisfaction_rating_enabled'] : 'off';
+    $checked = ($value === 'on') ? 'checked' : '';
+
+    $idle = isset($options['satisfaction_rating_idle_seconds']) ? intval($options['satisfaction_rating_idle_seconds']) : 60;
+    $idle = max(5, min(600, $idle));
+    $question    = isset($options['satisfaction_rating_question'])    ? $options['satisfaction_rating_question']    : '';
+    $thanks      = isset($options['satisfaction_rating_thanks'])      ? $options['satisfaction_rating_thanks']      : '';
+    $placeholder = isset($options['satisfaction_rating_placeholder']) ? $options['satisfaction_rating_placeholder'] : '';
+    $saved       = isset($options['satisfaction_rating_saved'])       ? $options['satisfaction_rating_saved']       : '';
+
+    echo '<div class="mxchat-autosave-section">';
+
+    echo '<label class="toggle-switch">';
+    echo sprintf(
+        '<input type="checkbox" id="satisfaction_rating_enabled" name="satisfaction_rating_enabled" value="on" %s />',
+        esc_attr($checked)
+    );
+    echo '<span class="slider"></span>';
+    echo '</label>';
+
+    ?>
+    <style>
+        .mxchat-sub-options-field { margin: 12px 0; }
+        .mxchat-sub-options-field label { display: inline-block; margin-bottom: 4px; }
+        #satisfaction-rating-sub-options h4 { margin: 16px 0 8px; }
+    </style>
+    <?php
+
+    $display_style = ($value === 'on') ? '' : 'display: none;';
+    echo '<div id="satisfaction-rating-sub-options" class="mxchat-sub-options" style="' . esc_attr($display_style) . '">';
+
+    echo '<h4>' . esc_html__('Customize the prompt (optional)', 'mxchat') . '</h4>';
+
+    echo '<div class="mxchat-sub-options-field">';
+    echo '<label for="satisfaction_rating_idle_seconds"><strong>' . esc_html__('Idle Timeout', 'mxchat') . '</strong></label><br />';
+    printf(
+        '<input type="number" id="satisfaction_rating_idle_seconds" name="satisfaction_rating_idle_seconds" value="%d" min="5" max="600" step="1" class="small-text" /> <span class="description">%s</span>',
+        (int) $idle,
+        esc_html__('seconds of user inactivity before the prompt appears (5-600)', 'mxchat')
+    );
+    echo '</div>';
+
+    echo '<div class="mxchat-sub-options-field">';
+    echo '<label for="satisfaction_rating_question"><strong>' . esc_html__('Prompt Question', 'mxchat') . '</strong></label><br />';
+    printf(
+        '<input type="text" id="satisfaction_rating_question" name="satisfaction_rating_question" value="%s" maxlength="200" class="regular-text" placeholder="%s" />',
+        esc_attr($question),
+        esc_attr__('Was this helpful?', 'mxchat')
+    );
+    echo '<p class="description">' . esc_html__('Leave blank for the default. Shown above the thumbs up/down.', 'mxchat') . '</p>';
+    echo '</div>';
+
+    echo '<div class="mxchat-sub-options-field">';
+    echo '<label for="satisfaction_rating_thanks"><strong>' . esc_html__('Thank-You Message', 'mxchat') . '</strong></label><br />';
+    printf(
+        '<input type="text" id="satisfaction_rating_thanks" name="satisfaction_rating_thanks" value="%s" maxlength="300" class="regular-text" placeholder="%s" />',
+        esc_attr($thanks),
+        esc_attr__('Thanks! Anything we should improve? (optional)', 'mxchat')
+    );
+    echo '<p class="description">' . esc_html__('Leave blank for the default. Shown after the user clicks a thumb.', 'mxchat') . '</p>';
+    echo '</div>';
+
+    echo '<div class="mxchat-sub-options-field">';
+    echo '<label for="satisfaction_rating_placeholder"><strong>' . esc_html__('Feedback Placeholder', 'mxchat') . '</strong></label><br />';
+    printf(
+        '<input type="text" id="satisfaction_rating_placeholder" name="satisfaction_rating_placeholder" value="%s" maxlength="200" class="regular-text" placeholder="%s" />',
+        esc_attr($placeholder),
+        esc_attr__('Tell us what could be better…', 'mxchat')
+    );
+    echo '<p class="description">' . esc_html__('Leave blank for the default. Placeholder text inside the feedback textarea.', 'mxchat') . '</p>';
+    echo '</div>';
+
+    echo '<div class="mxchat-sub-options-field">';
+    echo '<label for="satisfaction_rating_saved"><strong>' . esc_html__('Saved Confirmation', 'mxchat') . '</strong></label><br />';
+    printf(
+        '<input type="text" id="satisfaction_rating_saved" name="satisfaction_rating_saved" value="%s" maxlength="200" class="regular-text" placeholder="%s" />',
+        esc_attr($saved),
+        esc_attr__('Thanks for the feedback.', 'mxchat')
+    );
+    echo '<p class="description">' . esc_html__('Leave blank for the default. Shown after the feedback is sent.', 'mxchat') . '</p>';
+    echo '</div>';
+
+    echo '</div>'; // #satisfaction-rating-sub-options
+    echo '</div>'; // .mxchat-autosave-section
+
+    ?>
+    <script>
+    (function() {
+        document.addEventListener('DOMContentLoaded', function() {
+            var toggle = document.getElementById('satisfaction_rating_enabled');
+            var subOptions = document.getElementById('satisfaction-rating-sub-options');
+            if (!toggle || !subOptions) return;
+            toggle.addEventListener('change', function() {
+                subOptions.style.display = toggle.checked ? '' : 'none';
+            });
+        });
+    })();
+    </script>
+    <?php
 }
 
 public function mxchat_privacy_toggle_callback() {
@@ -8328,8 +8686,12 @@ private function enqueue_page_specific_assets($current_page, $plugin_url, $versi
             break;
 
         case 'mxchat-api-access':
-            // Shared sidebar styles — page handles its own tab switching inline.
+            // Shared sidebar shell (CSS + JS for tab switching / mobile menu / copy buttons).
             wp_enqueue_style('mxchat-admin-sidebar-css', $plugin_url . 'css/admin-sidebar.css', array(), $version);
+            wp_enqueue_script('mxchat-admin-sidebar-js', $plugin_url . 'js/admin-sidebar.js', array(), $version, true);
+            wp_localize_script('mxchat-admin-sidebar-js', 'MxChatAdminSidebarI18n', array(
+                'copied' => __('Copied', 'mxchat'),
+            ));
             break;
        default:
             wp_enqueue_script(
@@ -8458,15 +8820,20 @@ private function localize_page_specific_scripts($current_page) {
             ));
 
             // Content selector localization
+            $mxchat_options_for_selector = get_option('mxchat_options', array());
+            $acf_pdf_extract_default = !empty($mxchat_options_for_selector['acf_pdf_extract_default']);
             wp_localize_script('mxchat-content-selector-js', 'mxchatSelector', array(
                 'ajaxurl' => admin_url('admin-ajax.php'),
                 'nonce' => wp_create_nonce('mxchat_content_selector_nonce'),
+                'acfPdfExtractDefault' => $acf_pdf_extract_default ? 1 : 0,
                 'i18n' => array(
                     'searchPlaceholder' => __('Search posts and pages...', 'mxchat'),
                     'selectAll' => __('Select All', 'mxchat'),
                     'process' => __('Process Selected', 'mxchat'),
                     'cancel' => __('Cancel', 'mxchat'),
-                    'noResults' => __('No content found.', 'mxchat')
+                    'noResults' => __('No content found.', 'mxchat'),
+                    'extractingPdfs' => __('extracting %d PDF(s)...', 'mxchat'),
+                    'pdfExtractedSuffix' => __(' (%d PDF(s) extracted)', 'mxchat')
                 )
             ));
 
@@ -8702,6 +9069,33 @@ public function mxchat_sanitize($input) {
     $new_input['citation_links_toggle'] = $input['citation_links_toggle'] === 'on' ? 'on' : 'off';
 }
 
+    // Satisfaction rating prompt — defaults ON when unchecked (so first save
+    // doesn't accidentally disable it). The form posts 'on' when checked;
+    // unchecked checkboxes don't post a value at all, so we infer 'off' only
+    // when the autosave/PHP request explicitly clears it via empty string.
+    if (array_key_exists('satisfaction_rating_enabled', $input)) {
+        $new_input['satisfaction_rating_enabled'] = $input['satisfaction_rating_enabled'] === 'on' ? 'on' : 'off';
+    }
+
+    // Satisfaction rating customization (plan-141a12). Idle is clamped 5-600;
+    // the 4 text strings are sanitized + capped server-side. Blank values are
+    // preserved so the integrator falls back to translated defaults.
+    if (array_key_exists('satisfaction_rating_idle_seconds', $input)) {
+        $new_input['satisfaction_rating_idle_seconds'] = max(5, min(600, intval($input['satisfaction_rating_idle_seconds'])));
+    }
+    if (array_key_exists('satisfaction_rating_question', $input)) {
+        $new_input['satisfaction_rating_question'] = mb_substr(sanitize_text_field($input['satisfaction_rating_question']), 0, 200);
+    }
+    if (array_key_exists('satisfaction_rating_thanks', $input)) {
+        $new_input['satisfaction_rating_thanks'] = mb_substr(sanitize_text_field($input['satisfaction_rating_thanks']), 0, 300);
+    }
+    if (array_key_exists('satisfaction_rating_placeholder', $input)) {
+        $new_input['satisfaction_rating_placeholder'] = mb_substr(sanitize_text_field($input['satisfaction_rating_placeholder']), 0, 200);
+    }
+    if (array_key_exists('satisfaction_rating_saved', $input)) {
+        $new_input['satisfaction_rating_saved'] = mb_substr(sanitize_text_field($input['satisfaction_rating_saved']), 0, 200);
+    }
+
     if (isset($input['top_bar_title'])) {
         $new_input['top_bar_title'] = sanitize_text_field($input['top_bar_title']);
     }
@@ -8824,6 +9218,7 @@ if (isset($input['model'])) {
             'grok-3-mini-fast-beta',
             'grok-2',
             'deepseek-chat',
+            'claude-opus-4-7',
             'claude-opus-4-6',
             'claude-sonnet-4-6',
             'claude-opus-4-5',
@@ -8838,10 +9233,12 @@ if (isset($input['model'])) {
             'gpt-5',
             'gpt-5-mini',
             'gpt-5-nano',
+            'gpt-5.5',
             'gpt-5.4',
             'gpt-5.4-mini',
             'gpt-5.4-nano',
             'gpt-5.3-chat-latest',
+            'custom-provider',
         );
 
         if (in_array($input['model'], $allowed_models)) {
@@ -8865,6 +9262,33 @@ if (isset($input['openrouter_selected_model_name'])) {
     
     if (isset($input['openrouter_api_key'])) {
         $new_input['openrouter_api_key'] = sanitize_text_field($input['openrouter_api_key']);
+    }
+
+    // Custom (OpenAI-compatible) Provider — Ollama, LM Studio, vLLM, Azure OpenAI, etc.
+    if (isset($input['custom_provider_base_url'])) {
+        $new_input['custom_provider_base_url'] = esc_url_raw(rtrim(trim((string) $input['custom_provider_base_url']), '/'));
+    }
+    if (isset($input['custom_provider_api_key'])) {
+        $new_input['custom_provider_api_key'] = sanitize_text_field($input['custom_provider_api_key']);
+    }
+    if (isset($input['custom_provider_model'])) {
+        $new_input['custom_provider_model'] = sanitize_text_field($input['custom_provider_model']);
+    }
+    if (isset($input['custom_provider_auth_scheme'])) {
+        $scheme = sanitize_text_field($input['custom_provider_auth_scheme']);
+        $new_input['custom_provider_auth_scheme'] = in_array($scheme, array('bearer', 'api-key'), true) ? $scheme : 'bearer';
+    }
+    if (isset($input['custom_provider_for_embeddings'])) {
+        $new_input['custom_provider_for_embeddings'] = ($input['custom_provider_for_embeddings'] === 'on') ? 'on' : 'off';
+    }
+    if (isset($input['custom_provider_for_images'])) {
+        $new_input['custom_provider_for_images'] = ($input['custom_provider_for_images'] === 'on') ? 'on' : 'off';
+    }
+    if (isset($input['custom_provider_embedding_model'])) {
+        $new_input['custom_provider_embedding_model'] = sanitize_text_field($input['custom_provider_embedding_model']);
+    }
+    if (isset($input['custom_provider_api_version'])) {
+        $new_input['custom_provider_api_version'] = sanitize_text_field($input['custom_provider_api_version']);
     }
 
 
@@ -9052,6 +9476,10 @@ if (isset($input['openrouter_selected_model_name'])) {
     if (isset($input['content_image_model'])) {
         $new_input['content_image_model'] = sanitize_text_field($input['content_image_model']);
     }
+    if (isset($input['content_image_quality'])) {
+        $q = sanitize_text_field($input['content_image_quality']);
+        $new_input['content_image_quality'] = in_array($q, array('auto', 'low', 'medium', 'high'), true) ? $q : 'auto';
+    }
     if (isset($input['content_enable_images'])) {
         $new_input['content_enable_images'] = ($input['content_enable_images'] === 'on') ? 'on' : 'off';
     }
@@ -9075,7 +9503,7 @@ if (isset($input['openrouter_selected_model_name'])) {
     // Preserve content generator settings when saving from main settings page
     // (where content fields are not in the form submission)
     $existing = get_option('mxchat_options', array());
-    foreach (array('content_model', 'content_image_model', 'content_enable_images', 'content_use_placeholders', 'content_internal_linking', 'content_tool_use', 'seo_optimize_meta_desc', 'seo_optimize_seo_title', 'seo_optimize_slug', 'seo_optimize_readability', 'seo_optimize_internal_links', 'seo_optimize_img_alt', 'seo_optimize_featured_img') as $key) {
+    foreach (array('content_model', 'content_image_model', 'content_image_quality', 'content_enable_images', 'content_use_placeholders', 'content_internal_linking', 'content_tool_use', 'seo_optimize_meta_desc', 'seo_optimize_seo_title', 'seo_optimize_slug', 'seo_optimize_readability', 'seo_optimize_internal_links', 'seo_optimize_img_alt', 'seo_optimize_featured_img') as $key) {
         if (!isset($new_input[$key]) && isset($existing[$key])) {
             $new_input[$key] = $existing[$key];
         }

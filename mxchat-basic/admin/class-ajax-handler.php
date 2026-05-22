@@ -48,6 +48,79 @@ private function mxchat_init_ajax_hooks() {
     add_action('wp_ajax_mxchat_clear_debug_log', array($this, 'mxchat_clear_debug_log_callback'));
     add_action('wp_ajax_mxchat_export_settings', array($this, 'mxchat_export_settings_callback'));
     add_action('wp_ajax_mxchat_reset_all_settings', array($this, 'mxchat_reset_all_settings_callback'));
+
+    // Custom (OpenAI-compatible) Provider connection test
+    add_action('wp_ajax_mxchat_test_custom_provider', array($this, 'mxchat_test_custom_provider_callback'));
+}
+
+/**
+ * Test connection to a Custom (OpenAI-compatible) provider by hitting its /models endpoint
+ * with whichever auth scheme the user configured. Reports model count or a clean error.
+ */
+public function mxchat_test_custom_provider_callback() {
+    check_ajax_referer('mxchat_test_custom_provider');
+    if (!current_user_can('manage_options')) {
+        wp_send_json_error(array('message' => esc_html__('Unauthorized', 'mxchat')));
+    }
+
+    $options    = get_option('mxchat_options', array());
+    $base_url   = isset($options['custom_provider_base_url']) ? trim((string) $options['custom_provider_base_url']) : '';
+    $api_key    = isset($options['custom_provider_api_key']) ? trim((string) $options['custom_provider_api_key']) : '';
+    $auth       = isset($options['custom_provider_auth_scheme']) ? $options['custom_provider_auth_scheme'] : 'bearer';
+    $api_version = isset($options['custom_provider_api_version']) ? trim((string) $options['custom_provider_api_version']) : '';
+
+    if (empty($base_url)) {
+        wp_send_json_error(array('message' => esc_html__('Base URL is empty. Save it first.', 'mxchat')));
+    }
+
+    $url = rtrim($base_url, '/') . '/models';
+    if (!empty($api_version)) {
+        $url = add_query_arg('api-version', $api_version, $url);
+    }
+
+    $headers = array('Content-Type' => 'application/json');
+    if (!empty($api_key)) {
+        if ($auth === 'api-key') {
+            $headers['api-key'] = $api_key;
+        } else {
+            $headers['Authorization'] = 'Bearer ' . $api_key;
+        }
+    }
+
+    $response = wp_remote_get($url, array(
+        'headers' => $headers,
+        'timeout' => 10,
+    ));
+
+    if (is_wp_error($response)) {
+        wp_send_json_error(array('message' => sprintf(esc_html__('Network error: %s', 'mxchat'), esc_html($response->get_error_message()))));
+    }
+
+    $code = (int) wp_remote_retrieve_response_code($response);
+    if ($code === 401 || $code === 403) {
+        wp_send_json_error(array('message' => sprintf(esc_html__('Auth rejected (HTTP %d). Check API key and auth scheme.', 'mxchat'), $code)));
+    }
+    if ($code === 404) {
+        wp_send_json_error(array('message' => esc_html__('Endpoint not found (HTTP 404). Check the Base URL.', 'mxchat')));
+    }
+    if ($code < 200 || $code >= 300) {
+        wp_send_json_error(array('message' => sprintf(esc_html__('Upstream returned HTTP %d.', 'mxchat'), $code)));
+    }
+
+    $body = json_decode(wp_remote_retrieve_body($response), true);
+    $count = 0;
+    if (is_array($body)) {
+        if (isset($body['data']) && is_array($body['data'])) {
+            $count = count($body['data']);
+        } elseif (isset($body['models']) && is_array($body['models'])) {
+            $count = count($body['models']);
+        }
+    }
+
+    wp_send_json_success(array(
+        'message' => sprintf(esc_html__('Connection OK — %d model(s) reported.', 'mxchat'), $count),
+        'count'   => $count,
+    ));
 }
 
     // ========================================
@@ -102,17 +175,20 @@ public function mxchat_save_setting_callback() {
                 $options['model'] = 'openrouter';
             } else {
                 //error_log('MXChat Save: Checking against whitelist');
+                 // Keep in sync with the Settings-API sanitize allow-list in
+                 // includes/class-mxchat-admin.php (mxchat_options_validate).
                  $allowed_models = array(
                             'gemini-3-pro-preview', 'gemini-3-flash-preview', 'gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.5-flash-lite',
                             'gemini-2.0-flash', 'gemini-2.0-flash-lite', 'gemini-1.5-pro', 'gemini-1.5-flash',
                             'grok-4-0709', 'grok-4-1-fast-reasoning', 'grok-4-1-fast-non-reasoning', 'grok-3-beta', 'grok-3-fast-beta', 'grok-3-mini-beta',
                             'grok-3-mini-fast-beta', 'grok-2',
                             'deepseek-chat',
-                            'claude-opus-4-6', 'claude-opus-4-5', 'claude-sonnet-4-6',
+                            'claude-opus-4-7', 'claude-opus-4-6', 'claude-opus-4-5', 'claude-sonnet-4-6',
                             'claude-sonnet-4-5-20250929', 'claude-opus-4-1-20250805', 'claude-haiku-4-5-20251001',
                             'claude-opus-4-20250514', 'claude-sonnet-4-20250514',
-                            'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.4-nano', 'gpt-5.3-chat-latest',
+                            'gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.4-nano', 'gpt-5.3-chat-latest',
                             'gpt-5.2', 'gpt-5.1-chat-latest', 'gpt-5.1-2025-11-13', 'gpt-5', 'gpt-5-mini', 'gpt-5-nano',
+                            'custom-provider',
                         );
                 
                 //error_log('MXChat Save: in_array result: ' . (in_array($value, $allowed_models) ? 'YES' : 'NO'));
@@ -371,7 +447,9 @@ public function mxchat_save_setting_callback() {
                 'contextual_awareness_toggle',
                 'citation_links_toggle',
                 'enable_email_block',
-                'enable_name_field'
+                'enable_name_field',
+                'custom_provider_for_embeddings',
+                'custom_provider_for_images'
             ])) {
                 //error_log('MXChat Save: Processing toggle: ' . $field_name);
                 $options[$field_name] = ($value === 'on') ? 'on' : 'off';

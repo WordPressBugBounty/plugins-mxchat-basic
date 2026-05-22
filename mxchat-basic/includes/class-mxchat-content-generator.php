@@ -979,7 +979,7 @@ class MxChat_Content_Generator {
                     'prompt'        => $prompt,
                     'n'             => 1,
                     'size'          => '1536x1024',
-                    'quality'       => 'medium',
+                    'quality'       => $options['content_image_quality'] ?? 'auto',
                     'output_format' => 'png',
                 )),
             );
@@ -1103,7 +1103,7 @@ class MxChat_Content_Generator {
             'prompt'          => $prompt,
             'n'               => 1,
             'size'            => '1536x1024',
-            'quality'         => 'medium',
+            'quality'         => $options['content_image_quality'] ?? 'auto',
             'output_format'   => 'png',
         );
 
@@ -2282,6 +2282,8 @@ article .entry-content,
             // GPT-5.1 uses 'low' instead of 'minimal'
             if ($model === 'gpt-5.1-2025-11-13') {
                 $body['reasoning_effort'] = 'low';
+            } elseif ($model === 'gpt-5.5') {
+                $body['reasoning_effort'] = 'low';
             } elseif ($model === 'gpt-5.4') {
                 $body['reasoning_effort'] = 'low';
             } else {
@@ -2482,7 +2484,7 @@ article .entry-content,
         $field = sanitize_text_field($_POST['field'] ?? '');
         $value = sanitize_text_field($_POST['value'] ?? '');
 
-        $allowed_fields = array('content_model', 'content_image_model', 'content_enable_images', 'content_use_placeholders', 'content_internal_linking', 'content_tool_use', 'seo_optimize_meta_desc', 'seo_optimize_seo_title', 'seo_optimize_slug', 'seo_optimize_readability', 'seo_optimize_internal_links', 'seo_optimize_img_alt', 'seo_optimize_featured_img');
+        $allowed_fields = array('content_model', 'content_image_model', 'content_image_quality', 'content_enable_images', 'content_use_placeholders', 'content_internal_linking', 'content_tool_use', 'seo_optimize_meta_desc', 'seo_optimize_seo_title', 'seo_optimize_slug', 'seo_optimize_readability', 'seo_optimize_internal_links', 'seo_optimize_img_alt', 'seo_optimize_featured_img');
         if (!in_array($field, $allowed_fields, true)) {
             wp_send_json_error(array('message' => __('Invalid field.', 'mxchat')));
         }
@@ -2490,6 +2492,11 @@ article .entry-content,
         // Toggle fields
         if (in_array($field, array('content_enable_images', 'content_use_placeholders', 'content_internal_linking', 'content_tool_use', 'seo_optimize_meta_desc', 'seo_optimize_seo_title', 'seo_optimize_slug', 'seo_optimize_readability', 'seo_optimize_internal_links', 'seo_optimize_img_alt', 'seo_optimize_featured_img'), true)) {
             $value = ($value === 'on') ? 'on' : 'off';
+        }
+
+        // Enum field: image quality
+        if ($field === 'content_image_quality') {
+            $value = in_array($value, array('auto', 'low', 'medium', 'high'), true) ? $value : 'auto';
         }
 
         $options = get_option('mxchat_options', array());

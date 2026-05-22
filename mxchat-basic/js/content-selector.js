@@ -9,6 +9,12 @@ jQuery(document).ready(function($) {
     const $processButton = $('#mxchat-kb-process-selected');
     const $selectAll = $('#mxchat-kb-select-all');
     const $selectionCount = $('.mxchat-kb-selection-count');
+    const $acfPdfExtractCheckbox = $('#mxchat-kb-acf-pdf-extract');
+
+    // Restore last-used ACF→PDF extract preference from the server-localized default.
+    if (typeof mxchatSelector !== 'undefined' && mxchatSelector.acfPdfExtractDefault) {
+        $acfPdfExtractCheckbox.prop('checked', true);
+    }
     
     // Filter elements
     const $searchInput = $('#mxchat-kb-content-search');1
@@ -501,11 +507,13 @@ $processButton.on('click', function() {
         $progressModal.find('.mxchat-kb-progress-fill').css('width', percent + '%');
 
         // UPDATED: Prepare AJAX data with bot_id
+        const extractAcfPdfs = $acfPdfExtractCheckbox.prop('checked') ? 1 : 0;
         const ajaxData = {
             action: 'mxchat_process_selected_content',
             nonce: mxchatSelector.nonce,
             post_ids: [postId],
-            is_update: isUpdate
+            is_update: isUpdate,
+            extract_acf_pdfs: extractAcfPdfs
         };
 
         // Add bot_id if multi-bot is active and not default
@@ -535,8 +543,13 @@ $processButton.on('click', function() {
                         });
                     }
                     
-                    $progressModal.find('.mxchat-kb-current-item')
-                        .text('Successfully ' + (isUpdate ? 'updated' : 'processed') + ': ' + response.data.title);
+                    let successText = 'Successfully ' + (isUpdate ? 'updated' : 'processed') + ': ' + response.data.title;
+                    const pdfCount = parseInt(response.data.pdf_extracted_count, 10) || 0;
+                    if (pdfCount > 0) {
+                        const suffixTpl = (mxchatSelector.i18n && mxchatSelector.i18n.pdfExtractedSuffix) || ' (%d PDF(s) extracted)';
+                        successText += suffixTpl.replace('%d', pdfCount);
+                    }
+                    $progressModal.find('.mxchat-kb-current-item').text(successText);
                 } else {
                     failed++;
                     results.failed.push({

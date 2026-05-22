@@ -516,12 +516,14 @@ function mxchat_render_content_page($admin_instance) {
                                     $content_model = $options['content_model'] ?? ($options['model'] ?? 'gpt-5.1-chat-latest');
                                     $models = array(
                                         'OpenAI' => array(
+                                            'gpt-5.5'              => 'GPT-5.5',
                                             'gpt-5.4'              => 'GPT-5.4',
                                             'gpt-5.2'              => 'GPT-5.2',
                                             'gpt-5.1-chat-latest'  => 'GPT-5.1',
                                             'gpt-5'                => 'GPT-5',
                                         ),
                                         'Anthropic' => array(
+                                            'claude-opus-4-7'              => 'Claude Opus 4.7',
                                             'claude-opus-4-6'              => 'Claude Opus 4.6',
                                             'claude-sonnet-4-6'            => 'Claude Sonnet 4.6',
                                             'claude-haiku-4-5-20251001'    => 'Claude Haiku 4.5',
@@ -557,6 +559,7 @@ function mxchat_render_content_page($admin_instance) {
                                 <?php $image_model = $options['content_image_model'] ?? 'gpt-image-1.5'; ?>
                                 <select id="mxch-image-model" data-field="content_image_model" class="mxch-cg-select">
                                     <optgroup label="<?php esc_attr_e('OpenAI', 'mxchat'); ?>">
+                                        <option value="gpt-image-2" <?php selected($image_model, 'gpt-image-2'); ?>><?php esc_html_e('GPT Image 2 (Latest)', 'mxchat'); ?></option>
                                         <option value="gpt-image-1.5" <?php selected($image_model, 'gpt-image-1.5'); ?>><?php esc_html_e('GPT Image 1.5', 'mxchat'); ?></option>
                                     </optgroup>
                                     <optgroup label="<?php esc_attr_e('xAI', 'mxchat'); ?>">
@@ -571,6 +574,30 @@ function mxchat_render_content_page($admin_instance) {
                             </div>
                             <p class="mxch-field-description"><?php esc_html_e('Select the AI model used for generating images within your content.', 'mxchat'); ?></p>
                         </div>
+
+                        <!-- Image Quality (GPT Image only) -->
+                        <div class="mxch-field">
+                            <label class="mxch-field-label" for="mxch-image-quality"><?php esc_html_e('Image Quality', 'mxchat'); ?></label>
+                            <div class="mxch-field-control">
+                                <?php $image_quality = $options['content_image_quality'] ?? 'auto'; ?>
+                                <?php $quality_supported = (strpos($image_model, 'gpt-image') === 0); ?>
+                                <select id="mxch-image-quality" data-field="content_image_quality" class="mxch-cg-select"<?php echo $quality_supported ? '' : ' disabled'; ?>>
+                                    <option value="auto" <?php selected($image_quality, 'auto'); ?>><?php esc_html_e('Auto (default)', 'mxchat'); ?></option>
+                                    <option value="low" <?php selected($image_quality, 'low'); ?>><?php esc_html_e('Low (fastest, cheapest)', 'mxchat'); ?></option>
+                                    <option value="medium" <?php selected($image_quality, 'medium'); ?>><?php esc_html_e('Medium', 'mxchat'); ?></option>
+                                    <option value="high" <?php selected($image_quality, 'high'); ?>><?php esc_html_e('High (best, slowest)', 'mxchat'); ?></option>
+                                </select>
+                            </div>
+                            <p class="mxch-field-description"><?php esc_html_e('Quality control for OpenAI GPT Image models only. Grok Imagine and Gemini image models ignore this setting (their APIs do not expose an equivalent parameter).', 'mxchat'); ?></p>
+                        </div>
+                        <script>(function(){
+                            var m = document.getElementById('mxch-image-model');
+                            var q = document.getElementById('mxch-image-quality');
+                            if (!m || !q || q._wired) { return; } q._wired = true;
+                            function sync(){ q.disabled = (m.value || '').indexOf('gpt-image') !== 0; }
+                            m.addEventListener('change', sync);
+                            sync();
+                        })();</script>
 
                         <!-- Enable Image Generation -->
                         <div class="mxch-field">

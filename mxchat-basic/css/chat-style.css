@@ -1761,131 +1761,190 @@ pre {
     left: 0;
 }
 
-/* ============================================================
-   Print stylesheet — clean conversation export (v3.2.9 rebuild)
-   Goal: full-page-width transcript, no right-edge clipping, all chrome hidden.
-   ============================================================ */
-@media print {
-    body * {
-        visibility: hidden !important;
-    }
-    .mxchat-conversation-print-root,
-    .mxchat-conversation-print-root * {
-        visibility: visible !important;
-    }
-    .mxchat-conversation-print-root {
-        position: absolute !important;
-        left: 0 !important;
-        top: 0 !important;
-        right: 0 !important;
-        width: 100% !important;
-        max-width: 100% !important;
-        height: auto !important;
-        min-height: 0 !important;
-        max-height: none !important;
-        overflow: visible !important;
-        background: #fff !important;
-        color: #000 !important;
-        padding: 24px 32px !important;
-        margin: 0 !important;
-        box-shadow: none !important;
-        border: none !important;
-        transform: none !important;
-        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif !important;
-        direction: inherit;
-        box-sizing: border-box !important;
-    }
-    .mxchat-conversation-print-root::before {
-        content: attr(data-print-title);
-        display: block;
-        font-size: 16px;
-        font-weight: 600;
-        color: #000;
-        border-bottom: 1px solid #000;
-        padding-bottom: 8px;
-        margin-bottom: 16px;
-    }
-    .mxchat-conversation-print-root .user-message,
-    .mxchat-conversation-print-root .bot-message,
-    .mxchat-conversation-print-root .agent-message {
-        display: block !important;
-        position: static !important;
-        float: none !important;
-        width: 100% !important;
-        max-width: 100% !important;
-        min-width: 0 !important;
-        background: transparent !important;
-        color: #000 !important;
-        border: none !important;
-        border-radius: 0 !important;
-        box-shadow: none !important;
-        padding: 8px 0 !important;
-        margin: 0 0 12px 0 !important;
-        page-break-inside: avoid;
-        overflow-wrap: anywhere;
-        word-break: break-word;
-        box-sizing: border-box !important;
-    }
-    .mxchat-conversation-print-root .user-message *,
-    .mxchat-conversation-print-root .bot-message *,
-    .mxchat-conversation-print-root .agent-message * {
-        max-width: 100% !important;
-        box-sizing: border-box !important;
-        color: #000 !important;
-    }
-    .mxchat-conversation-print-root .user-message::before {
-        content: "You: ";
-        font-weight: 600;
-        color: #000;
-    }
-    .mxchat-conversation-print-root .bot-message::before {
-        content: "Bot: ";
-        font-weight: 600;
-        color: #000;
-    }
-    .mxchat-conversation-print-root .agent-message::before {
-        content: "Agent: ";
-        font-weight: 600;
-        color: #000;
-    }
-    .mxchat-conversation-print-root pre,
-    .mxchat-conversation-print-root code {
-        background: #f4f4f4 !important;
-        color: #000 !important;
-        border: 1px solid #ddd !important;
-        white-space: pre-wrap !important;
-        word-wrap: break-word !important;
-        overflow-wrap: anywhere !important;
-        max-width: 100% !important;
-        box-sizing: border-box !important;
-    }
-    .mxchat-conversation-print-root img,
-    .mxchat-conversation-print-root .image-gallery img {
-        max-width: 100% !important;
-        height: auto !important;
-    }
-    .mxchat-conversation-print-root a {
-        color: #000 !important;
-        text-decoration: underline;
-        word-break: break-all;
-    }
-    /* Hide widget chrome inside the transcript */
-    .mxchat-conversation-print-root .mxchat-copy-button,
-    .mxchat-conversation-print-root .thinking-dots,
-    .mxchat-conversation-print-root .temporary-message,
-    .mxchat-conversation-print-root .mxchat-product-card button,
-    .mxchat-conversation-print-root .mxchat-popular-questions,
-    .mxchat-conversation-print-root .mxchat-input-container,
-    .mxchat-conversation-print-root .mxchat-top-bar,
-    .mxchat-conversation-print-root .mxchat-toolbar,
-    .mxchat-conversation-print-root .mxchat-header-menu-wrap,
-    .mxchat-conversation-print-root .mxchat-header-menu,
-    .mxchat-conversation-print-root .mxchat-menu-trigger {
-        display: none !important;
-    }
-    /* Page setup */
-    @page {
-        margin: 0.5in;
-        size: auto;
-    }
+/* ============================================================================
+   Satisfaction rating (v3.2.6 — polished per plan-141a12)
+   Theme-adaptive via currentColor + inherit. Clean slate — old rules removed.
+   ========================================================================= */
+.mxchat-chatbot .chat-container .chat-box .mxchat-rating-prompt,
+.mxchat-chatbot .chat-container .chat-box .mxchat-rating-feedback,
+.mxchat-chatbot .chat-container .chat-box .mxchat-rating-saved {
+    clear: both;
+    float: left;
+    max-width: 92%;
+    box-sizing: border-box;
+}
+
+/* Theme-adaptive wrapper — .bot-message carries the user's custom bg/color via
+   inline style; the inner rating component supplies its own padding + layout. */
+.mxchat-rating-bot-bubble {
+    padding: 0;
+    overflow: visible;
+}
+
+.mxchat-rating-prompt {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+    padding: 10px 14px;
+    margin: 10px 0;
+    font-size: 14px;
+    color: inherit;
+}
+
+.mxchat-rating-question {
+    color: inherit;
+    opacity: 0.85;
+    font-weight: 500;
+}
+
+.mxchat-rating-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.mxchat-rating-buttons {
+    display: inline-flex;
+    gap: 6px;
+}
+
+.mxchat-rating-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    border-radius: 8px;
+    background: transparent;
+    border: none;
+    color: inherit;
+    opacity: 0.6;
+    cursor: pointer;
+    transition: opacity 0.18s ease, transform 0.18s ease, background-color 0.18s ease, color 0.18s ease;
+    padding: 0;
+}
+
+.mxchat-rating-btn:hover {
+    opacity: 1;
+    transform: scale(1.12);
+    background: rgba(255, 255, 255, 0.08);
+}
+
+.mxchat-rating-btn:focus-visible {
+    opacity: 1;
+    outline: 2px solid currentColor;
+    outline-offset: 2px;
+}
+
+.mxchat-rating-btn svg {
+    pointer-events: none;
+}
+
+.mxchat-rating-dismiss {
+    width: 24px;
+    height: 24px;
+    border-radius: 6px;
+    background: transparent;
+    border: none;
+    color: inherit;
+    opacity: 0.45;
+    cursor: pointer;
+    font-size: 18px;
+    line-height: 1;
+    transition: opacity 0.18s ease, background-color 0.18s ease;
+}
+
+.mxchat-rating-dismiss:hover {
+    opacity: 0.9;
+    background: rgba(255, 255, 255, 0.08);
+}
+
+/* Feedback panel that replaces the prompt after a rating is clicked */
+.mxchat-rating-feedback {
+    padding: 12px 14px;
+    margin: 10px 0;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    color: inherit;
+    animation: mxchat-rating-fade-in 0.22s ease;
+}
+
+.mxchat-rating-feedback-label {
+    font-size: 13px;
+    opacity: 0.85;
+    font-weight: 500;
+}
+
+.mxchat-rating-feedback-input {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 8px 10px;
+    border: 1px solid rgba(255, 255, 255, 0.25);
+    border-radius: 8px;
+    font-size: 14px;
+    font-family: inherit;
+    resize: vertical;
+    background: rgba(255, 255, 255, 0.08);
+    color: inherit;
+}
+
+.mxchat-rating-feedback-input:focus {
+    outline: none;
+    border-color: rgba(255, 255, 255, 0.45);
+    background: rgba(255, 255, 255, 0.15);
+}
+
+.mxchat-rating-feedback-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+}
+
+.mxchat-rating-skip,
+.mxchat-rating-submit {
+    padding: 6px 14px;
+    border-radius: 8px;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    border: none;
+    transition: opacity 0.18s ease, transform 0.18s ease, background-color 0.18s ease;
+}
+
+.mxchat-rating-skip {
+    background: transparent;
+    color: inherit;
+    opacity: 0.6;
+}
+
+.mxchat-rating-skip:hover {
+    opacity: 1;
+    background: rgba(255, 255, 255, 0.08);
+}
+
+.mxchat-rating-submit {
+    background: currentColor;
+    color: var(--mxchat-bot-message-bg, #ffffff);
+}
+
+.mxchat-rating-submit:hover {
+    transform: translateY(-1px);
+    opacity: 0.9;
+}
+
+.mxchat-rating-saved {
+    padding: 10px 14px;
+    margin: 10px 0;
+    font-size: 13px;
+    font-weight: 500;
+    text-align: center;
+    color: inherit;
+    animation: mxchat-rating-fade-in 0.22s ease;
+}
+
+@keyframes mxchat-rating-fade-in {
+    from { opacity: 0; transform: translateY(4px); }
+    to   { opacity: 1; transform: translateY(0); }
 }

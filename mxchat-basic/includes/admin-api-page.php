@@ -571,75 +571,8 @@ function mxchat_render_api_admin_page() {
             letter-spacing: 0.5px;
         }
     </style>
-
-    <script>
-    (function(){
-        // Sidebar tab switcher: clicking any [data-target] button toggles .mxch-section.active
-        document.addEventListener('DOMContentLoaded', function () {
-            var wrapper = document.querySelector('.mxch-api-wrapper');
-            if (!wrapper) return;
-
-            var navButtons = wrapper.querySelectorAll('[data-target]');
-            navButtons.forEach(function (btn) {
-                btn.addEventListener('click', function (e) {
-                    e.preventDefault();
-                    var targetId = btn.getAttribute('data-target');
-                    if (!targetId) return;
-
-                    wrapper.querySelectorAll('.mxch-section').forEach(function (s) {
-                        s.classList.remove('active');
-                    });
-                    var target = wrapper.querySelector('#' + targetId);
-                    if (target) target.classList.add('active');
-
-                    // Toggle active state on sidebar + mobile nav matching this target
-                    wrapper.querySelectorAll('.mxch-nav-link, .mxch-mobile-nav-link').forEach(function (l) {
-                        l.classList.remove('active');
-                    });
-                    wrapper.querySelectorAll('[data-target="' + targetId + '"]').forEach(function (l) {
-                        l.classList.add('active');
-                    });
-
-                    // Close mobile menu if open
-                    wrapper.querySelector('.mxch-mobile-menu')?.classList.remove('open');
-                    wrapper.querySelector('.mxch-mobile-overlay')?.classList.remove('open');
-                });
-            });
-
-            // Mobile menu open/close
-            var mobileBtn = wrapper.querySelector('.mxch-mobile-menu-btn');
-            var mobileMenu = wrapper.querySelector('.mxch-mobile-menu');
-            var mobileOverlay = wrapper.querySelector('.mxch-mobile-overlay');
-            var mobileClose = wrapper.querySelector('.mxch-mobile-menu-close');
-            function openMenu() { mobileMenu?.classList.add('open'); mobileOverlay?.classList.add('open'); }
-            function closeMenu() { mobileMenu?.classList.remove('open'); mobileOverlay?.classList.remove('open'); }
-            mobileBtn?.addEventListener('click', openMenu);
-            mobileClose?.addEventListener('click', closeMenu);
-            mobileOverlay?.addEventListener('click', closeMenu);
-
-            // Copy-to-clipboard for the just-rotated token
-            wrapper.querySelectorAll('[data-mxch-copy]').forEach(function (btn) {
-                btn.addEventListener('click', function () {
-                    var val = btn.getAttribute('data-mxch-copy');
-                    if (!val) return;
-                    var label = btn.querySelector('span');
-                    var original = label ? label.textContent : '';
-                    var done = function () {
-                        if (label) label.textContent = '<?php echo esc_js(__('Copied', 'mxchat')); ?>';
-                        setTimeout(function () { if (label) label.textContent = original; }, 1500);
-                    };
-                    if (navigator.clipboard && navigator.clipboard.writeText) {
-                        navigator.clipboard.writeText(val).then(done).catch(function(){ done(); });
-                    } else {
-                        var ta = document.createElement('textarea');
-                        ta.value = val; document.body.appendChild(ta); ta.select();
-                        try { document.execCommand('copy'); } catch(e){}
-                        document.body.removeChild(ta); done();
-                    }
-                });
-            });
-        });
-    })();
-    </script>
     <?php
+    // Tab switcher / mobile menu / copy-to-clipboard are wired by the shared
+    // mxchat-basic/js/admin-sidebar.js, enqueued in class-mxchat-admin.php for
+    // the mxchat-api-access screen.
 }

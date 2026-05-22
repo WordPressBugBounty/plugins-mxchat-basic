@@ -632,6 +632,34 @@ private static function submit_chunked_content($content, $source_url, $api_key, 
     foreach ($chunks as $index => $chunk_text) {
         // Generate chunk metadata
         $chunk_metadata = MxChat_Chunker::create_chunk_metadata($index, $total_chunks, $source_url);
+
+        // AI-Engine-style aliases so external consumers (Pinecone/Qdrant/Chroma) can rely on
+        // a stable shorthand ('source'/'part_index'/'part_total') without parsing our internal names.
+        $chunk_metadata['source']     = $source_url;
+        $chunk_metadata['part_index'] = (int) $index;
+        $chunk_metadata['part_total'] = (int) $total_chunks;
+
+        /**
+         * Filter the per-chunk metadata blob before it's written to the KB store.
+         *
+         * @param array  $chunk_metadata  Metadata array (source, part_index, part_total, chunk_index, total_chunks, source_url, parent_url_hash, document_type, ...).
+         * @param string $chunk_text      The chunk text being stored.
+         * @param array  $context         ['bot_id' => string, 'content_type' => string, 'source_url' => string, 'part_index' => int, 'part_total' => int]
+         * @return array Updated metadata array.
+         */
+        $chunk_metadata = apply_filters(
+            'mxchat_embedding_chunk_metadata',
+            $chunk_metadata,
+            $chunk_text,
+            array(
+                'bot_id'       => $bot_id,
+                'content_type' => $content_type,
+                'source_url'   => $source_url,
+                'part_index'   => (int) $index,
+                'part_total'   => (int) $total_chunks,
+            )
+        );
+
         $chunk_vector_id = MxChat_Chunker::generate_chunk_vector_id($source_url, $index);
 
         //error_log('[MXCHAT-CHUNK] Processing chunk ' . ($index + 1) . '/' . $total_chunks . ' (ID: ' . $chunk_vector_id . ')');

@@ -3,9 +3,9 @@ Contributors: mxchat
 Author: [MxChat](https://mxchat.ai)
 Tags: ai chatbot, chatgpt, woocommerce, customer support, content generation
 Requires at least: 5.0
-Tested up to: 6.9
+Tested up to: 7.0
 Requires PHP: 7.2
-Stable tag: 3.2.5
+Stable tag: 3.2.6
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -29,26 +29,29 @@ MxChat is the best free AI chatbot and content generation plugin for WordPress i
 
 🎬 [Quick Setup with MxChat](https://www.youtube.com/watch?v=3BqoiyWaQiM) – Learn how to quickly setup and understand how your chatbot works
 
-### 📦 Optional Premium Add-Ons  
-Extend the free plugin with these optional premium features:  
+### 📦 Optional Premium Add-Ons
+Extend the free plugin with these optional premium features:
 
-- [Advanced Content Editor Add-On](https://mxchat.ai/advanced-content-editor/) – Smart internal linking, AI image management, readability analysis, Google Search Console integration, advanced SEO optimization, and 30-day AI Content Calendar for automated blog scheduling
-- [WooCommerce Add-On](https://mxchat.ai/woocommerce/) – AI-powered shopping assistance with product-aware conversations, native product cards with images and pricing, upselling and recommendations, order inquiry handling, cart management, and real-time inventory awareness
-- [Forms Action Add-On](https://mxchat.ai/forms-action/) – Capture leads and data with custom in-chat forms
-- [MxChat Anywhere Add-On](https://mxchat.ai/mxchat-anywhere-deploy-your-ai-chatbot-on-any-website-with-one-script-tag/) – Deploy your chatbot on any website with one script tag — Shopify, Squarespace, Wix, static HTML, and more
-- [AI Chatbot Theme Customizer Add-On](https://mxchat.ai/ai-theme-customizer/) – Instantly design chatbot themes with natural language using AI
-- [Multi-Bot Add-On](https://mxchat.ai/multi-bot/) – Run unlimited AI chatbots with custom knowledge and personalities
-- [Image Analysis Add-On](https://mxchat.ai/image-analysis/) – Enable AI-powered image analysis and OCR inside chats
+- [MCP Server Add-On](https://mxchat.ai/add-ons/mxchat-mcp/) – Turn your MxChat install into a Model Context Protocol server so Claude, ChatGPT, and Claude Code list transcripts, push knowledge, and inspect bots natively — JSON-RPC 2.0 + OAuth + bearer auth, no per-message fees
+- [Advanced Content Editor Add-On](https://mxchat.ai/add-ons/mxchat-advanced-content/) – Smart internal linking, AI image management, readability analysis, Google Search Console integration, advanced SEO optimization, and 30-day AI Content Calendar for automated blog scheduling
+- [WooCommerce Add-On](https://mxchat.ai/add-ons/mxchat-woo/) – AI-powered shopping assistance with product-aware conversations, native product cards with images and pricing, upselling and recommendations, order inquiry handling, cart management, and real-time inventory awareness
+- [Forms Add-On](https://mxchat.ai/add-ons/mxchat-forms/) – Capture leads and data with custom in-chat forms
+- [MxChat Anywhere Add-On](https://mxchat.ai/add-ons/mxchat-embed/) – Deploy your chatbot on any website with one script tag — Shopify, Squarespace, Wix, static HTML, and more
+- [AI Chatbot Theme Customizer Add-On](https://mxchat.ai/add-ons/mxchat-theme/) – Instantly design chatbot themes with natural language using AI
+- [Multi-Bot Add-On](https://mxchat.ai/add-ons/mxchat-multi-bot/) – Run unlimited AI chatbots with custom knowledge and personalities
+- [Image Analysis Add-On](https://mxchat.ai/add-ons/mxchat-vision/) – Enable AI-powered image analysis and OCR inside chats
 
 👉 [Visit our website to view all add-ons](https://mxchat.ai)
 
-## 🔥 What's New in Version 3.2.5
+## 🔥 What's New in Version 3.2.6
 
-- **NEW: REST API** — Bearer-token-authenticated endpoints to read chat transcripts (`GET /wp-json/mxchat/v1/transcripts`), push content into the knowledge base (`POST /wp-json/mxchat/v1/knowledge`), and bulk-delete sessions (`DELETE /wp-json/mxchat/v1/transcripts`) from external tools — analytics dashboards, automations (n8n / Zapier / Make), data exports, GDPR right-to-erasure flows, custom RAG pipelines, or your own agents. Disabled by default; generate a token from the new **MxChat → API Access** admin page when you're ready to use it. Includes filters for date range, role, session, and "no-RAG-context" answers (perfect for finding gaps in your knowledge base).
-- **NEW: Redesigned chat-widget header** — A clean stroke-based X-close icon replaces the old minimize arrow, paired with a 3-dot kebab menu that opens a keyboard-accessible dropdown for future actions. Title, "AI Agent" pill, and 32×32 icon buttons sit on a single tidy baseline for a more modern, native feel.
-- **NEW: Download Transcript** — A new menu item in the chat header saves the conversation as a clean Markdown file with sender labels and a timestamp, replacing the old print-dialog flow. Toggleable from MxChat settings.
-- **NEW: Custom Transcript Retention** — Set any retention window from 1 to 3650 days under Transcripts settings; the daily cron sweep deletes older transcripts and cascades the delete to translations and URL-click tracking. Capped at 5000 sessions per run for large-site safety, with a new `mxchat_transcript_retention_days` filter for developer overrides.
-- **IMPROVED: Content Generator SEO** — Generated posts now write the SEO title to Rank Math, Yoast, and AIOSEO metadata, and inline `<img alt="...">` text is synced into each attachment's `_wp_attachment_image_alt` so the media library, schema markup, and SEO plugins all pick up the right alt text.
+- **NEW: Custom Provider (OpenAI-compatible)** — Point MxChat at any OpenAI-compatible endpoint: Ollama, LM Studio, vLLM, llama.cpp, or Azure OpenAI. Configure Base URL, optional API Key, Model Name, Auth Scheme (Bearer or `api-key` for Azure), and API Version, then one-click **Test Connection**. Opt-in checkboxes route embeddings and image generation through the same endpoint, with a dedicated **Custom Embedding Model** field so a single configuration can power a fully local stack — even the image-search query refiner stays on your endpoint.
+- **NEW: ACF PDF auto-indexing** — Any ACF field pointing at a PDF in your media library now has its full text auto-extracted into the knowledge base when the post is indexed — including PDFs nested in repeater, group, and flexible-content fields. Opt-in per import batch and per auto-sync save (default off), reports how many PDFs were extracted per post, and safely skips files over 25 MB. Extracted text is cached so re-syncing doesn't re-parse unchanged PDFs.
+- **NEW: Latest-Generation Models** — Claude Opus 4.7, GPT-5.5, and GPT Image 2 are now selectable from the Select AI Model modal, each tagged "Latest Flagship" at the top of its provider group.
+- **NEW: Image Quality Control for GPT Image** — New **Image Quality** dropdown (Auto / Low / Medium / High) in the Content Generator routes through OpenAI's `/v1/images/generations` `quality` parameter, auto-disabling on non-GPT-Image models.
+- **NEW: DELETE Transcripts Endpoint** — `DELETE /wp-json/mxchat/v1/transcripts` bulk-deletes chat sessions by session_id with optional cascade to translations and URL-click tracking. Bearer-token auth, capped at 1000 session_ids per call — ideal for daily privacy hygiene, GDPR right-to-erasure flows, and post-export cleanup.
+- **NEW: `mxchat_embedding_chunk_metadata` Filter** — Developers can enrich per-chunk metadata stored alongside every embedding (Pinecone + WordPress DB). Chunks now also expose alias keys (`source`, `part_index`, `part_total`) for cross-tool interoperability.
+- **FIXED: Page-Cache "Access Denied" Race** — Eliminates the intermittent "Access denied" error visitors saw on the first chat message when the site is served by WP Rocket, LiteSpeed, FlyingPress, W3 Total Cache, or Cloudflare APO. MxChat now also auto-tells those five cache plugins to never cache chat AJAX via their own filter APIs, and a new **Page Cache Compatibility** card under Settings → Optimization & Diagnostics surfaces per-plugin status with copy buttons for any cache layer outside the auto-handled set.
 
 ## Core Features That Set MxChat Apart
 
@@ -140,6 +143,7 @@ Your WordPress site powers the AI, but your chatbot doesn't have to live there. 
 ## Powerful Add-On Ecosystem
 
 **Pro Add-Ons:**
+🟢 **MCP Server** – Expose your MxChat install as a Model Context Protocol server so Claude, ChatGPT, and Claude Code can list transcripts, push knowledge, and inspect bots through a JSON-RPC 2.0 endpoint with OAuth + bearer auth — no per-message fees, no middleman API. Includes a WooCommerce extension for product, order, and customer lookups.
 🟢 **Advanced Content Editor** – Google Search Console integration with per-page impressions, clicks, and search queries. Smart internal linking, AI readability optimization, image ALT text generation, and advanced SEO checks
 🟢 **Multi-Bot Manager** – Create and manage multiple specialized chatbots with dedicated knowledge databases for different purposes (support, sales, technical, etc.)
 🟢 **Video Generation** – Generate stunning AI videos using Google's Veo 2 and Veo 3 models with audio support and multiple aspect ratios
@@ -329,13 +333,27 @@ Yes. MxChat is available for free on the WordPress plugin repository with full A
 
 == Changelog ==
 
-= 3.2.5 - May 11, 2026 =
+= 3.2.6 =
+* New: Custom Provider (OpenAI-compatible) — point MxChat at any OpenAI-compatible endpoint (Ollama, LM Studio, vLLM, llama.cpp, Azure OpenAI) under MxChat → API Keys, with opt-in routing for `/v1/embeddings` and `/v1/images/generations` through the same endpoint. Includes a one-click **Test Connection** button and a new "Custom / Local" category in the model picker.
+* New: Image Quality control for OpenAI GPT Image — new **Image Quality** dropdown in the Content Generator (Auto / Low / Medium / High), passed as the `quality` parameter to OpenAI's image API. Auto-disables when a non-GPT-Image model is selected.
+* New: Latest-generation models added to the picker — Claude Opus 4.7, GPT-5.5, and GPT Image 2 are now selectable from the Select AI Model modal, each tagged "Latest Flagship" at the top of its provider group.
+* New: ACF PDF auto-indexing — any ACF File/Image field (including PDFs nested in repeater, group, and flexible-content fields) now has its full PDF text extracted into the knowledge base alongside the post, not just the link. Opt-in per import batch via a new checkbox (default off), with per-post PDF counts reported during import, files over 25 MB safely skipped (adjustable via `mxchat_acf_pdf_max_bytes`), and a separate Knowledge → Auto-Sync toggle so editor saves don't re-parse unchanged PDFs. Extracted text is cached per attachment so re-syncs stay fast.
+* New: `DELETE /wp-json/mxchat/v1/transcripts` endpoint — bulk-delete chat sessions by session_id (bearer-token auth, capped at 1000/call) with optional cascade to translations and URL-click tracking. Useful for GDPR right-to-erasure flows and automated cleanup.
+* New: `mxchat_embedding_chunk_metadata` filter — developers can now enrich the per-chunk metadata that gets stored alongside every embedding (in both Pinecone and the WordPress DB). The filter receives the metadata array, the chunk text, and a context array (`bot_id`, `content_type`, `source_url`, `part_index`, `part_total`), and chunks now also expose alias keys (`source`, `part_index`, `part_total`) for cross-tool interoperability.
+* Improved: Page-cache compatibility — MxChat now auto-tells WP Rocket, LiteSpeed, W3 Total Cache, FlyingPress, and WP Super Cache to never cache the chat AJAX endpoint, and a new "Page Cache Compatibility" card under Settings → Optimization & Diagnostics shows per-plugin status with exclusion strings for Cloudflare APO (one-click Copy buttons included).
+* Fixed: Resolves intermittent "Access denied" error when sending the first chat message on sites running a full-page cache plugin (WP Rocket, LiteSpeed Cache, FlyingPress, W3 Total Cache, Cloudflare APO, etc.). The chat-send (and stream-send, plus PDF/Word upload) now waits for the page-cache nonce refresh to complete before firing, eliminating a race condition that affected the first message of each session.
+* Fixed: Print preview was blank on every page that had MxChat installed — a stale `@media print` rule from the old "Print Conversation" feature (replaced by "Download Transcript" in v3.2.5) was hiding all page content on print. The dead rule has been removed; printing any page now works normally regardless of whether MxChat is loaded.
+* New: End-of-session satisfaction rating — after two bot replies and a brief idle, the chat widget shows a "Was this helpful?" prompt with 👍 / 👎 thumbs and an optional feedback box, rendering inside a real bot bubble that inherits your chatbot's theme. Toggle on/off site-wide under Settings → Chatbot → Behavior, with configurable idle timeout (5–600s) and customizable prompt text. Ratings surface in admin as a badge on every Transcripts row, sort options, a **Satisfaction (last 30 days)** dashboard card, and a Feedback row in each session's details drawer.
+
+= 3.2.5 - May 12, 2026 =
 * New: REST API with bearer-token auth — `GET /wp-json/mxchat/v1/transcripts` (read), `POST /wp-json/mxchat/v1/knowledge` (push), `DELETE /wp-json/mxchat/v1/transcripts` (bulk-delete sessions with cascade to translations and URL-click tracking, capped at 1000 session_ids/call), plus a public `/health` endpoint; disabled by default, with constant-time token comparison and prepared statements throughout.
 * New: API Access admin page styled to match the rest of the MxChat admin UI — sidebar navigation, branded header, themed buttons, status pill, copy-to-clipboard on newly rotated tokens, and a "Last rotated" indicator.
 * New: Chat-widget header redesign — replaced the minimize arrow with a stroke-based X-close icon and a 3-dot kebab menu (keyboard-accessible dropdown), with refined alignment so the title, "AI Agent" pill, and equal-sized 32×32 icon buttons share a single 48px baseline.
-* New: **Download Transcript** menu item — saves a clean Markdown file of the conversation with sender labels and a timestamped header
+* New: **Download Transcript** menu item (replaces "Print conversation") — saves a clean Markdown file of the conversation with sender labels and a timestamped header, toggleable via `mxchat_options[print_button_enabled]`.
+* New: Sidebar ordering — API Access now sits directly above Pro & Extensions, keeping Pro & Extensions pinned as the trailing CTA via a later `admin_menu` priority.
 * New: Content Generator now writes Rank Math / Yoast / AIOSEO SEO-title meta and syncs each inline `<img alt="...">` into the attachment's `_wp_attachment_image_alt` postmeta, so SEO plugins, schema markup, and the media library see the alt text instead of only the inline body HTML.
 * New: Transcript retention — "Custom Retention (Days)" field (1–3650) under Transcripts settings; the daily cron sweep deletes older transcripts with cascade to translations and URL-click tracking, capped at 5000 sessions per run, with a new `mxchat_transcript_retention_days` filter for programmatic overrides.
+* Fixed: 3-dot header dropdown menu now inherits the bot bubble's colors instead of being hardcoded white/black — no more white-on-white "ghost menu" when using a dark bubble theme.
 
 = 3.2.4 - May 3, 2026 =
 - Fixed: WooCommerce product Short Description Visual tab broken by a 404 on the Gutenberg meta-box script
@@ -984,8 +1002,8 @@ Yes. MxChat is available for free on the WordPress plugin repository with full A
 
 == Upgrade Notice ==
 
-= 3.2.5 =
-Major release: REST API with bearer-token auth (transcripts read/delete, knowledge push, health), new API Access admin page, redesigned chat header with 3-dot menu and Download Transcript, SEO improvements to Content Generator (rank_math_title and image alt sync), and custom transcript retention (1–3650 days).
+= 3.2.6 =
+Recommended for any production install behind a full-page cache: eliminates the intermittent "Access denied" error visitors saw on the first chat message under WP Rocket, LiteSpeed, FlyingPress, W3 Total Cache, or Cloudflare APO, and now also auto-tells those cache plugins to never cache the chat AJAX endpoint. Major additions: Custom Provider (OpenAI-compatible) for Ollama / LM Studio / vLLM / llama.cpp / Azure OpenAI; an end-of-session 👍/👎 satisfaction rating prompt with full admin reporting; ACF PDF auto-indexing into the knowledge base; latest-generation models (Claude Opus 4.7, GPT-5.5, GPT Image 2); an Image Quality dropdown for GPT Image; and a bulk `DELETE /transcripts` REST endpoint. Also fixes a print regression where MxChat's stale print stylesheet was hiding all page content during normal page prints.
 
 == License & Warranty ==
 

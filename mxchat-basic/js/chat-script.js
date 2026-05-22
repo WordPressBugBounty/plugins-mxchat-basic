@@ -1,20 +1,38 @@
 jQuery(document).ready(function($) {
 
     // Nonce refresh is deferred until first user interaction (ensureSession)
-    // to avoid admin-ajax calls on passive page loads.
-    var nonceRefreshed = false;
+    // to avoid admin-ajax calls on passive page loads. The state machine below
+    // queues callbacks so a chat-send that fires while the refresh AJAX is still
+    // in flight waits for the fresh nonce instead of racing it with the stale
+    // cached value (which would 403 as "Access denied" on the first message).
+    var nonceRefreshState = 'idle'; // 'idle' | 'pending' | 'done'
+    var nonceRefreshCallbacks = [];
     function refreshNonceIfNeeded(callback) {
-        if (nonceRefreshed || typeof mxchatChat === 'undefined' || !mxchatChat.ajax_url) {
+        if (typeof mxchatChat === 'undefined' || !mxchatChat.ajax_url) {
             if (callback) callback();
             return;
         }
-        nonceRefreshed = true;
-        $.post(mxchatChat.ajax_url, { action: 'mxchat_refresh_nonce' }, function(res) {
-            if (res && res.success && res.data && res.data.nonce) {
-                mxchatChat.nonce = res.data.nonce;
-            }
+        if (nonceRefreshState === 'done') {
             if (callback) callback();
-        });
+            return;
+        }
+        if (callback) nonceRefreshCallbacks.push(callback);
+        if (nonceRefreshState === 'pending') {
+            return;
+        }
+        nonceRefreshState = 'pending';
+        $.post(mxchatChat.ajax_url, { action: 'mxchat_refresh_nonce' })
+            .done(function(res) {
+                if (res && res.success && res.data && res.data.nonce) {
+                    mxchatChat.nonce = res.data.nonce;
+                }
+            })
+            .always(function() {
+                nonceRefreshState = 'done';
+                var pending = nonceRefreshCallbacks;
+                nonceRefreshCallbacks = [];
+                pending.forEach(function(cb) { try { cb(); } catch (e) {} });
+            });
     }
 
     // ====================================
@@ -623,6 +641,11 @@ function callMxChat(message, callback, botId) {
         MxChatInstances.setChatSession(botId, sessionId);
     }
 
+    // Wait for the page-cache nonce refresh to complete before firing the
+    // chat-send AJAX. On cached pages the inline mxchatChat.nonce is stale
+    // until refreshNonceIfNeeded() returns; constructing ajaxData inside the
+    // callback guarantees we read the fresh value. See plan-c5457f.
+    refreshNonceIfNeeded(function() {
     // Prepare AJAX data
     const ajaxData = {
         action: 'mxchat_handle_chat_request',
@@ -635,12 +658,12 @@ function callMxChat(message, callback, botId) {
         // Pass session start timestamp so AI context matches what user sees
         session_start_timestamp: instance.sessionStartTimestamp || 0
     };
-    
+
     // Add page context if available
     if (pageContext) {
         ajaxData.page_context = JSON.stringify(pageContext);
     }
-    
+
     // CHECK FOR VISION FLAGS AND ADD THEM
     if (window.mxchatVisionProcessed) {
         ajaxData.vision_processed = true;
@@ -651,7 +674,7 @@ function callMxChat(message, callback, botId) {
         window.mxchatOriginalMessage = null;
         window.mxchatVisionImagesCount = 0;
     }
-    
+
     $.ajax({
         url: mxchatChat.ajax_url,
         type: 'POST',
@@ -842,6 +865,7 @@ function callMxChat(message, callback, botId) {
             replaceLastMessage("bot", errorMessage, '', [], botId);
         }
     });
+    }); // refreshNonceIfNeeded
 }
 
 function callMxChatStream(message, callback, botId) {
@@ -872,6 +896,9 @@ function callMxChatStream(message, callback, botId) {
         MxChatInstances.setChatSession(botId, streamSessionId);
     }
 
+    // Wait for the page-cache nonce refresh before constructing formData (which
+    // captures mxchatChat.nonce by value). Mirrors callMxChat's wrapping. See plan-c5457f.
+    refreshNonceIfNeeded(function() {
     const formData = new FormData();
     formData.append('action', 'mxchat_stream_chat');
     formData.append('message', message);
@@ -1097,6 +1124,7 @@ function callMxChatStream(message, callback, botId) {
                 callMxChat(message, callback, botId);
             }
         });
+    }); // refreshNonceIfNeeded
 }
 
 // Helper function to handle non-streaming responses
@@ -1326,25 +1354,6 @@ $(document).on('keypress', '.chat-input', function(e) {
         sendMessage(botId);
     }
 });
-
-    
-// Tags the chat-box transcript so the print stylesheet can target it,
-// and lazily initializes the header overflow menu for this bot if the
-// markup is present but not yet wired (covers dynamically-rendered widgets).
-// Idempotent; safe to call on every appended message.
-function mxchatEnsurePrintRoot(botId) {
-    var $chatBox = getElement(botId, 'chat-box');
-    if (!$chatBox || !$chatBox.length) return;
-    $chatBox.addClass('mxchat-conversation-print-root');
-    if (!$chatBox.attr('data-print-title')) {
-        var nowStr = new Date().toLocaleString();
-        var headerTitle = ((typeof mxchatChat !== 'undefined' && mxchatChat.print_header_title) || 'Chat transcript') + ' — ' + nowStr;
-        $chatBox.attr('data-print-title', headerTitle);
-    }
-    if (typeof mxchatInitHeaderMenu === 'function') {
-        mxchatInitHeaderMenu(botId);
-    }
-}
 
 // Builds the list of overflow-menu items for a given bot.
 // Adding a future item is one push to this array — do NOT hardcode "only download."
@@ -1662,7 +1671,7 @@ function appendMessage(sender, messageText = '', messageHtml = '', images = [], 
             }
 
             if ((sender === "bot" || sender === "agent") && !isTemporary) {
-                mxchatEnsurePrintRoot(botId);
+                if (typeof mxchatInitHeaderMenu === 'function') mxchatInitHeaderMenu(botId);
             }
         });
 
@@ -1814,7 +1823,7 @@ function replaceLastMessage(sender, responseText, responseHtml = '', images = []
         enableChatInput(botId);
 
         if (sender === "bot" || sender === "agent") {
-            mxchatEnsurePrintRoot(botId);
+            if (typeof mxchatInitHeaderMenu === 'function') mxchatInitHeaderMenu(botId);
         }
     } else {
         appendMessage(sender, responseText, responseHtml, images, false, botId);
@@ -3001,6 +3010,8 @@ $(document).on('click', '.questions-collapse-btn', function(e) {
         const originalBtnContent = uploadBtn.innerHTML;
     
         try {
+            // Wait for page-cache nonce refresh before reading mxchatChat.nonce. See plan-c5457f.
+            await new Promise(function(resolve) { refreshNonceIfNeeded(resolve); });
             const formData = new FormData();
             formData.append('action', 'mxchat_upload_pdf');
             formData.append('pdf_file', file);
@@ -3066,6 +3077,8 @@ $(document).on('click', '.questions-collapse-btn', function(e) {
         const originalBtnContent = uploadBtn.innerHTML;
     
         try {
+            // Wait for page-cache nonce refresh before reading mxchatChat.nonce. See plan-c5457f.
+            await new Promise(function(resolve) { refreshNonceIfNeeded(resolve); });
             const formData = new FormData();
             formData.append('action', 'mxchat_upload_word');
             formData.append('word_file', file);
@@ -3817,5 +3830,264 @@ document.addEventListener("click", (e) => {
             });
         }
     }
+});
+
+// ============================================================================
+// SATISFACTION RATING (v3.2.6)
+// ============================================================================
+// Per-session 👍/👎 prompt that appears in the chat-box after 60s of user
+// inactivity following a bot reply. One prompt per session, deduped via
+// localStorage. Disabled site-wide when mxchatChat.satisfaction_rating_enabled
+// is exactly false (default ON).
+jQuery(function($) {
+    if (typeof mxchatChat === 'undefined') return;
+    if (mxchatChat.satisfaction_rating_enabled === false || mxchatChat.satisfaction_rating_enabled === 'off') return;
+
+    // wp_localize_script stringifies ints, so accept both number and numeric string.
+    var idleRaw = mxchatChat.satisfaction_rating_idle_seconds;
+    var idleSeconds = (typeof idleRaw === 'number') ? idleRaw : parseInt(idleRaw, 10);
+    if (!isFinite(idleSeconds)) idleSeconds = 60;
+    if (idleSeconds < 5) idleSeconds = 5;
+    if (idleSeconds > 600) idleSeconds = 600;
+    var IDLE_MS = idleSeconds * 1000;
+    var MIN_BOT_REPLIES = 2;
+    var ratingState = {};
+
+    function getState(botId) {
+        if (!ratingState[botId]) {
+            ratingState[botId] = { idleTimer: null, botReplies: 0, promptShown: false, dismissed: false };
+        }
+        return ratingState[botId];
+    }
+
+    function getSessionId(botId) {
+        if (typeof MxChatInstances !== 'undefined' && MxChatInstances.getChatSession) {
+            return MxChatInstances.getChatSession(botId);
+        }
+        return null;
+    }
+
+    function isAlreadyRated(sessionId) {
+        if (!sessionId) return false;
+        try { return localStorage.getItem('mxchat_rated:' + sessionId) === '1'; } catch (e) { return false; }
+    }
+
+    function markRated(sessionId) {
+        if (!sessionId) return;
+        try { localStorage.setItem('mxchat_rated:' + sessionId, '1'); } catch (e) {}
+    }
+
+    function esc(s) {
+        return String(s == null ? '' : s)
+            .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;').replace(/'/g, '&#039;');
+    }
+
+    // Mirror shouldSkipInlineColors so rating bubbles defer to AI-theme CSS.
+    function ratingSkipInlineColors(botId) {
+        if (mxchatChat.skip_inline_colors) return true;
+        var botAssignments = mxchatChat.bot_theme_assignments || {};
+        return botAssignments.hasOwnProperty(botId);
+    }
+
+    function botBubbleStyleAttr(botId) {
+        if (ratingSkipInlineColors(botId)) return '';
+        var bg = mxchatChat.bot_message_bg_color;
+        var fg = mxchatChat.bot_message_font_color;
+        if (!bg && !fg) return '';
+        return ' style="background-color: ' + esc(bg || '') + '; color: ' + esc(fg || '') + ';"';
+    }
+
+    function copy(key) {
+        var c = mxchatChat.satisfaction_rating_copy || {};
+        var d = {
+            question: 'Was this helpful?',
+            helpful: 'Helpful',
+            not_helpful: 'Not helpful',
+            dismiss: 'Dismiss',
+            thanks: 'Thanks! Anything we should improve? (optional)',
+            placeholder: 'Tell us what could be better…',
+            send: 'Send',
+            skip: 'Skip',
+            saved: 'Thanks for the feedback.'
+        };
+        return c[key] || d[key];
+    }
+
+    function thumbUpSvg() {
+        return '<svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true"><path d="M7.493 18.75c-.425 0-.82-.236-.975-.632A7.48 7.48 0 0 1 6 15.375c0-1.75.599-3.358 1.602-4.634.151-.192.373-.309.6-.397.473-.183.89-.514 1.212-.924a9.042 9.042 0 0 1 2.861-2.4c.723-.384 1.35-.956 1.653-1.715a4.498 4.498 0 0 0 .322-1.672V2.75A.75.75 0 0 1 15 2a2.25 2.25 0 0 1 2.25 2.25c0 1.152-.26 2.243-.723 3.218-.266.558.107 1.282.725 1.282h3.126c1.026 0 1.945.694 2.054 1.715.045.422.068.85.068 1.285a11.95 11.95 0 0 1-2.649 7.521c-.388.482-.987.729-1.605.729H14.23c-.483 0-.964-.078-1.423-.23l-3.114-1.04a4.501 4.501 0 0 0-1.423-.23h-.777Z"/><path d="M2.331 10.977a11.969 11.969 0 0 0-.831 4.398 12 12 0 0 0 .52 3.507c.26.85 1.084 1.368 1.973 1.368H4.9c.445 0 .72-.498.523-.898a8.963 8.963 0 0 1-.924-3.977c0-1.708.476-3.305 1.302-4.666.245-.403-.028-.959-.5-.959H4.25c-.832 0-1.612.453-1.918 1.227Z"/></svg>';
+    }
+    function thumbDownSvg() {
+        return '<svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true"><path d="M15.73 5.25h1.035A7.465 7.465 0 0 1 18 9.375a7.465 7.465 0 0 1-1.235 4.125h-.148c-.806 0-1.534.446-2.031 1.08a9.04 9.04 0 0 1-2.861 2.4c-.723.384-1.35.956-1.653 1.715a4.498 4.498 0 0 0-.322 1.672V21a.75.75 0 0 1-.75.75 2.25 2.25 0 0 1-2.25-2.25c0-1.152.26-2.243.723-3.218.266-.558-.107-1.282-.725-1.282H3.622c-1.026 0-1.945-.694-2.054-1.715A12.137 12.137 0 0 1 1.5 12c0-2.848.992-5.464 2.649-7.521C4.537 3.997 5.136 3.75 5.754 3.75h4.541c.483 0 .964.078 1.423.23l3.114 1.04c.46.152.94.23 1.423.23Z"/><path d="M21.669 13.023c.536-1.362.831-2.845.831-4.398 0-1.22-.182-2.398-.52-3.507-.26-.85-1.084-1.368-1.973-1.368H19.1c-.445 0-.72.498-.523.898.591 1.2.924 2.55.924 3.977a8.958 8.958 0 0 1-1.302 4.666c-.245.403.028.959.5.959h1.053c.832 0 1.612-.453 1.918-1.227Z"/></svg>';
+    }
+
+    function buildPromptHtml(botId) {
+        var styleAttr = botBubbleStyleAttr(botId);
+        return ''
+            + '<div class="bot-message mxchat-rating-bot-bubble"' + styleAttr + '>'
+            +   '<div class="mxchat-rating-prompt" data-bot-id="' + esc(botId) + '" role="group" aria-label="' + esc(copy('question')) + '">'
+            +     '<div class="mxchat-rating-question">' + esc(copy('question')) + '</div>'
+            +     '<div class="mxchat-rating-actions">'
+            +       '<span class="mxchat-rating-buttons">'
+            +         '<button type="button" class="mxchat-rating-btn" data-rating="1" aria-label="' + esc(copy('helpful')) + '">' + thumbUpSvg() + '</button>'
+            +         '<button type="button" class="mxchat-rating-btn" data-rating="-1" aria-label="' + esc(copy('not_helpful')) + '">' + thumbDownSvg() + '</button>'
+            +       '</span>'
+            +       '<button type="button" class="mxchat-rating-dismiss" aria-label="' + esc(copy('dismiss')) + '">×</button>'
+            +     '</div>'
+            +   '</div>'
+            + '</div>';
+    }
+
+    function buildFeedbackHtml(botId, rating) {
+        var styleAttr = botBubbleStyleAttr(botId);
+        return ''
+            + '<div class="bot-message mxchat-rating-bot-bubble"' + styleAttr + '>'
+            +   '<div class="mxchat-rating-feedback" data-bot-id="' + esc(botId) + '" data-rating="' + esc(String(rating)) + '">'
+            +     '<div class="mxchat-rating-feedback-label">' + esc(copy('thanks')) + '</div>'
+            +     '<textarea class="mxchat-rating-feedback-input" maxlength="500" placeholder="' + esc(copy('placeholder')) + '" rows="2"></textarea>'
+            +     '<div class="mxchat-rating-feedback-actions">'
+            +       '<button type="button" class="mxchat-rating-skip">' + esc(copy('skip')) + '</button>'
+            +       '<button type="button" class="mxchat-rating-submit">' + esc(copy('send')) + '</button>'
+            +     '</div>'
+            +   '</div>'
+            + '</div>';
+    }
+
+    function buildSavedHtml(botId) {
+        var styleAttr = botBubbleStyleAttr(botId);
+        return ''
+            + '<div class="bot-message mxchat-rating-bot-bubble"' + styleAttr + '>'
+            +   '<div class="mxchat-rating-saved">' + esc(copy('saved')) + '</div>'
+            + '</div>';
+    }
+
+    function getChatBoxByBotId(botId) {
+        var $byId = $('#chat-box-' + botId);
+        if ($byId.length) return $byId.first();
+        return $('.chat-box').first();
+    }
+
+    function scrollChatBoxToBottom($chatBox) {
+        if (!$chatBox || !$chatBox.length) return;
+        $chatBox.scrollTop($chatBox[0].scrollHeight);
+    }
+
+    function showPrompt(botId) {
+        var s = getState(botId);
+        if (s.promptShown || s.dismissed) return;
+        var sessionId = getSessionId(botId);
+        if (!sessionId) return;
+        if (isAlreadyRated(sessionId)) { s.promptShown = true; return; }
+        var $chatBox = getChatBoxByBotId(botId);
+        if (!$chatBox.length) return;
+        if ($chatBox.find('.mxchat-rating-prompt').length) { s.promptShown = true; return; }
+        $chatBox.append(buildPromptHtml(botId));
+        s.promptShown = true;
+        scrollChatBoxToBottom($chatBox);
+    }
+
+    function submitRating(botId, rating, feedback) {
+        var sessionId = getSessionId(botId);
+        if (!sessionId) return;
+        $.post(mxchatChat.ajax_url, {
+            action: 'mxchat_save_rating',
+            session_id: sessionId,
+            bot_id: botId,
+            rating: rating,
+            feedback: feedback || ''
+        });
+        markRated(sessionId);
+    }
+
+    function onBotReply(botId) {
+        var s = getState(botId);
+        s.botReplies += 1;
+        if (s.promptShown || s.dismissed) return;
+        var sessionId = getSessionId(botId);
+        if (sessionId && isAlreadyRated(sessionId)) { s.promptShown = true; return; }
+        if (s.botReplies < MIN_BOT_REPLIES) return;
+        if (s.idleTimer) clearTimeout(s.idleTimer);
+        s.idleTimer = setTimeout(function() { showPrompt(botId); }, IDLE_MS);
+    }
+
+    function onUserMessage(botId) {
+        var s = getState(botId);
+        if (s.idleTimer) { clearTimeout(s.idleTimer); s.idleTimer = null; }
+    }
+
+    function botIdFromChatBox(el) {
+        var id = el && el.id ? el.id : '';
+        return id.indexOf('chat-box-') === 0 ? id.substring('chat-box-'.length) : 'default';
+    }
+
+    function setupObserver(chatBox) {
+        var botId = botIdFromChatBox(chatBox);
+        try {
+            var observer = new MutationObserver(function(mutations) {
+                mutations.forEach(function(m) {
+                    for (var i = 0; i < m.addedNodes.length; i++) {
+                        var node = m.addedNodes[i];
+                        if (!node || node.nodeType !== 1) continue;
+                        var $n = $(node);
+                        if ($n.hasClass('mxchat-rating-bot-bubble') || $n.hasClass('mxchat-rating-prompt') || $n.hasClass('mxchat-rating-feedback') || $n.hasClass('mxchat-rating-saved')) continue;
+                        if ($n.hasClass('bot-message')) onBotReply(botId); // count at insert time — streaming providers append with .temporary-message first, then remove later (childList observer can't see attr changes)
+                        else if ($n.hasClass('user-message')) onUserMessage(botId);
+                    }
+                });
+            });
+            observer.observe(chatBox, { childList: true });
+        } catch (e) { /* noop */ }
+    }
+
+    $('.chat-box').each(function() { setupObserver(this); });
+
+    $(document).on('click', '.mxchat-rating-btn', function(e) {
+        e.preventDefault();
+        var $btn = $(this);
+        var $prompt = $btn.closest('.mxchat-rating-prompt');
+        var $wrap = $btn.closest('.mxchat-rating-bot-bubble');
+        var botId = $prompt.data('bot-id') || 'default';
+        var rating = parseInt($btn.attr('data-rating'), 10);
+        if (rating !== 1 && rating !== -1) return;
+        submitRating(botId, rating, '');
+        ($wrap.length ? $wrap : $prompt).replaceWith(buildFeedbackHtml(botId, rating));
+        scrollChatBoxToBottom(getChatBoxByBotId(botId));
+    });
+
+    $(document).on('click', '.mxchat-rating-dismiss', function(e) {
+        e.preventDefault();
+        var $prompt = $(this).closest('.mxchat-rating-prompt');
+        var $wrap = $(this).closest('.mxchat-rating-bot-bubble');
+        var botId = $prompt.data('bot-id') || 'default';
+        var s = getState(botId);
+        s.dismissed = true;
+        markRated(getSessionId(botId));
+        ($wrap.length ? $wrap : $prompt).remove();
+    });
+
+    function closeFeedback($fb) {
+        var botId = $fb.data('bot-id') || 'default';
+        var $wrap = $fb.closest('.mxchat-rating-bot-bubble');
+        ($wrap.length ? $wrap : $fb).replaceWith(buildSavedHtml(botId));
+        scrollChatBoxToBottom(getChatBoxByBotId(botId));
+    }
+
+    $(document).on('click', '.mxchat-rating-skip', function(e) {
+        e.preventDefault();
+        closeFeedback($(this).closest('.mxchat-rating-feedback'));
+    });
+
+    $(document).on('click', '.mxchat-rating-submit', function(e) {
+        e.preventDefault();
+        var $fb = $(this).closest('.mxchat-rating-feedback');
+        var botId = $fb.data('bot-id') || 'default';
+        var rating = parseInt($fb.attr('data-rating'), 10);
+        if (rating !== 1 && rating !== -1) { closeFeedback($fb); return; }
+        var text = String($fb.find('.mxchat-rating-feedback-input').val() || '').trim();
+        if (text !== '') {
+            submitRating(botId, rating, text);
+        }
+        closeFeedback($fb);
+    });
 });
 

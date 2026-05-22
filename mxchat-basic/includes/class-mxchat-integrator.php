@@ -2272,15 +2272,20 @@ public function mxchat_handle_email_capture($message, $user_id, $session_id) {
 
 public function mxchat_generate_image($message, $user_id, $session_id) {
     //error_log("Starting image generation for message: " . $message);
-    
+
     // Prepare a prompt for OpenAI image generation
     $prompt = esc_html__('Create an image of ', 'mxchat') . sanitize_text_field($message);
 
-    // Use the existing OpenAI API key
-    $openai_api_key = sanitize_text_field($this->options['api_key']);
-
-    // Call OpenAI GPT Image to generate an image
-    $image_response = $this->mxchat_generate_openai_image($prompt, $openai_api_key);
+    // Opt-in routing: when 'custom_provider_for_images' is on, route image gen
+    // through the configured Custom (OpenAI-compatible) /images/generations route.
+    if (!empty($this->options['custom_provider_for_images']) && $this->options['custom_provider_for_images'] === 'on') {
+        $image_response = $this->mxchat_generate_custom_image($prompt);
+    } else {
+        // Use the existing OpenAI API key
+        $openai_api_key = sanitize_text_field($this->options['api_key']);
+        // Call OpenAI GPT Image to generate an image
+        $image_response = $this->mxchat_generate_openai_image($prompt, $openai_api_key);
+    }
     
     // Check if the response contains an image URL
     if (isset($image_response['imageUrl'])) {
@@ -2442,6 +2447,52 @@ private function mxchat_generate_openai_image($prompt, $api_key, $model = 'gpt-i
     } else {
         return ['error' => esc_html__('Failed to generate image.', 'mxchat')];
     }
+}
+
+/**
+ * Generate an image via a Custom (OpenAI-compatible) provider's /images/generations route.
+ * Only called when the opt-in 'custom_provider_for_images' setting is on.
+ */
+private function mxchat_generate_custom_image($prompt, $timeout = 90) {
+    $cfg = $this->mxchat_resolve_custom_provider();
+    if (empty($cfg['base_url'])) {
+        return ['error' => esc_html__('Custom provider Base URL is not configured.', 'mxchat')];
+    }
+    $url = $cfg['base_url'] . '/images/generations';
+    if (!empty($cfg['api_version'])) {
+        $url .= (strpos($url, '?') === false ? '?' : '&') . 'api-version=' . rawurlencode($cfg['api_version']);
+    }
+    $body = wp_json_encode([
+        'prompt' => sanitize_text_field($prompt),
+        'n'      => 1,
+        'size'   => '1024x1024',
+        'model'  => $cfg['model'],
+    ]);
+    $response = wp_remote_post($url, [
+        'headers' => $this->mxchat_custom_provider_assoc_headers($cfg),
+        'body'    => $body,
+        'method'  => 'POST',
+        'timeout' => absint($timeout),
+    ]);
+    if (is_wp_error($response)) {
+        return ['error' => esc_html__('Error generating image (custom provider): ', 'mxchat') . $response->get_error_message()];
+    }
+    $resp = json_decode(wp_remote_retrieve_body($response), true);
+    // Try b64 first (matches OpenAI shape), then url-based fallback.
+    $b64 = $resp['data'][0]['b64_json'] ?? $resp['data'][0]['b64'] ?? null;
+    if ($b64) {
+        $saved = $this->mxchat_save_generated_image($b64, 'image/png', 'mxchat-custom');
+        if (is_wp_error($saved)) {
+            return ['error' => $saved->get_error_message()];
+        }
+        return ['imageUrl' => $saved];
+    }
+    $remote_url = $resp['data'][0]['url'] ?? null;
+    if ($remote_url) {
+        return ['imageUrl' => esc_url_raw($remote_url)];
+    }
+    $err_msg = $resp['error']['message'] ?? esc_html__('Custom provider did not return an image.', 'mxchat');
+    return ['error' => esc_html($err_msg)];
 }
 
 private function mxchat_generate_imagen_image($prompt, $api_key, $timeout = 60) {
@@ -2751,15 +2802,20 @@ public function mxchat_handle_image_search_request($message, $user_id, $session_
  */
 public function mxchat_interpret_search_query($user_query) {
     $system_prompt = esc_html__("Interpret the user's request to provide only the essential keywords or phrases for image searching. Remove conversational language, politeness, or extra context. Return a concise search query that doesn't lose any of the original meaning.", 'mxchat');
-    
+
     // Get options and determine the selected model
     $options = $this->options ?? get_option('mxchat_options');
     $selected_model = isset($options['model']) ? $options['model'] : 'gpt-5.1-chat-latest';
-    
+
+    // Custom (OpenAI-compatible) provider routes by model id, not prefix.
+    if ($selected_model === 'custom-provider') {
+        return $this->interpret_query_with_custom($user_query, $system_prompt);
+    }
+
     // Extract model prefix to determine the provider
     $model_parts = explode('-', $selected_model);
     $provider = strtolower($model_parts[0]);
-    
+
     // Determine which API key to use based on the provider
     switch ($provider) {
         case 'gemini':
@@ -2799,6 +2855,55 @@ public function mxchat_interpret_search_query($user_query) {
             }
             return $this->interpret_query_with_openai($user_query, $system_prompt, $api_key, $selected_model);
     }
+}
+
+/**
+ * Interpret query against the configured Custom (OpenAI-compatible) provider.
+ * Uses the same base URL + auth scheme as the chat dispatcher.
+ */
+private function interpret_query_with_custom($user_query, $system_prompt) {
+    $cfg = $this->mxchat_resolve_custom_provider();
+    if (empty($cfg['base_url'])) {
+        return sanitize_text_field($user_query);
+    }
+    $args = [
+        'headers' => $this->mxchat_custom_provider_assoc_headers($cfg),
+        'body'    => wp_json_encode([
+            'model'       => $cfg['model'],
+            'messages'    => [
+                ['role' => 'system', 'content' => $system_prompt],
+                ['role' => 'user',   'content' => sanitize_text_field($user_query)],
+            ],
+            'temperature' => 0.2,
+            'max_tokens'  => 20,
+        ]),
+        'method'  => 'POST',
+        'timeout' => 15,
+    ];
+    $response = wp_remote_post($cfg['chat_url'], $args);
+    if (is_wp_error($response)) {
+        return sanitize_text_field($user_query);
+    }
+    $body = json_decode(wp_remote_retrieve_body($response), true);
+    return isset($body['choices'][0]['message']['content'])
+        ? sanitize_text_field(trim($body['choices'][0]['message']['content']))
+        : sanitize_text_field($user_query);
+}
+
+/**
+ * Convert the colon-style header list returned by mxchat_resolve_custom_provider
+ * into the assoc-array form wp_remote_post expects.
+ */
+private function mxchat_custom_provider_assoc_headers($cfg) {
+    $headers = ['Content-Type' => 'application/json'];
+    if (!empty($cfg['api_key'])) {
+        if (($cfg['auth_scheme'] ?? 'bearer') === 'api-key') {
+            $headers['api-key'] = $cfg['api_key'];
+        } else {
+            $headers['Authorization'] = 'Bearer ' . $cfg['api_key'];
+        }
+    }
+    return $headers;
 }
 
 /**
@@ -4495,7 +4600,13 @@ private function mxchat_generate_embedding($text, $api_key) {
         // Get options and selected model
         $options = get_option('mxchat_options');
         $selected_model = $options['embedding_model'] ?? 'text-embedding-ada-002';
-        
+
+        // Opt-in: route embeddings through the Custom (OpenAI-compatible) provider.
+        // Off by default so existing sites see byte-identical behavior.
+        if (!empty($options['custom_provider_for_embeddings']) && $options['custom_provider_for_embeddings'] === 'on') {
+            return $this->mxchat_generate_embedding_custom($text);
+        }
+
         // Determine endpoint and API key based on model
         if (strpos($selected_model, 'voyage') === 0) {
             $endpoint = 'https://api.voyageai.com/v1/embeddings';
@@ -4693,6 +4804,59 @@ private function mxchat_generate_embedding($text, $api_key) {
     }
 }
 
+
+/**
+ * Generate embedding via a Custom (OpenAI-compatible) provider's /embeddings route.
+ * Only called when the opt-in 'custom_provider_for_embeddings' setting is on.
+ * Returns a numeric array (the embedding vector) on success, or ['error','error_code'] on failure.
+ */
+private function mxchat_generate_embedding_custom($text) {
+    if (empty($text)) {
+        return ['error' => esc_html__('No text provided for embedding generation', 'mxchat'), 'error_code' => 'empty_embedding_text'];
+    }
+    $cfg = $this->mxchat_resolve_custom_provider();
+    if (empty($cfg['base_url'])) {
+        return ['error' => esc_html__('Custom provider Base URL is not configured.', 'mxchat'), 'error_code' => 'missing_custom_provider_base_url'];
+    }
+
+    $options    = get_option('mxchat_options');
+    $embed_url  = $cfg['base_url'] . '/embeddings';
+    if (!empty($cfg['api_version'])) {
+        $embed_url .= (strpos($embed_url, '?') === false ? '?' : '&') . 'api-version=' . rawurlencode($cfg['api_version']);
+    }
+    $model = isset($options['custom_provider_embedding_model']) && trim((string) $options['custom_provider_embedding_model']) !== ''
+        ? trim((string) $options['custom_provider_embedding_model'])
+        : $cfg['model'];
+
+    $response = wp_remote_post($embed_url, [
+        'headers' => $this->mxchat_custom_provider_assoc_headers($cfg),
+        'body'    => wp_json_encode(['input' => $text, 'model' => $model]),
+        'timeout' => 60,
+    ]);
+    if (is_wp_error($response)) {
+        return [
+            'error' => esc_html__('Connection error when generating embeddings (custom provider): ', 'mxchat') . esc_html($response->get_error_message()),
+            'error_code' => 'embedding_custom_connection_error',
+        ];
+    }
+    $status = wp_remote_retrieve_response_code($response);
+    $body   = json_decode(wp_remote_retrieve_body($response), true);
+    if ($status !== 200) {
+        $msg = isset($body['error']['message']) ? $body['error']['message'] : 'HTTP ' . $status;
+        return [
+            'error' => esc_html__('Custom embedding endpoint error: ', 'mxchat') . esc_html($msg),
+            'error_code' => 'embedding_custom_api_error',
+            'status_code' => $status,
+        ];
+    }
+    if (isset($body['data'][0]['embedding']) && is_array($body['data'][0]['embedding'])) {
+        return $body['data'][0]['embedding'];
+    }
+    return [
+        'error' => esc_html__('Invalid embedding response from custom provider.', 'mxchat'),
+        'error_code' => 'embedding_custom_invalid_response',
+    ];
+}
 
 private function mxchat_find_relevant_content($user_embedding, $bot_id = 'default', $user_query = '') {
     //error_log("MXCHAT DEBUG: find_relevant_content called with bot_id: " . $bot_id);
@@ -6626,6 +6790,36 @@ private function mxchat_generate_response($relevant_content, $api_key, $xai_api_
                 }
                 break;
                 
+            case 'custom':
+                // Custom (OpenAI-compatible) provider — Ollama, LM Studio, vLLM, llama.cpp, Azure OpenAI
+                $cp_base_url = isset($this->options['custom_provider_base_url']) ? trim((string) $this->options['custom_provider_base_url']) : '';
+                if (empty($cp_base_url)) {
+                    $error_response = [
+                        'error' => esc_html__('Custom provider is not configured. Set Base URL in MxChat → API Keys → Custom Provider.', 'mxchat'),
+                        'error_code' => 'missing_custom_provider_base_url'
+                    ];
+                    if ($testing_data !== null) {
+                        $error_response['testing_data'] = $testing_data;
+                    }
+                    return $error_response;
+                }
+                if ($streaming) {
+                    return $this->mxchat_generate_response_custom_stream(
+                        $selected_model,
+                        $conversation_history,
+                        $relevant_content,
+                        $session_id,
+                        $testing_data
+                    );
+                } else {
+                    $response = $this->mxchat_generate_response_custom(
+                        $selected_model,
+                        $conversation_history,
+                        $relevant_content
+                    );
+                }
+                break;
+
             case 'gpt':
             case 'o1':
                 if (empty($api_key)) {
@@ -7044,6 +7238,8 @@ private function mxchat_generate_response_openai_stream($selected_model, $api_ke
             // GPT-5.1 uses 'low' instead of 'minimal'
             if ($selected_model === 'gpt-5.1-2025-11-13') {
                 $request_body['reasoning_effort'] = 'low';
+            } elseif ($selected_model === 'gpt-5.5') {
+                $request_body['reasoning_effort'] = 'none';
             } elseif ($selected_model === 'gpt-5.4') {
                 $request_body['reasoning_effort'] = 'none';
             } else {
@@ -7241,6 +7437,237 @@ private function mxchat_generate_response_openai_stream($selected_model, $api_ke
 }
 
 /**
+ * Resolve custom (OpenAI-compatible) provider config from settings.
+ * Returns ['base_url','api_key','model','auth_scheme','api_version','chat_url','headers'].
+ */
+private function mxchat_resolve_custom_provider() {
+    $base_url    = isset($this->options['custom_provider_base_url']) ? rtrim(trim((string) $this->options['custom_provider_base_url']), '/') : '';
+    $api_key     = isset($this->options['custom_provider_api_key']) ? trim((string) $this->options['custom_provider_api_key']) : '';
+    $model       = isset($this->options['custom_provider_model']) ? trim((string) $this->options['custom_provider_model']) : '';
+    $auth_scheme = isset($this->options['custom_provider_auth_scheme']) ? $this->options['custom_provider_auth_scheme'] : 'bearer';
+    $api_version = isset($this->options['custom_provider_api_version']) ? trim((string) $this->options['custom_provider_api_version']) : '';
+
+    $chat_url = $base_url . '/chat/completions';
+    if (!empty($api_version)) {
+        $chat_url .= (strpos($chat_url, '?') === false ? '?' : '&') . 'api-version=' . rawurlencode($api_version);
+    }
+
+    $headers = array('Content-Type: application/json');
+    if (!empty($api_key)) {
+        if ($auth_scheme === 'api-key') {
+            $headers[] = 'api-key: ' . $api_key;
+        } else {
+            $headers[] = 'Authorization: Bearer ' . $api_key;
+        }
+    }
+
+    return array(
+        'base_url'    => $base_url,
+        'api_key'     => $api_key,
+        'model'       => $model !== '' ? $model : 'default',
+        'auth_scheme' => $auth_scheme,
+        'api_version' => $api_version,
+        'chat_url'    => $chat_url,
+        'headers'     => $headers,
+    );
+}
+
+/**
+ * Streaming chat completion against an OpenAI-compatible custom provider
+ * (Ollama, LM Studio, vLLM, llama.cpp, Azure OpenAI, etc.).
+ * Mirrors mxchat_generate_response_openai_stream but with parameterized URL/auth/model.
+ */
+private function mxchat_generate_response_custom_stream($selected_model, $conversation_history, $relevant_content, $session_id, $testing_data = null) {
+    try {
+        $cfg = $this->mxchat_resolve_custom_provider();
+        if (empty($cfg['base_url'])) {
+            return array('error' => esc_html__('Custom provider Base URL is not configured.', 'mxchat'), 'error_code' => 'missing_custom_provider_base_url');
+        }
+
+        $bot_id = $this->get_current_bot_id($session_id);
+        $system_prompt_instructions = $this->get_system_instructions($bot_id, $session_id);
+        if (!is_array($conversation_history)) {
+            $conversation_history = array();
+        }
+
+        $formatted_conversation = array();
+        $formatted_conversation[] = array(
+            'role' => 'system',
+            'content' => $system_prompt_instructions . ' ' . $relevant_content,
+        );
+        foreach ($conversation_history as $message) {
+            if (is_array($message) && isset($message['role']) && isset($message['content'])) {
+                $role = $message['role'];
+                if ($role === 'bot' || $role === 'agent') { $role = 'assistant'; }
+                if (!in_array($role, array('system', 'assistant', 'user', 'function', 'tool'))) { $role = 'user'; }
+                $formatted_conversation[] = array('role' => $role, 'content' => $message['content']);
+            }
+        }
+
+        if (headers_sent() || !function_exists('curl_init')) {
+            // No streaming capability — fall through to non-stream wrapper
+            $regular = $this->mxchat_generate_response_custom($selected_model, $conversation_history, $relevant_content);
+            if (!empty($regular) && !empty($session_id) && is_string($regular)) {
+                $this->mxchat_save_chat_message($session_id, 'bot', $regular);
+            }
+            $response_data = array('text' => is_string($regular) ? $regular : '', 'html' => '', 'session_id' => $session_id);
+            if ($testing_data !== null) { $response_data['testing_data'] = $testing_data; }
+            header('Content-Type: application/json');
+            echo json_encode($response_data);
+            return true;
+        }
+
+        $request_body = array(
+            'model'    => $cfg['model'],
+            'messages' => $formatted_conversation,
+            'stream'   => true,
+        );
+        $body = json_encode($request_body);
+
+        $this->setup_streaming_headers();
+
+        $ch = curl_init();
+        curl_setopt($ch, CURLOPT_URL, $cfg['chat_url']);
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, false);
+        curl_setopt($ch, CURLOPT_POST, true);
+        curl_setopt($ch, CURLOPT_POSTFIELDS, $body);
+        curl_setopt($ch, CURLOPT_HTTPHEADER, $cfg['headers']);
+        curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, true);
+        curl_setopt($ch, CURLOPT_TIMEOUT, 120);
+
+        $full_response = '';
+        $stream_started = false;
+        $buffer = '';
+
+        curl_setopt($ch, CURLOPT_WRITEFUNCTION, function($ch, $data) use (&$full_response, &$stream_started, &$buffer, $testing_data) {
+            if (!$stream_started && $testing_data !== null) {
+                echo "data: " . json_encode(array('testing_data' => $testing_data)) . "\n\n";
+                flush();
+                $stream_started = true;
+            }
+            $buffer .= $data;
+            $lines = explode("\n", $buffer);
+            $buffer = array_pop($lines);
+            foreach ($lines as $line) {
+                if (trim($line) === '') { continue; }
+                if (strpos($line, 'data: ') !== 0) { continue; }
+                $json_str = substr($line, 6);
+                if (trim($json_str) === '[DONE]') {
+                    echo "data: [DONE]\n\n";
+                    flush();
+                    continue;
+                }
+                $json = json_decode(trim($json_str), true);
+                if ($json && isset($json['choices'][0]['delta']['content'])) {
+                    $content = $json['choices'][0]['delta']['content'];
+                    $full_response .= $content;
+                    echo "data: " . json_encode(array('content' => $content)) . "\n\n";
+                    flush();
+                }
+            }
+            return strlen($data);
+        });
+
+        $response = curl_exec($ch);
+        $http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+
+        if (curl_errno($ch) || $http_code !== 200) {
+            $curl_error = curl_error($ch);
+            curl_close($ch);
+            $regular = $this->mxchat_generate_response_custom($selected_model, $conversation_history, $relevant_content);
+            if (is_array($regular) && isset($regular['error'])) {
+                echo "data: " . json_encode(array(
+                    'error' => true,
+                    'error_message' => $regular['error'],
+                    'error_code' => $regular['error_code'] ?? 'custom_provider_error',
+                    'text' => $regular['error'],
+                    'message' => $regular['error'],
+                )) . "\n\n";
+                echo "data: [DONE]\n\n";
+                flush();
+                return true;
+            }
+            $response_data = array('text' => is_string($regular) ? $regular : '', 'html' => '', 'session_id' => $session_id);
+            if ($testing_data !== null) { $response_data['testing_data'] = $testing_data; }
+            header('Content-Type: application/json');
+            echo json_encode($response_data);
+            return true;
+        }
+
+        curl_close($ch);
+
+        if (!empty($full_response) && !empty($session_id)) {
+            $this->mxchat_save_chat_message($session_id, 'bot', $full_response);
+        }
+        return true;
+
+    } catch (Exception $e) {
+        return array('error' => sprintf(esc_html__('Custom provider error: %s', 'mxchat'), $e->getMessage()), 'error_code' => 'custom_provider_exception');
+    }
+}
+
+/**
+ * Non-streaming chat completion against a custom OpenAI-compatible provider.
+ * Returns string content on success, array['error'=>...] on failure.
+ */
+private function mxchat_generate_response_custom($selected_model, $conversation_history, $relevant_content) {
+    $cfg = $this->mxchat_resolve_custom_provider();
+    if (empty($cfg['base_url'])) {
+        return array('error' => esc_html__('Custom provider Base URL is not configured.', 'mxchat'), 'error_code' => 'missing_custom_provider_base_url');
+    }
+
+    $bot_id = $this->get_current_bot_id(null);
+    $system_prompt_instructions = $this->get_system_instructions($bot_id, null);
+    if (!is_array($conversation_history)) {
+        $conversation_history = array();
+    }
+
+    $messages = array(array(
+        'role' => 'system',
+        'content' => $system_prompt_instructions . ' ' . $relevant_content,
+    ));
+    foreach ($conversation_history as $message) {
+        if (is_array($message) && isset($message['role']) && isset($message['content'])) {
+            $role = $message['role'];
+            if ($role === 'bot' || $role === 'agent') { $role = 'assistant'; }
+            if (!in_array($role, array('system', 'assistant', 'user', 'function', 'tool'))) { $role = 'user'; }
+            $messages[] = array('role' => $role, 'content' => $message['content']);
+        }
+    }
+
+    $headers_assoc = array('Content-Type' => 'application/json');
+    if (!empty($cfg['api_key'])) {
+        if ($cfg['auth_scheme'] === 'api-key') {
+            $headers_assoc['api-key'] = $cfg['api_key'];
+        } else {
+            $headers_assoc['Authorization'] = 'Bearer ' . $cfg['api_key'];
+        }
+    }
+
+    $response = wp_remote_post($cfg['chat_url'], array(
+        'headers' => $headers_assoc,
+        'body'    => wp_json_encode(array(
+            'model'    => $cfg['model'],
+            'messages' => $messages,
+        )),
+        'timeout' => 120,
+    ));
+
+    if (is_wp_error($response)) {
+        return array('error' => sprintf(esc_html__('Custom provider request failed: %s', 'mxchat'), $response->get_error_message()), 'error_code' => 'custom_provider_network_error');
+    }
+    $code = (int) wp_remote_retrieve_response_code($response);
+    if ($code < 200 || $code >= 300) {
+        return array('error' => sprintf(esc_html__('Custom provider returned HTTP %d.', 'mxchat'), $code), 'error_code' => 'custom_provider_http_error');
+    }
+    $body = json_decode(wp_remote_retrieve_body($response), true);
+    if (isset($body['choices'][0]['message']['content'])) {
+        return (string) $body['choices'][0]['message']['content'];
+    }
+    return array('error' => esc_html__('Custom provider returned an unexpected response shape.', 'mxchat'), 'error_code' => 'custom_provider_response_shape');
+}
+
+/**
  * Generate response using OpenAI Responses API with web search tool
  * This uses the newer Responses API which supports web search functionality
  */
@@ -7299,6 +7726,8 @@ private function mxchat_generate_response_openai_web_search($selected_model, $ap
         $no_reasoning_web = array('gpt-5.2', 'gpt-5.3-chat-latest', 'gpt-5.4-mini', 'gpt-5.4-nano');
         if ($is_gpt5_model && !in_array($selected_model, $no_reasoning_web, true)) {
             if ($selected_model === 'gpt-5.1-2025-11-13') {
+                $request_body['reasoning'] = ['effort' => 'low'];
+            } elseif ($selected_model === 'gpt-5.5') {
                 $request_body['reasoning'] = ['effort' => 'low'];
             } elseif ($selected_model === 'gpt-5.4') {
                 $request_body['reasoning'] = ['effort' => 'low'];
@@ -8663,6 +9092,8 @@ private function mxchat_generate_response_openai($selected_model, $api_key, $con
             // GPT-5.1 uses 'low' instead of 'minimal'
             if ($selected_model === 'gpt-5.1-2025-11-13') {
                 $request_body['reasoning_effort'] = 'low';
+            } elseif ($selected_model === 'gpt-5.5') {
+                $request_body['reasoning_effort'] = 'none';
             } elseif ($selected_model === 'gpt-5.4') {
                 $request_body['reasoning_effort'] = 'none';
             } else {
@@ -9546,6 +9977,22 @@ public function mxchat_enqueue_scripts_styles() {
         'print_button_enabled' => $this->options['print_button_enabled'] ?? 'on',
         'print_button_label' => esc_html__('Download Transcript', 'mxchat'),
         'print_header_title' => esc_html(get_bloginfo('name')) . ' — ' . esc_html__('Chat transcript', 'mxchat'),
+        'satisfaction_rating_enabled' => apply_filters(
+            'mxchat_satisfaction_rating_enabled',
+            ($this->options['satisfaction_rating_enabled'] ?? 'off') === 'on'
+        ),
+        'satisfaction_rating_idle_seconds' => max(5, min(600, intval($this->options['satisfaction_rating_idle_seconds'] ?? 60))),
+        'satisfaction_rating_copy' => array(
+            'question'    => !empty($this->options['satisfaction_rating_question'])    ? esc_html($this->options['satisfaction_rating_question'])    : esc_html__('Was this helpful?', 'mxchat'),
+            'helpful'     => esc_html__('Helpful', 'mxchat'),
+            'not_helpful' => esc_html__('Not helpful', 'mxchat'),
+            'dismiss'     => esc_html__('Dismiss', 'mxchat'),
+            'thanks'      => !empty($this->options['satisfaction_rating_thanks'])      ? esc_html($this->options['satisfaction_rating_thanks'])      : esc_html__('Thanks! Anything we should improve? (optional)', 'mxchat'),
+            'placeholder' => !empty($this->options['satisfaction_rating_placeholder']) ? esc_html($this->options['satisfaction_rating_placeholder']) : esc_html__('Tell us what could be better…', 'mxchat'),
+            'send'        => esc_html__('Send', 'mxchat'),
+            'skip'        => esc_html__('Skip', 'mxchat'),
+            'saved'       => !empty($this->options['satisfaction_rating_saved'])       ? esc_html($this->options['satisfaction_rating_saved'])       : esc_html__('Thanks for the feedback.', 'mxchat'),
+        ),
     );
 
     // For normal/defer loading, use wp_localize_script
@@ -9611,6 +10058,22 @@ public function mxchat_output_delayed_script_loader() {
         'print_button_enabled' => $this->options['print_button_enabled'] ?? 'on',
         'print_button_label' => esc_html__('Download Transcript', 'mxchat'),
         'print_header_title' => esc_html(get_bloginfo('name')) . ' — ' . esc_html__('Chat transcript', 'mxchat'),
+        'satisfaction_rating_enabled' => apply_filters(
+            'mxchat_satisfaction_rating_enabled',
+            ($this->options['satisfaction_rating_enabled'] ?? 'off') === 'on'
+        ),
+        'satisfaction_rating_idle_seconds' => max(5, min(600, intval($this->options['satisfaction_rating_idle_seconds'] ?? 60))),
+        'satisfaction_rating_copy' => array(
+            'question'    => !empty($this->options['satisfaction_rating_question'])    ? esc_html($this->options['satisfaction_rating_question'])    : esc_html__('Was this helpful?', 'mxchat'),
+            'helpful'     => esc_html__('Helpful', 'mxchat'),
+            'not_helpful' => esc_html__('Not helpful', 'mxchat'),
+            'dismiss'     => esc_html__('Dismiss', 'mxchat'),
+            'thanks'      => !empty($this->options['satisfaction_rating_thanks'])      ? esc_html($this->options['satisfaction_rating_thanks'])      : esc_html__('Thanks! Anything we should improve? (optional)', 'mxchat'),
+            'placeholder' => !empty($this->options['satisfaction_rating_placeholder']) ? esc_html($this->options['satisfaction_rating_placeholder']) : esc_html__('Tell us what could be better…', 'mxchat'),
+            'send'        => esc_html__('Send', 'mxchat'),
+            'skip'        => esc_html__('Skip', 'mxchat'),
+            'saved'       => !empty($this->options['satisfaction_rating_saved'])       ? esc_html($this->options['satisfaction_rating_saved'])       : esc_html__('Thanks for the feedback.', 'mxchat'),
+        ),
     );
 
     // Determine delay time based on strategy

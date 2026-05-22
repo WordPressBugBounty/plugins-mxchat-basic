@@ -217,12 +217,61 @@ jQuery(document).ready(function($) {
         $('#mxch-select-all').prop('indeterminate', checkedItems > 0 && checkedItems < totalItems);
     }
 
-    // Sort button
-    $('#mxch-sort-btn').on('click', function() {
-        currentSortOrder = currentSortOrder === 'desc' ? 'asc' : 'desc';
-        $(this).find('svg').css('transform', currentSortOrder === 'asc' ? 'rotate(180deg)' : 'rotate(0deg)');
-        loadChatList(currentPage, $('#mxch-search-transcripts').val());
+    // Sort button — opens a small menu with 4 sort modes (plan-a5b006 adds rating sorts).
+    $('#mxch-sort-btn').on('click', function(e) {
+        e.stopPropagation();
+        const $btn = $(this);
+        let $menu = $('#mxch-sort-menu');
+        if (!$menu.length) {
+            $menu = $(
+                '<div id="mxch-sort-menu" class="mxch-sort-menu" role="menu">' +
+                '  <button type="button" class="mxch-sort-option" data-sort="desc" role="menuitem">Newest first</button>' +
+                '  <button type="button" class="mxch-sort-option" data-sort="asc" role="menuitem">Oldest first</button>' +
+                '  <button type="button" class="mxch-sort-option" data-sort="rating_positive" role="menuitem"><span class="mxch-sort-option-icon mxch-rating-thumb-up"><svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 10v12"/><path d="M15 5.88 14 10h5.83a2 2 0 0 1 1.92 2.56l-2.33 8A2 2 0 0 1 17.5 22H7"/><path d="M3 10h4"/></svg></span>Positive ratings first</button>' +
+                '  <button type="button" class="mxch-sort-option" data-sort="rating_negative" role="menuitem"><span class="mxch-sort-option-icon mxch-rating-thumb-down"><svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 14V2"/><path d="M9 18.12 10 14H4.17a2 2 0 0 1-1.92-2.56l2.33-8A2 2 0 0 1 6.5 2H17"/><path d="M21 14h-4"/></svg></span>Negative ratings first</button>' +
+                '</div>'
+            );
+            $('body').append($menu);
+            $menu.on('click', '.mxch-sort-option', function() {
+                currentSortOrder = $(this).data('sort');
+                $menu.find('.mxch-sort-option').removeClass('active');
+                $(this).addClass('active');
+                $menu.hide();
+                loadChatList(1, $('#mxch-search-transcripts').val());
+            });
+            $(document).on('click.mxchSortMenu', function(ev) {
+                if (!$(ev.target).closest('#mxch-sort-menu, #mxch-sort-btn').length) {
+                    $menu.hide();
+                }
+            });
+        }
+        $menu.find('.mxch-sort-option').removeClass('active');
+        $menu.find('[data-sort="' + currentSortOrder + '"]').addClass('active');
+        const offset = $btn.offset();
+        const btnHeight = $btn.outerHeight();
+        $menu.css({
+            position: 'absolute',
+            top: (offset.top + btnHeight + 4) + 'px',
+            left: offset.left + 'px'
+        }).toggle();
     });
+
+    // Render a rating badge for a session row. Uses inline SVG so the glyph
+    // renders the same across OSes (emoji fonts vary). Tooltip surfaces the
+    // optional feedback text.
+    function renderRatingBadge(session) {
+        const value = (session && typeof session.rating_value === 'number') ? session.rating_value : null;
+        const feedback = (session && session.rating_feedback) ? session.rating_feedback : '';
+        if (value === 1) {
+            const title = feedback ? ('Visitor: ' + feedback) : 'Visitor rated this chat positively';
+            return '<span class="mxch-chat-rating mxch-chat-rating-up" title="' + escapeHtml(title) + '" aria-label="' + escapeHtml(title) + '"><svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 10v12"/><path d="M15 5.88 14 10h5.83a2 2 0 0 1 1.92 2.56l-2.33 8A2 2 0 0 1 17.5 22H7"/><path d="M3 10h4"/></svg></span>';
+        }
+        if (value === -1) {
+            const title = feedback ? ('Visitor: ' + feedback) : 'Visitor rated this chat negatively';
+            return '<span class="mxch-chat-rating mxch-chat-rating-down" title="' + escapeHtml(title) + '" aria-label="' + escapeHtml(title) + '"><svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 14V2"/><path d="M9 18.12 10 14H4.17a2 2 0 0 1-1.92-2.56l2.33-8A2 2 0 0 1 6.5 2H17"/><path d="M21 14h-4"/></svg></span>';
+        }
+        return '<span class="mxch-chat-rating mxch-chat-rating-empty" title="No rating yet" aria-label="No rating yet">—</span>';
+    }
 
     // Delete selected button — opens the shared confirm modal with the "also delete lead" checkbox.
     $('#mxch-delete-selected').on('click', function() {
@@ -367,6 +416,7 @@ jQuery(document).ready(function($) {
                         <div class="mxch-chat-preview">${escapeHtml(session.preview)}</div>
                     </div>
                     <div class="mxch-chat-meta">
+                        ${renderRatingBadge(session)}
                         <span class="mxch-chat-time">${escapeHtml(session.time_display)}</span>
                         <span class="mxch-chat-count">${session.message_count}</span>
                     </div>
@@ -519,6 +569,16 @@ jQuery(document).ready(function($) {
             $('#mxch-detail-email-row').show();
         } else {
             $('#mxch-detail-email-row').hide();
+        }
+
+        // Feedback row — .text() (not .html()) for XSS-safe display of user-submitted text.
+        // rating_feedback is already sanitize_text_field()'d + mb_substr(200) on save.
+        var feedback = (data && data.rating_feedback) ? String(data.rating_feedback).trim() : '';
+        if (feedback) {
+            $('#mxch-detail-feedback').text(feedback);
+            $('#mxch-detail-feedback-row').show();
+        } else {
+            $('#mxch-detail-feedback-row').hide();
         }
 
         // Clicked links
