@@ -1,38 +1,108 @@
 jQuery(document).ready(function($) {
 
-    // Nonce refresh is deferred until first user interaction (ensureSession)
-    // to avoid admin-ajax calls on passive page loads. The state machine below
-    // queues callbacks so a chat-send that fires while the refresh AJAX is still
-    // in flight waits for the fresh nonce instead of racing it with the stale
-    // cached value (which would 403 as "Access denied" on the first message).
+    // Nonce refresh — v2 (plan-6a68c9).
+    //
+    // The widget no longer relies on a nonce embedded in inline cached HTML.
+    // Before each chat-send / stream-send / upload, we call the REST endpoint
+    // GET /wp-json/mxchat/v1/nonce and use the freshly-issued value. The
+    // endpoint creates the nonce with action `mxchat_chat_send`; the server-side
+    // verifier ALSO still accepts the legacy `mxchat_chat_nonce` action for a
+    // 30-day backwards-compat window so cached pages still in users' browsers
+    // (which carry the legacy inline-localized nonce) keep working.
+    //
+    // Cache: a single module-scoped slot. TTL 12h conservatively (WP nonces are
+    // 24h but we refetch at half-life so a freshly-cached-page user never sees
+    // a borderline-stale nonce).
+    var cachedFreshNonce = null;
+    var cachedFreshNonceFetchedAt = 0;
+    var NONCE_TTL_MS = 12 * 60 * 60 * 1000;
     var nonceRefreshState = 'idle'; // 'idle' | 'pending' | 'done'
     var nonceRefreshCallbacks = [];
-    function refreshNonceIfNeeded(callback) {
-        if (typeof mxchatChat === 'undefined' || !mxchatChat.ajax_url) {
+
+    function getRestNonceUrl() {
+        if (typeof mxchatChat !== 'undefined' && mxchatChat.rest_url) {
+            return mxchatChat.rest_url.replace(/\/+$/, '') + '/nonce';
+        }
+        // Fallback: derive from current origin if mxchatChat.rest_url isn't set.
+        return window.location.origin + '/wp-json/mxchat/v1/nonce';
+    }
+
+    function fetchFreshNonceFromRest() {
+        return fetch(getRestNonceUrl(), {
+            credentials: 'same-origin',
+            headers: { 'Accept': 'application/json' }
+        }).then(function (resp) {
+            if (!resp.ok) {
+                throw new Error('REST nonce fetch failed: ' + resp.status);
+            }
+            return resp.json();
+        }).then(function (data) {
+            if (data && data.nonce) {
+                return data.nonce;
+            }
+            throw new Error('REST nonce response had no nonce field.');
+        });
+    }
+
+    /**
+     * withFreshNonce(cb) — invoke cb() after ensuring mxchatChat.nonce is fresh.
+     * Tries REST endpoint first (cache-bypass design); falls back to the legacy
+     * admin-ajax refresh path if REST is unavailable. Idempotent — concurrent
+     * calls share the same in-flight refresh.
+     */
+    function withFreshNonce(callback) {
+        if (typeof mxchatChat === 'undefined') {
             if (callback) callback();
             return;
         }
-        if (nonceRefreshState === 'done') {
+        var now = Date.now();
+        if (cachedFreshNonce && (now - cachedFreshNonceFetchedAt) < NONCE_TTL_MS) {
+            mxchatChat.nonce = cachedFreshNonce;
             if (callback) callback();
             return;
         }
         if (callback) nonceRefreshCallbacks.push(callback);
-        if (nonceRefreshState === 'pending') {
-            return;
-        }
+        if (nonceRefreshState === 'pending') return;
         nonceRefreshState = 'pending';
-        $.post(mxchatChat.ajax_url, { action: 'mxchat_refresh_nonce' })
-            .done(function(res) {
-                if (res && res.success && res.data && res.data.nonce) {
-                    mxchatChat.nonce = res.data.nonce;
+
+        var resolved = function (nonce) {
+            if (nonce) {
+                cachedFreshNonce = nonce;
+                cachedFreshNonceFetchedAt = Date.now();
+                mxchatChat.nonce = nonce;
+            }
+            nonceRefreshState = 'done';
+            var pending = nonceRefreshCallbacks;
+            nonceRefreshCallbacks = [];
+            pending.forEach(function (cb) { try { cb(); } catch (e) {} });
+        };
+
+        fetchFreshNonceFromRest()
+            .then(resolved)
+            .catch(function () {
+                // Fallback to the legacy admin-ajax refresh path (issued with the
+                // old action `mxchat_chat_nonce`; the server still accepts both
+                // during the compat window).
+                if (mxchatChat.ajax_url) {
+                    $.post(mxchatChat.ajax_url, { action: 'mxchat_refresh_nonce' })
+                        .done(function (res) {
+                            if (res && res.success && res.data && res.data.nonce) {
+                                resolved(res.data.nonce);
+                                return;
+                            }
+                            resolved(null);
+                        })
+                        .fail(function () { resolved(null); });
+                } else {
+                    resolved(null);
                 }
-            })
-            .always(function() {
-                nonceRefreshState = 'done';
-                var pending = nonceRefreshCallbacks;
-                nonceRefreshCallbacks = [];
-                pending.forEach(function(cb) { try { cb(); } catch (e) {} });
             });
+    }
+
+    // Backwards-compat alias — every existing caller in this file (and any
+    // out-of-tree consumer that hit this internal API) keeps working unchanged.
+    function refreshNonceIfNeeded(callback) {
+        return withFreshNonce(callback);
     }
 
     // ====================================
@@ -2918,15 +2988,21 @@ $(document).on('click', '.questions-collapse-btn', function(e) {
 });
     
     // Chatbot visibility toggle handlers - use class selector for multi-instance support
-    $(document).on('click', '.floating-chatbot-button', function() {
+    // Handles click + Enter/Space keypresses for keyboard accessibility (WCAG 2.1 SC 2.1.1).
+    $(document).on('click keydown', '.floating-chatbot-button', function(e) {
+        if (e.type === 'keydown') {
+            if (e.key !== 'Enter' && e.key !== ' ' && e.key !== 'Spacebar') return;
+            e.preventDefault();
+        }
         var botId = getBotIdFromElement(this);
         var $chatbot = getElement(botId, 'floating-chatbot');
         var $badge = getElement(botId, 'chat-notification-badge');
         var $preChat = getElement(botId, 'pre-chat-message');
 
         if ($chatbot.hasClass('hidden')) {
-            $chatbot.removeClass('hidden').addClass('visible');
-            $(this).addClass('hidden');
+            $chatbot.removeClass('hidden').addClass('visible')
+                    .attr('aria-modal', 'true').attr('role', 'dialog');
+            $(this).addClass('hidden').attr('aria-expanded', 'true');
             $badge.hide(); // Hide notification when opening chat
             disableScroll();
             $preChat.fadeOut(250);
@@ -2948,19 +3024,50 @@ $(document).on('click', '.questions-collapse-btn', function(e) {
                 // so the loader is shown while chat history loads
                 showChatContainerForBot(botId);
             }
+
+            // Move keyboard focus into the message input after the open transition.
+            setTimeout(function() {
+                var chatInput = getElementDOM(botId, 'chat-input');
+                if (chatInput && !chatInput.disabled) {
+                    try { chatInput.focus({ preventScroll: true }); } catch (err) { chatInput.focus(); }
+                }
+            }, 300);
         } else {
-            $chatbot.removeClass('visible').addClass('hidden');
-            $(this).removeClass('hidden');
+            $chatbot.removeClass('visible').addClass('hidden').removeAttr('aria-modal');
+            $(this).removeClass('hidden').attr('aria-expanded', 'false');
             enableScroll();
             checkPreChatDismissal(botId);
         }
     });
 
-    // Allow clicking anywhere on the title bar to close the chatbot
+    // Allow clicking anywhere on the title bar to close the chatbot.
+    // Returns keyboard focus to the launcher so keyboard users don't get
+    // stranded at <body> (WCAG SC 2.4.3 Focus Order). :focus-visible is
+    // heuristic-based so mouse-triggered close won't show a focus ring.
     $(document).on('click', '.chatbot-top-bar', function() {
         var botId = getBotIdFromElement(this);
-        getElement(botId, 'floating-chatbot').addClass('hidden').removeClass('visible');
-        getElement(botId, 'floating-chatbot-button').removeClass('hidden');
+        getElement(botId, 'floating-chatbot').addClass('hidden').removeClass('visible').removeAttr('aria-modal');
+        var $launcher = getElement(botId, 'floating-chatbot-button');
+        $launcher.removeClass('hidden').attr('aria-expanded', 'false');
+        enableScroll();
+        try { $launcher.trigger('focus'); } catch (err) { /* no-op */ }
+    });
+
+    // Global Escape-key handler — closes any visible chat widget and
+    // returns focus to its launcher. Standard modal-dismissal pattern;
+    // pairs with aria-modal="true" set on the widget when it opens.
+    $(document).on('keydown', function(e) {
+        if (e.key !== 'Escape' && e.key !== 'Esc') return;
+        var $visible = $('.floating-chatbot.visible');
+        if (!$visible.length) return;
+        e.preventDefault();
+        $visible.each(function() {
+            var botId = getBotIdFromElement(this);
+            $(this).addClass('hidden').removeClass('visible').removeAttr('aria-modal');
+            var $launcher = getElement(botId, 'floating-chatbot-button');
+            $launcher.removeClass('hidden').attr('aria-expanded', 'false');
+            try { $launcher.trigger('focus'); } catch (err) { /* no-op */ }
+        });
         enableScroll();
     });
 

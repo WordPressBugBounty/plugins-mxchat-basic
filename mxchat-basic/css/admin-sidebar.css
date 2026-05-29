@@ -1289,6 +1289,85 @@
 }
 
 /* ==========================================================================
+   Disclosure (collapsible <details>)
+   Generic Advanced/opt-in surface — used for static-bearer fallback on
+   mxchat-mcp's Connected Apps tab, and any add-on that needs the same
+   "advanced/show more" pattern. Originally lived in plugins/mxchat-mcp/css/
+   admin-mcp.css; elevated here so every add-on inherits via the standard
+   admin-sidebar.css enqueue.
+   ========================================================================== */
+.mxch-disclosure {
+    margin-top: 16px;
+    border: 1px solid var(--mxch-card-border, #e2e4e9);
+    border-radius: var(--mxch-radius-md, 6px);
+    background: #fbfcfd;
+}
+.mxch-disclosure[open] {
+    background: #fff;
+}
+.mxch-disclosure-summary {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 14px;
+    cursor: pointer;
+    list-style: none;
+    user-select: none;
+    color: var(--mxch-text-secondary, #57606a);
+    font-size: 13px;
+    font-weight: 600;
+}
+.mxch-disclosure-summary::-webkit-details-marker { display: none; }
+.mxch-disclosure-summary::before {
+    content: "";
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-right: 2px solid currentColor;
+    border-bottom: 2px solid currentColor;
+    transform: rotate(-45deg);
+    transition: transform 0.18s ease;
+    margin-right: 2px;
+}
+.mxch-disclosure[open] > .mxch-disclosure-summary::before {
+    transform: rotate(45deg);
+}
+.mxch-disclosure-summary svg {
+    flex-shrink: 0;
+    opacity: 0.7;
+}
+.mxch-disclosure-summary-text {
+    color: var(--mxch-text-primary, #1d2327);
+    font-weight: 600;
+}
+.mxch-disclosure-summary-hint {
+    color: var(--mxch-text-secondary, #57606a);
+    font-weight: 400;
+    font-size: 12px;
+}
+.mxch-disclosure-summary:hover .mxch-disclosure-summary-text {
+    color: var(--mxch-primary, #7873f5);
+}
+.mxch-disclosure-summary:focus-visible {
+    outline: 2px solid var(--mxch-primary, #7873f5);
+    outline-offset: 2px;
+    border-radius: var(--mxch-radius-md, 6px);
+}
+.mxch-disclosure-body {
+    padding: 8px 14px 14px 14px;
+    border-top: 1px solid var(--mxch-card-border, #e2e4e9);
+}
+@media (max-width: 600px) {
+    .mxch-disclosure-summary {
+        flex-wrap: wrap;
+    }
+    .mxch-disclosure-summary-hint {
+        flex-basis: 100%;
+        margin-left: 18px;
+    }
+}
+
+/* ==========================================================================
    Quick Questions List
    ========================================================================== */
 .mxch-quick-questions {
@@ -2554,4 +2633,217 @@
     .mxch-modal-content {
         margin: 10px;
     }
+}
+
+/* ============================================================
+   Dashboard page (Setup Assistant + dashboard cards)
+   Added with plan-mxchat-20260526-704e25.
+   ============================================================ */
+
+.mxch-setup-card .mxch-card-body {
+    padding-top: var(--mxch-spacing-md);
+}
+
+.mxch-progress-bar {
+    height: 6px;
+    background: var(--mxch-card-border, #e5e7eb);
+    border-radius: 999px;
+    overflow: hidden;
+    margin: var(--mxch-spacing-sm) 0 var(--mxch-spacing-xs);
+}
+
+.mxch-progress-bar-fill {
+    height: 100%;
+    background: linear-gradient(90deg, var(--mxch-primary) 0%, #9b96ff 100%);
+    border-radius: 999px;
+    transition: width 400ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.mxch-progress-label {
+    font-size: 12px;
+    color: var(--mxch-text-secondary);
+    margin: 0 0 var(--mxch-spacing-md);
+    font-weight: 500;
+}
+
+.mxch-step-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: var(--mxch-spacing-sm);
+}
+
+.mxch-step {
+    display: grid;
+    grid-template-columns: 32px 1fr auto;
+    align-items: center;
+    gap: var(--mxch-spacing-md);
+    padding: var(--mxch-spacing-md);
+    background: var(--mxch-content-bg, #f7f8fa);
+    border: 1px solid transparent;
+    border-radius: var(--mxch-radius-md);
+    transition: background 160ms ease, border-color 160ms ease;
+}
+
+.mxch-step.mxch-step-in-progress {
+    background: var(--mxch-primary-lighter, rgba(120, 115, 245, 0.05));
+    border-color: var(--mxch-primary-light, rgba(120, 115, 245, 0.1));
+}
+
+.mxch-step.mxch-step-done {
+    background: rgba(16, 185, 129, 0.06);
+}
+
+.mxch-step-indicator {
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 13px;
+    font-weight: 600;
+    background: #fff;
+    color: var(--mxch-text-secondary, #64748b);
+    border: 1.5px solid var(--mxch-card-border, #e5e7eb);
+    flex-shrink: 0;
+}
+
+.mxch-step-in-progress .mxch-step-indicator {
+    color: var(--mxch-primary);
+    border-color: var(--mxch-primary);
+    background: #fff;
+    box-shadow: 0 0 0 4px var(--mxch-primary-lighter, rgba(120, 115, 245, 0.06));
+}
+
+.mxch-step-done .mxch-step-indicator {
+    background: var(--mxch-success, #10b981);
+    border-color: var(--mxch-success, #10b981);
+    color: #fff;
+}
+
+.mxch-step-number {
+    line-height: 1;
+}
+
+.mxch-step-body {
+    min-width: 0;
+}
+
+.mxch-step-title {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--mxch-text-primary, #1a1a2e);
+    margin-bottom: 2px;
+}
+
+.mxch-step-done .mxch-step-title {
+    color: var(--mxch-text-secondary, #64748b);
+}
+
+.mxch-step-description {
+    font-size: 12.5px;
+    color: var(--mxch-text-secondary, #64748b);
+    line-height: 1.45;
+}
+
+.mxch-step-action {
+    align-self: center;
+}
+
+.mxch-setup-dismiss-row {
+    margin-top: var(--mxch-spacing-md);
+    text-align: right;
+}
+
+.mxch-setup-dismiss,
+.mxch-setup-resume {
+    font-size: 12.5px;
+    color: var(--mxch-text-secondary, #64748b);
+    text-decoration: none;
+    border-bottom: 1px dotted currentColor;
+}
+
+.mxch-setup-dismiss:hover,
+.mxch-setup-resume:hover {
+    color: var(--mxch-primary);
+}
+
+.mxch-resume-setup-row {
+    margin: 0 0 var(--mxch-spacing-md);
+    text-align: right;
+}
+
+.mxch-dashboard-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: var(--mxch-spacing-md);
+    margin-top: var(--mxch-spacing-lg);
+}
+
+.mxch-dashboard-card .mxch-card-body {
+    display: flex;
+    flex-direction: column;
+    gap: var(--mxch-spacing-sm);
+}
+
+.mxch-dashboard-big-number {
+    font-size: 36px;
+    font-weight: 700;
+    color: var(--mxch-text-primary, #1a1a2e);
+    line-height: 1.1;
+    letter-spacing: -0.02em;
+}
+
+.mxch-dashboard-provider-name {
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--mxch-text-primary, #1a1a2e);
+    word-break: break-word;
+}
+
+.mxch-dashboard-card-meta {
+    font-size: 13px;
+    color: var(--mxch-text-secondary, #64748b);
+    margin: 0;
+}
+
+@media (max-width: 1024px) {
+    .mxch-dashboard-grid {
+        grid-template-columns: 1fr 1fr;
+    }
+}
+
+@media (max-width: 782px) {
+    .mxch-step {
+        grid-template-columns: 32px 1fr;
+        grid-template-rows: auto auto;
+        gap: var(--mxch-spacing-sm) var(--mxch-spacing-md);
+    }
+    .mxch-step-action {
+        grid-column: 1 / -1;
+        text-align: right;
+    }
+    .mxch-dashboard-grid {
+        grid-template-columns: 1fr;
+    }
+}
+
+/* ------------------------------------------------------------------
+ * Test Streaming Compatibility button (AI Models page)
+ * Branded .mxch-btn replacing the legacy WP button + dashicon wrench.
+ * ------------------------------------------------------------------ */
+.mxch-streaming-test-row {
+    margin-top: var(--mxch-spacing-md, 16px);
+}
+.mxch-streaming-test-row .mxch-streaming-test-icon {
+    vertical-align: middle;
+    margin-right: 8px;
+}
+.mxch-streaming-test-result {
+    margin-top: var(--mxch-spacing-sm, 12px);
+    font-weight: 600;
+    color: var(--mxch-text-primary, #1a1a2e);
 }

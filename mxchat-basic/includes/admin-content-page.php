@@ -523,14 +523,21 @@ function mxchat_render_content_page($admin_instance) {
                                             'gpt-5'                => 'GPT-5',
                                         ),
                                         'Anthropic' => array(
+                                            'claude-opus-4-8'              => 'Claude Opus 4.8',
                                             'claude-opus-4-7'              => 'Claude Opus 4.7',
                                             'claude-opus-4-6'              => 'Claude Opus 4.6',
                                             'claude-sonnet-4-6'            => 'Claude Sonnet 4.6',
                                             'claude-haiku-4-5-20251001'    => 'Claude Haiku 4.5',
                                         ),
                                         'Google' => array(
-                                            'gemini-3-pro-preview' => 'Gemini 3 Pro',
-                                            'gemini-2.5-pro'       => 'Gemini 2.5 Pro',
+                                            'gemini-3.5-flash'              => 'Gemini 3.5 Flash',
+                                            'gemini-3.1-pro-preview'        => 'Gemini 3.1 Pro',
+                                            'gemini-3-flash-preview'        => 'Gemini 3 Flash',
+                                            'gemini-3.1-flash-lite'         => 'Gemini 3.1 Flash-Lite',
+                                            'gemini-3.1-flash-lite-preview' => 'Gemini 3.1 Flash-Lite (Preview)',
+                                            'gemini-2.5-pro'                => 'Gemini 2.5 Pro',
+                                            'gemini-2.5-flash'              => 'Gemini 2.5 Flash',
+                                            'gemini-2.5-flash-lite'         => 'Gemini 2.5 Flash-Lite',
                                         ),
                                         'xAI' => array(
                                             'grok-4-0709'                  => 'Grok 4',

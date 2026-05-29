@@ -20,6 +20,209 @@ class MxChat_Integrator {
  * Setup streaming headers - call this right before actually streaming
  * This delays header setup to allow actions/forms to return JSON responses
  */
+/**
+ * Auto-retry wrapper around wp_remote_post for chat-send provider calls.
+ *
+ * Retries up to twice (750ms then 2000ms backoff) when the upstream provider
+ * returns a TRANSIENT error: WP timeout, 429, 502, 503, 504, or a provider-
+ * specific "overloaded" / "rate limit" body string. Returns immediately on
+ * permanent errors (401/403/404/422) so misconfiguration surfaces fast.
+ *
+ * Drop-in replacement for wp_remote_post — returns the same shape
+ * (WP_Error or response array) so the caller's existing error-handling
+ * code path is unchanged.
+ *
+ * STREAMING PATH NOTE: this helper is ONLY for non-streaming chat-send
+ * paths (the *_response_openai / *_response_claude / etc functions).
+ * For the *_stream variants, the cURL initial-connect happens inside a
+ * read-chunks loop — retrying there safely (without re-emitting partial
+ * stream chunks to the client) is a separate problem. Streaming paths
+ * are NOT wrapped in this build; tracked as a follow-on.
+ *
+ * Honors the `mxchat_options['auto_retry_on_transient_error']` toggle
+ * (default true). When false, behavior is identical to plain wp_remote_post.
+ */
+private function mxchat_provider_call_with_retry($url, $args, $provider_hint = '') {
+    $opts = is_array($this->options ?? null) ? $this->options : array();
+    $enabled = !isset($opts['auto_retry_on_transient_error']) ||
+               (string) $opts['auto_retry_on_transient_error'] !== '0';
+
+    if (!$enabled) {
+        return wp_remote_post($url, $args);
+    }
+
+    $backoffs = array(0, 750, 2000); // ms — first attempt 0, then retry waits
+    $last_response = null;
+
+    foreach ($backoffs as $i => $delay_ms) {
+        if ($delay_ms > 0) {
+            usleep($delay_ms * 1000);
+        }
+        $response = wp_remote_post($url, $args);
+        $last_response = $response;
+
+        if (!$this->mxchat_is_transient_provider_error($response, $provider_hint)) {
+            return $response;
+        }
+
+        if (defined('WP_DEBUG') && WP_DEBUG) {
+            $code_for_log = is_wp_error($response) ? 'wp_error:' . $response->get_error_code()
+                                                   : (int) wp_remote_retrieve_response_code($response);
+            error_log(sprintf(
+                '[MxChat] Transient provider error (provider=%s, attempt=%d/3, status=%s). %s',
+                $provider_hint ?: 'unknown',
+                $i + 1,
+                $code_for_log,
+                ($i + 1) < count($backoffs) ? 'Retrying.' : 'Giving up.'
+            ));
+        }
+    }
+
+    return $last_response;
+}
+
+/**
+ * Returns true if a wp_remote_post response represents a TRANSIENT
+ * provider error worth retrying. Conservative — only retries on signals
+ * that are very likely to clear within a few seconds.
+ *
+ * Transient signals:
+ *  - WP_Error with timeout / connection / dns / ssl
+ *  - HTTP 429, 502, 503, 504
+ *  - Provider-specific overload bodies (gemini "overloaded", openai
+ *    "server_error", anthropic "overloaded_error", xai/grok "Rate limit")
+ *
+ * NOT transient (return false — fail-fast):
+ *  - 200/2xx (success)
+ *  - 401, 403, 404, 422 (auth / config errors — retrying wastes the
+ *    budget; the user needs to fix something)
+ *  - Any other 4xx (assume permanent unless explicitly listed above)
+ *  - 5xx other than the four listed above (e.g. 500 generic server error
+ *    is often a malformed request on our side, not a transient outage)
+ */
+private function mxchat_is_transient_provider_error($response, $provider_hint = '') {
+    if (is_wp_error($response)) {
+        $code = $response->get_error_code();
+        return in_array($code, array('http_request_failed', 'connection_failed', 'connection_timeout'), true)
+            || stripos((string) $response->get_error_message(), 'timed out') !== false
+            || stripos((string) $response->get_error_message(), 'timeout') !== false;
+    }
+
+    $status = (int) wp_remote_retrieve_response_code($response);
+    if (in_array($status, array(429, 502, 503, 504), true)) {
+        return true;
+    }
+    if ($status >= 200 && $status < 300) {
+        return false;
+    }
+    // Permanent 4xx that should fail fast — even with no body.
+    if (in_array($status, array(401, 403, 404, 405, 422), true)) {
+        return false;
+    }
+
+    // Provider-specific body inspection for the cases where the upstream
+    // returns 200 with an error envelope (gemini does this for overload).
+    $body = (string) wp_remote_retrieve_body($response);
+    if ($body === '') {
+        return false;
+    }
+    $lower = strtolower($body);
+    $hint  = strtolower((string) $provider_hint);
+
+    if ($hint === 'gemini' && (strpos($lower, 'overloaded') !== false
+                            || strpos($lower, 'high demand') !== false
+                            || strpos($lower, 'model is overloaded') !== false)) {
+        return true;
+    }
+    if ($hint === 'openai' && (strpos($lower, 'rate limit reached') !== false
+                            || strpos($lower, '"type":"server_error"') !== false
+                            || strpos($lower, '"code":"server_error"') !== false)) {
+        return true;
+    }
+    if ($hint === 'anthropic' && (strpos($lower, '"type":"overloaded_error"') !== false
+                               || strpos($lower, 'overloaded_error') !== false)) {
+        return true;
+    }
+    if (($hint === 'xai' || $hint === 'grok') && strpos($lower, 'rate limit') !== false) {
+        return true;
+    }
+
+    return false;
+}
+
+/**
+ * Streaming-path classifier: same rules as mxchat_is_transient_provider_error
+ * but takes a raw (http_code, body, provider_hint, curl_errno) tuple as
+ * captured during a cURL streaming exec. cURL's WRITEFUNCTION/HEADERFUNCTION
+ * collect status separately from a plain wp_remote_post array shape, so the
+ * non-streaming helper above can't be called directly. This delegate keeps
+ * the classification rules identical across both paths.
+ */
+private function mxchat_is_transient_provider_error_raw($http_code, $body, $provider_hint = '', $curl_errno = 0) {
+    if ($curl_errno) {
+        // cURL transport-level error (timeout, connection failure, DNS, etc.)
+        // Match the same WP_Error timeout/connection signals the array variant treats as transient.
+        return in_array($curl_errno, array(
+            CURLE_OPERATION_TIMEDOUT,
+            CURLE_COULDNT_CONNECT,
+            CURLE_COULDNT_RESOLVE_HOST,
+            CURLE_SSL_CONNECT_ERROR,
+            CURLE_GOT_NOTHING,
+            CURLE_SEND_ERROR,
+            CURLE_RECV_ERROR,
+        ), true);
+    }
+
+    $status = (int) $http_code;
+    if (in_array($status, array(429, 502, 503, 504), true)) {
+        return true;
+    }
+    if ($status >= 200 && $status < 300) {
+        return false;
+    }
+    if (in_array($status, array(401, 403, 404, 405, 422), true)) {
+        return false;
+    }
+
+    $body = (string) $body;
+    if ($body === '') {
+        return false;
+    }
+    $lower = strtolower($body);
+    $hint  = strtolower((string) $provider_hint);
+
+    if ($hint === 'gemini' && (strpos($lower, 'overloaded') !== false
+                            || strpos($lower, 'high demand') !== false
+                            || strpos($lower, 'model is overloaded') !== false)) {
+        return true;
+    }
+    if ($hint === 'openai' && (strpos($lower, 'rate limit reached') !== false
+                            || strpos($lower, '"type":"server_error"') !== false
+                            || strpos($lower, '"code":"server_error"') !== false)) {
+        return true;
+    }
+    if ($hint === 'anthropic' && (strpos($lower, '"type":"overloaded_error"') !== false
+                               || strpos($lower, 'overloaded_error') !== false)) {
+        return true;
+    }
+    if (($hint === 'xai' || $hint === 'grok') && strpos($lower, 'rate limit') !== false) {
+        return true;
+    }
+
+    return false;
+}
+
+/**
+ * Whether transient-error auto-retry is enabled in admin settings.
+ * Default true unless explicitly set to '0'. Used by both wp_remote_post
+ * (mxchat_provider_call_with_retry) and cURL streaming paths.
+ */
+private function mxchat_retry_enabled() {
+    $opts = is_array($this->options ?? null) ? $this->options : array();
+    return !isset($opts['auto_retry_on_transient_error']) ||
+           (string) $opts['auto_retry_on_transient_error'] !== '0';
+}
+
 private function setup_streaming_headers() {
     if ($this->streaming_headers_sent || headers_sent()) {
         return false;
@@ -280,6 +483,15 @@ if (strpos($clean_content, '<pre') === false &&
 public function register_routes() {
     //error_log(esc_html__('Registering MxChat REST routes', 'mxchat'));
 
+    // Per-request chat-send nonce endpoint — issues a fresh nonce on demand
+    // so the chat widget never depends on a stale nonce embedded in cached HTML.
+    // Public (no auth), rate-limited (1 call / IP / second via a transient).
+    register_rest_route('mxchat/v1', '/nonce', [
+        'methods'             => 'GET',
+        'callback'            => [$this, 'mxchat_issue_chat_send_nonce'],
+        'permission_callback' => '__return_true',
+    ]);
+
     register_rest_route('mxchat/v1', '/stream', [
         'methods'  => 'GET',
         'callback' => [$this, 'mxchat_stream_events'],
@@ -312,6 +524,70 @@ public function register_routes() {
     ]);
 
     //error_log(esc_html__('MxChat REST routes registered', 'mxchat'));
+}
+
+/**
+ * Issue a fresh per-request nonce for chat-send. Returned to the widget which
+ * caches it for the session and includes it on every chat-send / stream-send /
+ * upload call. By moving the nonce out of inline `window.mxchatChat = {...}` HTML
+ * we eliminate the entire class of "first-message Access denied" failures that
+ * plague WP installs behind a full-page cache (WP Rocket, LiteSpeed, FlyingPress,
+ * W3 Total Cache, Cloudflare APO) — the nonce is never cached because it never
+ * lives in the HTML body.
+ *
+ * Public endpoint. Rate-limited to 1 call / IP / 1s via a transient so a single
+ * client browser can't be used to flood the nonce-issuance path.
+ *
+ * Nonce action: `mxchat_chat_send` (new). The chat-send AJAX handlers accept
+ * BOTH this action AND the legacy `mxchat_chat_nonce` action for a 30-day
+ * backwards-compat window so cached pages still in users' browsers don't break
+ * mid-session.
+ *
+ * @since 3.2.7
+ */
+public function mxchat_issue_chat_send_nonce(WP_REST_Request $request) {
+    $ip = '';
+    if (!empty($_SERVER['REMOTE_ADDR'])) {
+        $ip = preg_replace('#[^0-9a-fA-F:\.]#', '', wp_unslash((string) $_SERVER['REMOTE_ADDR']));
+    }
+    if ($ip !== '') {
+        // Best-effort rate limit. WP transients with sub-second TTL are racy
+        // (parallel bursts can squeak through before set_transient completes);
+        // we use 2s to make the gate slightly more reliable. Real production
+        // rate-limiting at sub-second granularity needs Redis or DB row locks
+        // — out of scope for this endpoint, which is already cheap.
+        $key = 'mxchat_nonce_rl_' . md5($ip);
+        if (get_transient($key)) {
+            return new WP_REST_Response(array(
+                'error'   => 'rate_limited',
+                'message' => __('Too many nonce requests. Try again shortly.', 'mxchat'),
+            ), 429);
+        }
+        set_transient($key, 1, 2);
+    }
+
+    return new WP_REST_Response(array(
+        'nonce'      => wp_create_nonce('mxchat_chat_send'),
+        'expires_in' => 86400, // WP nonces live 24h; widget caches for 12h conservatively.
+    ), 200);
+}
+
+/**
+ * Verify a chat-send nonce. Accepts BOTH the new `mxchat_chat_send` action
+ * (issued by /wp-json/mxchat/v1/nonce) AND the legacy `mxchat_chat_nonce`
+ * action (inline-localized in older cached HTML). The legacy acceptance is
+ * a 30-day backwards-compat window — to be removed in a follow-up release
+ * after 2026-06-27.
+ *
+ * @param string $posted_nonce
+ * @return bool
+ */
+public static function mxchat_verify_chat_send_nonce($posted_nonce) {
+    if (!is_string($posted_nonce) || $posted_nonce === '') {
+        return false;
+    }
+    return (bool) wp_verify_nonce($posted_nonce, 'mxchat_chat_send')
+        || (bool) wp_verify_nonce($posted_nonce, 'mxchat_chat_nonce');
 }
 
 /**
@@ -878,7 +1154,7 @@ public function mxchat_handle_save_email_and_response() {
     nocache_headers();
 
     // Validate nonce
-    if (!isset($_POST['nonce']) || !wp_verify_nonce($_POST['nonce'], 'mxchat_chat_nonce')) {
+    if (!isset($_POST['nonce']) || !MxChat_Integrator::mxchat_verify_chat_send_nonce($_POST['nonce'])) {
         //error_log(esc_html__('[ERROR] Invalid nonce in mxchat_handle_save_email_and_response', 'mxchat'));
         wp_send_json_error(['message' => esc_html__('Invalid nonce.', 'mxchat')]);
         wp_die();
@@ -963,7 +1239,7 @@ public function mxchat_check_email_provided() {
 
     nocache_headers();
 
-    if (!isset($_POST['nonce']) || !wp_verify_nonce($_POST['nonce'], 'mxchat_chat_nonce')) {
+    if (!isset($_POST['nonce']) || !MxChat_Integrator::mxchat_verify_chat_send_nonce($_POST['nonce'])) {
         //error_log('[ERROR] Invalid nonce in mxchat_check_email_provided');
         wp_send_json_error(['message' => esc_html__('Invalid nonce', 'mxchat')]);
     }
@@ -2941,26 +3217,39 @@ private function interpret_query_with_openai($user_query, $system_prompt, $api_k
 }
 
 /**
+ * Anthropic deprecated temperature/top_p/top_k starting with Opus 4.7 —
+ * add new reasoning-Opus model ids here. (We don't send top_p/top_k in any
+ * Claude body, so the list only needs to gate temperature stripping.)
+ */
+private function mxchat_claude_omits_temperature($model) {
+    $no_temp = array('claude-opus-4-7', 'claude-opus-4-8');
+    return in_array($model, $no_temp, true);
+}
+
+/**
  * Interpret query using Claude models
  */
 private function interpret_query_with_claude($user_query, $system_prompt, $api_key, $model) {
     $url = 'https://api.anthropic.com/v1/messages';
-    
+
+    $payload = [
+        'model' => $model,
+        'system' => $system_prompt,
+        'messages' => [
+            ['role' => 'user', 'content' => sanitize_text_field($user_query)]
+        ],
+        'max_tokens' => 20,
+        'temperature' => 0.2,
+    ];
+    if ($this->mxchat_claude_omits_temperature($model)) { unset($payload['temperature']); }
+
     $args = [
         'headers' => [
             'Content-Type' => 'application/json',
             'x-api-key' => $api_key,
             'anthropic-version' => '2023-06-01',
         ],
-        'body' => wp_json_encode([
-            'model' => $model,
-            'system' => $system_prompt,
-            'messages' => [
-                ['role' => 'user', 'content' => sanitize_text_field($user_query)]
-            ],
-            'max_tokens' => 20,
-            'temperature' => 0.2,
-        ]),
+        'body' => wp_json_encode($payload),
         'method' => 'POST',
         'timeout' => 15,
     ];
@@ -2982,6 +3271,9 @@ private function interpret_query_with_claude($user_query, $system_prompt, $api_k
  * Interpret query using Gemini models
  */
 private function interpret_query_with_gemini($user_query, $system_prompt, $api_key, $model) {
+    if ($model === 'gemini-3-pro-preview') {
+        $model = 'gemini-3.1-pro-preview';
+    }
     // Use v1beta for preview models, v1 for stable models
     $api_version = (strpos($model, 'preview') !== false || strpos($model, 'exp') !== false) ? 'v1beta' : 'v1';
 
@@ -3409,7 +3701,9 @@ private function find_relevant_pdf_pages($query_embedding, $embeddings) {
 
 
 public function handle_pdf_upload() {
-    check_ajax_referer('mxchat_chat_nonce', 'nonce');
+    if (!isset($_POST['nonce']) || !MxChat_Integrator::mxchat_verify_chat_send_nonce(wp_unslash((string) $_POST['nonce']))) {
+        wp_send_json_error(array('message' => esc_html__('Invalid nonce.', 'mxchat')), 403);
+    }
 
     if (!isset($_FILES['pdf_file']) || !isset($_POST['session_id'])) {
         wp_send_json_error(esc_html__('Missing required parameters.', 'mxchat'));
@@ -3503,7 +3797,9 @@ public function handle_pdf_upload() {
     return;
 }
 public function handle_pdf_remove() {
-    check_ajax_referer('mxchat_chat_nonce', 'nonce');
+    if (!isset($_POST['nonce']) || !MxChat_Integrator::mxchat_verify_chat_send_nonce(wp_unslash((string) $_POST['nonce']))) {
+        wp_send_json_error(array('message' => esc_html__('Invalid nonce.', 'mxchat')), 403);
+    }
 
     if (empty($_POST['session_id'])) {
         wp_send_json_error(esc_html__('Session ID missing.', 'mxchat'));
@@ -7006,145 +7302,170 @@ private function mxchat_generate_response_openrouter_stream($selected_model, $op
             'stream' => true
         ]);
 
-        // Setup streaming headers now that we know we're actually streaming
-        $this->setup_streaming_headers();
+        // V2 retry-on-initial-connect: setup_streaming_headers is now lazy-fired
+        // inside WRITEFUNCTION on first byte of a successful upstream.
 
-        $ch = curl_init();
-        curl_setopt($ch, CURLOPT_URL, 'https://openrouter.ai/api/v1/chat/completions');
-        curl_setopt($ch, CURLOPT_RETURNTRANSFER, false);
-        curl_setopt($ch, CURLOPT_POST, true);
-        curl_setopt($ch, CURLOPT_POSTFIELDS, $body);
-        curl_setopt($ch, CURLOPT_HTTPHEADER, array(
-            'Content-Type: application/json',
-            'Authorization: Bearer ' . $openrouter_api_key,
-            'HTTP-Referer: ' . home_url(),
-            'X-Title: ' . get_bloginfo('name')
-        ));
-        curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, true);
-        curl_setopt($ch, CURLOPT_TIMEOUT, 60);
-        
+        $captured_status_code = 0;
+        $captured_body_pre_stream = '';
         $full_response = '';
         $stream_started = false;
         $buffer = '';
-        
-        curl_setopt($ch, CURLOPT_WRITEFUNCTION, function($ch, $data) use (&$full_response, &$stream_started, &$buffer, $testing_data) {
-            if (!$stream_started && $testing_data !== null) {
-                echo "data: " . json_encode(['testing_data' => $testing_data]) . "\n\n";
-                flush();
-                $stream_started = true;
+        $errno = 0;
+        $last_curl_error = '';
+        $http_code = 0;
+        $max_attempts = $this->mxchat_retry_enabled() ? 3 : 1;
+        $backoff_ms = array(0, 750, 2000);
+
+        for ($attempt = 0; $attempt < $max_attempts; $attempt++) {
+            if ($attempt > 0 && $backoff_ms[$attempt] > 0) {
+                usleep($backoff_ms[$attempt] * 1000);
             }
-            
-            $buffer .= $data;
-            $lines = explode("\n", $buffer);
-            $buffer = array_pop($lines);
-            
-            foreach ($lines as $line) {
-                if (trim($line) === '') {
-                    continue;
+
+            $captured_status_code = 0;
+            $captured_body_pre_stream = '';
+            $full_response = '';
+            $stream_started = false;
+            $buffer = '';
+
+            $ch = curl_init();
+            curl_setopt($ch, CURLOPT_URL, 'https://openrouter.ai/api/v1/chat/completions');
+            curl_setopt($ch, CURLOPT_RETURNTRANSFER, false);
+            curl_setopt($ch, CURLOPT_POST, true);
+            curl_setopt($ch, CURLOPT_POSTFIELDS, $body);
+            curl_setopt($ch, CURLOPT_HTTPHEADER, array(
+                'Content-Type: application/json',
+                'Authorization: Bearer ' . $openrouter_api_key,
+                'HTTP-Referer: ' . home_url(),
+                'X-Title: ' . get_bloginfo('name')
+            ));
+            curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, true);
+            curl_setopt($ch, CURLOPT_TIMEOUT, 60);
+
+            curl_setopt($ch, CURLOPT_HEADERFUNCTION, function($ch, $header) use (&$captured_status_code) {
+                if ($captured_status_code === 0 && preg_match('#^HTTP/\S+\s+(\d+)\b#', $header, $m)) {
+                    $captured_status_code = (int) $m[1];
                 }
-                
-                if (strpos($line, 'data: ') !== 0) {
-                    continue;
+                return strlen($header);
+            });
+
+            curl_setopt($ch, CURLOPT_WRITEFUNCTION, function($ch, $data) use (&$full_response, &$stream_started, &$buffer, &$captured_status_code, &$captured_body_pre_stream, $testing_data) {
+                if ($captured_status_code !== 0 && $captured_status_code !== 200) {
+                    $captured_body_pre_stream .= $data;
+                    return strlen($data);
                 }
-                
-                $json_str = substr($line, 6);
-                
-                if (trim($json_str) === '[DONE]') {
-                    echo "data: [DONE]\n\n";
+
+                if (!$this->streaming_headers_sent) {
+                    $this->setup_streaming_headers();
+                }
+
+                if (!$stream_started && $testing_data !== null) {
+                    echo "data: " . json_encode(['testing_data' => $testing_data]) . "\n\n";
                     flush();
-                    continue;
+                    $stream_started = true;
                 }
-                
-                $json = json_decode(trim($json_str), true);
-                if ($json && isset($json['choices'][0]['delta']['content'])) {
-                    $content = $json['choices'][0]['delta']['content'];
-                    $full_response .= $content;
-                    
-                    echo "data: " . json_encode(['content' => $content]) . "\n\n";
-                    flush();
+
+                $buffer .= $data;
+                $lines = explode("\n", $buffer);
+                $buffer = array_pop($lines);
+
+                foreach ($lines as $line) {
+                    if (trim($line) === '') {
+                        continue;
+                    }
+                    if (strpos($line, 'data: ') !== 0) {
+                        continue;
+                    }
+
+                    $json_str = substr($line, 6);
+
+                    if (trim($json_str) === '[DONE]') {
+                        echo "data: [DONE]\n\n";
+                        flush();
+                        continue;
+                    }
+
+                    $json = json_decode(trim($json_str), true);
+                    if ($json && isset($json['choices'][0]['delta']['content'])) {
+                        $content = $json['choices'][0]['delta']['content'];
+                        $full_response .= $content;
+
+                        echo "data: " . json_encode(['content' => $content]) . "\n\n";
+                        flush();
+                    }
                 }
-            }
-            
-            return strlen($data);
-        });
-        
-        $response = curl_exec($ch);
-        $http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        
-        if (curl_errno($ch) || $http_code !== 200) {
+
+                return strlen($data);
+            });
+
+            $response = curl_exec($ch);
+            $errno = curl_errno($ch);
+            $last_curl_error = curl_error($ch);
+            $http_code = $captured_status_code !== 0 ? $captured_status_code : (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
             curl_close($ch);
-            
-            $regular_response = $this->mxchat_generate_response_openrouter(
-                $selected_model,
-                $openrouter_api_key,
-                $conversation_history,
-                $relevant_content
-            );
-            
-            $response_data = [
-                'text' => $regular_response,
-                'html' => '',
-                'session_id' => $session_id
-            ];
-            
-            if ($testing_data !== null) {
-                $response_data['testing_data'] = $testing_data;
+
+            if (!$errno && $http_code === 200) {
+                break;
             }
-            
-            header('Content-Type: application/json');
-            echo json_encode($response_data);
+
+            $is_transient = $this->mxchat_is_transient_provider_error_raw($http_code, $captured_body_pre_stream, 'openai', $errno);
+            $can_retry = !$this->streaming_headers_sent
+                      && ($attempt + 1) < $max_attempts
+                      && $is_transient;
+
+            if (defined('WP_DEBUG') && WP_DEBUG) {
+                error_log(sprintf(
+                    '[MxChat] openrouter_stream initial-connect failure (attempt=%d/%d, status=%d, errno=%d, transient=%s, %s).',
+                    $attempt + 1, $max_attempts, $http_code, $errno,
+                    $is_transient ? 'yes' : 'no',
+                    $can_retry ? 'Retrying.' : 'Giving up.'
+                ));
+            }
+
+            if (!$can_retry) {
+                break;
+            }
+        }
+
+        if (!$errno && $http_code === 200) {
+            if (!empty($full_response) && !empty($session_id)) {
+                $rag_context_for_storage = null;
+                $has_rag_data = $this->last_similarity_analysis !== null && !empty($this->last_similarity_analysis['top_matches']);
+                $has_action_data = isset($this->last_action_analysis) && !empty($this->last_action_analysis);
+
+                if ($has_rag_data || $has_action_data) {
+                    $rag_context_for_storage = [];
+
+                    if ($has_rag_data) {
+                        $rag_context_for_storage['top_matches'] = $this->last_similarity_analysis['top_matches'];
+                        $rag_context_for_storage['approved_urls'] = $this->current_valid_urls ?? [];
+                        $rag_context_for_storage['similarity_threshold'] = $this->last_similarity_analysis['threshold_used'] ?? 0.35;
+                        $rag_context_for_storage['knowledge_base_type'] = $this->last_similarity_analysis['knowledge_base_type'] ?? 'WordPress Database';
+                        $rag_context_for_storage['total_documents_checked'] = $this->last_similarity_analysis['total_checked'] ?? 0;
+                    }
+
+                    if ($has_action_data) {
+                        $rag_context_for_storage['action_analysis'] = $this->last_action_analysis;
+                    }
+                }
+                $this->mxchat_save_chat_message($session_id, 'bot', $full_response, null, $rag_context_for_storage);
+            }
             return true;
         }
-        
-        curl_close($ch);
-        
-        if (!empty($full_response) && !empty($session_id)) {
-            // Prepare RAG context for streaming response
-            $rag_context_for_storage = null;
-            $has_rag_data = $this->last_similarity_analysis !== null && !empty($this->last_similarity_analysis['top_matches']);
-            $has_action_data = isset($this->last_action_analysis) && !empty($this->last_action_analysis);
 
-            if ($has_rag_data || $has_action_data) {
-                $rag_context_for_storage = [];
-
-                if ($has_rag_data) {
-                    $rag_context_for_storage['top_matches'] = $this->last_similarity_analysis['top_matches'];
-                    $rag_context_for_storage['approved_urls'] = $this->current_valid_urls ?? [];
-                    $rag_context_for_storage['similarity_threshold'] = $this->last_similarity_analysis['threshold_used'] ?? 0.35;
-                    $rag_context_for_storage['knowledge_base_type'] = $this->last_similarity_analysis['knowledge_base_type'] ?? 'WordPress Database';
-                    $rag_context_for_storage['total_documents_checked'] = $this->last_similarity_analysis['total_checked'] ?? 0;
-                }
-
-                if ($has_action_data) {
-                    $rag_context_for_storage['action_analysis'] = $this->last_action_analysis;
-                }
-            }
-            $this->mxchat_save_chat_message($session_id, 'bot', $full_response, null, $rag_context_for_storage);
-        }
-
-        return true;
+        return $this->mxchat_stream_emit_fallback(
+            'openai',
+            $this->mxchat_generate_response_openrouter($selected_model, $openrouter_api_key, $conversation_history, $relevant_content),
+            $session_id,
+            $testing_data
+        );
 
     } catch (Exception $e) {
-        $regular_response = $this->mxchat_generate_response_openrouter(
-            $selected_model,
-            $openrouter_api_key,
-            $conversation_history,
-            $relevant_content
+        return $this->mxchat_stream_emit_fallback(
+            'openai',
+            $this->mxchat_generate_response_openrouter($selected_model, $openrouter_api_key, $conversation_history, $relevant_content),
+            $session_id,
+            $testing_data
         );
-        
-        $response_data = [
-            'text' => $regular_response,
-            'html' => '',
-            'session_id' => $session_id
-        ];
-        
-        if ($testing_data !== null) {
-            $response_data['testing_data'] = $testing_data;
-        }
-        
-        header('Content-Type: application/json');
-        echo json_encode($response_data);
-        return true;
     }
 }
 private function mxchat_generate_response_openai_stream($selected_model, $api_key, $conversation_history, $relevant_content, $session_id, $testing_data = null) {
@@ -7249,165 +7570,205 @@ private function mxchat_generate_response_openai_stream($selected_model, $api_ke
 
         $body = json_encode($request_body);
 
-        // Setup streaming headers now that we know we're actually streaming
-        $this->setup_streaming_headers();
+        // V2 retry-on-initial-connect: do NOT call setup_streaming_headers() here.
+        // It is now lazy-fired inside the WRITEFUNCTION on the first byte of a
+        // SUCCESSFUL upstream response, gated by the captured HTTP status.
 
-        // Use cURL for streaming support
-        $ch = curl_init();
-        curl_setopt($ch, CURLOPT_URL, 'https://api.openai.com/v1/chat/completions');
-        curl_setopt($ch, CURLOPT_RETURNTRANSFER, false);
-        curl_setopt($ch, CURLOPT_POST, true);
-        curl_setopt($ch, CURLOPT_POSTFIELDS, $body);
-        curl_setopt($ch, CURLOPT_HTTPHEADER, array(
-            'Content-Type: application/json',
-            'Authorization: Bearer ' . $api_key
-        ));
-        curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, true);
-        curl_setopt($ch, CURLOPT_TIMEOUT, 60);
-        
-        $full_response = ''; // Accumulate full response for saving
+        $captured_status_code = 0;
+        $captured_body_pre_stream = '';
+        $full_response = '';
         $stream_started = false;
-        $buffer = ''; // CRITICAL: Add persistent buffer for incomplete chunks
-        
-        // Buffer control for real-time streaming
-        curl_setopt($ch, CURLOPT_WRITEFUNCTION, function($ch, $data) use (&$full_response, &$stream_started, &$buffer, $testing_data) {
-            // Send testing data as the first event if available
-            if (!$stream_started && $testing_data !== null) {
-                echo "data: " . json_encode(['testing_data' => $testing_data]) . "\n\n";
-                flush();
-                $stream_started = true;
+        $buffer = '';
+        $errno = 0;
+        $last_curl_error = '';
+        $http_code = 0;
+        $max_attempts = $this->mxchat_retry_enabled() ? 3 : 1;
+        $backoff_ms = array(0, 750, 2000);
+
+        for ($attempt = 0; $attempt < $max_attempts; $attempt++) {
+            if ($attempt > 0 && $backoff_ms[$attempt] > 0) {
+                usleep($backoff_ms[$attempt] * 1000);
             }
-            
-            // CRITICAL FIX: Append new data to buffer
-            $buffer .= $data;
-            
-            // Process complete lines only
-            $lines = explode("\n", $buffer);
-            
-            // CRITICAL FIX: Keep the last incomplete line in the buffer
-            // The last element might be incomplete, so keep it in buffer
-            $buffer = array_pop($lines);
-            
-            foreach ($lines as $line) {
-                // Skip empty lines
-                if (trim($line) === '') {
-                    continue;
+
+            // Reset per-attempt capture state.
+            $captured_status_code = 0;
+            $captured_body_pre_stream = '';
+            $full_response = '';
+            $stream_started = false;
+            $buffer = '';
+
+            $ch = curl_init();
+            curl_setopt($ch, CURLOPT_URL, 'https://api.openai.com/v1/chat/completions');
+            curl_setopt($ch, CURLOPT_RETURNTRANSFER, false);
+            curl_setopt($ch, CURLOPT_POST, true);
+            curl_setopt($ch, CURLOPT_POSTFIELDS, $body);
+            curl_setopt($ch, CURLOPT_HTTPHEADER, array(
+                'Content-Type: application/json',
+                'Authorization: Bearer ' . $api_key
+            ));
+            curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, true);
+            curl_setopt($ch, CURLOPT_TIMEOUT, 60);
+
+            // Capture HTTP status as soon as response headers arrive — fires before WRITEFUNCTION.
+            curl_setopt($ch, CURLOPT_HEADERFUNCTION, function($ch, $header) use (&$captured_status_code) {
+                if ($captured_status_code === 0 && preg_match('#^HTTP/\S+\s+(\d+)\b#', $header, $m)) {
+                    $captured_status_code = (int) $m[1];
                 }
-                
-                // Only process lines that start with "data: "
-                if (strpos($line, 'data: ') !== 0) {
-                    continue;
+                return strlen($header);
+            });
+
+            // Buffer control for real-time streaming
+            curl_setopt($ch, CURLOPT_WRITEFUNCTION, function($ch, $data) use (&$full_response, &$stream_started, &$buffer, &$captured_status_code, &$captured_body_pre_stream, $testing_data) {
+                // V2 guard: if upstream returned non-200, buffer body for transient
+                // classification and DO NOT emit to client. Stream channel must NOT open.
+                if ($captured_status_code !== 0 && $captured_status_code !== 200) {
+                    $captured_body_pre_stream .= $data;
+                    return strlen($data);
                 }
-                
-                $json_str = substr($line, 6); // Remove 'data: ' prefix
-                
-                if (trim($json_str) === '[DONE]') {
-                    echo "data: [DONE]\n\n";
+
+                // Lazy-fire streaming headers on first byte of a SUCCESSFUL upstream.
+                // After this point streaming_headers_sent === true → retry is structurally blocked.
+                if (!$this->streaming_headers_sent) {
+                    $this->setup_streaming_headers();
+                }
+
+                // Send testing data as the first event if available
+                if (!$stream_started && $testing_data !== null) {
+                    echo "data: " . json_encode(['testing_data' => $testing_data]) . "\n\n";
                     flush();
-                    continue;
+                    $stream_started = true;
                 }
-                
-                // Try to decode JSON
-                $json = json_decode(trim($json_str), true);
-                if ($json && isset($json['choices'][0]['delta']['content'])) {
-                    $content = $json['choices'][0]['delta']['content'];
-                    $full_response .= $content; // Accumulate the full response
-                    
-                    // Send as SSE format
-                    echo "data: " . json_encode(['content' => $content]) . "\n\n";
-                    flush();
+
+                // CRITICAL FIX: Append new data to buffer
+                $buffer .= $data;
+
+                // Process complete lines only
+                $lines = explode("\n", $buffer);
+
+                // CRITICAL FIX: Keep the last incomplete line in the buffer
+                $buffer = array_pop($lines);
+
+                foreach ($lines as $line) {
+                    if (trim($line) === '') {
+                        continue;
+                    }
+                    if (strpos($line, 'data: ') !== 0) {
+                        continue;
+                    }
+
+                    $json_str = substr($line, 6);
+
+                    if (trim($json_str) === '[DONE]') {
+                        echo "data: [DONE]\n\n";
+                        flush();
+                        continue;
+                    }
+
+                    $json = json_decode(trim($json_str), true);
+                    if ($json && isset($json['choices'][0]['delta']['content'])) {
+                        $content = $json['choices'][0]['delta']['content'];
+                        $full_response .= $content;
+
+                        echo "data: " . json_encode(['content' => $content]) . "\n\n";
+                        flush();
+                    }
                 }
-            }
-            
-            return strlen($data);
-        });
-        
-        $response = curl_exec($ch);
-        $http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        
-        if (curl_errno($ch) || $http_code !== 200) {
-            $curl_error = curl_error($ch);
+
+                return strlen($data);
+            });
+
+            $response = curl_exec($ch);
+            $errno = curl_errno($ch);
+            $last_curl_error = curl_error($ch);
+            $http_code = $captured_status_code !== 0 ? $captured_status_code : (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
             curl_close($ch);
 
-            // Fallback to regular response
-            $regular_response = $this->mxchat_generate_response_openai(
-                $selected_model,
-                $api_key,
-                $conversation_history,
-                $relevant_content
-            );
-
-            // FIXED: Check if regular response returned an error
-            if (is_array($regular_response) && isset($regular_response['error'])) {
-                // Send error in SSE format since we're in streaming mode
-                echo "data: " . json_encode([
-                    'error' => true,
-                    'error_message' => $regular_response['error'],
-                    'error_code' => $regular_response['error_code'] ?? 'api_error',
-                    'text' => $regular_response['error'],
-                    'message' => $regular_response['error']
-                ]) . "\n\n";
-                echo "data: [DONE]\n\n";
-                flush();
-                return true;
+            if (!$errno && $http_code === 200) {
+                break; // Happy path — WRITEFUNCTION already streamed everything.
             }
 
-            $response_data = [
-                'text' => $regular_response,
-                'html' => '',
-                'session_id' => $session_id
-            ];
+            $is_transient = $this->mxchat_is_transient_provider_error_raw($http_code, $captured_body_pre_stream, 'openai', $errno);
+            $can_retry = !$this->streaming_headers_sent
+                      && ($attempt + 1) < $max_attempts
+                      && $is_transient;
 
-            if ($testing_data !== null) {
-                $response_data['testing_data'] = $testing_data;
+            if (defined('WP_DEBUG') && WP_DEBUG) {
+                error_log(sprintf(
+                    '[MxChat] openai_stream initial-connect failure (attempt=%d/%d, status=%d, errno=%d, transient=%s, %s).',
+                    $attempt + 1, $max_attempts, $http_code, $errno,
+                    $is_transient ? 'yes' : 'no',
+                    $can_retry ? 'Retrying.' : 'Giving up.'
+                ));
             }
 
-            header('Content-Type: application/json');
-            echo json_encode($response_data);
+            if (!$can_retry) {
+                break;
+            }
+        }
+
+        // Post-loop branch.
+        if (!$errno && $http_code === 200) {
+            // Happy path — save the complete response to maintain chat persistence.
+            if (!empty($full_response) && !empty($session_id)) {
+                $rag_context_for_storage = null;
+                $has_rag_data = $this->last_similarity_analysis !== null && !empty($this->last_similarity_analysis['top_matches']);
+                $has_action_data = isset($this->last_action_analysis) && !empty($this->last_action_analysis);
+
+                if ($has_rag_data || $has_action_data) {
+                    $rag_context_for_storage = [];
+
+                    if ($has_rag_data) {
+                        $rag_context_for_storage['top_matches'] = $this->last_similarity_analysis['top_matches'];
+                        $rag_context_for_storage['approved_urls'] = $this->current_valid_urls ?? [];
+                        $rag_context_for_storage['similarity_threshold'] = $this->last_similarity_analysis['threshold_used'] ?? 0.35;
+                        $rag_context_for_storage['knowledge_base_type'] = $this->last_similarity_analysis['knowledge_base_type'] ?? 'WordPress Database';
+                        $rag_context_for_storage['total_documents_checked'] = $this->last_similarity_analysis['total_checked'] ?? 0;
+                    }
+
+                    if ($has_action_data) {
+                        $rag_context_for_storage['action_analysis'] = $this->last_action_analysis;
+                    }
+                }
+                $this->mxchat_save_chat_message($session_id, 'bot', $full_response, null, $rag_context_for_storage);
+            }
+
             return true;
         }
-        
-        curl_close($ch);
 
-        // Save the complete response to maintain chat persistence
-        if (!empty($full_response) && !empty($session_id)) {
-            // Prepare RAG context for streaming response
-            $rag_context_for_storage = null;
-            $has_rag_data = $this->last_similarity_analysis !== null && !empty($this->last_similarity_analysis['top_matches']);
-            $has_action_data = isset($this->last_action_analysis) && !empty($this->last_action_analysis);
-
-            if ($has_rag_data || $has_action_data) {
-                $rag_context_for_storage = [];
-
-                if ($has_rag_data) {
-                    $rag_context_for_storage['top_matches'] = $this->last_similarity_analysis['top_matches'];
-                    $rag_context_for_storage['approved_urls'] = $this->current_valid_urls ?? [];
-                    $rag_context_for_storage['similarity_threshold'] = $this->last_similarity_analysis['threshold_used'] ?? 0.35;
-                    $rag_context_for_storage['knowledge_base_type'] = $this->last_similarity_analysis['knowledge_base_type'] ?? 'WordPress Database';
-                    $rag_context_for_storage['total_documents_checked'] = $this->last_similarity_analysis['total_checked'] ?? 0;
-                }
-
-                if ($has_action_data) {
-                    $rag_context_for_storage['action_analysis'] = $this->last_action_analysis;
-                }
-            }
-            $this->mxchat_save_chat_message($session_id, 'bot', $full_response, null, $rag_context_for_storage);
-        }
-
-        return true; // Indicate streaming completed successfully
-
-    } catch (Exception $e) {
-        // Fallback to regular response
-        $regular_response = $this->mxchat_generate_response_openai(
-            $selected_model,
-            $api_key,
-            $conversation_history,
-            $relevant_content
+        // Failure path — branch on whether SSE channel was opened.
+        return $this->mxchat_stream_emit_fallback(
+            'openai',
+            $this->mxchat_generate_response_openai($selected_model, $api_key, $conversation_history, $relevant_content),
+            $session_id,
+            $testing_data
         );
 
-        // FIXED: Check if regular response returned an error
-        if (is_array($regular_response) && isset($regular_response['error'])) {
-            // Send error in SSE format since we're in streaming mode
+    } catch (Exception $e) {
+        return $this->mxchat_stream_emit_fallback(
+            'openai',
+            $this->mxchat_generate_response_openai($selected_model, $api_key, $conversation_history, $relevant_content),
+            $session_id,
+            $testing_data
+        );
+    }
+}
+
+/**
+ * Shared fallback emitter for streaming chat functions. Two outcomes:
+ *  - streaming_headers_sent === true: SSE channel is open. Emit fallback content
+ *    as `data: {...}\n\n` + `data: [DONE]\n\n` so the widget renders it as a
+ *    normal bot bubble. Transcript row is persisted.
+ *  - streaming_headers_sent === false: SSE channel never opened (retries
+ *    exhausted on initial connect). Emit a clean JSON response — the path
+ *    the widget would normally hit if streaming wasn't even attempted.
+ *
+ * Used by all six *_stream functions after their per-attempt retry loop.
+ */
+private function mxchat_stream_emit_fallback($provider_hint, $regular_response, $session_id, $testing_data = null) {
+    $is_error_array = is_array($regular_response) && isset($regular_response['error']);
+
+    if ($this->streaming_headers_sent) {
+        if ($is_error_array) {
             echo "data: " . json_encode([
                 'error' => true,
                 'error_message' => $regular_response['error'],
@@ -7419,21 +7780,44 @@ private function mxchat_generate_response_openai_stream($selected_model, $api_ke
             flush();
             return true;
         }
-
-        $response_data = [
-            'text' => $regular_response,
-            'html' => '',
-            'session_id' => $session_id
-        ];
-
-        if ($testing_data !== null) {
-            $response_data['testing_data'] = $testing_data;
+        $fallback_message = (string) $regular_response;
+        if (!empty($fallback_message) && !empty($session_id)) {
+            $this->mxchat_save_chat_message($session_id, 'bot', $fallback_message);
         }
-
-        header('Content-Type: application/json');
-        echo json_encode($response_data);
+        echo "data: " . json_encode(['content' => $fallback_message]) . "\n\n";
+        echo "data: [DONE]\n\n";
+        flush();
         return true;
     }
+
+    // SSE channel never opened — clean JSON fallback.
+    if ($is_error_array) {
+        header('Content-Type: application/json');
+        echo json_encode(array(
+            'error' => true,
+            'error_message' => $regular_response['error'],
+            'error_code' => $regular_response['error_code'] ?? 'api_error',
+            'text' => $regular_response['error'],
+            'message' => $regular_response['error'],
+        ));
+        return true;
+    }
+
+    $fallback_message = (string) $regular_response;
+    if (!empty($fallback_message) && !empty($session_id)) {
+        $this->mxchat_save_chat_message($session_id, 'bot', $fallback_message);
+    }
+    $response_data = array(
+        'text' => $fallback_message,
+        'html' => '',
+        'session_id' => $session_id,
+    );
+    if ($testing_data !== null) {
+        $response_data['testing_data'] = $testing_data;
+    }
+    header('Content-Type: application/json');
+    echo json_encode($response_data);
+    return true;
 }
 
 /**
@@ -7524,82 +7908,124 @@ private function mxchat_generate_response_custom_stream($selected_model, $conver
         );
         $body = json_encode($request_body);
 
-        $this->setup_streaming_headers();
+        // V2 retry-on-initial-connect: setup_streaming_headers is lazy-fired in WRITEFUNCTION.
 
-        $ch = curl_init();
-        curl_setopt($ch, CURLOPT_URL, $cfg['chat_url']);
-        curl_setopt($ch, CURLOPT_RETURNTRANSFER, false);
-        curl_setopt($ch, CURLOPT_POST, true);
-        curl_setopt($ch, CURLOPT_POSTFIELDS, $body);
-        curl_setopt($ch, CURLOPT_HTTPHEADER, $cfg['headers']);
-        curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, true);
-        curl_setopt($ch, CURLOPT_TIMEOUT, 120);
-
+        $captured_status_code = 0;
+        $captured_body_pre_stream = '';
         $full_response = '';
         $stream_started = false;
         $buffer = '';
+        $errno = 0;
+        $http_code = 0;
+        $max_attempts = $this->mxchat_retry_enabled() ? 3 : 1;
+        $backoff_ms = array(0, 750, 2000);
 
-        curl_setopt($ch, CURLOPT_WRITEFUNCTION, function($ch, $data) use (&$full_response, &$stream_started, &$buffer, $testing_data) {
-            if (!$stream_started && $testing_data !== null) {
-                echo "data: " . json_encode(array('testing_data' => $testing_data)) . "\n\n";
-                flush();
-                $stream_started = true;
+        for ($attempt = 0; $attempt < $max_attempts; $attempt++) {
+            if ($attempt > 0 && $backoff_ms[$attempt] > 0) {
+                usleep($backoff_ms[$attempt] * 1000);
             }
-            $buffer .= $data;
-            $lines = explode("\n", $buffer);
-            $buffer = array_pop($lines);
-            foreach ($lines as $line) {
-                if (trim($line) === '') { continue; }
-                if (strpos($line, 'data: ') !== 0) { continue; }
-                $json_str = substr($line, 6);
-                if (trim($json_str) === '[DONE]') {
-                    echo "data: [DONE]\n\n";
-                    flush();
-                    continue;
-                }
-                $json = json_decode(trim($json_str), true);
-                if ($json && isset($json['choices'][0]['delta']['content'])) {
-                    $content = $json['choices'][0]['delta']['content'];
-                    $full_response .= $content;
-                    echo "data: " . json_encode(array('content' => $content)) . "\n\n";
-                    flush();
-                }
-            }
-            return strlen($data);
-        });
 
-        $response = curl_exec($ch);
-        $http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+            $captured_status_code = 0;
+            $captured_body_pre_stream = '';
+            $full_response = '';
+            $stream_started = false;
+            $buffer = '';
 
-        if (curl_errno($ch) || $http_code !== 200) {
-            $curl_error = curl_error($ch);
+            $ch = curl_init();
+            curl_setopt($ch, CURLOPT_URL, $cfg['chat_url']);
+            curl_setopt($ch, CURLOPT_RETURNTRANSFER, false);
+            curl_setopt($ch, CURLOPT_POST, true);
+            curl_setopt($ch, CURLOPT_POSTFIELDS, $body);
+            curl_setopt($ch, CURLOPT_HTTPHEADER, $cfg['headers']);
+            curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, true);
+            curl_setopt($ch, CURLOPT_TIMEOUT, 120);
+
+            curl_setopt($ch, CURLOPT_HEADERFUNCTION, function($ch, $header) use (&$captured_status_code) {
+                if ($captured_status_code === 0 && preg_match('#^HTTP/\S+\s+(\d+)\b#', $header, $m)) {
+                    $captured_status_code = (int) $m[1];
+                }
+                return strlen($header);
+            });
+
+            curl_setopt($ch, CURLOPT_WRITEFUNCTION, function($ch, $data) use (&$full_response, &$stream_started, &$buffer, &$captured_status_code, &$captured_body_pre_stream, $testing_data) {
+                if ($captured_status_code !== 0 && $captured_status_code !== 200) {
+                    $captured_body_pre_stream .= $data;
+                    return strlen($data);
+                }
+
+                if (!$this->streaming_headers_sent) {
+                    $this->setup_streaming_headers();
+                }
+
+                if (!$stream_started && $testing_data !== null) {
+                    echo "data: " . json_encode(array('testing_data' => $testing_data)) . "\n\n";
+                    flush();
+                    $stream_started = true;
+                }
+                $buffer .= $data;
+                $lines = explode("\n", $buffer);
+                $buffer = array_pop($lines);
+                foreach ($lines as $line) {
+                    if (trim($line) === '') { continue; }
+                    if (strpos($line, 'data: ') !== 0) { continue; }
+                    $json_str = substr($line, 6);
+                    if (trim($json_str) === '[DONE]') {
+                        echo "data: [DONE]\n\n";
+                        flush();
+                        continue;
+                    }
+                    $json = json_decode(trim($json_str), true);
+                    if ($json && isset($json['choices'][0]['delta']['content'])) {
+                        $content = $json['choices'][0]['delta']['content'];
+                        $full_response .= $content;
+                        echo "data: " . json_encode(array('content' => $content)) . "\n\n";
+                        flush();
+                    }
+                }
+                return strlen($data);
+            });
+
+            $response = curl_exec($ch);
+            $errno = curl_errno($ch);
+            $http_code = $captured_status_code !== 0 ? $captured_status_code : (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
             curl_close($ch);
-            $regular = $this->mxchat_generate_response_custom($selected_model, $conversation_history, $relevant_content);
-            if (is_array($regular) && isset($regular['error'])) {
-                echo "data: " . json_encode(array(
-                    'error' => true,
-                    'error_message' => $regular['error'],
-                    'error_code' => $regular['error_code'] ?? 'custom_provider_error',
-                    'text' => $regular['error'],
-                    'message' => $regular['error'],
-                )) . "\n\n";
-                echo "data: [DONE]\n\n";
-                flush();
-                return true;
+
+            if (!$errno && $http_code === 200) {
+                break;
             }
-            $response_data = array('text' => is_string($regular) ? $regular : '', 'html' => '', 'session_id' => $session_id);
-            if ($testing_data !== null) { $response_data['testing_data'] = $testing_data; }
-            header('Content-Type: application/json');
-            echo json_encode($response_data);
+
+            $is_transient = $this->mxchat_is_transient_provider_error_raw($http_code, $captured_body_pre_stream, 'openai', $errno);
+            $can_retry = !$this->streaming_headers_sent
+                      && ($attempt + 1) < $max_attempts
+                      && $is_transient;
+
+            if (defined('WP_DEBUG') && WP_DEBUG) {
+                error_log(sprintf(
+                    '[MxChat] custom_stream initial-connect failure (attempt=%d/%d, status=%d, errno=%d, transient=%s, %s).',
+                    $attempt + 1, $max_attempts, $http_code, $errno,
+                    $is_transient ? 'yes' : 'no',
+                    $can_retry ? 'Retrying.' : 'Giving up.'
+                ));
+            }
+
+            if (!$can_retry) {
+                break;
+            }
+        }
+
+        if (!$errno && $http_code === 200) {
+            if (!empty($full_response) && !empty($session_id)) {
+                $this->mxchat_save_chat_message($session_id, 'bot', $full_response);
+            }
             return true;
         }
 
-        curl_close($ch);
-
-        if (!empty($full_response) && !empty($session_id)) {
-            $this->mxchat_save_chat_message($session_id, 'bot', $full_response);
-        }
-        return true;
+        return $this->mxchat_stream_emit_fallback(
+            'openai',
+            $this->mxchat_generate_response_custom($selected_model, $conversation_history, $relevant_content),
+            $session_id,
+            $testing_data
+        );
 
     } catch (Exception $e) {
         return array('error' => sprintf(esc_html__('Custom provider error: %s', 'mxchat'), $e->getMessage()), 'error_code' => 'custom_provider_exception');
@@ -7644,14 +8070,14 @@ private function mxchat_generate_response_custom($selected_model, $conversation_
         }
     }
 
-    $response = wp_remote_post($cfg['chat_url'], array(
+    $response = $this->mxchat_provider_call_with_retry($cfg['chat_url'], array(
         'headers' => $headers_assoc,
         'body'    => wp_json_encode(array(
             'model'    => $cfg['model'],
             'messages' => $messages,
         )),
         'timeout' => 120,
-    ));
+    ), 'openai');
 
     if (is_wp_error($response)) {
         return array('error' => sprintf(esc_html__('Custom provider request failed: %s', 'mxchat'), $response->get_error_message()), 'error_code' => 'custom_provider_network_error');
@@ -7757,14 +8183,14 @@ private function mxchat_generate_response_openai_web_search($selected_model, $ap
 private function mxchat_web_search_non_streaming_response($request_body, $api_key, $session_id, $testing_data) {
     $request_body['stream'] = false;
 
-    $response = wp_remote_post('https://api.openai.com/v1/responses', array(
+    $response = $this->mxchat_provider_call_with_retry('https://api.openai.com/v1/responses', array(
         'headers' => array(
             'Authorization' => 'Bearer ' . $api_key,
             'Content-Type' => 'application/json'
         ),
         'body' => json_encode($request_body),
         'timeout' => 90
-    ));
+    ), 'openai');
 
     if (is_wp_error($response)) {
         //error_log("MXCHAT WEB SEARCH ERROR: WP Error: " . $response->get_error_message());
@@ -7966,31 +8392,12 @@ private function mxchat_web_search_streaming_response($request_body, $api_key, $
 
         //error_log("MXCHAT WEB SEARCH STREAM ERROR: HTTP $http_code, cURL error: $curl_error");
 
-        // Fallback to non-streaming
-        $fallback_response = $this->mxchat_web_search_non_streaming_response($request_body, $api_key, $session_id, $testing_data);
-
-        if (is_array($fallback_response) && isset($fallback_response['error'])) {
-            echo "data: " . json_encode([
-                'error' => true,
-                'error_message' => $fallback_response['error'],
-                'error_code' => $fallback_response['error_code'] ?? 'web_search_error'
-            ]) . "\n\n";
-            echo "data: [DONE]\n\n";
-            flush();
-            return true;
-        }
-
-        $response_data = [
-            'text' => $fallback_response,
-            'html' => '',
-            'session_id' => $session_id
-        ];
-        if ($testing_data !== null) {
-            $response_data['testing_data'] = $testing_data;
-        }
-        header('Content-Type: application/json');
-        echo json_encode($response_data);
-        return true;
+        return $this->mxchat_stream_emit_fallback(
+            'web_search',
+            $this->mxchat_web_search_non_streaming_response($request_body, $api_key, $session_id, $testing_data),
+            $session_id,
+            $testing_data
+        );
     }
 
     curl_close($ch);
@@ -8063,14 +8470,16 @@ private function mxchat_generate_response_claude_stream($selected_model, $claude
         ];
 
         // Prepare the request body with stream: true
-        $body = json_encode([
+        $payload = [
             'model' => $selected_model,
             'messages' => $conversation_history,
             'max_tokens' => 1000,
             'temperature' => 0.8,
             'system' => $system_prompt_instructions,
             'stream' => true
-        ]);
+        ];
+        if ($this->mxchat_claude_omits_temperature($selected_model)) { unset($payload['temperature']); }
+        $body = json_encode($payload);
 
         // Check if we can actually stream (headers not sent, etc.)
         if (headers_sent() || !function_exists('curl_init')) {
@@ -8108,145 +8517,149 @@ private function mxchat_generate_response_claude_stream($selected_model, $claude
             return true; // Indicate we handled the response
         }
 
-        // Setup streaming headers now that we know we're actually streaming
-        $this->setup_streaming_headers();
+        // V2 retry-on-initial-connect: setup_streaming_headers is lazy-fired in WRITEFUNCTION.
 
-        // Use cURL for streaming support
-        $ch = curl_init();
-        curl_setopt($ch, CURLOPT_URL, 'https://api.anthropic.com/v1/messages');
-        curl_setopt($ch, CURLOPT_RETURNTRANSFER, false);
-        curl_setopt($ch, CURLOPT_POST, true);
-        curl_setopt($ch, CURLOPT_POSTFIELDS, $body);
-        curl_setopt($ch, CURLOPT_HTTPHEADER, array(
-            'Content-Type: application/json',
-            'x-api-key: ' . $claude_api_key,
-            'anthropic-version: 2023-06-01'
-        ));
-        curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, true);
-        curl_setopt($ch, CURLOPT_TIMEOUT, 60);
-
-        $full_response = ''; // Accumulate full response for saving
+        $captured_status_code = 0;
+        $captured_body_pre_stream = '';
+        $full_response = '';
         $stream_started = false;
-        $buffer = ''; // CRITICAL: Add persistent buffer for incomplete chunks
+        $buffer = '';
+        $errno = 0;
+        $http_code = 0;
+        $max_attempts = $this->mxchat_retry_enabled() ? 3 : 1;
+        $backoff_ms = array(0, 750, 2000);
 
-        // Buffer control for real-time streaming
-        curl_setopt($ch, CURLOPT_WRITEFUNCTION, function($ch, $data) use (&$full_response, &$stream_started, &$buffer, $testing_data) {
-            // Send testing data as the first event if available
-            if (!$stream_started && $testing_data !== null) {
-                echo "data: " . json_encode(['testing_data' => $testing_data]) . "\n\n";
-                flush();
-                $stream_started = true;
-                //error_log("MxChat Testing: Sent testing data in Claude stream");
+        for ($attempt = 0; $attempt < $max_attempts; $attempt++) {
+            if ($attempt > 0 && $backoff_ms[$attempt] > 0) {
+                usleep($backoff_ms[$attempt] * 1000);
             }
-            
-            // CRITICAL FIX: Append new data to buffer
-            $buffer .= $data;
-            
-            // Process complete lines only
-            $lines = explode("\n", $buffer);
-            
-            // CRITICAL FIX: Keep the last incomplete line in the buffer
-            // The last element might be incomplete, so keep it in buffer
-            $buffer = array_pop($lines);
 
-            foreach ($lines as $line) {
-                if (trim($line) === '') {
-                    continue;
+            $captured_status_code = 0;
+            $captured_body_pre_stream = '';
+            $full_response = '';
+            $stream_started = false;
+            $buffer = '';
+
+            $ch = curl_init();
+            curl_setopt($ch, CURLOPT_URL, 'https://api.anthropic.com/v1/messages');
+            curl_setopt($ch, CURLOPT_RETURNTRANSFER, false);
+            curl_setopt($ch, CURLOPT_POST, true);
+            curl_setopt($ch, CURLOPT_POSTFIELDS, $body);
+            curl_setopt($ch, CURLOPT_HTTPHEADER, array(
+                'Content-Type: application/json',
+                'x-api-key: ' . $claude_api_key,
+                'anthropic-version: 2023-06-01'
+            ));
+            curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, true);
+            curl_setopt($ch, CURLOPT_TIMEOUT, 60);
+
+            curl_setopt($ch, CURLOPT_HEADERFUNCTION, function($ch, $header) use (&$captured_status_code) {
+                if ($captured_status_code === 0 && preg_match('#^HTTP/\S+\s+(\d+)\b#', $header, $m)) {
+                    $captured_status_code = (int) $m[1];
+                }
+                return strlen($header);
+            });
+
+            curl_setopt($ch, CURLOPT_WRITEFUNCTION, function($ch, $data) use (&$full_response, &$stream_started, &$buffer, &$captured_status_code, &$captured_body_pre_stream, $testing_data) {
+                if ($captured_status_code !== 0 && $captured_status_code !== 200) {
+                    $captured_body_pre_stream .= $data;
+                    return strlen($data);
                 }
 
-                // Claude uses event: and data: format
-                if (strpos($line, 'event: ') === 0) {
-                    // Store the event type for the next data line
-                    continue;
+                if (!$this->streaming_headers_sent) {
+                    $this->setup_streaming_headers();
                 }
 
-                if (strpos($line, 'data: ') === 0) {
-                    $json_str = substr($line, 6); // Remove 'data: ' prefix
+                if (!$stream_started && $testing_data !== null) {
+                    echo "data: " . json_encode(['testing_data' => $testing_data]) . "\n\n";
+                    flush();
+                    $stream_started = true;
+                }
 
-                    $json = json_decode(trim($json_str), true);
-                    if (json_last_error() !== JSON_ERROR_NONE) {
+                $buffer .= $data;
+                $lines = explode("\n", $buffer);
+                $buffer = array_pop($lines);
+
+                foreach ($lines as $line) {
+                    if (trim($line) === '') {
                         continue;
                     }
 
-                    // Handle different event types
-                    if (isset($json['type'])) {
-                        switch ($json['type']) {
-                            case 'content_block_delta':
-                                if (isset($json['delta']['text'])) {
-                                    $content = $json['delta']['text'];
-                                    $full_response .= $content; // Accumulate
-                                    // Send as SSE format compatible with your frontend
-                                    echo "data: " . json_encode(['content' => $content]) . "\n\n";
+                    if (strpos($line, 'event: ') === 0) {
+                        continue;
+                    }
+
+                    if (strpos($line, 'data: ') === 0) {
+                        $json_str = substr($line, 6);
+
+                        $json = json_decode(trim($json_str), true);
+                        if (json_last_error() !== JSON_ERROR_NONE) {
+                            continue;
+                        }
+
+                        if (isset($json['type'])) {
+                            switch ($json['type']) {
+                                case 'content_block_delta':
+                                    if (isset($json['delta']['text'])) {
+                                        $content = $json['delta']['text'];
+                                        $full_response .= $content;
+                                        echo "data: " . json_encode(['content' => $content]) . "\n\n";
+                                        flush();
+                                    }
+                                    break;
+
+                                case 'message_stop':
+                                    echo "data: [DONE]\n\n";
                                     flush();
-                                }
-                                break;
+                                    break;
 
-                            case 'message_stop':
-                                echo "data: [DONE]\n\n";
-                                flush();
-                                break;
-
-                            case 'error':
-                                echo "data: " . json_encode(['error' => $json['error']['message'] ?? 'Unknown error']) . "\n\n";
-                                flush();
-                                break;
+                                case 'error':
+                                    echo "data: " . json_encode(['error' => $json['error']['message'] ?? 'Unknown error']) . "\n\n";
+                                    flush();
+                                    break;
+                            }
                         }
                     }
                 }
+
+                return strlen($data);
+            });
+
+            $response = curl_exec($ch);
+            $errno = curl_errno($ch);
+            $http_code = $captured_status_code !== 0 ? $captured_status_code : (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+            curl_close($ch);
+
+            if (!$errno && $http_code === 200) {
+                break;
             }
 
-            return strlen($data);
-        });
+            $is_transient = $this->mxchat_is_transient_provider_error_raw($http_code, $captured_body_pre_stream, 'anthropic', $errno);
+            $can_retry = !$this->streaming_headers_sent
+                      && ($attempt + 1) < $max_attempts
+                      && $is_transient;
 
-        $response = curl_exec($ch);
-        $http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+            if (defined('WP_DEBUG') && WP_DEBUG) {
+                error_log(sprintf(
+                    '[MxChat] claude_stream initial-connect failure (attempt=%d/%d, status=%d, errno=%d, transient=%s, %s).',
+                    $attempt + 1, $max_attempts, $http_code, $errno,
+                    $is_transient ? 'yes' : 'no',
+                    $can_retry ? 'Retrying.' : 'Giving up.'
+                ));
+            }
 
-        if (curl_errno($ch)) {
-            curl_close($ch);
-            throw new Exception('cURL Error: ' . curl_error($ch));
+            if (!$can_retry) {
+                break;
+            }
         }
 
-        curl_close($ch);
-
-        if ($http_code !== 200) {
-            // Fallback to regular response
-            //error_log("MxChat: Claude streaming failed with HTTP $http_code, falling back");
-            $regular_response = $this->mxchat_generate_response_claude(
-                $selected_model,
-                $claude_api_key,
-                array_slice($conversation_history, 0, -1), // Remove the added content
-                $relevant_content
+        if ($errno || $http_code !== 200) {
+            return $this->mxchat_stream_emit_fallback(
+                'anthropic',
+                $this->mxchat_generate_response_claude($selected_model, $claude_api_key, array_slice($conversation_history, 0, -1), $relevant_content),
+                $session_id,
+                $testing_data
             );
-
-            // FIXED: Check if regular response returned an error
-            if (is_array($regular_response) && isset($regular_response['error'])) {
-                // Send error in SSE format since we're in streaming mode
-                echo "data: " . json_encode([
-                    'error' => true,
-                    'error_message' => $regular_response['error'],
-                    'error_code' => $regular_response['error_code'] ?? 'api_error',
-                    'text' => $regular_response['error'],
-                    'message' => $regular_response['error']
-                ]) . "\n\n";
-                echo "data: [DONE]\n\n";
-                flush();
-                return true;
-            }
-
-            $response_data = [
-                'text' => $regular_response,
-                'html' => '',
-                'session_id' => $session_id
-            ];
-
-            if ($testing_data !== null) {
-                $response_data['testing_data'] = $testing_data;
-                //error_log("MxChat Testing: Added testing data to Claude error fallback");
-            }
-
-            header('Content-Type: application/json');
-            echo json_encode($response_data);
-            return true;
         }
 
         // Save the complete response to maintain chat persistence
@@ -8277,45 +8690,12 @@ private function mxchat_generate_response_claude_stream($selected_model, $claude
         return true; // Indicate streaming completed successfully
 
     } catch (Exception $e) {
-        //error_log("MxChat Claude streaming exception: " . $e->getMessage());
-
-        // Fallback to regular response on exception
-        $regular_response = $this->mxchat_generate_response_claude(
-            $selected_model,
-            $claude_api_key,
-            $conversation_history,
-            $relevant_content
+        return $this->mxchat_stream_emit_fallback(
+            'anthropic',
+            $this->mxchat_generate_response_claude($selected_model, $claude_api_key, $conversation_history, $relevant_content),
+            $session_id,
+            $testing_data
         );
-
-        // FIXED: Check if regular response returned an error
-        if (is_array($regular_response) && isset($regular_response['error'])) {
-            // Send error in SSE format since we're in streaming mode
-            echo "data: " . json_encode([
-                'error' => true,
-                'error_message' => $regular_response['error'],
-                'error_code' => $regular_response['error_code'] ?? 'api_error',
-                'text' => $regular_response['error'],
-                'message' => $regular_response['error']
-            ]) . "\n\n";
-            echo "data: [DONE]\n\n";
-            flush();
-            return true;
-        }
-
-        $response_data = [
-            'text' => $regular_response,
-            'html' => '',
-            'session_id' => $session_id
-        ];
-
-        if ($testing_data !== null) {
-            $response_data['testing_data'] = $testing_data;
-            //error_log("MxChat Testing: Added testing data to Claude exception fallback");
-        }
-
-        header('Content-Type: application/json');
-        echo json_encode($response_data);
-        return true;
     }
 }
 private function mxchat_generate_response_xai_stream($selected_model, $xai_api_key, $conversation_history, $relevant_content, $session_id, $testing_data = null) {
@@ -8395,111 +8775,132 @@ private function mxchat_generate_response_xai_stream($selected_model, $xai_api_k
             'stream' => true
         ]);
 
-        // Setup streaming headers now that we know we're actually streaming
-        $this->setup_streaming_headers();
+        // V2 retry-on-initial-connect: setup_streaming_headers is lazy-fired in WRITEFUNCTION.
 
-        // Use cURL for streaming support
-        $ch = curl_init();
-        curl_setopt($ch, CURLOPT_URL, 'https://api.x.ai/v1/chat/completions');
-        curl_setopt($ch, CURLOPT_RETURNTRANSFER, false);
-        curl_setopt($ch, CURLOPT_POST, true);
-        curl_setopt($ch, CURLOPT_POSTFIELDS, $body);
-        curl_setopt($ch, CURLOPT_HTTPHEADER, array(
-            'Content-Type: application/json',
-            'Authorization: Bearer ' . $xai_api_key
-        ));
-        curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, true);
-        curl_setopt($ch, CURLOPT_TIMEOUT, 60);
-        
-        $full_response = ''; // Accumulate full response for saving
+        $captured_status_code = 0;
+        $captured_body_pre_stream = '';
+        $full_response = '';
         $stream_started = false;
-        $buffer = ''; // CRITICAL: Add persistent buffer for incomplete chunks
-        
-        // Buffer control for real-time streaming
-        curl_setopt($ch, CURLOPT_WRITEFUNCTION, function($ch, $data) use (&$full_response, &$stream_started, &$buffer, $testing_data) {
-            // Send testing data as the first event if available
-            if (!$stream_started && $testing_data !== null) {
-                echo "data: " . json_encode(['testing_data' => $testing_data]) . "\n\n";
-                flush();
-                $stream_started = true;
-                //error_log("MxChat Testing: Sent testing data in X.AI stream");
+        $buffer = '';
+        $errno = 0;
+        $http_code = 0;
+        $max_attempts = $this->mxchat_retry_enabled() ? 3 : 1;
+        $backoff_ms = array(0, 750, 2000);
+
+        for ($attempt = 0; $attempt < $max_attempts; $attempt++) {
+            if ($attempt > 0 && $backoff_ms[$attempt] > 0) {
+                usleep($backoff_ms[$attempt] * 1000);
             }
-            
-            // CRITICAL FIX: Append new data to buffer
-            $buffer .= $data;
-            
-            // Process complete lines only
-            $lines = explode("\n", $buffer);
-            
-            // CRITICAL FIX: Keep the last incomplete line in the buffer
-            // The last element might be incomplete, so keep it in buffer
-            $buffer = array_pop($lines);
-            
-            foreach ($lines as $line) {
-                // Skip empty lines
-                if (trim($line) === '') {
-                    continue;
+
+            $captured_status_code = 0;
+            $captured_body_pre_stream = '';
+            $full_response = '';
+            $stream_started = false;
+            $buffer = '';
+
+            $ch = curl_init();
+            curl_setopt($ch, CURLOPT_URL, 'https://api.x.ai/v1/chat/completions');
+            curl_setopt($ch, CURLOPT_RETURNTRANSFER, false);
+            curl_setopt($ch, CURLOPT_POST, true);
+            curl_setopt($ch, CURLOPT_POSTFIELDS, $body);
+            curl_setopt($ch, CURLOPT_HTTPHEADER, array(
+                'Content-Type: application/json',
+                'Authorization: Bearer ' . $xai_api_key
+            ));
+            curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, true);
+            curl_setopt($ch, CURLOPT_TIMEOUT, 60);
+
+            curl_setopt($ch, CURLOPT_HEADERFUNCTION, function($ch, $header) use (&$captured_status_code) {
+                if ($captured_status_code === 0 && preg_match('#^HTTP/\S+\s+(\d+)\b#', $header, $m)) {
+                    $captured_status_code = (int) $m[1];
                 }
-                
-                // Only process lines that start with "data: "
-                if (strpos($line, 'data: ') !== 0) {
-                    continue;
+                return strlen($header);
+            });
+
+            curl_setopt($ch, CURLOPT_WRITEFUNCTION, function($ch, $data) use (&$full_response, &$stream_started, &$buffer, &$captured_status_code, &$captured_body_pre_stream, $testing_data) {
+                if ($captured_status_code !== 0 && $captured_status_code !== 200) {
+                    $captured_body_pre_stream .= $data;
+                    return strlen($data);
                 }
-                
-                $json_str = substr($line, 6); // Remove 'data: ' prefix
-                
-                if (trim($json_str) === '[DONE]') {
-                    echo "data: [DONE]\n\n";
+
+                if (!$this->streaming_headers_sent) {
+                    $this->setup_streaming_headers();
+                }
+
+                if (!$stream_started && $testing_data !== null) {
+                    echo "data: " . json_encode(['testing_data' => $testing_data]) . "\n\n";
                     flush();
-                    continue;
+                    $stream_started = true;
                 }
-                
-                // Try to decode JSON
-                $json = json_decode(trim($json_str), true);
-                if ($json && isset($json['choices'][0]['delta']['content'])) {
-                    $content = $json['choices'][0]['delta']['content'];
-                    $full_response .= $content; // Accumulate
-                    // Send as SSE format
-                    echo "data: " . json_encode(['content' => $content]) . "\n\n";
-                    flush();
+
+                $buffer .= $data;
+                $lines = explode("\n", $buffer);
+                $buffer = array_pop($lines);
+
+                foreach ($lines as $line) {
+                    if (trim($line) === '') {
+                        continue;
+                    }
+                    if (strpos($line, 'data: ') !== 0) {
+                        continue;
+                    }
+
+                    $json_str = substr($line, 6);
+
+                    if (trim($json_str) === '[DONE]') {
+                        echo "data: [DONE]\n\n";
+                        flush();
+                        continue;
+                    }
+
+                    $json = json_decode(trim($json_str), true);
+                    if ($json && isset($json['choices'][0]['delta']['content'])) {
+                        $content = $json['choices'][0]['delta']['content'];
+                        $full_response .= $content;
+                        echo "data: " . json_encode(['content' => $content]) . "\n\n";
+                        flush();
+                    }
                 }
-            }
-            
-            return strlen($data);
-        });
-        
-        $response = curl_exec($ch);
-        $http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        
-        if (curl_errno($ch) || $http_code !== 200) {
+
+                return strlen($data);
+            });
+
+            $response = curl_exec($ch);
+            $errno = curl_errno($ch);
+            $http_code = $captured_status_code !== 0 ? $captured_status_code : (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
             curl_close($ch);
-            
-            // Fallback to regular response
-            //error_log("MxChat: X.AI streaming failed, falling back");
-            $regular_response = $this->mxchat_generate_response_xai(
-                $selected_model,
-                $xai_api_key,
-                $conversation_history,
-                $relevant_content
-            );
-            
-            $response_data = [
-                'text' => $regular_response,
-                'html' => '',
-                'session_id' => $session_id
-            ];
-            
-            if ($testing_data !== null) {
-                $response_data['testing_data'] = $testing_data;
-                //error_log("MxChat Testing: Added testing data to X.AI error fallback");
+
+            if (!$errno && $http_code === 200) {
+                break;
             }
-            
-            header('Content-Type: application/json');
-            echo json_encode($response_data);
-            return true;
+
+            $is_transient = $this->mxchat_is_transient_provider_error_raw($http_code, $captured_body_pre_stream, 'xai', $errno);
+            $can_retry = !$this->streaming_headers_sent
+                      && ($attempt + 1) < $max_attempts
+                      && $is_transient;
+
+            if (defined('WP_DEBUG') && WP_DEBUG) {
+                error_log(sprintf(
+                    '[MxChat] xai_stream initial-connect failure (attempt=%d/%d, status=%d, errno=%d, transient=%s, %s).',
+                    $attempt + 1, $max_attempts, $http_code, $errno,
+                    $is_transient ? 'yes' : 'no',
+                    $can_retry ? 'Retrying.' : 'Giving up.'
+                ));
+            }
+
+            if (!$can_retry) {
+                break;
+            }
         }
-        
-        curl_close($ch);
+
+        if ($errno || $http_code !== 200) {
+            return $this->mxchat_stream_emit_fallback(
+                'xai',
+                $this->mxchat_generate_response_xai($selected_model, $xai_api_key, $conversation_history, $relevant_content),
+                $session_id,
+                $testing_data
+            );
+        }
 
         // Save the complete response to maintain chat persistence
         if (!empty($full_response) && !empty($session_id)) {
@@ -8529,30 +8930,12 @@ private function mxchat_generate_response_xai_stream($selected_model, $xai_api_k
         return true; // Indicate streaming completed successfully
 
     } catch (Exception $e) {
-        //error_log("MxChat X.AI streaming exception: " . $e->getMessage());
-
-        // Fallback to regular response
-        $regular_response = $this->mxchat_generate_response_xai(
-            $selected_model,
-            $xai_api_key,
-            $conversation_history,
-            $relevant_content
+        return $this->mxchat_stream_emit_fallback(
+            'xai',
+            $this->mxchat_generate_response_xai($selected_model, $xai_api_key, $conversation_history, $relevant_content),
+            $session_id,
+            $testing_data
         );
-        
-        $response_data = [
-            'text' => $regular_response,
-            'html' => '',
-            'session_id' => $session_id
-        ];
-        
-        if ($testing_data !== null) {
-            $response_data['testing_data'] = $testing_data;
-            //error_log("MxChat Testing: Added testing data to X.AI exception fallback");
-        }
-        
-        header('Content-Type: application/json');
-        echo json_encode($response_data);
-        return true;
     }
 }
 private function mxchat_generate_response_deepseek_stream($selected_model, $deepseek_api_key, $conversation_history, $relevant_content, $session_id, $testing_data = null) {
@@ -8632,125 +9015,132 @@ private function mxchat_generate_response_deepseek_stream($selected_model, $deep
             'stream' => true
         ]);
 
-        // Setup streaming headers now that we know we're actually streaming
-        $this->setup_streaming_headers();
+        // V2 retry-on-initial-connect: setup_streaming_headers is lazy-fired in WRITEFUNCTION.
 
-        // Use cURL for streaming support
-        $ch = curl_init();
-        curl_setopt($ch, CURLOPT_URL, 'https://api.deepseek.com/v1/chat/completions');
-        curl_setopt($ch, CURLOPT_RETURNTRANSFER, false);
-        curl_setopt($ch, CURLOPT_POST, true);
-        curl_setopt($ch, CURLOPT_POSTFIELDS, $body);
-        curl_setopt($ch, CURLOPT_HTTPHEADER, array(
-            'Content-Type: application/json',
-            'Authorization: Bearer ' . $deepseek_api_key
-        ));
-        curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, true);
-        curl_setopt($ch, CURLOPT_TIMEOUT, 60);
-        
-        $full_response = ''; // Accumulate full response for saving
+        $captured_status_code = 0;
+        $captured_body_pre_stream = '';
+        $full_response = '';
         $stream_started = false;
-        $buffer = ''; // CRITICAL: Add persistent buffer for incomplete chunks
-        
-        // Buffer control for real-time streaming
-        curl_setopt($ch, CURLOPT_WRITEFUNCTION, function($ch, $data) use (&$full_response, &$stream_started, &$buffer, $testing_data) {
-            // Send testing data as the first event if available
-            if (!$stream_started && $testing_data !== null) {
-                echo "data: " . json_encode(['testing_data' => $testing_data]) . "\n\n";
-                flush();
-                $stream_started = true;
-                //error_log("MxChat Testing: Sent testing data in DeepSeek stream");
+        $buffer = '';
+        $errno = 0;
+        $http_code = 0;
+        $max_attempts = $this->mxchat_retry_enabled() ? 3 : 1;
+        $backoff_ms = array(0, 750, 2000);
+
+        for ($attempt = 0; $attempt < $max_attempts; $attempt++) {
+            if ($attempt > 0 && $backoff_ms[$attempt] > 0) {
+                usleep($backoff_ms[$attempt] * 1000);
             }
-            
-            // CRITICAL FIX: Append new data to buffer
-            $buffer .= $data;
-            
-            // Process complete lines only
-            $lines = explode("\n", $buffer);
-            
-            // CRITICAL FIX: Keep the last incomplete line in the buffer
-            // The last element might be incomplete, so keep it in buffer
-            $buffer = array_pop($lines);
-            
-            foreach ($lines as $line) {
-                // Skip empty lines
-                if (trim($line) === '') {
-                    continue;
+
+            $captured_status_code = 0;
+            $captured_body_pre_stream = '';
+            $full_response = '';
+            $stream_started = false;
+            $buffer = '';
+
+            $ch = curl_init();
+            curl_setopt($ch, CURLOPT_URL, 'https://api.deepseek.com/v1/chat/completions');
+            curl_setopt($ch, CURLOPT_RETURNTRANSFER, false);
+            curl_setopt($ch, CURLOPT_POST, true);
+            curl_setopt($ch, CURLOPT_POSTFIELDS, $body);
+            curl_setopt($ch, CURLOPT_HTTPHEADER, array(
+                'Content-Type: application/json',
+                'Authorization: Bearer ' . $deepseek_api_key
+            ));
+            curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, true);
+            curl_setopt($ch, CURLOPT_TIMEOUT, 60);
+
+            curl_setopt($ch, CURLOPT_HEADERFUNCTION, function($ch, $header) use (&$captured_status_code) {
+                if ($captured_status_code === 0 && preg_match('#^HTTP/\S+\s+(\d+)\b#', $header, $m)) {
+                    $captured_status_code = (int) $m[1];
                 }
-                
-                // Only process lines that start with "data: "
-                if (strpos($line, 'data: ') !== 0) {
-                    continue;
+                return strlen($header);
+            });
+
+            curl_setopt($ch, CURLOPT_WRITEFUNCTION, function($ch, $data) use (&$full_response, &$stream_started, &$buffer, &$captured_status_code, &$captured_body_pre_stream, $testing_data) {
+                if ($captured_status_code !== 0 && $captured_status_code !== 200) {
+                    $captured_body_pre_stream .= $data;
+                    return strlen($data);
                 }
-                
-                $json_str = substr($line, 6); // Remove 'data: ' prefix
-                
-                if (trim($json_str) === '[DONE]') {
-                    echo "data: [DONE]\n\n";
+
+                if (!$this->streaming_headers_sent) {
+                    $this->setup_streaming_headers();
+                }
+
+                if (!$stream_started && $testing_data !== null) {
+                    echo "data: " . json_encode(['testing_data' => $testing_data]) . "\n\n";
                     flush();
-                    continue;
+                    $stream_started = true;
                 }
-                
-                // Try to decode JSON
-                $json = json_decode(trim($json_str), true);
-                if ($json && isset($json['choices'][0]['delta']['content'])) {
-                    $content = $json['choices'][0]['delta']['content'];
-                    $full_response .= $content; // Accumulate the full response
-                    
-                    // Send as SSE format
-                    echo "data: " . json_encode(['content' => $content]) . "\n\n";
-                    flush();
+
+                $buffer .= $data;
+                $lines = explode("\n", $buffer);
+                $buffer = array_pop($lines);
+
+                foreach ($lines as $line) {
+                    if (trim($line) === '') {
+                        continue;
+                    }
+                    if (strpos($line, 'data: ') !== 0) {
+                        continue;
+                    }
+
+                    $json_str = substr($line, 6);
+
+                    if (trim($json_str) === '[DONE]') {
+                        echo "data: [DONE]\n\n";
+                        flush();
+                        continue;
+                    }
+
+                    $json = json_decode(trim($json_str), true);
+                    if ($json && isset($json['choices'][0]['delta']['content'])) {
+                        $content = $json['choices'][0]['delta']['content'];
+                        $full_response .= $content;
+                        echo "data: " . json_encode(['content' => $content]) . "\n\n";
+                        flush();
+                    }
                 }
-            }
-            
-            return strlen($data);
-        });
-        
-        $response = curl_exec($ch);
-        $http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        
-        if (curl_errno($ch) || $http_code !== 200) {
-            $curl_error = curl_error($ch);
+
+                return strlen($data);
+            });
+
+            $response = curl_exec($ch);
+            $errno = curl_errno($ch);
+            $http_code = $captured_status_code !== 0 ? $captured_status_code : (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
             curl_close($ch);
-            
-            // Log the specific error for debugging
-            //error_log("MxChat: DeepSeek streaming failed - HTTP: $http_code, cURL: $curl_error");
-            
-            // Fallback to regular response
-            $regular_response = $this->mxchat_generate_response_deepseek(
-                $selected_model,
-                $deepseek_api_key,
-                $conversation_history,
-                $relevant_content
-            );
-            
-            // Handle error response from regular function
-            if (is_array($regular_response) && isset($regular_response['error'])) {
-                if ($testing_data !== null) {
-                    $regular_response['testing_data'] = $testing_data;
-                }
-                header('Content-Type: application/json');
-                echo json_encode($regular_response);
-                return true;
+
+            if (!$errno && $http_code === 200) {
+                break;
             }
-            
-            $response_data = [
-                'text' => $regular_response,
-                'html' => '',
-                'session_id' => $session_id
-            ];
-            
-            if ($testing_data !== null) {
-                $response_data['testing_data'] = $testing_data;
-                //error_log("MxChat Testing: Added testing data to DeepSeek error fallback");
+
+            $is_transient = $this->mxchat_is_transient_provider_error_raw($http_code, $captured_body_pre_stream, 'openai', $errno);
+            $can_retry = !$this->streaming_headers_sent
+                      && ($attempt + 1) < $max_attempts
+                      && $is_transient;
+
+            if (defined('WP_DEBUG') && WP_DEBUG) {
+                error_log(sprintf(
+                    '[MxChat] deepseek_stream initial-connect failure (attempt=%d/%d, status=%d, errno=%d, transient=%s, %s).',
+                    $attempt + 1, $max_attempts, $http_code, $errno,
+                    $is_transient ? 'yes' : 'no',
+                    $can_retry ? 'Retrying.' : 'Giving up.'
+                ));
             }
-            
-            header('Content-Type: application/json');
-            echo json_encode($response_data);
-            return true;
+
+            if (!$can_retry) {
+                break;
+            }
         }
-        
-        curl_close($ch);
+
+        if ($errno || $http_code !== 200) {
+            return $this->mxchat_stream_emit_fallback(
+                'openai',
+                $this->mxchat_generate_response_deepseek($selected_model, $deepseek_api_key, $conversation_history, $relevant_content),
+                $session_id,
+                $testing_data
+            );
+        }
 
         // Save the complete response to maintain chat persistence
         if (!empty($full_response) && !empty($session_id)) {
@@ -8780,40 +9170,12 @@ private function mxchat_generate_response_deepseek_stream($selected_model, $deep
         return true; // Indicate streaming completed successfully
 
     } catch (Exception $e) {
-        //error_log("MxChat DeepSeek streaming exception: " . $e->getMessage());
-
-        // Fallback to regular response
-        $regular_response = $this->mxchat_generate_response_deepseek(
-            $selected_model,
-            $deepseek_api_key,
-            $conversation_history,
-            $relevant_content
+        return $this->mxchat_stream_emit_fallback(
+            'openai',
+            $this->mxchat_generate_response_deepseek($selected_model, $deepseek_api_key, $conversation_history, $relevant_content),
+            $session_id,
+            $testing_data
         );
-        
-        // Handle error response from regular function
-        if (is_array($regular_response) && isset($regular_response['error'])) {
-            if ($testing_data !== null) {
-                $regular_response['testing_data'] = $testing_data;
-            }
-            header('Content-Type: application/json');
-            echo json_encode($regular_response);
-            return true;
-        }
-        
-        $response_data = [
-            'text' => $regular_response,
-            'html' => '',
-            'session_id' => $session_id
-        ];
-        
-        if ($testing_data !== null) {
-            $response_data['testing_data'] = $testing_data;
-            //error_log("MxChat Testing: Added testing data to DeepSeek exception fallback");
-        }
-        
-        header('Content-Type: application/json');
-        echo json_encode($response_data);
-        return true;
     }
 }
 
@@ -8873,7 +9235,7 @@ private function mxchat_generate_response_openrouter($selected_model, $openroute
             'sslverify'   => true,
         ];
 
-        $response = wp_remote_post('https://openrouter.ai/api/v1/chat/completions', $args);
+        $response = $this->mxchat_provider_call_with_retry('https://openrouter.ai/api/v1/chat/completions', $args, 'openai');
 
         if (is_wp_error($response)) {
             $error_message = $response->get_error_message();
@@ -8957,13 +9319,15 @@ private function mxchat_generate_response_claude($selected_model, $claude_api_ke
     ];
 
     // Build request body
-    $body = json_encode([
+    $payload = [
         'model' => $selected_model,
         'max_tokens' => 1000,
         'temperature' => 0.8,
         'messages' => $conversation_history,
         'system' => $system_prompt_instructions
-    ]);
+    ];
+    if ($this->mxchat_claude_omits_temperature($selected_model)) { unset($payload['temperature']); }
+    $body = json_encode($payload);
 
     // Set up API request
     $args = [
@@ -8981,7 +9345,7 @@ private function mxchat_generate_response_claude($selected_model, $claude_api_ke
     ];
 
     // Make API request
-    $response = wp_remote_post('https://api.anthropic.com/v1/messages', $args);
+    $response = $this->mxchat_provider_call_with_retry('https://api.anthropic.com/v1/messages', $args, 'anthropic');
 
     // Check for WordPress errors
     if (is_wp_error($response)) {
@@ -9116,7 +9480,7 @@ private function mxchat_generate_response_openai($selected_model, $api_key, $con
             'sslverify'   => true,
         ];
 
-        $response = wp_remote_post('https://api.openai.com/v1/chat/completions', $args);
+        $response = $this->mxchat_provider_call_with_retry('https://api.openai.com/v1/chat/completions', $args, 'openai');
 
         if (is_wp_error($response)) {
             $error_message = $response->get_error_message();
@@ -9262,7 +9626,7 @@ private function mxchat_generate_response_xai($selected_model, $xai_api_key, $co
     ];
 
     // Make the API request
-    $response = wp_remote_post('https://api.x.ai/v1/chat/completions', $args);
+    $response = $this->mxchat_provider_call_with_retry('https://api.x.ai/v1/chat/completions', $args, 'xai');
 
     // Process the response
     if (is_wp_error($response)) {
@@ -9460,7 +9824,7 @@ private function mxchat_generate_response_deepseek($selected_model, $deepseek_ap
             'sslverify'   => true,
         ];
 
-        $response = wp_remote_post('https://api.deepseek.com/v1/chat/completions', $args);
+        $response = $this->mxchat_provider_call_with_retry('https://api.deepseek.com/v1/chat/completions', $args, 'openai');
 
         if (is_wp_error($response)) {
             $error_message = $response->get_error_message();
@@ -9564,6 +9928,11 @@ private function mxchat_generate_response_deepseek($selected_model, $deepseek_ap
     }
 }
 private function mxchat_generate_response_gemini($selected_model, $gemini_api_key, $conversation_history, $relevant_content) {
+        // Read-time remap: gemini-3-pro-preview was shut down March 9, 2026.
+        // Auto-rescue existing installs whose saved model is the dead ID.
+        if ($selected_model === 'gemini-3-pro-preview') {
+            $selected_model = 'gemini-3.1-pro-preview';
+        }
         // Get bot ID from session or request
         $bot_id = $this->get_current_bot_id($session_id);
         
@@ -9684,8 +10053,8 @@ private function mxchat_generate_response_gemini($selected_model, $gemini_api_ke
     ];
     
     // Make the API request
-    $response = wp_remote_post($api_endpoint, $args);
-    
+    $response = $this->mxchat_provider_call_with_retry($api_endpoint, $args, 'gemini');
+
     // Process the response
     if (is_wp_error($response)) {
         return "Sorry, there was an error processing your request: " . $response->get_error_message();
@@ -9941,7 +10310,13 @@ public function mxchat_enqueue_scripts_styles() {
     // Prepare settings for JavaScript
     $style_settings = array(
         'ajax_url' => admin_url('admin-ajax.php'),
-        'nonce' => wp_create_nonce('mxchat_chat_nonce'),
+        // The chat-send nonce is now fetched per-request from /wp-json/mxchat/v1/nonce
+        // (plan-6a68c9) so it never sits in cached HTML. We still emit a nonce here
+        // as a one-shot fallback for the first interaction on a fresh page load
+        // (so the very first chat-send doesn't need to wait for a REST round-trip),
+        // but the widget refetches before each subsequent send.
+        'nonce' => wp_create_nonce('mxchat_chat_send'),
+        'rest_url' => esc_url_raw(trailingslashit(rest_url('mxchat/v1'))),
         'model' => isset($this->options['model']) ? $this->options['model'] : 'gpt-5.1-chat-latest',
         'enable_streaming_toggle' => isset($this->options['enable_streaming_toggle']) ? $this->options['enable_streaming_toggle'] : 'on',
         'contextual_awareness_toggle' => isset($this->options['contextual_awareness_toggle']) ? $this->options['contextual_awareness_toggle'] : 'off',
@@ -10022,7 +10397,10 @@ public function mxchat_output_delayed_script_loader() {
 
     $style_settings = array(
         'ajax_url' => admin_url('admin-ajax.php'),
-        'nonce' => wp_create_nonce('mxchat_chat_nonce'),
+        // Per-request nonce — see plan-6a68c9; widget fetches via /wp-json/mxchat/v1/nonce
+        // before each send. This inline value is a one-shot fallback for the first interaction.
+        'nonce' => wp_create_nonce('mxchat_chat_send'),
+        'rest_url' => esc_url_raw(trailingslashit(rest_url('mxchat/v1'))),
         'model' => isset($this->options['model']) ? $this->options['model'] : 'gpt-5.1-chat-latest',
         'enable_streaming_toggle' => isset($this->options['enable_streaming_toggle']) ? $this->options['enable_streaming_toggle'] : 'on',
         'contextual_awareness_toggle' => isset($this->options['contextual_awareness_toggle']) ? $this->options['contextual_awareness_toggle'] : 'off',
@@ -10973,7 +11351,7 @@ private function capture_testing_data($user_embedding, $message, $session_id) {
  */
 public function mxchat_track_url_click() {
     // Verify nonce for security
-    if (!isset($_POST['nonce']) || !wp_verify_nonce($_POST['nonce'], 'mxchat_chat_nonce')) {
+    if (!isset($_POST['nonce']) || !MxChat_Integrator::mxchat_verify_chat_send_nonce($_POST['nonce'])) {
         wp_send_json_error(['message' => 'Invalid nonce']);
         wp_die();
     }
@@ -11026,7 +11404,7 @@ public function mxchat_get_url_clicks($session_id) {
  */
 public function mxchat_track_originating_page() {
     // Verify nonce
-    if (!isset($_POST['nonce']) || !wp_verify_nonce($_POST['nonce'], 'mxchat_chat_nonce')) {
+    if (!isset($_POST['nonce']) || !MxChat_Integrator::mxchat_verify_chat_send_nonce($_POST['nonce'])) {
         wp_send_json_error(['message' => 'Invalid nonce']);
         wp_die();
     }
@@ -11240,7 +11618,7 @@ private function validate_and_clean_urls($response_text, $valid_urls) {
  */
 public function mxchat_get_current_chat_mode() {
     // Verify nonce for security
-    if (!isset($_POST['nonce']) || !wp_verify_nonce($_POST['nonce'], 'mxchat_chat_nonce')) {
+    if (!isset($_POST['nonce']) || !MxChat_Integrator::mxchat_verify_chat_send_nonce($_POST['nonce'])) {
         wp_send_json_error(['message' => 'Invalid nonce']);
         wp_die();
     }

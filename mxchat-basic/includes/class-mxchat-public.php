@@ -446,7 +446,9 @@ public function render_chatbot_shortcode($atts) {
                     echo '</div>';
                 }
 
-                echo '<div class="floating-chatbot-button ' . esc_attr($visibility_class) . '" id="floating-chatbot-button-' . esc_attr($bot_id) . '"' . ($skip_inline_colors ? '' : ' style="background: ' . esc_attr($chatbot_background_color) . '; color: ' . esc_attr($send_button_font_color) . ';"') . '>';
+                $is_initially_hidden = (strpos($visibility_class, 'hidden') !== false);
+                $aria_expanded = $is_initially_hidden ? 'false' : 'true';
+                echo '<div class="floating-chatbot-button ' . esc_attr($visibility_class) . '" id="floating-chatbot-button-' . esc_attr($bot_id) . '" role="button" tabindex="0" aria-label="' . esc_attr__('Open chat', 'mxchat') . '" aria-expanded="' . esc_attr($aria_expanded) . '" aria-controls="floating-chatbot-' . esc_attr($bot_id) . '"' . ($skip_inline_colors ? '' : ' style="background: ' . esc_attr($chatbot_background_color) . '; color: ' . esc_attr($send_button_font_color) . ';"') . '>';
                 echo '<div id="chat-notification-badge-' . esc_attr($bot_id) . '" class="chat-notification-badge" style="display: none; position: absolute; top: -8px; right: -8px; background-color: #ff4444; color: white; border-radius: 50%; padding: 4px 8px; font-size: 12px; font-weight: bold; z-index: 10001;">1</div>';
 
                 if (!empty($custom_icon)) {

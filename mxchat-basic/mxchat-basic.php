@@ -3,7 +3,7 @@
  * Plugin Name: MxChat
  * Plugin URI: https://mxchat.ai/
  * Description: AI chatbot for WordPress with OpenAI, Claude, xAI, DeepSeek, live agent, PDF uploads, WooCommerce, and training on website data.
- * Version: 3.2.6
+ * Version: 3.2.7
  * Author: MxChat
  * Author URI: https://mxchat.ai
  * License: GPLv2 or later
@@ -45,6 +45,49 @@ function mxchat_load_textdomain() {
     load_plugin_textdomain($domain, false, dirname(plugin_basename(__FILE__)) . '/languages');
 }
 add_action('init', 'mxchat_load_textdomain');
+
+/**
+ * One-time migration: gemini-3-pro-preview was shut down by Google on March 9, 2026.
+ * Existing installs with the dead ID get auto-remapped to gemini-3.1-pro-preview
+ * (Google's official migration target) the first time admin_init fires after update.
+ */
+add_action('admin_init', function () {
+    if (get_option('mxchat_gemini_3_remap_done')) {
+        return;
+    }
+    $opts = get_option('mxchat_options');
+    if (is_array($opts) && isset($opts['model']) && $opts['model'] === 'gemini-3-pro-preview') {
+        $opts['model'] = 'gemini-3.1-pro-preview';
+        update_option('mxchat_options', $opts);
+    }
+    if (is_array($opts) && isset($opts['content_model']) && $opts['content_model'] === 'gemini-3-pro-preview') {
+        $opts['content_model'] = 'gemini-3.1-pro-preview';
+        update_option('mxchat_options', $opts);
+    }
+    update_option('mxchat_gemini_3_remap_done', 1);
+});
+
+/**
+ * One-time migration: the Grok 2 family was retired by xAI (grok-2, grok-2-1212,
+ * grok-2-latest, grok-2-vision-1212 all return 400 "Model not found"). Existing
+ * installs with the dead ID get auto-remapped to grok-4-1-fast-non-reasoning
+ * (modern, fast, broadly available) the first time admin_init fires after update.
+ */
+add_action('admin_init', function () {
+    if (get_option('mxchat_grok_2_remap_done')) {
+        return;
+    }
+    $opts = get_option('mxchat_options');
+    if (is_array($opts) && isset($opts['model']) && $opts['model'] === 'grok-2') {
+        $opts['model'] = 'grok-4-1-fast-non-reasoning';
+        update_option('mxchat_options', $opts);
+    }
+    if (is_array($opts) && isset($opts['content_model']) && $opts['content_model'] === 'grok-2') {
+        $opts['content_model'] = 'grok-4-1-fast-non-reasoning';
+        update_option('mxchat_options', $opts);
+    }
+    update_option('mxchat_grok_2_remap_done', 1);
+});
 
 /**
  * Exclude MxChat assets from caching plugin optimizations
@@ -336,6 +379,16 @@ function mxchat_include_classes() {
         $admin_api_page = plugin_dir_path(__FILE__) . 'includes/admin-api-page.php';
         if (file_exists($admin_api_page)) {
             require_once $admin_api_page;
+        }
+        // f7c7d4 renamed this file admin-dashboard-page.php → admin-onboarding-page.php.
+        // The require MUST live here (admin bootstrap) and not just inside
+        // mxchat_add_plugin_page() on the admin_menu hook — admin_menu does NOT
+        // fire on admin-ajax.php requests, so the wizard's AJAX handlers
+        // (plan-905439: mxchat_onboarding_kb_status / save_step / mark_step /
+        // auto_graduate + the f7c7d4 dismiss handler) would never register.
+        $admin_onboarding_page = plugin_dir_path(__FILE__) . 'includes/admin-onboarding-page.php';
+        if (file_exists($admin_onboarding_page)) {
+            require_once $admin_onboarding_page;
         }
     }
 }

@@ -1,0 +1,1133 @@
+/*
+ * MxChat Onboarding Wizard styling.
+ *
+ * Plan: plan-mxchat-20260527-905439. Layers on top of admin-sidebar.css.
+ *
+ * Two distinct concerns in this file:
+ *   1. Wizard card layout (step container, progress bar, fields, buttons,
+ *      KB status row, congrats screen) — scoped to .mxch-onboarding-wizard-wrapper
+ *      so it never bleeds into other admin pages.
+ *   2. ADMIN-CHROME SURGERY scoped to body.mxchat-onboarding-focused so the
+ *      WP admin sidebar collapses and the bottom dashboard cards (License /
+ *      Recent Activity / Provider) are hidden on the Onboarding page ONLY.
+ *      Every other admin page is untouched.
+ *
+ * Chrome-surgery approach (CSS-only — we don't fight WP core JS):
+ *   - #adminmenuwrap + #adminmenuback are hidden (display:none)
+ *   - #wpcontent margin-left adjusted to 0 so the content area uses full width
+ *   - The collapsed-sidebar widget at the top (#collapse-menu) also hidden
+ *   - On screens <= 782px WP already collapses the sidebar; we don't need to
+ *     override anything there
+ *
+ * The Onboarding page already renders without the LEGACY bottom dashboard
+ * cards (the renderer simply doesn't include them in the wizard layout), so
+ * no CSS hiding is needed for those — they're absent by construction. This is
+ * the correct way to suppress them per the spec: don't render, don't hide.
+ */
+
+/* =============================================================== */
+/* 1. CHROME SURGERY — REMOVED (plan-d14e89)                       */
+/* =============================================================== */
+/*
+ * The earlier version of this file hid #adminmenuwrap / #adminmenuback /
+ * #collapse-menu on body.mxchat-onboarding-focused to give the wizard a
+ * focused look. That inadvertently broke WordPress's responsive top-left
+ * hamburger toggle (#wp-admin-bar-menu-toggle) — that button toggles the
+ * very element we were hiding, so on mobile the user could tap the toggle
+ * and nothing visible would happen.
+ *
+ * Fix: do not interfere with native WP admin chrome on the Onboarding page.
+ * The wizard card already provides the focus. The body class
+ * `mxchat-onboarding-focused` is still added (kept for any future
+ * page-only style scoping) but no longer hides the admin menu.
+ */
+
+/* =============================================================== */
+/* 2. WIZARD CARD                                                   */
+/* =============================================================== */
+
+.mxch-onboarding-wizard-wrapper .mxch-wizard-card {
+    max-width: 760px;
+    margin: 0 auto;
+    padding: 0;
+}
+
+/* --- Defensive hide rules for stale inner state (plan-a2e4d6 Issue 5) ---
+ *
+ * THE ROOT CAUSE of the lingering double-confirmation:
+ * `.mxch-wiz-key-saved` and `.mxch-wiz-key-dedup` set `display: flex` below,
+ * which OVERRIDES the browser-default `[hidden] { display: none }`. So even
+ * when JS sets `el.hidden = true` (which adds the [hidden] attribute), the
+ * row stays visible because flex wins. That's why d14e89's JS-only fix
+ * didn't hold — the JS path was correct; the CSS undid it.
+ *
+ * Fix in three layers:
+ *   1. Any [hidden] element inside the wizard wrapper goes display:none — beats
+ *      the row-specific display:flex below.
+ *   2. An entire inactive step is also fully suppressed (every descendant).
+ *   3. The JS defensive hide-all at the top of applyProviderUI() flips the
+ *      attribute on EVERY render so a stale prior render can't leak through.
+ */
+.mxch-onboarding-wizard-wrapper [hidden] {
+    display: none !important;
+}
+.mxch-onboarding-wizard-wrapper .mxch-wizard-step[hidden] {
+    display: none !important;
+}
+.mxch-onboarding-wizard-wrapper .mxch-wizard-step[hidden] * {
+    display: none !important;
+}
+
+/* --- Clickable pill step indicator (plan-a2e4d6) ---
+ * Six pills across the top of the wizard. Three visual states:
+ *   .is-complete : solid brand purple, check icon, pointer cursor — clickable
+ *   .is-current  : outlined brand purple, number visible, aria-current="step"
+ *   .is-future   : faded gray, number visible, non-clickable (disabled attr)
+ * Mobile (≤600px): pills wrap; labels shrink to icons only on the smallest
+ * viewports so all 6 fit. */
+.mxch-onboarding-wizard-wrapper .mxch-wizard-pillnav {
+    display: flex;
+    gap: 6px;
+    padding: 0 28px 4px;
+    margin: 18px 0 14px;
+    flex-wrap: wrap;
+    align-items: stretch;
+}
+
+.mxch-onboarding-wizard-wrapper .mxch-wizard-pill {
+    flex: 1 1 90px;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    padding: 8px 10px;
+    border: 1.5px solid transparent;
+    background: transparent;
+    border-radius: var(--mxch-radius-md);
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s, color 0.15s, transform 0.1s;
+    text-align: left;
+    line-height: 1.25;
+    color: var(--mxch-text-secondary);
+    appearance: none;
+    -webkit-appearance: none;
+    font-family: inherit;
+}
+
+.mxch-onboarding-wizard-wrapper .mxch-wizard-pill .mxch-wizard-pill-num {
+    flex-shrink: 0;
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 11px;
+    font-weight: 700;
+    background: var(--mxch-card-border, #e2e8f0);
+    color: #fff;
+    transition: background 0.15s, color 0.15s;
+    position: relative;
+}
+
+.mxch-onboarding-wizard-wrapper .mxch-wizard-pill .mxch-wizard-pill-check {
+    display: none;
+}
+
+.mxch-onboarding-wizard-wrapper .mxch-wizard-pill-label {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: inherit;
+}
+
+/* Complete: solid purple bg + check icon */
+.mxch-onboarding-wizard-wrapper .mxch-wizard-pill.is-complete {
+    background: var(--mxch-primary);
+    border-color: var(--mxch-primary);
+    color: #fff;
+}
+
+.mxch-onboarding-wizard-wrapper .mxch-wizard-pill.is-complete .mxch-wizard-pill-num {
+    background: rgba(255, 255, 255, 0.22);
+    color: #fff;
+}
+
+.mxch-onboarding-wizard-wrapper .mxch-wizard-pill.is-complete .mxch-wizard-pill-num-text {
+    display: none;
+}
+
+.mxch-onboarding-wizard-wrapper .mxch-wizard-pill.is-complete .mxch-wizard-pill-check {
+    display: block;
+}
+
+.mxch-onboarding-wizard-wrapper .mxch-wizard-pill.is-complete:hover {
+    background: var(--mxch-primary-hover, var(--mxch-primary));
+    transform: translateY(-1px);
+}
+
+/* Current: outlined purple */
+.mxch-onboarding-wizard-wrapper .mxch-wizard-pill.is-current {
+    border-color: var(--mxch-primary);
+    color: var(--mxch-primary);
+    background: rgba(120, 115, 245, 0.07);
+    cursor: default;
+}
+
+.mxch-onboarding-wizard-wrapper .mxch-wizard-pill.is-current .mxch-wizard-pill-num {
+    background: var(--mxch-primary);
+    color: #fff;
+}
+
+/* Future: faded gray, disabled */
+.mxch-onboarding-wizard-wrapper .mxch-wizard-pill.is-future {
+    color: var(--mxch-text-muted, #94a3b8);
+    cursor: not-allowed;
+    opacity: 0.65;
+}
+
+.mxch-onboarding-wizard-wrapper .mxch-wizard-pill.is-future .mxch-wizard-pill-num {
+    background: var(--mxch-card-border, #e2e8f0);
+    color: var(--mxch-text-muted, #94a3b8);
+}
+
+.mxch-onboarding-wizard-wrapper .mxch-wizard-pill:disabled {
+    cursor: not-allowed;
+}
+
+/* Focus ring for keyboard nav */
+.mxch-onboarding-wizard-wrapper .mxch-wizard-pill:focus-visible {
+    outline: 2px solid var(--mxch-primary);
+    outline-offset: 2px;
+}
+
+.mxch-onboarding-wizard-wrapper .mxch-wizard-progress {
+    padding: 20px 28px 0;
+}
+
+.mxch-onboarding-wizard-wrapper .mxch-wizard-progress-label {
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+    margin-bottom: 10px;
+    flex-wrap: wrap;
+}
+
+.mxch-onboarding-wizard-wrapper .mxch-wizard-step-label {
+    font-size: 12px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
+    color: var(--mxch-text-secondary);
+}
+
+.mxch-onboarding-wizard-wrapper .mxch-wizard-step-name {
+    font-size: 13px;
+    color: var(--mxch-text-secondary);
+}
+
+.mxch-onboarding-wizard-wrapper .mxch-wizard-progress-bar {
+    height: 6px;
+    border-radius: var(--mxch-radius-sm);
+    background: rgba(120, 115, 245, 0.12);
+    overflow: hidden;
+}
+
+.mxch-onboarding-wizard-wrapper .mxch-wizard-progress-fill {
+    height: 100%;
+    background: linear-gradient(90deg, var(--mxch-primary) 0%, var(--mxch-primary-hover, var(--mxch-primary)) 100%);
+    width: 0;
+    transition: width 0.35s ease;
+    border-radius: var(--mxch-radius-sm);
+}
+
+/* --- Step content ------------------------------------------------ */
+.mxch-onboarding-wizard-wrapper .mxch-wizard-step {
+    padding: 28px;
+    border-top: 1px solid transparent;
+    margin-top: 18px;
+}
+
+.mxch-onboarding-wizard-wrapper .mxch-wizard-step-title {
+    margin: 0 0 8px;
+    font-size: 22px;
+    font-weight: 600;
+    color: var(--mxch-text-primary);
+    line-height: 1.25;
+}
+
+.mxch-onboarding-wizard-wrapper .mxch-wizard-step-explainer {
+    margin: 0 0 22px;
+    color: var(--mxch-text-secondary);
+    font-size: 14px;
+    line-height: 1.6;
+    max-width: 60ch;
+}
+
+.mxch-onboarding-wizard-wrapper .mxch-field {
+    margin: 0 0 18px;
+}
+
+.mxch-onboarding-wizard-wrapper .mxch-field-label {
+    display: block;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--mxch-text-primary);
+    margin-bottom: 6px;
+}
+
+.mxch-onboarding-wizard-wrapper .mxch-field-description {
+    font-size: 12px;
+    color: var(--mxch-text-secondary);
+    margin: 0 0 8px;
+    line-height: 1.5;
+}
+
+.mxch-onboarding-wizard-wrapper .mxch-field-hint {
+    font-size: 12px;
+    color: var(--mxch-text-secondary);
+    margin: 8px 0 0;
+    line-height: 1.5;
+}
+
+.mxch-onboarding-wizard-wrapper .mxch-field-hint a {
+    color: var(--mxch-primary);
+    text-decoration: none;
+}
+
+.mxch-onboarding-wizard-wrapper .mxch-field-hint a:hover {
+    text-decoration: underline;
+}
+
+.mxch-onboarding-wizard-wrapper .mxch-wiz-select {
+    width: 100%;
+    max-width: 420px;
+    padding: 9px 12px;
+    border-radius: var(--mxch-radius-md);
+    border: 1px solid var(--mxch-card-border, #e2e8f0);
+    background: #fff;
+    font-size: 14px;
+    color: var(--mxch-text-primary);
+    box-shadow: 0 1px 2px rgba(15, 23, 42, 0.03);
+    transition: border-color 0.15s, box-shadow 0.15s;
+    line-height: 1.4;
+}
+
+.mxch-onboarding-wizard-wrapper .mxch-wiz-select:focus {
+    outline: none;
+    border-color: var(--mxch-primary);
+    box-shadow: 0 0 0 3px rgba(120, 115, 245, 0.18);
+}
+
+.mxch-onboarding-wizard-wrapper .mxch-wiz-key-row {
+    display: flex;
+    gap: 8px;
+    align-items: stretch;
+    max-width: 540px;
+}
+
+.mxch-onboarding-wizard-wrapper .mxch-wiz-key-input {
+    flex: 1;
+    padding: 9px 12px;
+    border-radius: var(--mxch-radius-md);
+    border: 1px solid var(--mxch-card-border, #e2e8f0);
+    background: #fff;
+    font-size: 14px;
+    color: var(--mxch-text-primary);
+    box-shadow: 0 1px 2px rgba(15, 23, 42, 0.03);
+    transition: border-color 0.15s, box-shadow 0.15s;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+}
+
+.mxch-onboarding-wizard-wrapper .mxch-wiz-key-input:focus {
+    outline: none;
+    border-color: var(--mxch-primary);
+    box-shadow: 0 0 0 3px rgba(120, 115, 245, 0.18);
+}
+
+.mxch-onboarding-wizard-wrapper .mxch-wiz-key-saved,
+.mxch-onboarding-wizard-wrapper .mxch-wiz-key-dedup {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 14px;
+    border-radius: var(--mxch-radius-md);
+    background: rgba(34, 197, 94, 0.09);
+    border: 1px solid rgba(34, 197, 94, 0.22);
+    color: var(--mxch-success, #16a34a);
+    font-size: 13px;
+    font-weight: 500;
+    margin: 0 0 18px;
+    max-width: 540px;
+}
+
+.mxch-onboarding-wizard-wrapper .mxch-wiz-key-saved svg,
+.mxch-onboarding-wizard-wrapper .mxch-wiz-key-dedup svg {
+    flex-shrink: 0;
+}
+
+.mxch-onboarding-wizard-wrapper .mxch-wiz-key-saved span,
+.mxch-onboarding-wizard-wrapper .mxch-wiz-key-dedup span {
+    flex: 1;
+    color: var(--mxch-text-primary);
+}
+
+.mxch-onboarding-wizard-wrapper .mxch-wiz-replace-key-link {
+    background: none;
+    border: none;
+    padding: 0;
+    color: var(--mxch-primary);
+    font-size: 12px;
+    cursor: pointer;
+    text-decoration: underline;
+    font-weight: 500;
+}
+
+.mxch-onboarding-wizard-wrapper .mxch-wiz-replace-key-link:hover {
+    color: var(--mxch-primary-hover, var(--mxch-primary));
+}
+
+.mxch-onboarding-wizard-wrapper .mxch-wiz-error {
+    margin: 0 0 18px;
+    padding: 10px 14px;
+    border-radius: var(--mxch-radius-md);
+    background: rgba(220, 38, 38, 0.07);
+    border: 1px solid rgba(220, 38, 38, 0.22);
+    color: var(--mxch-error, #dc2626);
+    font-size: 13px;
+}
+
+/* --- AI Behavior step (Step 2) — plan-a2e4d6 -------------------- */
+.mxch-onboarding-wizard-wrapper .mxch-wiz-behavior-textarea {
+    width: 100%;
+    max-width: 100%;
+    padding: 11px 14px;
+    border-radius: var(--mxch-radius-md);
+    border: 1px solid var(--mxch-card-border, #e2e8f0);
+    background: #fff;
+    font-size: 13px;
+    color: var(--mxch-text-primary);
+    box-shadow: 0 1px 2px rgba(15, 23, 42, 0.03);
+    transition: border-color 0.15s, box-shadow 0.15s;
+    font-family: inherit;
+    line-height: 1.55;
+    resize: vertical;
+    min-height: 130px;
+}
+
+.mxch-onboarding-wizard-wrapper .mxch-wiz-behavior-textarea:focus {
+    outline: none;
+    border-color: var(--mxch-primary);
+    box-shadow: 0 0 0 3px rgba(120, 115, 245, 0.18);
+}
+
+.mxch-onboarding-wizard-wrapper .mxch-wiz-behavior-actions-row {
+    margin: -6px 0 18px;
+}
+
+.mxch-onboarding-wizard-wrapper .mxch-wiz-behavior-actions-row .mxchat-instructions-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 7px 12px;
+    border-radius: var(--mxch-radius-md);
+    border: 1px solid var(--mxch-card-border, #e2e8f0);
+    background: #fff;
+    color: var(--mxch-text-primary);
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s, color 0.15s;
+    font-family: inherit;
+}
+
+.mxch-onboarding-wizard-wrapper .mxch-wiz-behavior-actions-row .mxchat-instructions-btn:hover {
+    background: var(--mxch-content-bg, #f0f2f5);
+    border-color: var(--mxch-primary);
+    color: var(--mxch-primary);
+}
+
+.mxch-onboarding-wizard-wrapper .mxch-wiz-behavior-examples-label {
+    font-size: 12px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--mxch-text-secondary);
+    margin: 8px 0 10px;
+}
+
+.mxch-onboarding-wizard-wrapper .mxch-wiz-behavior-examples {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 10px;
+    margin-bottom: 18px;
+}
+
+.mxch-onboarding-wizard-wrapper .mxch-wiz-behavior-example {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    text-align: left;
+    gap: 4px;
+    padding: 12px 14px;
+    border-radius: var(--mxch-radius-md);
+    border: 1px solid var(--mxch-card-border, #e2e8f0);
+    background: #fff;
+    cursor: pointer;
+    transition: border-color 0.15s, background 0.15s, transform 0.1s, box-shadow 0.15s;
+    font-family: inherit;
+}
+
+.mxch-onboarding-wizard-wrapper .mxch-wiz-behavior-example:hover {
+    border-color: var(--mxch-primary);
+    background: rgba(120, 115, 245, 0.04);
+    transform: translateY(-1px);
+    box-shadow: 0 4px 12px rgba(15, 23, 42, 0.06);
+}
+
+.mxch-onboarding-wizard-wrapper .mxch-wiz-behavior-example.is-picked {
+    border-color: var(--mxch-primary);
+    background: rgba(120, 115, 245, 0.08);
+}
+
+.mxch-onboarding-wizard-wrapper .mxch-wiz-behavior-example-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--mxch-text-primary);
+}
+
+.mxch-onboarding-wizard-wrapper .mxch-wiz-behavior-example-desc {
+    font-size: 12px;
+    color: var(--mxch-text-secondary);
+    line-height: 1.45;
+}
+
+/* --- CTA row (for steps that link out to KB / Actions) ---------- */
+.mxch-onboarding-wizard-wrapper .mxch-wiz-cta-row {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    flex-wrap: wrap;
+    margin-bottom: 18px;
+}
+
+.mxch-onboarding-wizard-wrapper .mxch-wiz-cta-row .mxch-field-hint {
+    margin: 0;
+}
+
+/* --- KB status row (Step 3) ------------------------------------- */
+.mxch-onboarding-wizard-wrapper .mxch-wiz-kb-status {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 14px;
+    border-radius: var(--mxch-radius-md);
+    background: var(--mxch-content-bg, #f0f2f5);
+    border: 1px solid var(--mxch-card-border, #e2e8f0);
+    font-size: 13px;
+    margin-bottom: 4px;
+    max-width: 540px;
+    transition: background 0.2s, border-color 0.2s;
+}
+
+.mxch-onboarding-wizard-wrapper .mxch-wiz-kb-status.mxch-wiz-kb-ok {
+    background: rgba(34, 197, 94, 0.09);
+    border-color: rgba(34, 197, 94, 0.28);
+}
+
+.mxch-onboarding-wizard-wrapper .mxch-wiz-kb-status.mxch-wiz-kb-empty {
+    color: var(--mxch-text-secondary);
+}
+
+.mxch-onboarding-wizard-wrapper .mxch-wiz-kb-dot {
+    width: 18px;
+    height: 18px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 50%;
+    background: var(--mxch-card-border, #e2e8f0);
+    color: #fff;
+    flex-shrink: 0;
+}
+
+.mxch-onboarding-wizard-wrapper .mxch-wiz-kb-status.mxch-wiz-kb-ok .mxch-wiz-kb-dot {
+    background: var(--mxch-success, #16a34a);
+}
+
+.mxch-onboarding-wizard-wrapper .mxch-wiz-kb-text {
+    color: var(--mxch-text-primary);
+    font-weight: 500;
+}
+
+/* --- Wizard actions row (Continue / Back / Skip) ---------------- */
+.mxch-onboarding-wizard-wrapper .mxch-wizard-actions {
+    display: flex;
+    gap: 10px;
+    margin-top: 28px;
+    padding-top: 22px;
+    border-top: 1px solid var(--mxch-card-border, #e2e8f0);
+    flex-wrap: wrap;
+    align-items: center;
+}
+
+.mxch-onboarding-wizard-wrapper .mxch-wizard-actions .mxch-wiz-back {
+    margin-right: auto;
+}
+
+.mxch-onboarding-wizard-wrapper .mxch-wizard-actions .mxch-wiz-continue {
+    min-width: 132px;
+}
+
+.mxch-onboarding-wizard-wrapper .mxch-wizard-actions .mxch-wiz-continue:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+}
+
+/* --- Step 5 congrats ------------------------------------------- */
+.mxch-onboarding-wizard-wrapper .mxch-wizard-step-congrats {
+    text-align: center;
+}
+
+.mxch-onboarding-wizard-wrapper .mxch-wiz-congrats-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 84px;
+    height: 84px;
+    border-radius: 50%;
+    background: rgba(34, 197, 94, 0.10);
+    color: var(--mxch-success, #16a34a);
+    margin: 0 auto 16px;
+}
+
+.mxch-onboarding-wizard-wrapper .mxch-wizard-step-title-congrats {
+    font-size: 28px;
+}
+
+.mxch-onboarding-wizard-wrapper .mxch-wiz-congrats-list {
+    list-style: none;
+    padding: 0;
+    margin: 0 auto 22px;
+    text-align: left;
+    max-width: 520px;
+    color: var(--mxch-text-primary);
+    font-size: 14px;
+    line-height: 1.7;
+}
+
+.mxch-onboarding-wizard-wrapper .mxch-wiz-congrats-list li {
+    position: relative;
+    padding-left: 22px;
+    margin-bottom: 8px;
+}
+
+.mxch-onboarding-wizard-wrapper .mxch-wiz-congrats-list li::before {
+    content: "→";
+    position: absolute;
+    left: 0;
+    top: 0;
+    color: var(--mxch-primary);
+    font-weight: 700;
+}
+
+.mxch-onboarding-wizard-wrapper .mxch-wiz-congrats-list a {
+    color: var(--mxch-primary);
+    text-decoration: none;
+    font-weight: 500;
+}
+
+.mxch-onboarding-wizard-wrapper .mxch-wiz-congrats-list a:hover {
+    text-decoration: underline;
+}
+
+.mxch-onboarding-wizard-wrapper .mxch-wiz-congrats-graduated {
+    padding: 12px 16px;
+    border-radius: var(--mxch-radius-md);
+    background: rgba(120, 115, 245, 0.08);
+    color: var(--mxch-text-primary);
+    font-size: 13px;
+    margin: 0 auto 22px;
+    max-width: 560px;
+    line-height: 1.5;
+    text-align: center;
+}
+
+.mxch-onboarding-wizard-wrapper .mxch-wizard-step-congrats .mxch-wizard-actions {
+    justify-content: center;
+    border-top: none;
+    padding-top: 0;
+}
+
+.mxch-onboarding-wizard-wrapper .mxch-wizard-step-congrats .mxch-wizard-actions .mxch-wiz-back {
+    margin-right: 0;
+}
+
+/* --- Dismiss row at the bottom of the PAGE — outside both cards.
+ * Ghost / tertiary visual weight so users don't accidentally tap it.
+ * Plan-d14e89 Issue 7. The legacy .mxch-wiz-dismiss-row (inside the card)
+ * is no longer rendered. */
+.mxch-onboarding-wizard-wrapper .mxch-onboarding-dismiss-row {
+    max-width: 760px;
+    margin: 28px auto 16px;
+    padding: 0 4px;
+    text-align: center;
+    color: var(--mxch-text-muted, #94a3b8);
+    font-size: 12px;
+    line-height: 1.55;
+}
+
+.mxch-onboarding-wizard-wrapper .mxch-onboarding-dismiss-link {
+    background: none;
+    border: none;
+    padding: 0;
+    margin: 0 0 4px;
+    color: var(--mxch-text-secondary, #64748b);
+    font-size: 12px;
+    font-weight: 500;
+    text-decoration: underline;
+    text-decoration-color: rgba(100, 116, 139, 0.35);
+    text-underline-offset: 3px;
+    cursor: pointer;
+    display: inline-block;
+}
+
+.mxch-onboarding-wizard-wrapper .mxch-onboarding-dismiss-link:hover,
+.mxch-onboarding-wizard-wrapper .mxch-onboarding-dismiss-link:focus {
+    color: var(--mxch-text-primary, #1a1a2e);
+    text-decoration-color: currentColor;
+    outline: none;
+}
+
+.mxch-onboarding-wizard-wrapper .mxch-onboarding-dismiss-hint {
+    display: block;
+    margin-top: 2px;
+    font-size: 11px;
+    color: var(--mxch-text-muted, #94a3b8);
+}
+
+/* --- Help footer card (preserved structure from f7c7d4) -------- */
+.mxch-onboarding-wizard-wrapper .mxch-onboarding-help {
+    max-width: 760px;
+    margin: 16px auto 0;
+}
+
+.mxch-onboarding-wizard-wrapper .mxch-help-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 12px;
+}
+
+.mxch-onboarding-wizard-wrapper .mxch-help-title {
+    margin: 0 0 2px;
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--mxch-text-primary);
+}
+
+.mxch-onboarding-wizard-wrapper .mxch-help-subtitle {
+    margin: 0;
+    color: var(--mxch-text-secondary);
+    font-size: 13px;
+    line-height: 1.5;
+}
+
+.mxch-onboarding-wizard-wrapper .mxch-help-buttons {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+/* --- Disabled-provider helper (Step 1) — plan-23987f ----------- */
+.mxch-onboarding-wizard-wrapper .mxch-wiz-disabled-provider-hint {
+    margin: 8px 0 0;
+    padding: 8px 12px;
+    border-radius: var(--mxch-radius-sm, 4px);
+    background: rgba(100, 116, 139, 0.06);
+    color: var(--mxch-text-secondary, #64748b);
+    font-size: 12.5px;
+    line-height: 1.5;
+    border-left: 3px solid var(--mxch-text-muted, #94a3b8);
+}
+
+.mxch-onboarding-wizard-wrapper select.mxch-wiz-select option[disabled] {
+    color: var(--mxch-text-muted, #94a3b8);
+    font-style: italic;
+}
+
+/* --- Vector-store note (Step 3) — plan-23987f ------------------ */
+.mxch-onboarding-wizard-wrapper .mxch-wiz-vector-store-note {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    margin: 16px 0 0;
+    padding: 12px 14px;
+    border-radius: var(--mxch-radius-md, 8px);
+    background: rgba(120, 115, 245, 0.06);
+    color: var(--mxch-text-primary, #1a1a2e);
+    font-size: 13px;
+    line-height: 1.55;
+}
+.mxch-onboarding-wizard-wrapper .mxch-wiz-vector-store-note svg {
+    flex: 0 0 auto;
+    color: var(--mxch-primary, #7873f5);
+    margin-top: 1px;
+}
+.mxch-onboarding-wizard-wrapper .mxch-wiz-vector-store-note a {
+    color: var(--mxch-primary, #7873f5);
+    text-decoration: none;
+    font-weight: 600;
+}
+.mxch-onboarding-wizard-wrapper .mxch-wiz-vector-store-note a:hover {
+    text-decoration: underline;
+}
+
+/* --- Congrats: 3-card next-steps grid (Step 6) — plan-23987f + plan-9451be alignment polish --- */
+.mxch-onboarding-wizard-wrapper .mxch-wiz-nextsteps-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    align-items: stretch;
+    gap: 16px;
+    margin: 22px auto 22px;
+    max-width: 880px;
+    text-align: left;
+}
+
+.mxch-onboarding-wizard-wrapper .mxch-wiz-nextstep-card {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 20px;
+    min-height: 220px;
+    border-radius: var(--mxch-radius-md, 8px);
+    background: var(--mxch-card-bg, #ffffff);
+    border: 1px solid var(--mxch-card-border, rgba(120, 115, 245, 0.18));
+    color: inherit;
+    text-decoration: none;
+    transition: border-color 120ms ease, box-shadow 120ms ease, transform 120ms ease;
+    box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+}
+
+.mxch-onboarding-wizard-wrapper a.mxch-wiz-nextstep-card:hover,
+.mxch-onboarding-wizard-wrapper a.mxch-wiz-nextstep-card:focus {
+    border-color: var(--mxch-primary, #7873f5);
+    box-shadow: 0 4px 12px rgba(120, 115, 245, 0.16);
+    transform: translateY(-1px);
+    outline: none;
+}
+
+.mxch-onboarding-wizard-wrapper .mxch-wiz-nextstep-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 36px;
+    height: 36px;
+    border-radius: 8px;
+    background: rgba(120, 115, 245, 0.10);
+    color: var(--mxch-primary, #7873f5);
+    margin-bottom: 4px;
+}
+
+.mxch-onboarding-wizard-wrapper .mxch-wiz-nextstep-title {
+    margin: 0;
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--mxch-text-primary, #1a1a2e);
+    line-height: 1.3;
+}
+
+.mxch-onboarding-wizard-wrapper .mxch-wiz-nextstep-desc {
+    margin: 0 0 4px;
+    font-size: 13px;
+    color: var(--mxch-text-secondary, #64748b);
+    line-height: 1.5;
+}
+
+.mxch-onboarding-wizard-wrapper .mxch-wiz-nextstep-cta {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: auto;
+    padding-top: 6px;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--mxch-primary, #7873f5);
+}
+
+.mxch-onboarding-wizard-wrapper .mxch-wiz-nextstep-cta svg {
+    transition: transform 120ms ease;
+}
+.mxch-onboarding-wizard-wrapper a.mxch-wiz-nextstep-card:hover .mxch-wiz-nextstep-cta svg {
+    transform: translateX(2px);
+}
+
+/* Embed card differs — has shortcodes + copy buttons, no single CTA arrow */
+.mxch-onboarding-wizard-wrapper .mxch-wiz-nextstep-card-embed {
+    cursor: default;
+}
+.mxch-onboarding-wizard-wrapper .mxch-wiz-nextstep-card-embed:hover {
+    transform: none;
+    box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+    border-color: var(--mxch-card-border, rgba(120, 115, 245, 0.18));
+}
+
+/* Pin the first shortcode-row to the bottom so the embed card's footer block
+   baseline-aligns with the CTAs on cards 1+2 (plan-9451be). */
+.mxch-onboarding-wizard-wrapper .mxch-wiz-nextstep-card-embed .mxch-wiz-shortcode-row:first-of-type {
+    margin-top: auto;
+}
+
+.mxch-onboarding-wizard-wrapper .mxch-wiz-shortcode-row {
+    display: flex;
+    align-items: stretch;
+    gap: 6px;
+    margin-top: 6px;
+}
+
+.mxch-onboarding-wizard-wrapper .mxch-wiz-shortcode {
+    flex: 1 1 auto;
+    min-width: 0;
+    padding: 6px 8px;
+    border-radius: var(--mxch-radius-sm, 4px);
+    background: rgba(15, 23, 42, 0.04);
+    border: 1px solid rgba(15, 23, 42, 0.06);
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 12px;
+    color: var(--mxch-text-primary, #1a1a2e);
+    overflow-x: auto;
+    white-space: nowrap;
+    line-height: 1.4;
+    display: inline-flex;
+    align-items: center;
+}
+
+.mxch-onboarding-wizard-wrapper .mxch-wiz-shortcode-copy {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 6px 10px;
+    border-radius: var(--mxch-radius-sm, 4px);
+    border: 1px solid var(--mxch-card-border, rgba(120, 115, 245, 0.18));
+    background: var(--mxch-card-bg, #ffffff);
+    color: var(--mxch-text-primary, #1a1a2e);
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
+    flex: 0 0 auto;
+}
+
+.mxch-onboarding-wizard-wrapper .mxch-wiz-shortcode-copy:hover {
+    border-color: var(--mxch-primary, #7873f5);
+    color: var(--mxch-primary, #7873f5);
+}
+
+.mxch-onboarding-wizard-wrapper .mxch-wiz-shortcode-copy.is-copied {
+    background: var(--mxch-success, #16a34a);
+    border-color: var(--mxch-success, #16a34a);
+    color: #ffffff;
+}
+
+.mxch-onboarding-wizard-wrapper .mxch-wiz-shortcode-caption {
+    margin: 4px 0 0;
+    font-size: 11.5px;
+    color: var(--mxch-text-muted, #94a3b8);
+    text-align: left;
+}
+
+.mxch-onboarding-wizard-wrapper .mxch-wiz-congrats-footer {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: center;
+    gap: 18px;
+    margin: 8px auto 0;
+    padding-top: 16px;
+    border-top: 1px solid var(--mxch-card-border, rgba(120, 115, 245, 0.10));
+    max-width: 720px;
+}
+
+.mxch-onboarding-wizard-wrapper .mxch-wiz-congrats-footer-link {
+    background: none;
+    border: none;
+    padding: 0;
+    margin: 0;
+    color: var(--mxch-text-secondary, #64748b);
+    font-size: 13px;
+    font-weight: 500;
+    text-decoration: none;
+    cursor: pointer;
+}
+.mxch-onboarding-wizard-wrapper .mxch-wiz-congrats-footer-link:hover,
+.mxch-onboarding-wizard-wrapper .mxch-wiz-congrats-footer-link:focus {
+    color: var(--mxch-primary, #7873f5);
+    text-decoration: underline;
+    outline: none;
+}
+
+/* --- Congrats: PRO add-ons conversion block (plan-9451be) ------- */
+.mxch-onboarding-wizard-wrapper .mxch-wiz-pro-promo {
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    align-items: center;
+    gap: 20px;
+    max-width: 880px;
+    margin: 4px auto 24px;
+    padding: 18px 22px;
+    text-align: left;
+    text-decoration: none;
+    color: #ffffff;
+    background: linear-gradient(135deg, #6a64ec 0%, #7873f5 50%, #9590ff 100%);
+    border-radius: var(--mxch-radius-md, 8px);
+    box-shadow: 0 6px 20px -8px rgba(120, 115, 245, 0.55), 0 1px 2px rgba(15, 23, 42, 0.06);
+    transition: transform 140ms ease, box-shadow 140ms ease, filter 140ms ease;
+}
+.mxch-onboarding-wizard-wrapper .mxch-wiz-pro-promo:hover,
+.mxch-onboarding-wizard-wrapper .mxch-wiz-pro-promo:focus {
+    transform: translateY(-1px);
+    box-shadow: 0 10px 26px -6px rgba(120, 115, 245, 0.65), 0 1px 2px rgba(15, 23, 42, 0.08);
+    filter: saturate(1.08);
+    outline: none;
+    text-decoration: none;
+    color: #ffffff;
+}
+
+.mxch-onboarding-wizard-wrapper .mxch-wiz-pro-promo-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 5px 10px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.18);
+    color: #ffffff;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+    white-space: nowrap;
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
+}
+
+.mxch-onboarding-wizard-wrapper .mxch-wiz-pro-promo-body {
+    min-width: 0;
+}
+
+.mxch-onboarding-wizard-wrapper .mxch-wiz-pro-promo-title {
+    margin: 0 0 4px;
+    font-size: 16px;
+    font-weight: 700;
+    color: #ffffff;
+    line-height: 1.25;
+}
+
+.mxch-onboarding-wizard-wrapper .mxch-wiz-pro-promo-desc {
+    margin: 0;
+    font-size: 13px;
+    color: rgba(255, 255, 255, 0.92);
+    line-height: 1.5;
+}
+
+.mxch-onboarding-wizard-wrapper .mxch-wiz-pro-promo-cta {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 9px 16px;
+    border-radius: var(--mxch-radius-sm, 6px);
+    background: #ffffff;
+    color: #5a55d8;
+    font-size: 13px;
+    font-weight: 600;
+    white-space: nowrap;
+    transition: transform 120ms ease, background 120ms ease;
+}
+.mxch-onboarding-wizard-wrapper .mxch-wiz-pro-promo-cta svg {
+    transition: transform 120ms ease;
+}
+.mxch-onboarding-wizard-wrapper .mxch-wiz-pro-promo:hover .mxch-wiz-pro-promo-cta svg,
+.mxch-onboarding-wizard-wrapper .mxch-wiz-pro-promo:focus .mxch-wiz-pro-promo-cta svg {
+    transform: translateX(2px);
+}
+
+/* --- Mobile: tighten paddings, stack actions ------------------- */
+@media (max-width: 600px) {
+    .mxch-onboarding-wizard-wrapper .mxch-wizard-progress {
+        padding: 16px 18px 0;
+    }
+    .mxch-onboarding-wizard-wrapper .mxch-wizard-step {
+        padding: 18px;
+    }
+    .mxch-onboarding-wizard-wrapper .mxch-wizard-actions {
+        flex-direction: column-reverse;
+        align-items: stretch;
+    }
+    .mxch-onboarding-wizard-wrapper .mxch-wizard-actions .mxch-wiz-back {
+        margin-right: 0;
+    }
+    .mxch-onboarding-wizard-wrapper .mxch-wizard-actions .mxch-btn {
+        width: 100%;
+    }
+    .mxch-onboarding-wizard-wrapper .mxch-wiz-key-row {
+        flex-direction: column;
+    }
+    .mxch-onboarding-wizard-wrapper .mxch-wizard-step-title {
+        font-size: 18px;
+    }
+    .mxch-onboarding-wizard-wrapper .mxch-wizard-step-title-congrats {
+        font-size: 22px;
+    }
+    /* Pill nav — drop labels, keep only numbers/checks for tight mobile fit */
+    .mxch-onboarding-wizard-wrapper .mxch-wizard-pillnav {
+        padding: 0 18px 4px;
+        gap: 4px;
+    }
+    .mxch-onboarding-wizard-wrapper .mxch-wizard-pill {
+        flex: 1 1 auto;
+        padding: 6px 8px;
+        justify-content: center;
+    }
+    .mxch-onboarding-wizard-wrapper .mxch-wizard-pill-label {
+        display: none;
+    }
+    /* Examples — single column on phones */
+    .mxch-onboarding-wizard-wrapper .mxch-wiz-behavior-examples {
+        grid-template-columns: 1fr;
+    }
+    /* Congrats next-step cards — single column on phones */
+    .mxch-onboarding-wizard-wrapper .mxch-wiz-nextsteps-grid {
+        grid-template-columns: 1fr;
+        gap: 12px;
+    }
+    /* On phones each card hugs its content — drop the desktop min-height
+       so cards don't have empty space below the CTA. */
+    .mxch-onboarding-wizard-wrapper .mxch-wiz-nextstep-card {
+        min-height: 0;
+    }
+    /* The "pin shortcodes to bottom" trick is desktop-only — on a single-column
+       stack the embed card's shortcodes should sit naturally below the desc. */
+    .mxch-onboarding-wizard-wrapper .mxch-wiz-nextstep-card-embed .mxch-wiz-shortcode-row:first-of-type {
+        margin-top: 6px;
+    }
+    .mxch-onboarding-wizard-wrapper .mxch-wiz-congrats-footer {
+        flex-direction: column;
+        gap: 10px;
+    }
+    /* PRO promo stacks on phones, badge sits above headline, CTA full-width */
+    .mxch-onboarding-wizard-wrapper .mxch-wiz-pro-promo {
+        grid-template-columns: 1fr;
+        gap: 12px;
+        padding: 18px;
+        text-align: left;
+    }
+    .mxch-onboarding-wizard-wrapper .mxch-wiz-pro-promo-badge {
+        justify-self: start;
+    }
+    .mxch-onboarding-wizard-wrapper .mxch-wiz-pro-promo-cta {
+        justify-content: center;
+        width: 100%;
+    }
+}

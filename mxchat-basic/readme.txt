@@ -5,7 +5,7 @@ Tags: ai chatbot, chatgpt, woocommerce, customer support, content generation
 Requires at least: 5.0
 Tested up to: 7.0
 Requires PHP: 7.2
-Stable tag: 3.2.6
+Stable tag: 3.2.7
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -333,7 +333,14 @@ Yes. MxChat is available for free on the WordPress plugin repository with full A
 
 == Changelog ==
 
-= 3.2.6 =
+= 3.2.7 - May 29, 2026 =
+* New: Guided onboarding for new users. First-time setup is now a step-by-step wizard — pick your AI model and add your key inline, set how the chatbot should behave, choose an embedding model, optionally add a knowledge base, then finish on a “What’s next” screen that links straight to the in-dashboard test chat, your display settings, and copy-paste embed shortcodes. Reopen it any time from Settings → Tutorials.
+* New: Latest AI models, with automatic recovery when providers change theirs. Added Claude Opus 4.8 and the current Google Gemini 3.x lineup (Gemini 3.5 Flash, 3.1 Pro, 3 Flash, 3.1 Flash-Lite and more). Models that providers retired or changed are now handled for you: the discontinued Gemini 3 Pro and the retired Grok 2 have been replaced, and Claude Opus 4.7 / 4.8 no longer error on send (Anthropic dropped the temperature setting on those). Any site pinned to a discontinued model is switched to a working one automatically.
+* New: Reliable first message behind page caches. The chat widget now fetches a fresh security token for each message instead of trusting cached page HTML, eliminating the intermittent “Access denied” error on the first message under full-page caching (WP Rocket, LiteSpeed, FlyingPress, W3 Total Cache, Cloudflare APO).
+* Improved: More resilient replies. Both streaming and standard chat now automatically retry transient provider problems (overload, rate-limit, 5xx) before showing an error, and streaming fallbacks appear in a second or two instead of leaving visitors on a spinner — across every supported provider.
+* Improved: Accessibility and polish. The floating chat button is now fully keyboard-operable (Tab to focus, Enter or Space to open, Esc to close, and focus returns to the button on close — WCAG 2.1 Level A), alongside a range of admin interface refinements.
+
+= 3.2.6 - May 21, 2026 =
 * New: Custom Provider (OpenAI-compatible) — point MxChat at any OpenAI-compatible endpoint (Ollama, LM Studio, vLLM, llama.cpp, Azure OpenAI) under MxChat → API Keys, with opt-in routing for `/v1/embeddings` and `/v1/images/generations` through the same endpoint. Includes a one-click **Test Connection** button and a new "Custom / Local" category in the model picker.
 * New: Image Quality control for OpenAI GPT Image — new **Image Quality** dropdown in the Content Generator (Auto / Low / Medium / High), passed as the `quality` parameter to OpenAI's image API. Auto-disables when a non-GPT-Image model is selected.
 * New: Latest-generation models added to the picker — Claude Opus 4.7, GPT-5.5, and GPT Image 2 are now selectable from the Select AI Model modal, each tagged "Latest Flagship" at the top of its provider group.
@@ -1002,8 +1009,8 @@ Yes. MxChat is available for free on the WordPress plugin repository with full A
 
 == Upgrade Notice ==
 
-= 3.2.6 =
-Recommended for any production install behind a full-page cache: eliminates the intermittent "Access denied" error visitors saw on the first chat message under WP Rocket, LiteSpeed, FlyingPress, W3 Total Cache, or Cloudflare APO, and now also auto-tells those cache plugins to never cache the chat AJAX endpoint. Major additions: Custom Provider (OpenAI-compatible) for Ollama / LM Studio / vLLM / llama.cpp / Azure OpenAI; an end-of-session 👍/👎 satisfaction rating prompt with full admin reporting; ACF PDF auto-indexing into the knowledge base; latest-generation models (Claude Opus 4.7, GPT-5.5, GPT Image 2); an Image Quality dropdown for GPT Image; and a bulk `DELETE /transcripts` REST endpoint. Also fixes a print regression where MxChat's stale print stylesheet was hiding all page content during normal page prints.
+= 3.2.7 =
+Adds a guided onboarding wizard for new users plus the latest AI models — Claude Opus 4.8 and Google’s Gemini 3.x lineup — with automatic recovery for models providers have retired (Gemini 3 Pro, Grok 2) or changed (the Claude Opus 4.7/4.8 temperature deprecation), so no site is left on a broken model. Also makes the first chat message reliable behind full-page caches (WP Rocket, LiteSpeed, Cloudflare APO and similar), auto-retries transient provider errors, and makes the chat launcher fully keyboard-accessible.
 
 == License & Warranty ==
 

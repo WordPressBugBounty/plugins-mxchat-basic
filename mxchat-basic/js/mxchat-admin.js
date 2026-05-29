@@ -1012,61 +1012,34 @@ function setupMxChatModelSelector() {
     window.populateModelsGrid = function(filter = '', category = 'all') {
         const $grid = $('#mxchat_models_grid');
         $grid.empty();
-        
-        const models = {
+
+        // Catalog refactor (plan-d14e89): when class-mxchat-model-catalog.php
+        // is loaded (via wp_localize_script as mxchatChatModelCatalog), use
+        // its data so a single edit there flows to this picker grid. The
+        // inline fallback below keeps the picker working if for some reason
+        // the localize hasn't run (e.g. legacy admin page bootstrap order).
+        const models = (typeof mxchatChatModelCatalog === 'object' && mxchatChatModelCatalog) ? mxchatChatModelCatalog : {
             openrouter: [
                 { value: 'openrouter', label: 'OpenRouter', description: 'Access 100+ models from multiple providers (add API key to browse)' }
             ],
             gemini: [
-                { value: 'gemini-3-pro-preview', label: 'Gemini 3 Pro', description: 'Most intelligent model - multimodal understanding & agentic' },
-                { value: 'gemini-3-flash-preview', label: 'Gemini 3 Flash', description: 'Most balanced - speed, scale & frontier intelligence' },
-                { value: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro', description: 'Advanced thinking - code, math, STEM & long context' },
-                { value: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash', description: 'Best price-performance with thinking capabilities' },
-                { value: 'gemini-2.5-flash-lite', label: 'Gemini 2.5 Flash-Lite', description: 'Ultra fast - optimized for cost & high throughput' },
-                { value: 'gemini-2.0-flash', label: 'Gemini 2.0 Flash', description: 'Deprecated March 2026' },
-                { value: 'gemini-2.0-flash-lite', label: 'Gemini 2.0 Flash-Lite', description: 'Deprecated March 2026' },
-                { value: 'gemini-1.5-pro', label: 'Gemini 1.5 Pro', description: 'Deprecated September 2025' },
-                { value: 'gemini-1.5-flash', label: 'Gemini 1.5 Flash', description: 'Deprecated September 2025' },
+                { value: 'gemini-3.5-flash', label: 'Gemini 3.5 Flash', description: 'Stable — newest Flash generation, recommended default' },
             ],
             openai: [
-                { value: 'gpt-5.5', label: 'GPT-5.5', description: 'Latest Flagship — newest OpenAI reasoning and coding model' },
-                { value: 'gpt-5.4', label: 'GPT-5.4', description: 'Flagship reasoning and coding model' },
-                { value: 'gpt-5.4-mini', label: 'GPT-5.4 Mini', description: 'Fast and affordable with 400K context' },
-                { value: 'gpt-5.4-nano', label: 'GPT-5.4 Nano', description: 'Fastest and cheapest for lightweight tasks' },
-                { value: 'gpt-5.3-chat-latest', label: 'GPT-5.3 Chat', description: 'Optimized for natural conversations with reduced hallucinations' },
-                { value: 'gpt-5.2', label: 'GPT-5.2', description: 'Best general-purpose & agentic model with fast responses' },
                 { value: 'gpt-5.1-chat-latest', label: 'GPT-5.1 Chat Latest', description: 'Recommended for most use cases' },
-                { value: 'gpt-5.1-2025-11-13', label: 'GPT-5.1', description: 'Flagship for coding & agentic tasks with low reasoning (400K context)' },
-                { value: 'gpt-5', label: 'GPT-5', description: 'Flagship for coding, reasoning, and agentic tasks across domains' },
-                { value: 'gpt-5-mini', label: 'GPT-5 Mini', description: 'Fast and lightweight' },
-                { value: 'gpt-5-nano', label: 'GPT-5 Nano', description: 'Fastest and cheapest; ideal for summarization and classification' },
             ],
             claude: [
-                { value: 'claude-opus-4-7', label: 'Claude Opus 4.7', description: 'Latest Flagship — newest Anthropic flagship model' },
-                { value: 'claude-opus-4-6', label: 'Claude Opus 4.6', description: 'Most capable Claude model - recommended' },
-                { value: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6', description: 'Latest Sonnet - excellent balance of speed and capability' },
-                { value: 'claude-opus-4-5', label: 'Claude Opus 4.5', description: 'Highly capable for complex tasks' },
-                { value: 'claude-sonnet-4-5-20250929', label: 'Claude Sonnet 4.5', description: 'Best for complex agents and coding' },
-                { value: 'claude-opus-4-1-20250805', label: 'Claude Opus 4.1', description: 'Exceptional for specialized complex tasks' },
-                { value: 'claude-haiku-4-5-20251001', label: 'Claude Haiku 4.5', description: 'Fastest and most intelligent Haiku' },
-                { value: 'claude-opus-4-20250514', label: 'Claude 4 Opus', description: 'Complex tasks' },
-                { value: 'claude-sonnet-4-20250514', label: 'Claude 4 Sonnet', description: 'High performance' },
+                { value: 'claude-opus-4-8', label: 'Claude Opus 4.8', description: 'Latest Flagship — newest Anthropic flagship model' },
+                { value: 'claude-opus-4-7', label: 'Claude Opus 4.7', description: 'Previous Anthropic flagship model' },
             ],
             xai: [
-                { value: 'grok-4-1-fast-reasoning', label: 'Grok 4.1 Fast (Reasoning)', description: '2M context window and reasoning' },
-                { value: 'grok-4-1-fast-non-reasoning', label: 'Grok 4.1 Fast (Non-Reasoning)', description: '2M context window and faster responses' },
-                { value: 'grok-4-0709', label: 'Grok 4', description: 'Latest flagship model - unparalleled performance in natural language, math and reasoning' },
-                { value: 'grok-3-beta', label: 'Grok-3', description: 'Powerful model with 131K context' },
-                { value: 'grok-3-fast-beta', label: 'Grok-3 Fast', description: 'High performance with faster responses' },
-                { value: 'grok-3-mini-beta', label: 'Grok-3 Mini', description: 'Affordable model with good performance' },
-                { value: 'grok-3-mini-fast-beta', label: 'Grok-3 Mini Fast', description: 'Quick and cost-effective' },
-                { value: 'grok-2', label: 'Grok 2', description: 'Latest X.AI model' },
+                { value: 'grok-4-0709', label: 'Grok 4', description: 'Latest flagship model' },
             ],
             deepseek: [
                 { value: 'deepseek-chat', label: 'DeepSeek-V3', description: 'Advanced AI assistant' },
             ],
             custom: [
-                { value: 'custom-provider', label: 'Custom Provider', description: 'OpenAI-compatible local LLM (Ollama, LM Studio, vLLM, llama.cpp, Azure OpenAI) — configure Base URL, key, and model in API Keys tab' },
+                { value: 'custom-provider', label: 'Custom Provider', description: 'OpenAI-compatible local LLM — configure in API Keys tab' },
             ],
         };
         

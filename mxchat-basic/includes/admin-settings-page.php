@@ -664,6 +664,44 @@ function mxchat_render_settings_page($admin_instance) {
                     </div>
                 </div>
 
+                <!-- Provider Reliability Card -->
+                <?php
+                $auto_retry_enabled = !isset($options['auto_retry_on_transient_error']) ||
+                                      (string) $options['auto_retry_on_transient_error'] !== '0';
+                ?>
+                <div class="mxch-card">
+                    <div class="mxch-card-header">
+                        <h3 class="mxch-card-title">
+                            <svg class="mxch-card-title-icon" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-6.219-8.56"/><polyline points="21 4 21 10 15 10"/></svg>
+                            <?php esc_html_e('Provider Reliability', 'mxchat'); ?>
+                        </h3>
+                        <span class="mxch-status-pill <?php echo $auto_retry_enabled ? 'mxch-status-pill-active' : 'mxch-status-pill-disabled'; ?>">
+                            <span class="mxch-status-dot"></span>
+                            <?php echo $auto_retry_enabled ? esc_html__('Active', 'mxchat') : esc_html__('Disabled', 'mxchat'); ?>
+                        </span>
+                    </div>
+                    <div class="mxch-card-body mxchat-autosave-section">
+                        <div class="mxch-field">
+                            <label class="mxch-field-label" for="auto_retry_on_transient_error">
+                                <?php esc_html_e('Auto-retry on provider overload', 'mxchat'); ?>
+                            </label>
+                            <div class="mxch-field-control">
+                                <label class="mxch-toggle">
+                                    <input type="checkbox"
+                                           id="auto_retry_on_transient_error"
+                                           name="mxchat_options[auto_retry_on_transient_error]"
+                                           class="mxchat-autosave-field"
+                                           value="1"
+                                           <?php checked($auto_retry_enabled); ?> />
+                                    <span class="mxch-toggle-slider"></span>
+                                </label>
+                            </div>
+                            <p class="mxch-field-description"><?php esc_html_e('When the AI provider returns a transient error (rate-limit / overload / 429 / 503 / Gemini "model overloaded"), MxChat retries the chat-send up to twice before surfacing the error. Visitors see a brief pause instead of a raw provider error in the bot bubble.', 'mxchat'); ?></p>
+                            <p class="mxch-field-hint"><?php esc_html_e('Configuration errors (invalid API key, 401/403/404/422) still surface immediately — never retried.', 'mxchat'); ?></p>
+                        </div>
+                    </div>
+                </div>
+
                 <!-- Debug Mode Card -->
                 <?php
                 $debug_mode = isset($options['debug_mode']) ? $options['debug_mode'] : 'off';
@@ -1004,6 +1042,38 @@ function mxchat_render_settings_page($admin_instance) {
                     <p class="mxch-content-subtitle"><?php esc_html_e('Learn how to get the most out of MxChat with our video guides.', 'mxchat'); ?></p>
                 </div>
 
+                <?php
+                // Setup Guide — reopen the onboarding wizard (plan-347916, moved here from Display tab).
+                // Only shows once the user has dismissed/graduated from the Onboarding page.
+                if (function_exists('mxchat_onboarding_is_dismissed') && mxchat_onboarding_is_dismissed()):
+                    $auto_grad = function_exists('mxchat_onboarding_is_auto_graduated') && mxchat_onboarding_is_auto_graduated();
+                ?>
+                <div class="mxch-card mxch-onboarding-unhide-card" style="margin-bottom: 24px;">
+                    <div class="mxch-card-header">
+                        <h3 class="mxch-card-title">
+                            <svg class="mxch-card-title-icon" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 10v6M2 10l10-5 10 5-10 5z"/><path d="M6 12v5c0 2 3 3 6 3s6-1 6-3v-5"/></svg>
+                            <?php esc_html_e('Setup Guide', 'mxchat'); ?>
+                        </h3>
+                    </div>
+                    <div class="mxch-card-body">
+                        <p style="margin:0 0 12px;color:var(--mxch-text-secondary);font-size:13px;line-height:1.5;">
+                            <?php if ($auto_grad): ?>
+                                <?php esc_html_e('You finished the setup guide. Reopen it any time to revisit the steps or change a setup choice.', 'mxchat'); ?>
+                            <?php else: ?>
+                                <?php esc_html_e('You hid the setup guide from the MxChat menu. Reopen it any time to revisit the steps.', 'mxchat'); ?>
+                            <?php endif; ?>
+                        </p>
+                        <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="margin:0;">
+                            <?php wp_nonce_field('mxchat_unhide_onboarding'); ?>
+                            <input type="hidden" name="action" value="mxchat_unhide_onboarding" />
+                            <button type="submit" class="mxch-btn mxch-btn-secondary mxch-btn-sm">
+                                <?php esc_html_e('Reopen setup guide', 'mxchat'); ?>
+                            </button>
+                        </form>
+                    </div>
+                </div>
+                <?php endif; ?>
+
                 <div class="mxch-card" style="margin-bottom: 24px;">
                     <div class="mxch-card-body">
                         <div style="display: flex; align-items: flex-start; gap: 16px;">
@@ -1321,18 +1391,41 @@ function mxchat_render_settings_page($admin_instance) {
             });
         });
 
-        // Handle initial hash
-        const hash = window.location.hash.slice(1);
-        if (hash) {
-            const targetLink = document.querySelector('[data-target="' + hash + '"]');
-            if (targetLink) {
-                // Expand parent if it's a sub-link
-                const parentItem = targetLink.closest('.mxch-nav-item');
-                if (parentItem && targetLink.classList.contains('mxch-nav-sub-link')) {
-                    parentItem.classList.add('expanded');
-                }
-                showSection(hash);
-                setActiveNav(targetLink);
+        // Handle initial deep-link (?tab=<slug> takes precedence over #hash so the
+        // Onboarding setup-step CTAs land on the right sub-tab). Whitelist of valid
+        // section ids must stay in sync with the .mxch-section[id] values above.
+        const validTabs = [
+            'chatbot-ai-models', 'chatbot-behavior', 'chatbot-display',
+            'chatbot-lead-capture', 'chatbot-quick-questions', 'chatbot-rate-limits',
+            'api-keys', 'optimization', 'testing',
+            'integrations-toolbar', 'integrations-loops', 'integrations-brave',
+            'integrations-slack', 'integrations-telegram',
+            'tutorials'
+        ];
+        function activateTab(target) {
+            if (!target) return false;
+            if (validTabs.indexOf(target) === -1) return false;
+            const targetLink = document.querySelector('[data-target="' + target + '"]');
+            if (!targetLink) return false;
+            const parentItem = targetLink.closest('.mxch-nav-item');
+            if (parentItem && targetLink.classList.contains('mxch-nav-sub-link')) {
+                parentItem.classList.add('expanded');
+            }
+            showSection(target);
+            setActiveNav(targetLink);
+            return true;
+        }
+        const urlParams = new URLSearchParams(window.location.search);
+        const tabParam = urlParams.get('tab');
+        let tabActivated = false;
+        if (tabParam) {
+            tabActivated = activateTab(tabParam);
+            // Invalid ?tab=… silently falls through to default (#hash or AI Models).
+        }
+        if (!tabActivated) {
+            const hash = window.location.hash.slice(1);
+            if (hash) {
+                activateTab(hash);
             }
         }
 

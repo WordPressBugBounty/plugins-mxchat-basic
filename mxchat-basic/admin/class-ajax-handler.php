@@ -175,21 +175,13 @@ public function mxchat_save_setting_callback() {
                 $options['model'] = 'openrouter';
             } else {
                 //error_log('MXChat Save: Checking against whitelist');
-                 // Keep in sync with the Settings-API sanitize allow-list in
-                 // includes/class-mxchat-admin.php (mxchat_options_validate).
-                 $allowed_models = array(
-                            'gemini-3-pro-preview', 'gemini-3-flash-preview', 'gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.5-flash-lite',
-                            'gemini-2.0-flash', 'gemini-2.0-flash-lite', 'gemini-1.5-pro', 'gemini-1.5-flash',
-                            'grok-4-0709', 'grok-4-1-fast-reasoning', 'grok-4-1-fast-non-reasoning', 'grok-3-beta', 'grok-3-fast-beta', 'grok-3-mini-beta',
-                            'grok-3-mini-fast-beta', 'grok-2',
-                            'deepseek-chat',
-                            'claude-opus-4-7', 'claude-opus-4-6', 'claude-opus-4-5', 'claude-sonnet-4-6',
-                            'claude-sonnet-4-5-20250929', 'claude-opus-4-1-20250805', 'claude-haiku-4-5-20251001',
-                            'claude-opus-4-20250514', 'claude-sonnet-4-20250514',
-                            'gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.4-nano', 'gpt-5.3-chat-latest',
-                            'gpt-5.2', 'gpt-5.1-chat-latest', 'gpt-5.1-2025-11-13', 'gpt-5', 'gpt-5-mini', 'gpt-5-nano',
-                            'custom-provider',
-                        );
+                 // Catalog refactor (plan-d14e89): canonical allowlist lives in
+                 // includes/class-mxchat-model-catalog.php. A new chat model
+                 // added there is automatically accepted by autosave.
+                 if (!class_exists('MxChat_Model_Catalog')) {
+                     require_once plugin_dir_path(dirname(__FILE__)) . 'includes/class-mxchat-model-catalog.php';
+                 }
+                 $allowed_models = MxChat_Model_Catalog::chat_model_ids();
                 
                 //error_log('MXChat Save: in_array result: ' . (in_array($value, $allowed_models) ? 'YES' : 'NO'));
                 
@@ -307,6 +299,10 @@ public function mxchat_save_setting_callback() {
             // Validate script loading strategy value
             $allowed_strategies = array('default', 'defer', 'delay_1s', 'delay_3s', 'delay_5s', 'on_interaction');
             $options[$field_name] = in_array($value, $allowed_strategies) ? $value : 'default';
+            break;
+        case 'auto_retry_on_transient_error':
+            // Boolean toggle — accept 1/0/on/off, default to '1' if any truthy value.
+            $options[$field_name] = ($value === '1' || $value === 'on' || $value === 1 || $value === true) ? '1' : '0';
             break;
         default:
             // Handle transcripts options

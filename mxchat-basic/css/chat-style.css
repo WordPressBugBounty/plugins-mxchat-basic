@@ -1060,6 +1060,11 @@
     display: flex;
 }
 
+.floating-chatbot-button:focus-visible {
+    outline: 3px solid #7873f5;
+    outline-offset: 3px;
+}
+
 .floating-chatbot-button img {
     max-width: 100%;
     max-height: 100%;

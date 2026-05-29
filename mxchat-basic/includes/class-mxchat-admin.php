@@ -42,9 +42,16 @@ class MxChat_Admin {
         // the sidebar — below API Access (priority 20) and below any other
         // submenu that hooks at default priority 10.
         add_action('admin_menu', array($this, 'mxchat_add_pro_extensions_page'), 30);
+        // Onboarding visibility — runs LAST so it can remove the submenu after every
+        // other add_submenu_page() call. The page stays reachable by direct URL.
+        add_action('admin_menu', array($this, 'mxchat_apply_onboarding_visibility'), 999);
         add_action('admin_init', array($this, 'mxchat_page_init'));
         add_action('admin_init', array($this, 'mxchat_prompts_page_init'));
         add_action('admin_enqueue_scripts', array($this, 'mxchat_enqueue_admin_assets'));
+        // Add body class for the Onboarding wizard (plan-905439) so the
+        // chrome-surgery CSS in admin-onboarding-wizard.css can scope its
+        // WP-sidebar collapse to this page only.
+        add_filter('admin_body_class', array($this, 'mxchat_add_onboarding_body_class'));
         add_action('wp_ajax_mxchat_delete_chat_history', array($this, 'mxchat_delete_chat_history'));
         add_action('admin_post_mxchat_delete_prompt', array($this, 'mxchat_handle_delete_prompt'));
         add_action('wp_ajax_mxchat_fetch_chat_history', array($this, 'mxchat_fetch_chat_history'));
@@ -378,24 +385,53 @@ private function initialize_default_options() {
     }
 
 public function mxchat_add_plugin_page() {
-    // Main menu page
+    // Onboarding lifecycle helpers (admin_init redirect + ajax handlers live in the file).
+    require_once plugin_dir_path(__FILE__) . 'admin-onboarding-page.php';
+
+    // Main menu page — `mxchat-max` remains the parent slug for every MxChat submenu
+    // (Settings, Knowledge, Transcripts, …). Hitting `?page=mxchat-max` directly now
+    // dispatches to the Onboarding page (or Settings if the user has dismissed onboarding).
     add_menu_page(
-        esc_html__('MxChat Settings', 'mxchat'),
+        esc_html__('MxChat', 'mxchat'),
         esc_html__('MxChat', 'mxchat'),
         'manage_options',
         'mxchat-max',
-        array($this, 'mxchat_create_admin_page'),
+        array($this, 'mxchat_create_dashboard_page'),
         'dashicons-testimonial',
         6
     );
 
-    // Rename the first submenu item from "MxChat" to "Settings"
+    // Onboarding submenu — first child under MxChat (plan-d14e89).
+    // First registration uses menu_slug === parent slug 'mxchat-max' →
+    // WP-canonical override of the auto-duplicate "MxChat" entry. Result: the
+    // first child shows as "Onboarding" instead of a redundant pair.
+    add_submenu_page(
+        'mxchat-max',
+        esc_html__('MxChat Onboarding', 'mxchat'),
+        esc_html__('Onboarding', 'mxchat'),
+        'manage_options',
+        'mxchat-max',
+        array($this, 'mxchat_create_dashboard_page')
+    );
+    // Hidden route for `?page=mxchat-onboarding` (Settings "Show again" link
+    // + legacy redirects still target this slug). Parent === null keeps it
+    // out of the menu while remaining accessible by URL.
+    add_submenu_page(
+        null,
+        esc_html__('MxChat Onboarding', 'mxchat'),
+        esc_html__('Onboarding', 'mxchat'),
+        'manage_options',
+        'mxchat-onboarding',
+        array($this, 'mxchat_create_dashboard_page')
+    );
+
+    // Settings submenu — same callback as before, just at a new slug.
     add_submenu_page(
         'mxchat-max',
         esc_html__('MxChat Settings', 'mxchat'),
         esc_html__('Settings', 'mxchat'),
         'manage_options',
-        'mxchat-max',
+        'mxchat-settings',
         array($this, 'mxchat_create_admin_page')
     );
 
@@ -1034,6 +1070,52 @@ public function show_live_agent_disabled_banner() {
         <?php
     }
 }
+/**
+ * Render the Onboarding page. Delegates to the procedural renderer in
+ * includes/admin-onboarding-page.php. Wired to both `?page=mxchat-max`
+ * (legacy top-level URL) and `?page=mxchat-onboarding` (the canonical
+ * Onboarding submenu).
+ *
+ * When the user has dismissed onboarding and lands on `mxchat-max` (the
+ * legacy URL, since the Onboarding submenu has been removed), redirect to
+ * Settings instead — the page is "graduated" and we shouldn't dump them
+ * back onto it. They can still navigate here directly via the unhide link.
+ */
+public function mxchat_create_dashboard_page() {
+    require_once plugin_dir_path(__FILE__) . 'admin-onboarding-page.php';
+
+    $current = isset($_GET['page']) ? sanitize_key($_GET['page']) : '';
+    if ($current === 'mxchat-max' && function_exists('mxchat_onboarding_is_dismissed') && mxchat_onboarding_is_dismissed()) {
+        wp_safe_redirect(admin_url('admin.php?page=mxchat-settings'));
+        exit;
+    }
+
+    if (function_exists('mxchat_render_onboarding_page')) {
+        mxchat_render_onboarding_page();
+        return;
+    }
+    // Defensive: if the include failed to load, fall back to the old Settings page
+    // so the top-level menu never lands on an empty screen.
+    $this->mxchat_create_admin_page();
+}
+
+/**
+ * Hide the Onboarding submenu when the user has dismissed it (either
+ * manually or via auto-graduation). The page itself remains routable so
+ * the Settings "Show MxChat Onboarding again" link can navigate back to it.
+ */
+public function mxchat_apply_onboarding_visibility() {
+    if (!function_exists('mxchat_onboarding_is_dismissed')) {
+        return;
+    }
+    if (mxchat_onboarding_is_dismissed()) {
+        // The first MxChat child is the same-slug-as-parent registration
+        // (slug 'mxchat-max', labelled "Onboarding") added in plan-d14e89.
+        // Remove it so the menu opens straight to Settings after dismiss.
+        remove_submenu_page('mxchat-max', 'mxchat-max');
+    }
+}
+
 public function mxchat_create_admin_page() {
     $this->add_live_agent_nonce();
     $this->add_theme_migration_nonce();
@@ -2933,6 +3015,9 @@ private function translate_with_deepseek($api_key, $model, $system_prompt, $text
  * Translate text using Google Gemini API
  */
 private function translate_with_gemini($api_key, $model, $system_prompt, $text) {
+    if ($model === 'gemini-3-pro-preview') {
+        $model = 'gemini-3.1-pro-preview';
+    }
     $url = 'https://generativelanguage.googleapis.com/v1beta/models/' . $model . ':generateContent?key=' . $api_key;
 
     $response = wp_remote_post($url, [
@@ -7236,63 +7321,13 @@ public function render_sample_instructions_modal() {
 
 
 public function mxchat_model_callback() {
-    // Define available models grouped by provider
-    $models = array(
-        esc_html__('OpenRouter (100+ Models)', 'mxchat') => array(
-            'openrouter' => esc_html__('OpenRouter - Select after entering API key', 'mxchat'),
-        ),
-        esc_html__('Google Gemini Models', 'mxchat') => array(
-            'gemini-3-pro-preview' => esc_html__('Gemini 3 Pro (Most Intelligent, Multimodal)', 'mxchat'),
-            'gemini-3-flash-preview' => esc_html__('Gemini 3 Flash (Balanced Speed & Scale)', 'mxchat'),
-            'gemini-2.5-pro' => esc_html__('Gemini 2.5 Pro (Advanced Thinking)', 'mxchat'),
-            'gemini-2.5-flash' => esc_html__('Gemini 2.5 Flash (Best Price-Performance)', 'mxchat'),
-            'gemini-2.5-flash-lite' => esc_html__('Gemini 2.5 Flash-Lite (Ultra Fast)', 'mxchat'),
-            'gemini-2.0-flash' => esc_html__('Gemini 2.0 Flash (Deprecated Mar 2026)', 'mxchat'),
-            'gemini-2.0-flash-lite' => esc_html__('Gemini 2.0 Flash-Lite (Deprecated Mar 2026)', 'mxchat'),
-            'gemini-1.5-pro' => esc_html__('Gemini 1.5 Pro (Deprecated Sep 2025)', 'mxchat'),
-            'gemini-1.5-flash' => esc_html__('Gemini 1.5 Flash (Deprecated Sep 2025)', 'mxchat'),
-        ),
-        esc_html__('X.AI Models', 'mxchat') => array(
-            'grok-3-beta' => esc_html__('Grok-3 (Powerful)', 'mxchat'),
-            'grok-3-fast-beta' => esc_html__('Grok-3 Fast (High Performance)', 'mxchat'),
-            'grok-3-mini-beta' => esc_html__('Grok-3 Mini (Affordable)', 'mxchat'),
-            'grok-3-mini-fast-beta' => esc_html__('Grok-3 Mini Fast (Quick Response)', 'mxchat'),
-            'grok-2' => esc_html__('Grok 2', 'mxchat'),
-            'grok-4-0709' => esc_html__('Grok 4 (Latest Flagship)', 'mxchat'),
-            'grok-4-1-fast-reasoning' => esc_html__('Grok 4.1 Fast (Reasoning)', 'mxchat'),
-            'grok-4-1-fast-non-reasoning' => esc_html__('Grok 4.1 Fast (Non-Reasoning)', 'mxchat'),
-        ),
-        esc_html__('DeepSeek Models', 'mxchat') => array(
-            'deepseek-chat' => esc_html__('DeepSeek-V3', 'mxchat'),
-        ),
-        esc_html__('Claude Models', 'mxchat') => array(
-            'claude-opus-4-7' => esc_html__('Claude Opus 4.7 (Latest Flagship)', 'mxchat'),
-            'claude-opus-4-6' => esc_html__('Claude Opus 4.6 (Most Capable - Recommended)', 'mxchat'),
-            'claude-sonnet-4-6' => esc_html__('Claude Sonnet 4.6 (Latest Sonnet - Fast & Capable)', 'mxchat'),
-            'claude-opus-4-5' => esc_html__('Claude Opus 4.5 (Highly Capable)', 'mxchat'),
-            'claude-sonnet-4-5-20250929' => esc_html__('Claude Sonnet 4.5 (Best for Agents & Coding)', 'mxchat'),
-            'claude-opus-4-1-20250805' => esc_html__('Claude Opus 4.1 (Exceptional for Complex Tasks)', 'mxchat'),
-            'claude-haiku-4-5-20251001' => esc_html__('Claude Haiku 4.5 (Fastest & Most Intelligent)', 'mxchat'),
-            'claude-opus-4-20250514' => esc_html__('Claude 4 Opus (Complex Tasks)', 'mxchat'),
-            'claude-sonnet-4-20250514' => esc_html__('Claude 4 Sonnet (High Performance)', 'mxchat'),
-        ),
-        esc_html__('Custom (OpenAI-compatible)', 'mxchat') => array(
-            'custom-provider' => esc_html__('Custom Provider (configure in API Keys tab)', 'mxchat'),
-        ),
-        esc_html__('OpenAI Models', 'mxchat') => array(
-            'gpt-5.5' => esc_html__('GPT-5.5 (Latest Flagship)', 'mxchat'),
-            'gpt-5.4' => esc_html__('GPT-5.4 (Flagship Reasoning & Coding)', 'mxchat'),
-            'gpt-5.4-mini' => esc_html__('GPT-5.4 Mini (Fast, 400K Context)', 'mxchat'),
-            'gpt-5.4-nano' => esc_html__('GPT-5.4 Nano (Fastest & Cheapest)', 'mxchat'),
-            'gpt-5.3-chat-latest' => esc_html__('GPT-5.3 Chat (Conversational)', 'mxchat'),
-            'gpt-5.2' => esc_html__('GPT-5.2 (Best General-Purpose & Agentic Model)', 'mxchat'),
-            'gpt-5.1-chat-latest' => esc_html__('GPT-5.1 Chat Latest (Recommended)', 'mxchat'),
-            'gpt-5.1-2025-11-13' => esc_html__('GPT-5.1 (Flagship for Coding & Agentic Tasks)', 'mxchat'),
-            'gpt-5' => esc_html__('GPT-5 (Flagship for Coding, Reasoning & Agents)', 'mxchat'),
-            'gpt-5-mini' => esc_html__('GPT-5 Mini (Fast and Lightweight)', 'mxchat'),
-            'gpt-5-nano' => esc_html__('GPT-5 Nano (Fastest & Cheapest for Summarization/Classification)', 'mxchat'),
-        ),
-    );
+    // Catalog refactor (plan-d14e89): single source of truth lives in
+    // includes/class-mxchat-model-catalog.php. Dropdown groups are the
+    // provider labels; each group maps model_id => "Label" strings.
+    if (!class_exists('MxChat_Model_Catalog')) {
+        require_once plugin_dir_path(__FILE__) . 'class-mxchat-model-catalog.php';
+    }
+    $models = MxChat_Model_Catalog::settings_dropdown_groups();
 
     // Retrieve the currently selected model from saved options
     $selected_model = isset($this->options['model']) ? esc_attr($this->options['model']) : 'gpt-5.1-chat-latest';
@@ -7403,13 +7438,13 @@ public function enable_streaming_toggle_callback() {
     echo '<span class="slider"></span>';
     echo '</label>';
 
-    // Test button with better styling
-    echo '<div style="margin-top: 15px;">';
-    echo '<button type="button" id="mxchat-test-streaming-btn" class="button button-secondary">';
-    echo '<span class="dashicons dashicons-admin-tools" style="vertical-align: middle; margin-right: 5px;"></span>';
+    // Test button — branded .mxch-btn with inline SVG (IDs preserved for AJAX binding)
+    echo '<div class="mxch-streaming-test-row">';
+    echo '<button type="button" id="mxchat-test-streaming-btn" class="mxch-btn mxch-btn-secondary">';
+    echo '<svg class="mxch-streaming-test-icon" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>';
     echo esc_html__('Test Streaming Compatibility', 'mxchat');
     echo '</button>';
-    echo '<p id="mxchat-test-streaming-result" style="margin-top:10px; font-weight: bold;"></p>';
+    echo '<p id="mxchat-test-streaming-result" class="mxch-streaming-test-result"></p>';
     echo '</div>';
 }
 
@@ -7422,15 +7457,21 @@ public function enable_web_search_toggle_callback() {
     // Get current model to determine if we should show/enable the toggle
     $current_model = isset($this->options['model']) ? $this->options['model'] : 'gpt-5.1-chat-latest';
 
-    // Models that DON'T support web search (per OpenAI docs)
-    // gpt-5 with minimal reasoning is handled at API level, gpt-4.1-nano doesn't support it
+    // Models that DON'T support web search — OpenAI-docs-driven exception list.
+    // Keep hardcoded; the catalog can't infer "supports web search" per-model, so any
+    // future OpenAI model that lacks Responses-API web_search support is added here.
     $unsupported_models = array('gpt-4.1-nano');
 
-    // Check if current model is an OpenAI model that supports web search
-    $openai_models = array(
-        'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.4-nano', 'gpt-5.3-chat-latest',
-        'gpt-5.2', 'gpt-5.1-chat-latest', 'gpt-5.1-2025-11-13', 'gpt-5', 'gpt-5-mini', 'gpt-5-nano'
-    );
+    // OpenAI chat-model allowlist for the Web Search toggle, derived from the central
+    // model catalog (class-mxchat-model-catalog.php). When a new OpenAI chat model is
+    // added there, the Web Search toggle picks it up automatically — no edit here.
+    if (!class_exists('MxChat_Model_Catalog')) {
+        require_once plugin_dir_path(__FILE__) . 'class-mxchat-model-catalog.php';
+    }
+    $chat_catalog = MxChat_Model_Catalog::chat_models();
+    $openai_models = (isset($chat_catalog['openai']['models']) && is_array($chat_catalog['openai']['models']))
+        ? array_keys($chat_catalog['openai']['models'])
+        : array();
 
     $is_openai = in_array($current_model, $openai_models);
     $is_supported = $is_openai && !in_array($current_model, $unsupported_models);
@@ -8581,6 +8622,18 @@ public function mxchat_rag_chunks_limit_callback() {
     echo '</div>';
 }
 
+/**
+ * Add body class on the Onboarding wizard page so CSS-only chrome surgery
+ * (collapsing the WP admin sidebar) only applies on this page.
+ * Plan: plan-mxchat-20260527-905439.
+ */
+public function mxchat_add_onboarding_body_class($classes) {
+    if (isset($_GET['page']) && $_GET['page'] === 'mxchat-onboarding') {
+        $classes .= ' mxchat-onboarding-focused';
+    }
+    return $classes;
+}
+
 public function mxchat_enqueue_admin_assets() {
     // Get plugin version
     $version = MXCHAT_VERSION;
@@ -8692,6 +8745,27 @@ private function enqueue_page_specific_assets($current_page, $plugin_url, $versi
             wp_localize_script('mxchat-admin-sidebar-js', 'MxChatAdminSidebarI18n', array(
                 'copied' => __('Copied', 'mxchat'),
             ));
+            break;
+
+        case 'mxchat-max':
+        case 'mxchat-onboarding':
+            // Onboarding page — uses the shared admin shell PLUS the wizard
+            // overlay (plan-905439). admin-onboarding-wizard.css scopes the
+            // WP-chrome surgery to body.mxchat-onboarding-focused so it only
+            // applies on THIS page. The body class is added below via the
+            // admin_body_class filter.
+            wp_enqueue_style('mxchat-admin-sidebar-css', $plugin_url . 'css/admin-sidebar.css', array(), $version);
+            wp_enqueue_script('mxchat-admin-sidebar-js', $plugin_url . 'js/admin-sidebar.js', array(), $version, true);
+            wp_localize_script('mxchat-admin-sidebar-js', 'MxChatAdminSidebarI18n', array(
+                'copied' => __('Copied', 'mxchat'),
+            ));
+            // admin-style.css provides the .mxchat-instructions-modal-* classes
+            // the new Behavior step's "View Sample Instructions" modal needs.
+            // Enqueued AFTER admin-sidebar.css but BEFORE the wizard overlay
+            // so the wizard's own rules win where they collide. plan-a2e4d6.
+            wp_enqueue_style('mxchat-admin-style-css', $plugin_url . 'css/admin-style.css', array('mxchat-admin-sidebar-css'), $version);
+            wp_enqueue_style('mxchat-admin-onboarding-wizard-css', $plugin_url . 'css/admin-onboarding-wizard.css', array('mxchat-admin-sidebar-css', 'mxchat-admin-style-css'), $version);
+            wp_enqueue_script('mxchat-admin-onboarding-wizard-js', $plugin_url . 'js/admin-onboarding-wizard.js', array(), $version, true);
             break;
        default:
             wp_enqueue_script(
@@ -8806,6 +8880,14 @@ private function localize_admin_scripts($current_page) {
 
     // Localize main admin script with base data
     wp_localize_script('mxchat-admin-js', 'mxchatAdmin', $base_data);
+
+    // Canonical chat-model catalog for the modal picker grid
+    // (plan-d14e89). Adding a model in class-mxchat-model-catalog.php
+    // automatically appears here.
+    if (!class_exists('MxChat_Model_Catalog')) {
+        require_once plugin_dir_path(__FILE__) . 'class-mxchat-model-catalog.php';
+    }
+    wp_localize_script('mxchat-admin-js', 'mxchatChatModelCatalog', MxChat_Model_Catalog::js_picker_shape());
 
     // Page-specific localizations
     $this->localize_page_specific_scripts($current_page);
@@ -9183,13 +9265,12 @@ if (isset($input['rate_limits']) && is_array($input['rate_limits'])) {
 
     // Add to your sanitize function
     if (isset($input['embedding_model'])) {
-        $allowed_models = array(
-            'text-embedding-ada-002',
-            'text-embedding-3-small',
-            'text-embedding-3-large',
-            'voyage-3-large',
-            'gemini-embedding-001'
-        );
+        // Catalog refactor (plan-d14e89): allowlist derived from the canonical
+        // catalog in includes/class-mxchat-model-catalog.php.
+        if (!class_exists('MxChat_Model_Catalog')) {
+            require_once plugin_dir_path(__FILE__) . 'class-mxchat-model-catalog.php';
+        }
+        $allowed_models = MxChat_Model_Catalog::embedding_model_ids();
         if (in_array($input['embedding_model'], $allowed_models)) {
             $new_input['embedding_model'] = sanitize_text_field($input['embedding_model']);
         }
@@ -9199,47 +9280,10 @@ if (isset($input['model'])) {
     if ($input['model'] === 'openrouter') {
         $new_input['model'] = 'openrouter';
     } else {
-        $allowed_models = array(
-            'gemini-3-pro-preview',
-            'gemini-3-flash-preview',
-            'gemini-2.5-pro',
-            'gemini-2.5-flash',
-            'gemini-2.5-flash-lite',
-            'gemini-2.0-flash',
-            'gemini-2.0-flash-lite',
-            'gemini-1.5-pro',
-            'gemini-1.5-flash',
-            'grok-4-0709',
-            'grok-4-1-fast-reasoning',
-            'grok-4-1-fast-non-reasoning',
-            'grok-3-beta',
-            'grok-3-fast-beta',
-            'grok-3-mini-beta',
-            'grok-3-mini-fast-beta',
-            'grok-2',
-            'deepseek-chat',
-            'claude-opus-4-7',
-            'claude-opus-4-6',
-            'claude-sonnet-4-6',
-            'claude-opus-4-5',
-            'claude-sonnet-4-5-20250929',
-            'claude-opus-4-1-20250805',
-            'claude-haiku-4-5-20251001',
-            'claude-opus-4-20250514',
-            'claude-sonnet-4-20250514',
-            'gpt-5.2',
-            'gpt-5.1-chat-latest',
-            'gpt-5.1-2025-11-13',
-            'gpt-5',
-            'gpt-5-mini',
-            'gpt-5-nano',
-            'gpt-5.5',
-            'gpt-5.4',
-            'gpt-5.4-mini',
-            'gpt-5.4-nano',
-            'gpt-5.3-chat-latest',
-            'custom-provider',
-        );
+        if (!class_exists('MxChat_Model_Catalog')) {
+            require_once plugin_dir_path(__FILE__) . 'class-mxchat-model-catalog.php';
+        }
+        $allowed_models = MxChat_Model_Catalog::chat_model_ids();
 
         if (in_array($input['model'], $allowed_models)) {
             $new_input['model'] = sanitize_text_field($input['model']);

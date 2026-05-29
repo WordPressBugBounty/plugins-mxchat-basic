@@ -2386,6 +2386,9 @@ article .entry-content,
      * Call Gemini API
      */
     private function call_gemini($model, $api_key, $system_prompt, $messages, $max_tokens) {
+        if ($model === 'gemini-3-pro-preview') {
+            $model = 'gemini-3.1-pro-preview';
+        }
         if (empty($api_key)) {
             return new WP_Error('no_api_key', __('Gemini API key not configured.', 'mxchat'));
         }
