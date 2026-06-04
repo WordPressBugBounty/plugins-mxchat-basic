@@ -49,6 +49,9 @@ private function mxchat_init_ajax_hooks() {
     add_action('wp_ajax_mxchat_export_settings', array($this, 'mxchat_export_settings_callback'));
     add_action('wp_ajax_mxchat_reset_all_settings', array($this, 'mxchat_reset_all_settings_callback'));
 
+    // Global rate-limit usage counter reset (admin-only, nonce-guarded)
+    add_action('wp_ajax_mxchat_reset_global_rate_limit', array($this, 'mxchat_reset_global_rate_limit_callback'));
+
     // Custom (OpenAI-compatible) Provider connection test
     add_action('wp_ajax_mxchat_test_custom_provider', array($this, 'mxchat_test_custom_provider_callback'));
 }
@@ -373,6 +376,46 @@ public function mxchat_save_setting_callback() {
                     return;
                 }
             }
+            // Whole-chatbot global cap (sits in mxchat_options['rate_limits_global']).
+            // Field names: mxchat_options[rate_limits_global][limit|timeframe|limit_custom]
+            else if (strpos($name, 'mxchat_options[rate_limits_global]') !== false) {
+                preg_match('/\[rate_limits_global\]\[(.*?)\]/', $name, $matches);
+                if (isset($matches[1])) {
+                    $setting_key = $matches[1];
+                    if (!isset($options['rate_limits_global']) || !is_array($options['rate_limits_global'])) {
+                        $options['rate_limits_global'] = array('limit' => 'unlimited', 'timeframe' => 'daily');
+                    }
+                    if ($setting_key === 'limit') {
+                        // Selection from the preset dropdown. If __custom__, resolve from limit_custom; otherwise store directly.
+                        if ($value === '__custom__') {
+                            $custom = isset($options['rate_limits_global']['limit_custom']) ? (string) $options['rate_limits_global']['limit_custom'] : '';
+                            if ($custom !== '' && ctype_digit($custom) && (int) $custom >= 1) {
+                                $options['rate_limits_global']['limit'] = $custom;
+                            }
+                            // else leave existing limit untouched until the custom value arrives
+                        } else {
+                            $options['rate_limits_global']['limit'] = $value;
+                        }
+                    } elseif ($setting_key === 'limit_custom') {
+                        $clean = preg_replace('/[^0-9]/', '', (string) $value);
+                        $options['rate_limits_global']['limit_custom'] = $clean;
+                        // Mirror a valid custom value into limit UNCONDITIONALLY (plan-74eb86).
+                        // The custom number input is only editable when the dropdown is on
+                        // "Custom…" (the toggle JS hides it for presets/unlimited) and autosave
+                        // sends one field per change event, so a limit_custom change only fires
+                        // in custom mode — there is no preset to clobber. The old guard required
+                        // limit to already be non-preset, which it isn't on a first-time custom
+                        // entry (the limit=__custom__ event arrives before limit_custom is set),
+                        // so the value never landed in limit on the first save and reverted on refresh.
+                        if ($clean !== '' && (int) $clean >= 1) {
+                            $options['rate_limits_global']['limit'] = $clean;
+                        }
+                    } elseif ($setting_key === 'timeframe') {
+                        $allowed_tf = array('hourly','daily','weekly','monthly');
+                        $options['rate_limits_global']['timeframe'] = in_array($value, $allowed_tf, true) ? $value : 'daily';
+                    }
+                }
+            }
             // First check for rate limits settings
             else if (strpos($name, 'mxchat_options[rate_limits]') !== false) {
                 //error_log('MXChat Save: Detected rate_limits field: ' . $name);
@@ -383,7 +426,7 @@ public function mxchat_save_setting_callback() {
 
                 if (isset($matches[1]) && isset($matches[2])) {
                     $role_id = $matches[1];
-                    $setting_key = $matches[2]; // limit, timeframe, or message
+                    $setting_key = $matches[2]; // limit, timeframe, message, or limit_custom
 
                     //error_log('MXChat Save: Role ID = ' . $role_id . ', Setting Key = ' . $setting_key);
 
@@ -403,8 +446,30 @@ public function mxchat_save_setting_callback() {
                         ];
                     }
 
-                    // Update the specific setting
-                    $options['rate_limits'][$role_id][$setting_key] = $value;
+                    if ($setting_key === 'limit') {
+                        if ($value === '__custom__') {
+                            // Pull the integer from limit_custom that may have arrived (or will arrive).
+                            $custom = isset($options['rate_limits'][$role_id]['limit_custom']) ? (string) $options['rate_limits'][$role_id]['limit_custom'] : '';
+                            if ($custom !== '' && ctype_digit($custom) && (int) $custom >= 1) {
+                                $options['rate_limits'][$role_id]['limit'] = $custom;
+                            }
+                        } else {
+                            $options['rate_limits'][$role_id]['limit'] = $value;
+                        }
+                    } elseif ($setting_key === 'limit_custom') {
+                        $clean = preg_replace('/[^0-9]/', '', (string) $value);
+                        $options['rate_limits'][$role_id]['limit_custom'] = $clean;
+                        // Mirror a valid custom value into limit UNCONDITIONALLY — same reasoning
+                        // as the global branch above (plan-74eb86). The per-role custom input is
+                        // only editable in custom mode and autosave is one-field-per-change, so
+                        // this never clobbers a preset; it fixes the first-time-save revert.
+                        if ($clean !== '' && (int) $clean >= 1) {
+                            $options['rate_limits'][$role_id]['limit'] = $clean;
+                        }
+                    } else {
+                        // Update the specific setting (timeframe, message)
+                        $options['rate_limits'][$role_id][$setting_key] = $value;
+                    }
                     //error_log('MXChat Save: Updated rate_limits[' . $role_id . '][' . $setting_key . '] = ' . $value);
                 } else {
                     //error_log('MXChat Save: Failed to parse rate_limits pattern: ' . $name);
@@ -1344,6 +1409,72 @@ function mxchat_deactivate_license() {
         MxChat_Admin::mxchat_reset_all_settings();
 
         wp_send_json_success( array( 'message' => esc_html__( 'All settings have been reset to defaults. The page will reload.', 'mxchat' ) ) );
+    }
+
+    /**
+     * Reset the global rate-limit usage counter to zero on demand.
+     *
+     * Zeroes the WP option mxchat_chat_limit_<bot>_global that the integrator
+     * increments per message, then returns a freshly-formatted readout string
+     * so the settings page can update without a reload. Does NOT change any
+     * enforcement config — purely clears the running counter.
+     */
+    public function mxchat_reset_global_rate_limit_callback() {
+        // Verify nonce
+        if ( ! check_ajax_referer( 'mxchat_reset_global_usage', '_ajax_nonce', false ) ) {
+            wp_send_json_error( array( 'message' => esc_html__( 'Security check failed', 'mxchat' ) ) );
+        }
+
+        // Check permissions
+        if ( ! current_user_can( 'manage_options' ) ) {
+            wp_send_json_error( array( 'message' => esc_html__( 'Unauthorized', 'mxchat' ) ) );
+        }
+
+        // Resolve the per-bot counter key the same way the integrator does.
+        $bot_id   = isset( $_POST['bot_id'] ) ? sanitize_key( wp_unslash( $_POST['bot_id'] ) ) : 'default';
+        $safe_bot = preg_replace( '/[^a-zA-Z0-9_]/', '_', $bot_id );
+        if ( $safe_bot === '' ) {
+            $safe_bot = 'default';
+        }
+        $option_key = 'mxchat_chat_limit_' . $safe_bot . '_global';
+
+        $now = time();
+        update_option( $option_key, array( 'count' => 0, 'timestamp' => $now ) );
+
+        // Recompute the display string so the front-end can update in place.
+        $all_options = get_option( 'mxchat_options', array() );
+        $global_cfg  = isset( $all_options['rate_limits_global'] ) && is_array( $all_options['rate_limits_global'] )
+            ? $all_options['rate_limits_global']
+            : array();
+        $limit_raw   = isset( $global_cfg['limit'] ) ? (string) $global_cfg['limit'] : 'unlimited';
+        // Defensive: if a raw __custom__ ever slips through, fall back to the custom value.
+        if ( ! ctype_digit( $limit_raw ) && isset( $global_cfg['limit_custom'] ) && ctype_digit( (string) $global_cfg['limit_custom'] ) ) {
+            $limit_raw = (string) $global_cfg['limit_custom'];
+        }
+        $timeframe = isset( $global_cfg['timeframe'] ) ? (string) $global_cfg['timeframe'] : 'daily';
+        $windows   = array( 'hourly' => 3600, 'daily' => 86400, 'weekly' => 604800, 'monthly' => 2592000 );
+        $window    = isset( $windows[ $timeframe ] ) ? $windows[ $timeframe ] : 86400;
+        $reset_at  = $now + $window;
+        $limit_int = ctype_digit( $limit_raw ) ? (int) $limit_raw : 0;
+
+        $text = sprintf(
+            /* translators: 1: used count, 2: limit, 3: remaining, 4: human-readable time until reset */
+            esc_html__( '%1$s of %2$s used · %3$s left · resets in %4$s', 'mxchat' ),
+            number_format_i18n( 0 ),
+            number_format_i18n( $limit_int ),
+            number_format_i18n( $limit_int ),
+            human_time_diff( $now, $reset_at )
+        );
+
+        wp_send_json_success( array(
+            'count'    => 0,
+            'limit'    => $limit_int,
+            'left'     => $limit_int,
+            'reset_at' => $reset_at,
+            'pct'      => 0,
+            'text'     => $text,
+            'message'  => esc_html__( 'Usage counter reset.', 'mxchat' ),
+        ) );
     }
 
 }

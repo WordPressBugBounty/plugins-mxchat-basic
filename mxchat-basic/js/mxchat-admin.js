@@ -3605,3 +3605,46 @@ jQuery(document).ready(function($) {
         setTimeout(refreshDebugLog, 100);
     });
 });
+
+// Global rate-limit usage: "Reset counter" button (plan-mxchat-20260603-e9b3f9)
+jQuery(document).ready(function($) {
+    var $usage = $('#mxch-global-usage');
+    if (!$usage.length) {
+        return;
+    }
+
+    $('#mxch-global-usage-reset').on('click', function() {
+        var $btn = $(this);
+        if (!window.confirm('Reset the global usage counter to zero now? This clears how many messages have been used in the current window.')) {
+            return;
+        }
+
+        var original = $btn.text();
+        $btn.prop('disabled', true).text('Resetting…');
+
+        $.ajax({
+            url: mxchatAdmin.ajax_url,
+            type: 'POST',
+            data: {
+                action: 'mxchat_reset_global_rate_limit',
+                bot_id: $usage.data('bot-id') || 'default',
+                _ajax_nonce: $usage.data('reset-nonce')
+            },
+            success: function(response) {
+                $btn.prop('disabled', false).text(original);
+                if (response && response.success) {
+                    $('#mxch-global-usage-fill').css('width', (response.data.pct || 0) + '%');
+                    if (response.data.text) {
+                        $('#mxch-global-usage-text').text(response.data.text);
+                    }
+                } else {
+                    window.alert((response && response.data && response.data.message) || 'Reset failed. Please try again.');
+                }
+            },
+            error: function() {
+                $btn.prop('disabled', false).text(original);
+                window.alert('Reset failed. Please try again.');
+            }
+        });
+    });
+});

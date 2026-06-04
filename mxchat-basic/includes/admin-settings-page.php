@@ -1440,6 +1440,24 @@ function mxchat_render_settings_page($admin_instance) {
             });
         });
 
+        // Rate-limit "Custom…" toggle: show/hide the integer input below each
+        // limit <select> based on whether __custom__ is the active option.
+        document.querySelectorAll('.mxch-rate-limit-limit-select').forEach(sel => {
+            const targetId = sel.getAttribute('data-mxch-custom-target');
+            if (!targetId) return;
+            const field = document.querySelector('[data-mxch-custom-for="' + targetId + '"]');
+            if (!field) return;
+            const sync = () => {
+                if (sel.value === '__custom__') {
+                    field.hidden = false;
+                } else {
+                    field.hidden = true;
+                }
+            };
+            sel.addEventListener('change', sync);
+            sync();
+        });
+
         // =====================================================
         // Mobile Menu Functionality
         // =====================================================
@@ -1571,7 +1589,143 @@ function mxchat_render_rate_limits_accordion($admin_instance) {
     $roles = wp_roles()->get_names();
     $roles['logged_out'] = __('Logged Out Users', 'mxchat');
 
+    // Whole-chatbot global cap (sits above per-role; defaults to unlimited so
+    // existing installs are unchanged). Stored under mxchat_options['rate_limits_global'].
+    $global_cfg = isset($all_options['rate_limits_global']) && is_array($all_options['rate_limits_global'])
+        ? $all_options['rate_limits_global']
+        : array();
+    $global_limit_raw     = isset($global_cfg['limit']) ? (string) $global_cfg['limit'] : 'unlimited';
+    $global_timeframe     = isset($global_cfg['timeframe']) ? (string) $global_cfg['timeframe'] : 'daily';
+    $global_is_unlimited  = ($global_limit_raw === '' || $global_limit_raw === 'unlimited');
+    $global_is_preset     = !$global_is_unlimited && in_array($global_limit_raw, $rate_limits, true);
+    $global_select_value  = $global_is_unlimited ? 'unlimited' : ($global_is_preset ? $global_limit_raw : '__custom__');
+    $global_custom_value  = (!$global_is_unlimited && !$global_is_preset && ctype_digit($global_limit_raw))
+        ? $global_limit_raw
+        : '';
+
     echo '<div class="mxch-rate-limits">';
+
+    // --- Global cap card -------------------------------------------------
+    ?>
+    <div class="mxch-rate-limit-item mxch-rate-limit-global mxchat-autosave-section">
+        <div class="mxch-rate-limit-header">
+            <span class="mxch-rate-limit-role"><?php esc_html_e('Total chatbot message limit', 'mxchat'); ?></span>
+            <div class="mxch-rate-limit-summary">
+                <span class="mxch-rate-limit-badge mxch-rate-limit-global-badge">
+                    <?php
+                    if ($global_is_unlimited) {
+                        esc_html_e('Unlimited', 'mxchat');
+                    } else {
+                        $tf_label = isset($timeframes[$global_timeframe]) ? $timeframes[$global_timeframe] : $global_timeframe;
+                        echo esc_html(($global_custom_value !== '' ? $global_custom_value : $global_limit_raw) . ' / ' . $tf_label);
+                    }
+                    ?>
+                </span>
+                <svg class="mxch-rate-limit-arrow" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+            </div>
+        </div>
+        <div class="mxch-rate-limit-body">
+            <p class="mxch-field-description" style="margin: 0 0 12px;">
+                <?php esc_html_e('A single ceiling across all users and all roles, per timeframe. Independent of the per-role limits below. When both a per-role limit and this global cap are configured, whichever is hit first stops the conversation. Default is Unlimited — existing installs are unchanged.', 'mxchat'); ?>
+            </p>
+            <div class="mxch-rate-limit-controls">
+                <div class="mxch-field">
+                    <label class="mxch-field-label" for="rate_limits_global_limit"><?php esc_html_e('Limit', 'mxchat'); ?></label>
+                    <select id="rate_limits_global_limit"
+                            name="mxchat_options[rate_limits_global][limit]"
+                            class="mxch-select mxchat-autosave-field mxch-rate-limit-limit-select"
+                            data-mxch-custom-target="rate_limits_global_limit_custom">
+                        <?php foreach ($rate_limits as $limit): ?>
+                            <option value="<?php echo esc_attr($limit); ?>" <?php selected($global_select_value, $limit); ?>>
+                                <?php echo esc_html($limit === 'unlimited' ? __('Unlimited', 'mxchat') : $limit); ?>
+                            </option>
+                        <?php endforeach; ?>
+                        <option value="__custom__" <?php selected($global_select_value, '__custom__'); ?>><?php esc_html_e('Custom…', 'mxchat'); ?></option>
+                    </select>
+                </div>
+                <div class="mxch-field mxch-rate-limit-custom-field" data-mxch-custom-for="rate_limits_global_limit_custom" <?php echo $global_select_value === '__custom__' ? '' : 'hidden'; ?>>
+                    <label class="mxch-field-label" for="rate_limits_global_limit_custom"><?php esc_html_e('Custom limit', 'mxchat'); ?></label>
+                    <input type="number"
+                           min="1"
+                           step="1"
+                           id="rate_limits_global_limit_custom"
+                           name="mxchat_options[rate_limits_global][limit_custom]"
+                           class="mxch-input mxchat-autosave-field mxch-rate-limit-custom-input"
+                           placeholder="e.g. 250"
+                           value="<?php echo esc_attr($global_custom_value); ?>" />
+                </div>
+                <div class="mxch-field">
+                    <label class="mxch-field-label" for="rate_limits_global_timeframe"><?php esc_html_e('Timeframe', 'mxchat'); ?></label>
+                    <select id="rate_limits_global_timeframe"
+                            name="mxchat_options[rate_limits_global][timeframe]"
+                            class="mxch-select mxchat-autosave-field">
+                        <?php foreach ($timeframes as $value => $label): ?>
+                            <option value="<?php echo esc_attr($value); ?>" <?php selected($global_timeframe, $value); ?>><?php echo esc_html($label); ?></option>
+                        <?php endforeach; ?>
+                    </select>
+                </div>
+            </div>
+            <?php
+            // --- Current usage readout (read-only; mirrors the integrator's
+            // window-reset math at READ time — never writes the counter here).
+            // v1 surfaces the DEFAULT bot's pool. TODO: per-bot selector if asked.
+            $global_usage_limit_int = (!$global_is_unlimited && ctype_digit($global_limit_raw))
+                ? (int) $global_limit_raw
+                : 0;
+            $usage_raw   = get_option('mxchat_chat_limit_default_global', array('count' => 0, 'timestamp' => time()));
+            $usage_count = isset($usage_raw['count']) ? (int) $usage_raw['count'] : 0;
+            $usage_ts    = isset($usage_raw['timestamp']) ? (int) $usage_raw['timestamp'] : time();
+            $usage_windows = array('hourly' => 3600, 'daily' => 86400, 'weekly' => 604800, 'monthly' => 2592000);
+            $usage_window  = isset($usage_windows[$global_timeframe]) ? $usage_windows[$global_timeframe] : 86400;
+            $usage_now = time();
+            if (($usage_now - $usage_ts) >= $usage_window) {
+                // Window elapsed since the stored timestamp → effective count is 0.
+                $usage_count = 0;
+                $usage_reset_at = $usage_now + $usage_window;
+            } else {
+                $usage_reset_at = $usage_ts + $usage_window;
+            }
+            $usage_left = max(0, $global_usage_limit_int - $usage_count);
+            $usage_pct  = ($global_usage_limit_int > 0)
+                ? min(100, (int) round(($usage_count / $global_usage_limit_int) * 100))
+                : 0;
+            $usage_reset_nonce = wp_create_nonce('mxchat_reset_global_usage');
+            ?>
+            <div class="mxch-rate-limit-usage"
+                 id="mxch-global-usage"
+                 data-bot-id="default"
+                 data-reset-nonce="<?php echo esc_attr($usage_reset_nonce); ?>"
+                 <?php echo $global_is_unlimited ? 'hidden' : ''; ?>>
+                <div class="mxch-rate-limit-usage-head">
+                    <span class="mxch-field-label" style="margin:0;"><?php esc_html_e('Current usage', 'mxchat'); ?></span>
+                    <button type="button" class="mxch-btn mxch-btn-secondary mxch-btn-sm" id="mxch-global-usage-reset"><?php esc_html_e('Reset counter', 'mxchat'); ?></button>
+                </div>
+                <div class="mxch-progress-bar">
+                    <div class="mxch-progress-bar-fill" id="mxch-global-usage-fill" style="width: <?php echo esc_attr($usage_pct); ?>%;"></div>
+                </div>
+                <p class="mxch-progress-label" id="mxch-global-usage-text" style="margin:0;">
+                    <?php
+                    printf(
+                        /* translators: 1: used count, 2: limit, 3: remaining, 4: human-readable time until reset */
+                        esc_html__('%1$s of %2$s used · %3$s left · resets in %4$s', 'mxchat'),
+                        esc_html(number_format_i18n($usage_count)),
+                        esc_html(number_format_i18n($global_usage_limit_int)),
+                        esc_html(number_format_i18n($usage_left)),
+                        esc_html(human_time_diff($usage_now, $usage_reset_at))
+                    );
+                    ?>
+                </p>
+            </div>
+            <p class="mxch-field-description mxch-rate-limit-usage-unlimited"
+               id="mxch-global-usage-unlimited"
+               style="margin: 12px 0 0;"
+               <?php echo $global_is_unlimited ? '' : 'hidden'; ?>>
+                <?php esc_html_e('Unlimited — no cap. Usage tracking applies only when a numeric limit is set.', 'mxchat'); ?>
+            </p>
+        </div>
+    </div>
+    <?php
+    // ---------------------------------------------------------------------
 
     foreach ($roles as $role_id => $role_name) {
         $default_limit = ($role_id === 'logged_out') ? '10' : '100';
@@ -1579,7 +1733,7 @@ function mxchat_render_rate_limits_accordion($admin_instance) {
         $default_message = __('Rate limit exceeded. Please try again later.', 'mxchat');
 
         $selected_limit = isset($all_options['rate_limits'][$role_id]['limit'])
-            ? $all_options['rate_limits'][$role_id]['limit']
+            ? (string) $all_options['rate_limits'][$role_id]['limit']
             : $default_limit;
 
         $selected_timeframe = isset($all_options['rate_limits'][$role_id]['timeframe'])
@@ -1591,6 +1745,14 @@ function mxchat_render_rate_limits_accordion($admin_instance) {
             : $default_message;
 
         $timeframe_label = isset($timeframes[$selected_timeframe]) ? $timeframes[$selected_timeframe] : $selected_timeframe;
+
+        // Custom-value handling: if the stored limit is not in the preset list
+        // and not 'unlimited', it's a custom integer. The select shows __custom__
+        // and the number input below carries the actual value.
+        $is_preset_limit = in_array($selected_limit, $rate_limits, true);
+        $role_select_value = $is_preset_limit ? $selected_limit : '__custom__';
+        $role_custom_value = (!$is_preset_limit && ctype_digit($selected_limit)) ? $selected_limit : '';
+        $custom_field_id   = 'rate_limits_' . $role_id . '_limit_custom';
         ?>
         <div class="mxch-rate-limit-item">
             <div class="mxch-rate-limit-header">
@@ -1606,11 +1768,26 @@ function mxchat_render_rate_limits_accordion($admin_instance) {
                         <label class="mxch-field-label" for="rate_limits_<?php echo esc_attr($role_id); ?>_limit"><?php esc_html_e('Limit', 'mxchat'); ?></label>
                         <select id="rate_limits_<?php echo esc_attr($role_id); ?>_limit"
                                 name="mxchat_options[rate_limits][<?php echo esc_attr($role_id); ?>][limit]"
-                                class="mxch-select mxchat-autosave-field">
+                                class="mxch-select mxchat-autosave-field mxch-rate-limit-limit-select"
+                                data-mxch-custom-target="<?php echo esc_attr($custom_field_id); ?>">
                             <?php foreach ($rate_limits as $limit): ?>
-                            <option value="<?php echo esc_attr($limit); ?>" <?php selected($selected_limit, $limit); ?>><?php echo esc_html($limit); ?></option>
+                            <option value="<?php echo esc_attr($limit); ?>" <?php selected($role_select_value, $limit); ?>>
+                                <?php echo esc_html($limit === 'unlimited' ? __('Unlimited', 'mxchat') : $limit); ?>
+                            </option>
                             <?php endforeach; ?>
+                            <option value="__custom__" <?php selected($role_select_value, '__custom__'); ?>><?php esc_html_e('Custom…', 'mxchat'); ?></option>
                         </select>
+                    </div>
+                    <div class="mxch-field mxch-rate-limit-custom-field" data-mxch-custom-for="<?php echo esc_attr($custom_field_id); ?>" <?php echo $role_select_value === '__custom__' ? '' : 'hidden'; ?>>
+                        <label class="mxch-field-label" for="<?php echo esc_attr($custom_field_id); ?>"><?php esc_html_e('Custom limit', 'mxchat'); ?></label>
+                        <input type="number"
+                               min="1"
+                               step="1"
+                               id="<?php echo esc_attr($custom_field_id); ?>"
+                               name="mxchat_options[rate_limits][<?php echo esc_attr($role_id); ?>][limit_custom]"
+                               class="mxch-input mxchat-autosave-field mxch-rate-limit-custom-input"
+                               placeholder="e.g. 250"
+                               value="<?php echo esc_attr($role_custom_value); ?>" />
                     </div>
                     <div class="mxch-field">
                         <label class="mxch-field-label" for="rate_limits_<?php echo esc_attr($role_id); ?>_timeframe"><?php esc_html_e('Timeframe', 'mxchat'); ?></label>

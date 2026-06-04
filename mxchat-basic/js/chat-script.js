@@ -4005,6 +4005,37 @@ jQuery(function($) {
         return ' style="background-color: ' + esc(bg || '') + '; color: ' + esc(fg || '') + ';"';
     }
 
+    // Reads the rating bubble's actual computed fg+bg (whatever paints it —
+    // the inline color pickers OR the mxchat-theme AI customizer's injected CSS)
+    // and paints the filled "Send" pill so it fills with the bot font color and
+    // labels in the bubble bg. Mirrors mxchatSyncMenuColors(~:1512) for the read.
+    // We paint the submit button DIRECTLY (inline longhand) rather than relying
+    // on the CSS rule's var()s: Chromium resolves an INHERITED custom property
+    // unreliably inside a descendant's `background`, so a bubble-level var would
+    // silently fall back to the literal (white-block bug all over again). Inline
+    // longhand always wins. Same transparent-guard as the menu so we never paint
+    // a see-through value — in that case the CSS literal fallbacks keep it legible.
+    function syncRatingBubbleColors(botId) {
+        var $chatBox = getChatBoxByBotId(botId);
+        if (!$chatBox || !$chatBox.length) return;
+        var bubbleEl = $chatBox.find('.mxchat-rating-bot-bubble').last()[0];
+        if (!bubbleEl) return;
+        var cs = window.getComputedStyle(bubbleEl);
+        var fg = cs.color;
+        var bg = cs.backgroundColor;
+        var hasFg = fg && fg !== 'rgba(0, 0, 0, 0)' && fg !== 'transparent';
+        var hasBg = bg && bg !== 'rgba(0, 0, 0, 0)' && bg !== 'transparent';
+        // Expose on the bubble too, for any inheriting styles / future use.
+        if (hasFg) bubbleEl.style.setProperty('--mxchat-bot-fg', fg);
+        if (hasBg) bubbleEl.style.setProperty('--mxchat-bot-bg', bg);
+        // Paint the Send pill directly — the part that actually fixes the bug.
+        var submitEl = bubbleEl.querySelector('.mxchat-rating-submit');
+        if (submitEl) {
+            if (hasFg) submitEl.style.backgroundColor = fg; // fill  = bot font color
+            if (hasBg) submitEl.style.color = bg;           // label = bubble background
+        }
+    }
+
     function copy(key) {
         var c = mxchatChat.satisfaction_rating_copy || {};
         var d = {
@@ -4089,6 +4120,7 @@ jQuery(function($) {
         if (!$chatBox.length) return;
         if ($chatBox.find('.mxchat-rating-prompt').length) { s.promptShown = true; return; }
         $chatBox.append(buildPromptHtml(botId));
+        syncRatingBubbleColors(botId);
         s.promptShown = true;
         scrollChatBoxToBottom($chatBox);
     }
@@ -4158,6 +4190,7 @@ jQuery(function($) {
         if (rating !== 1 && rating !== -1) return;
         submitRating(botId, rating, '');
         ($wrap.length ? $wrap : $prompt).replaceWith(buildFeedbackHtml(botId, rating));
+        syncRatingBubbleColors(botId);
         scrollChatBoxToBottom(getChatBoxByBotId(botId));
     });
 
@@ -4176,6 +4209,7 @@ jQuery(function($) {
         var botId = $fb.data('bot-id') || 'default';
         var $wrap = $fb.closest('.mxchat-rating-bot-bubble');
         ($wrap.length ? $wrap : $fb).replaceWith(buildSavedHtml(botId));
+        syncRatingBubbleColors(botId);
         scrollChatBoxToBottom(getChatBoxByBotId(botId));
     }
 

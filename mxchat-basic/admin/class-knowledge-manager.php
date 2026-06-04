@@ -4201,7 +4201,18 @@ private function mxchat_generate_embedding($text, $bot_id = 'default') {
     //  Get bot-specific options
     $bot_options = $this->get_bot_options($bot_id);
     $options = !empty($bot_options) ? $bot_options : get_option('mxchat_options');
-    
+
+    // Opt-in: when the custom provider is selected for embeddings, index through
+    // the same custom endpoint the query path uses so stored vectors and query
+    // vectors share a model. Returns the vector array on success, or an error
+    // string on failure (this function's existing failure contract).
+    if (isset($options['custom_provider_for_embeddings']) && $options['custom_provider_for_embeddings'] === 'on') {
+        if (!class_exists('MxChat_Utils')) {
+            require_once dirname(__FILE__) . '/../includes/class-mxchat-utils.php';
+        }
+        return MxChat_Utils::generate_embedding_custom($text, $options);
+    }
+
     $selected_model = $options['embedding_model'] ?? 'text-embedding-ada-002';
     //error_log('[MXCHAT-EMBED] Selected embedding model for bot ' . $bot_id . ': ' . $selected_model);
 

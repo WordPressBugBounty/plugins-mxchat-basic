@@ -5,7 +5,7 @@ Tags: ai chatbot, chatgpt, woocommerce, customer support, content generation
 Requires at least: 5.0
 Tested up to: 7.0
 Requires PHP: 7.2
-Stable tag: 3.2.7
+Stable tag: 3.2.8
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -43,15 +43,11 @@ Extend the free plugin with these optional premium features:
 
 👉 [Visit our website to view all add-ons](https://mxchat.ai)
 
-## 🔥 What's New in Version 3.2.6
+## 🔥 What's New in Version 3.2.8
 
-- **NEW: Custom Provider (OpenAI-compatible)** — Point MxChat at any OpenAI-compatible endpoint: Ollama, LM Studio, vLLM, llama.cpp, or Azure OpenAI. Configure Base URL, optional API Key, Model Name, Auth Scheme (Bearer or `api-key` for Azure), and API Version, then one-click **Test Connection**. Opt-in checkboxes route embeddings and image generation through the same endpoint, with a dedicated **Custom Embedding Model** field so a single configuration can power a fully local stack — even the image-search query refiner stays on your endpoint.
-- **NEW: ACF PDF auto-indexing** — Any ACF field pointing at a PDF in your media library now has its full text auto-extracted into the knowledge base when the post is indexed — including PDFs nested in repeater, group, and flexible-content fields. Opt-in per import batch and per auto-sync save (default off), reports how many PDFs were extracted per post, and safely skips files over 25 MB. Extracted text is cached so re-syncing doesn't re-parse unchanged PDFs.
-- **NEW: Latest-Generation Models** — Claude Opus 4.7, GPT-5.5, and GPT Image 2 are now selectable from the Select AI Model modal, each tagged "Latest Flagship" at the top of its provider group.
-- **NEW: Image Quality Control for GPT Image** — New **Image Quality** dropdown (Auto / Low / Medium / High) in the Content Generator routes through OpenAI's `/v1/images/generations` `quality` parameter, auto-disabling on non-GPT-Image models.
-- **NEW: DELETE Transcripts Endpoint** — `DELETE /wp-json/mxchat/v1/transcripts` bulk-deletes chat sessions by session_id with optional cascade to translations and URL-click tracking. Bearer-token auth, capped at 1000 session_ids per call — ideal for daily privacy hygiene, GDPR right-to-erasure flows, and post-export cleanup.
-- **NEW: `mxchat_embedding_chunk_metadata` Filter** — Developers can enrich per-chunk metadata stored alongside every embedding (Pinecone + WordPress DB). Chunks now also expose alias keys (`source`, `part_index`, `part_total`) for cross-tool interoperability.
-- **FIXED: Page-Cache "Access Denied" Race** — Eliminates the intermittent "Access denied" error visitors saw on the first chat message when the site is served by WP Rocket, LiteSpeed, FlyingPress, W3 Total Cache, or Cloudflare APO. MxChat now also auto-tells those five cache plugins to never cache chat AJAX via their own filter APIs, and a new **Page Cache Compatibility** card under Settings → Optimization & Diagnostics surfaces per-plugin status with copy buttons for any cache layer outside the auto-handled set.
+- **NEW: Total Chatbot Message Limit** — Set a single message cap for the whole chatbot across all users and roles per timeframe (hourly / daily / weekly / monthly), independent of the per-role limits — when both are configured, whichever is hit first stops the conversation. A live usage readout shows how much of the cap is used right now ("10 of 200 used · 190 left · resets in ~6 hours") with a one-click **Reset counter**. Both the global and per-role limits now also accept **Custom** values — any positive integer, not just the presets. Defaults to Unlimited, so existing installs are unchanged.
+- **IMPROVED: Custom Provider & Azure OpenAI embeddings** — "Use custom provider for embeddings" now works end-to-end: both knowledge-base indexing and live queries use your endpoint's embedding model, so a fully local or Azure OpenAI stack retrieves correctly. Includes a new **Azure OpenAI quick-start** callout with the exact Base URL, API Key, Auth Scheme, and API Version. (If you already had custom embeddings enabled, re-index your knowledge base so the stored vectors are rebuilt with your model.)
+- **FIXED: Feedback "Send" button visibility** — The helpful / not-helpful feedback **Send** button no longer renders as an invisible white-on-white block. It now fills with your chatbot's font color with a clearly legible label, and adapts to custom colors set via either the built-in color pickers or the MxChat Theme AI customizer.
 
 ## Core Features That Set MxChat Apart
 
@@ -75,13 +71,13 @@ Access the world's most advanced AI models based on your specific needs:
 
 **OpenRouter**: 100+ models from multiple providers with a single API key – including OpenAI, Anthropic, Google, Meta, Mistral, and more!
 **OpenAI**:
-GPT-5.2, GPT-5.1 Chat Latest, GPT-5.1, GPT-5, GPT-5-mini, GPT-5-nano
+GPT-5.5, GPT-5.4, GPT-5.4 Mini, GPT-5.4 Nano, GPT-5.3 Chat, GPT-5.2, GPT-5.1 Chat Latest, GPT-5.1, GPT-5, GPT-5 Mini, GPT-5 Nano
 **Anthropic Claude**:
-Claude Opus 4.6, Claude Sonnet 4.6, Claude Opus 4.5, Claude Sonnet 4.5, Claude Opus 4.1, Claude Haiku 4.5, Claude 4 Sonnet, Claude 4 Opus
+Claude Opus 4.8, Claude Opus 4.7, Claude Opus 4.6, Claude Sonnet 4.6, Claude Opus 4.5, Claude Sonnet 4.5, Claude Opus 4.1, Claude Haiku 4.5, Claude 4 Opus, Claude 4 Sonnet
 **X.AI**:  
-Grok-4, Grok-3, Grok-3 Fast, Grok-3 Mini, Grok-3 Mini Fast, Grok-2, **Grok 4.1 Fast (Reasoning)**, **Grok 4.1 Fast (Non-Reasoning)**
+**Grok 4.1 Fast (Reasoning)**, **Grok 4.1 Fast (Non-Reasoning)**, Grok 4, Grok-3, Grok-3 Fast, Grok-3 Mini, Grok-3 Mini Fast
 **Google Gemini**:
-Gemini 3 Pro Preview, Gemini 3 Flash Preview, Gemini 2.5 Pro, Gemini 2.5 Flash, Gemini 2.5 Flash-Lite, Gemini 2.0 Flash, Gemini 2.0 Flash-Lite, Gemini 1.5 Pro, Gemini 1.5 Flash
+Gemini 3.5 Flash, Gemini 3.1 Pro, Gemini 3 Flash, Gemini 3.1 Flash-Lite, Gemini 2.5 Pro, Gemini 2.5 Flash, Gemini 2.5 Flash-Lite
 **DeepSeek**:  
 DeepSeek V3
 
@@ -230,7 +226,7 @@ Please ensure compliance with applicable terms and data privacy laws.
 
 = What AI models does MxChat support? =
 
-MxChat supports 100+ AI models including OpenAI GPT-5.2, GPT-5.1, GPT-5, GPT-5 Mini, Anthropic Claude Opus 4.6, Claude Sonnet 4.6, Claude Opus 4.5, Claude Sonnet 4.5, Claude Haiku 4.5, Google Gemini 2.0 Flash, Gemini 1.5 Pro, xAI Grok 4, Grok 3, DeepSeek Chat, and many more. With OpenRouter integration, you get access to models from OpenAI, Anthropic, Google, Meta, Mistral, and other providers with a single API key.
+MxChat supports 100+ AI models including OpenAI GPT-5.5, GPT-5.1 Chat Latest, GPT-5, Anthropic Claude Opus 4.8, Claude Sonnet 4.6, Claude Haiku 4.5, Google Gemini 3.5 Flash, Gemini 3.1 Pro, xAI Grok 4, Grok 3, DeepSeek V3, and many more. With OpenRouter integration, you get access to models from OpenAI, Anthropic, Google, Meta, Mistral, and other providers with a single API key.
 
 = How do I get API keys for the AI chatbot? =
 
@@ -332,6 +328,11 @@ Yes. MxChat is available for free on the WordPress plugin repository with full A
 *(Note: Screenshots will be added in future updates)*
 
 == Changelog ==
+
+= 3.2.8 - June 4, 2026 =
+* New: Total chatbot message limit — set a single message cap across all users and roles per timeframe (hourly/daily/weekly/monthly), independent of the per-role limits, with a live usage readout ("10 of 200 used · 190 left · resets in ~6 hours") and a one-click Reset to zero the count mid-window. Both the global and per-role limits now also accept Custom values (any positive integer, not just the 1–100 presets). Defaults to Unlimited, so existing installs are unchanged.
+* Improved: Custom Provider & Azure OpenAI — "use custom provider for embeddings" now works end-to-end (both knowledge-base indexing and live queries use your endpoint's embedding model), plus a new Azure OpenAI quick-start callout with the exact Base URL, API Key, Auth Scheme, and API Version. NOTE: if you already had custom embeddings enabled, re-index your knowledge base (Knowledge → Process Selected) so vectors are rebuilt with your model.
+* Fixed: The helpful/not-helpful feedback "Send" button no longer renders as an invisible white-on-white block — it fills with your chatbot's font color and adapts to colors set via the built-in pickers or the MxChat Theme AI customizer.
 
 = 3.2.7 - May 29, 2026 =
 * New: Guided onboarding for new users. First-time setup is now a step-by-step wizard — pick your AI model and add your key inline, set how the chatbot should behave, choose an embedding model, optionally add a knowledge base, then finish on a “What’s next” screen that links straight to the in-dashboard test chat, your display settings, and copy-paste embed shortcodes. Reopen it any time from Settings → Tutorials.
@@ -1009,8 +1010,8 @@ Yes. MxChat is available for free on the WordPress plugin repository with full A
 
 == Upgrade Notice ==
 
-= 3.2.7 =
-Adds a guided onboarding wizard for new users plus the latest AI models — Claude Opus 4.8 and Google’s Gemini 3.x lineup — with automatic recovery for models providers have retired (Gemini 3 Pro, Grok 2) or changed (the Claude Opus 4.7/4.8 temperature deprecation), so no site is left on a broken model. Also makes the first chat message reliable behind full-page caches (WP Rocket, LiteSpeed, Cloudflare APO and similar), auto-retries transient provider errors, and makes the chat launcher fully keyboard-accessible.
+= 3.2.8 - June 4, 2026 =
+Rate limits gain a whole-chatbot total message cap (single ceiling across all users and roles, default Unlimited so existing installs are unchanged) with a live "X of Y used" usage readout, a one-click Reset, and a new "Custom…" option for setting any value beyond the 1–100 presets on both the global and per-role limits. Also fixes custom-provider embeddings end-to-end so indexing and queries use the same model (re-index your knowledge base if you had this on), adds an Azure OpenAI quick-start guide, and fixes the feedback "Send" button rendering as an invisible white-on-white block.
 
 == License & Warranty ==
 

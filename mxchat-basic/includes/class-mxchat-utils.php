@@ -489,9 +489,18 @@ private static function generate_embedding($text, $api_key, $bot_id = 'default')
         $bot_options = apply_filters('mxchat_get_bot_options', array(), $bot_id);
         $options = !empty($bot_options) ? $bot_options : get_option('mxchat_options');
     }
-    
+
+    // Opt-in: when the custom provider is selected for embeddings, route the KB
+    // INDEX side through the same custom endpoint the query side uses, so stored
+    // vectors and query vectors come from the same model. Default-off behavior
+    // below is untouched.
+    if (isset($options['custom_provider_for_embeddings']) && $options['custom_provider_for_embeddings'] === 'on') {
+        $custom = self::generate_embedding_custom($text, $options);
+        return is_array($custom) ? $custom : null;
+    }
+
     $selected_model = $options['embedding_model'] ?? 'text-embedding-ada-002';
-    
+
     // Determine endpoint and API key based on model
     if (strpos($selected_model, 'voyage') === 0) {
         $endpoint = 'https://api.voyageai.com/v1/embeddings';
@@ -581,6 +590,79 @@ private static function generate_embedding($text, $api_key, $bot_id = 'default')
             return null;
         }
     }
+}
+
+/**
+ * Generate an embedding via a Custom (OpenAI-compatible) provider's /embeddings route.
+ * Shared by every embedding entry point so the KNOWLEDGE-BASE INDEX side and the
+ * QUERY side route through the same model when the opt-in
+ * 'custom_provider_for_embeddings' setting is on. Mirrors the query-path logic in
+ * MxChat_Integrator::mxchat_generate_embedding_custom() but takes an explicit
+ * $options array so it is callable statically from utils + knowledge-manager.
+ *
+ * Returns a numeric array (the embedding vector) on success, or a human-readable
+ * error string on failure (so callers expecting a string error, like the
+ * knowledge-manager, can surface it directly; callers expecting array|null wrap it).
+ *
+ * @param string $text    Text to embed.
+ * @param array  $options The resolved mxchat options (must contain the custom_provider_* keys).
+ * @return array|string   Embedding vector on success; error string on failure.
+ */
+public static function generate_embedding_custom($text, $options) {
+    if (empty($text)) {
+        return 'No text provided for embedding generation';
+    }
+
+    $base_url = isset($options['custom_provider_base_url']) ? rtrim(trim((string) $options['custom_provider_base_url']), '/') : '';
+    if (empty($base_url)) {
+        return 'Custom provider Base URL is not configured.';
+    }
+
+    $api_key     = isset($options['custom_provider_api_key']) ? trim((string) $options['custom_provider_api_key']) : '';
+    $auth_scheme = isset($options['custom_provider_auth_scheme']) ? $options['custom_provider_auth_scheme'] : 'bearer';
+    $api_version = isset($options['custom_provider_api_version']) ? trim((string) $options['custom_provider_api_version']) : '';
+
+    // Embedding model: prefer the dedicated custom_provider_embedding_model, fall back to the chat model.
+    $model = (isset($options['custom_provider_embedding_model']) && trim((string) $options['custom_provider_embedding_model']) !== '')
+        ? trim((string) $options['custom_provider_embedding_model'])
+        : ((isset($options['custom_provider_model']) && trim((string) $options['custom_provider_model']) !== '') ? trim((string) $options['custom_provider_model']) : 'default');
+
+    $embed_url = $base_url . '/embeddings';
+    if (!empty($api_version)) {
+        $embed_url .= (strpos($embed_url, '?') === false ? '?' : '&') . 'api-version=' . rawurlencode($api_version);
+    }
+
+    $headers = ['Content-Type' => 'application/json'];
+    if (!empty($api_key)) {
+        if ($auth_scheme === 'api-key') {
+            $headers['api-key'] = $api_key;
+        } else {
+            $headers['Authorization'] = 'Bearer ' . $api_key;
+        }
+    }
+
+    $response = wp_remote_post($embed_url, [
+        'headers' => $headers,
+        'body'    => wp_json_encode(['input' => $text, 'model' => $model]),
+        'timeout' => 60,
+    ]);
+    if (is_wp_error($response)) {
+        return 'Connection error when generating embeddings (custom provider): ' . $response->get_error_message();
+    }
+
+    $status = wp_remote_retrieve_response_code($response);
+    $body   = json_decode(wp_remote_retrieve_body($response), true);
+    if ($status !== 200) {
+        $msg = isset($body['error']['message']) ? $body['error']['message'] : 'HTTP ' . $status;
+        return 'Custom embedding endpoint error: ' . $msg;
+    }
+    if (isset($body['data'][0]['embedding']) && is_array($body['data'][0]['embedding'])) {
+        // Stamp the custom model identity so the active-embedding-model mismatch
+        // warning reflects the real (custom) model rather than the built-in setting.
+        self::stamp_active_embedding_model('custom:' . $model);
+        return $body['data'][0]['embedding'];
+    }
+    return 'Invalid embedding response from custom provider.';
 }
 
 /**

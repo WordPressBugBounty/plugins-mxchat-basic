@@ -1930,8 +1930,18 @@ pre {
 }
 
 .mxchat-rating-submit {
-    background: currentColor;
-    color: var(--mxchat-bot-message-bg, #ffffff);
+    /* Filled "primary" pill: fill = the bot font color, label = the bubble bg.
+       syncRatingBubbleColors() in chat-script.js paints the real bot colors
+       straight onto this button (inline) from the bubble's COMPUTED style, so
+       it adapts to both the inline color pickers AND the mxchat-theme AI
+       customizer. These var()/literal values are the no-JS safety net — the
+       literal fallbacks (#212121 fill / #ffffff label) stay legible on their
+       own (no white-on-white). Longhand background-color (not the `background`
+       shorthand) because Chromium resolves inherited custom properties
+       unreliably inside the shorthand. Do NOT use currentColor here — setting
+       `color` would re-poison the background to the same value. */
+    background-color: var(--mxchat-bot-fg, #212121);
+    color: var(--mxchat-bot-bg, #ffffff);
 }
 
 .mxchat-rating-submit:hover {

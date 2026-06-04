@@ -10673,7 +10673,55 @@ public function check_rate_limit() {
     
     // Use bot-specific rate limits if available, otherwise fall back to default
     $rate_limits_source = isset($current_options['rate_limits']) ? $current_options['rate_limits'] : get_option('mxchat_options', [])['rate_limits'] ?? [];
-    
+
+    // -------------------------------------------------------------------
+    // Whole-chatbot global cap (independent of role). Evaluated FIRST so
+    // it acts as a hard ceiling across all users + all roles. Default is
+    // 'unlimited' so existing installs are unchanged. Counter key drops
+    // both <role> and <user_id> segments — single pool per bot.
+    // -------------------------------------------------------------------
+    $global_cfg = isset($current_options['rate_limits_global']) && is_array($current_options['rate_limits_global'])
+        ? $current_options['rate_limits_global']
+        : (isset(get_option('mxchat_options', [])['rate_limits_global']) ? get_option('mxchat_options', [])['rate_limits_global'] : []);
+    $global_limit_raw = isset($global_cfg['limit']) ? (string) $global_cfg['limit'] : 'unlimited';
+    $global_timeframe = isset($global_cfg['timeframe']) ? (string) $global_cfg['timeframe'] : 'daily';
+    if ($global_limit_raw !== '' && $global_limit_raw !== 'unlimited' && (int) $global_limit_raw >= 1) {
+        $bot_id_for_global = isset($_POST['bot_id']) ? sanitize_key($_POST['bot_id']) : 'default';
+        $safe_bot_global   = preg_replace('/[^a-zA-Z0-9_]/', '_', $bot_id_for_global);
+        $global_option     = 'mxchat_chat_limit_' . $safe_bot_global . '_global';
+        $global_data       = get_option($global_option, ['count' => 0, 'timestamp' => time()]);
+        if ((int) $global_data['count'] === 0) {
+            $global_data['timestamp'] = time();
+            update_option($global_option, $global_data);
+        }
+        $now = time();
+        $ts  = (int) $global_data['timestamp'];
+        $reset = false;
+        switch ($global_timeframe) {
+            case 'hourly':  $reset = ($now - $ts) >= 3600;    break;
+            case 'daily':   $reset = ($now - $ts) >= 86400;   break;
+            case 'weekly':  $reset = ($now - $ts) >= 604800;  break;
+            case 'monthly': $reset = ($now - $ts) >= 2592000; break;
+        }
+        if ($reset) {
+            $global_data = ['count' => 0, 'timestamp' => $now];
+            update_option($global_option, $global_data);
+        }
+        if ((int) $global_data['count'] >= (int) $global_limit_raw) {
+            $global_msg = !empty($global_cfg['message'])
+                ? $global_cfg['message']
+                : __('This chatbot has reached its message limit. Please try again later.', 'mxchat');
+            return [
+                'error'   => true,
+                'message' => $this->process_rate_limit_message_html($global_msg),
+            ];
+        }
+        // Reserve the slot for this request. Per-role check below also increments
+        // its own counter — that is intentional, both ceilings apply independently.
+        $global_data['count']++;
+        update_option($global_option, $global_data);
+    }
+
     // Determine user role or if logged out
     if (is_user_logged_in()) {
         $user = wp_get_current_user();

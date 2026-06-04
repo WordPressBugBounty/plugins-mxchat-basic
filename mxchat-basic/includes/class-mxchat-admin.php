@@ -7023,10 +7023,26 @@ public function custom_provider_callback() {
         .mxchat-cp .mxchat-cp-row > .description { display: block; margin: 6px 0 0; color: #646970; font-size: 12px; line-height: 1.5; max-width: 480px; }
         .mxchat-cp .mxchat-cp-test { margin-top: 4px; padding-top: 14px; border-top: 1px solid #e5e7eb; }
         .mxchat-cp .mxchat-cp-test .mxchat-cp-test-status { display: inline-block; margin-left: 10px; vertical-align: middle; font-size: 13px; }
+        .mxchat-cp .mxchat-cp-azure { margin: 0 0 18px; padding: 12px 14px; background: #f6f7ff; border: 1px solid #dfe1f5; border-left: 3px solid #7873f5; border-radius: 6px; max-width: 480px; }
+        .mxchat-cp .mxchat-cp-azure > .mxchat-cp-azure-title { display: block; font-weight: 600; color: #1d2327; font-size: 12px; text-transform: uppercase; letter-spacing: 0.4px; margin: 0 0 8px; }
+        .mxchat-cp .mxchat-cp-azure ol { margin: 0; padding: 0 0 0 18px; color: #50575e; font-size: 12px; line-height: 1.7; }
+        .mxchat-cp .mxchat-cp-azure code { background: #eceefb; padding: 1px 5px; border-radius: 3px; font-size: 11px; }
     </style>';
 
     echo '<div class="api-key-wrapper mxchat-cp">';
     echo '<p class="mxchat-cp-intro">' . esc_html__('Point MxChat at any OpenAI-compatible /v1/chat/completions endpoint: Ollama, LM Studio, vLLM, llama.cpp, LocalAI, Azure OpenAI, etc. Then select "Custom (OpenAI-compatible)" in the model picker.', 'mxchat') . '</p>';
+
+    // Azure OpenAI quick start — consolidates the 4-field Azure recipe in one scannable callout
+    // so admins can configure Azure without piecing it together from each field's hint.
+    echo '<div class="mxchat-cp-azure">';
+    echo '<span class="mxchat-cp-azure-title">' . esc_html__('Azure OpenAI quick start', 'mxchat') . '</span>';
+    echo '<ol>';
+    echo '<li>' . wp_kses(__('<strong>Base URL</strong> → <code>https://&lt;resource&gt;.openai.azure.com/openai/deployments/&lt;deployment&gt;</code>', 'mxchat'), array('strong' => array(), 'code' => array())) . '</li>';
+    echo '<li>' . wp_kses(__('<strong>API Key</strong> → your Azure OpenAI key (required)', 'mxchat'), array('strong' => array(), 'code' => array())) . '</li>';
+    echo '<li>' . wp_kses(__('<strong>Auth Scheme</strong> → <code>api-key header (Azure OpenAI)</code>', 'mxchat'), array('strong' => array(), 'code' => array())) . '</li>';
+    echo '<li>' . wp_kses(__('<strong>API Version</strong> → required for Azure, e.g. <code>2024-08-01-preview</code>', 'mxchat'), array('strong' => array(), 'code' => array())) . '</li>';
+    echo '</ol>';
+    echo '</div>';
 
     echo '<div class="mxchat-cp-row">';
     echo '<label for="custom_provider_base_url">' . esc_html__('Base URL', 'mxchat') . '</label>';
@@ -7058,7 +7074,7 @@ public function custom_provider_callback() {
     echo '<div class="mxchat-cp-row">';
     echo '<label for="custom_provider_api_version">' . esc_html__('API Version (Azure only)', 'mxchat') . '</label>';
     echo '<input type="text" id="custom_provider_api_version" name="custom_provider_api_version" value="' . $api_version . '" class="regular-text mxchat-autosave-field" placeholder="2024-08-01-preview" autocomplete="off" data-lpignore="true" data-nonce="' . $nonce . '" />';
-    echo '<p class="description">' . esc_html__('Appended as ?api-version=... on the request URL. Leave empty for non-Azure providers.', 'mxchat') . '</p>';
+    echo '<p class="description">' . esc_html__('Appended as ?api-version=... on the request URL. Required for Azure OpenAI; leave empty for non-Azure providers.', 'mxchat') . '</p>';
     echo '</div>';
 
     // Extended-use checkboxes — opt-in routing of other dispatcher paths through the custom provider.
@@ -9231,11 +9247,20 @@ if (isset($input['rate_limits']) && is_array($input['rate_limits'])) {
         // Sanitize limit
         if (isset($settings['limit'])) {
             $limit = sanitize_text_field($settings['limit']);
-            if (in_array($limit, $allowed_limits, true)) {
+            // Accept presets, 'unlimited', the '__custom__' sentinel, OR any positive
+            // integer (custom value) — mirrors the global branch (plan-2c02ea). Without
+            // the custom path the per-role custom input was dropped and reset to the role
+            // default on every save (plan-7e23e7).
+            if (in_array($limit, $allowed_limits, true) || $limit === '__custom__' || (ctype_digit($limit) && (int) $limit >= 1)) {
                 $new_input['rate_limits'][$role_id]['limit'] = $limit;
             } else {
                 $new_input['rate_limits'][$role_id]['limit'] = ($role_id === 'logged_out') ? '10' : '100'; // Default
             }
+        }
+
+        // Preserve the per-role custom value (mirrors the global branch's limit_custom).
+        if (isset($settings['limit_custom'])) {
+            $new_input['rate_limits'][$role_id]['limit_custom'] = preg_replace('/[^0-9]/', '', (string) $settings['limit_custom']);
         }
 
         // Sanitize timeframe
@@ -9253,6 +9278,44 @@ if (isset($input['rate_limits']) && is_array($input['rate_limits'])) {
             $new_input['rate_limits'][$role_id]['message'] = sanitize_textarea_field($settings['message']);
         }
     }
+}
+
+// Handle the whole-chatbot global rate limit (plan-mxchat-20260603-2c02ea).
+// Mirrors the per-role block above, adapted to the single global shape. Without
+// this branch the whitelist-rebuild dropped rate_limits_global entirely on every
+// save, so the global cap silently fell back to its 'unlimited' default.
+// MUST accept arbitrary positive integers so the custom-value path (d55f65) is not regressed.
+if (isset($input['rate_limits_global']) && is_array($input['rate_limits_global'])) {
+    $g = $input['rate_limits_global'];
+    $allowed_limits     = array('1', '3', '5', '10', '15', '20', '50', '100', 'unlimited');
+    $allowed_timeframes = array('hourly', 'daily', 'weekly', 'monthly');
+    $global_out = array();
+
+    if (isset($g['limit'])) {
+        $limit = sanitize_text_field($g['limit']);
+        // Accept presets, 'unlimited', the '__custom__' sentinel (resolved by the
+        // autosave handler / renderer), OR any positive integer (custom value).
+        if (in_array($limit, $allowed_limits, true) || $limit === '__custom__' || (ctype_digit($limit) && (int) $limit >= 1)) {
+            $global_out['limit'] = $limit;
+        } else {
+            $global_out['limit'] = 'unlimited';
+        }
+    }
+
+    if (isset($g['limit_custom'])) {
+        $global_out['limit_custom'] = preg_replace('/[^0-9]/', '', (string) $g['limit_custom']);
+    }
+
+    if (isset($g['timeframe'])) {
+        $timeframe = sanitize_text_field($g['timeframe']);
+        $global_out['timeframe'] = in_array($timeframe, $allowed_timeframes, true) ? $timeframe : 'daily';
+    }
+
+    if (isset($g['message'])) {
+        $global_out['message'] = sanitize_textarea_field($g['message']);
+    }
+
+    $new_input['rate_limits_global'] = $global_out;
 }
 
     if (isset($input['pre_chat_message'])) {
