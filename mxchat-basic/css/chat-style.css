@@ -919,6 +919,13 @@
     opacity: 0.8;
 }
 
+/* Stop state while a response is streaming: the send button becomes a Stop
+   control in place — same chrome and position, swapped glyph. Themeable hook;
+   the glyph's size/color are mirrored from the send icon at runtime. */
+.mxchat-chatbot .chat-container .input-container .send-button.mxchat-stop-mode {
+    cursor: pointer;
+}
+
 .mxchat-chatbot .spinner {
     animation: rotate 2s linear infinite;
     width: 20px;

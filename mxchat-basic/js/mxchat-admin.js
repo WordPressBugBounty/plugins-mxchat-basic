@@ -1029,7 +1029,8 @@ function setupMxChatModelSelector() {
                 { value: 'gpt-5.1-chat-latest', label: 'GPT-5.1 Chat Latest', description: 'Recommended for most use cases' },
             ],
             claude: [
-                { value: 'claude-opus-4-8', label: 'Claude Opus 4.8', description: 'Latest Flagship — newest Anthropic flagship model' },
+                { value: 'claude-fable-5', label: 'Claude Fable 5', description: 'Latest Flagship — newest and most capable Anthropic model' },
+                { value: 'claude-opus-4-8', label: 'Claude Opus 4.8', description: 'Previous flagship — most capable Opus-tier model' },
                 { value: 'claude-opus-4-7', label: 'Claude Opus 4.7', description: 'Previous Anthropic flagship model' },
             ],
             xai: [

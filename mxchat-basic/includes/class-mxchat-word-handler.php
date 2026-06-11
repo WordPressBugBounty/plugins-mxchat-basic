@@ -16,8 +16,13 @@ class MXChat_Word_Handler {
      * Handle Word document upload and processing
      */
     public function mxchat_handle_word_upload() {
-        check_ajax_referer('mxchat_chat_nonce', 'nonce');
-        
+        // Match the PDF handler's nonce verification: the widget sends the chat-send
+        // nonce (action 'mxchat_chat_send'), which the old check_ajax_referer('mxchat_chat_nonce')
+        // rejected with -1. mxchat_verify_chat_send_nonce accepts both chat-send and chat nonces.
+        if (!isset($_POST['nonce']) || !MxChat_Integrator::mxchat_verify_chat_send_nonce(wp_unslash((string) $_POST['nonce']))) {
+            wp_send_json_error(array('message' => esc_html__('Invalid nonce.', 'mxchat')), 403);
+        }
+
         if (!isset($_FILES['word_file']) || !isset($_POST['session_id'])) {
             wp_send_json_error(esc_html__('Missing required parameters.', 'mxchat'));
             return;

@@ -6299,6 +6299,14 @@ public function mxchat_page_init() {
     );
 
     add_settings_field(
+        'print_button_enabled',
+        esc_html__('Show Download Transcript Button', 'mxchat'),
+        array($this, 'mxchat_print_button_toggle_callback'),
+        'mxchat-chatbot',
+        'mxchat_chatbot_section'
+    );
+
+    add_settings_field(
         'popular_question_1',
         esc_html__('Quick Question 1', 'mxchat'),
         array($this, 'mxchat_popular_question_1_callback'),
@@ -8053,6 +8061,24 @@ public function mxchat_chat_persistence_toggle_callback() {
     echo '</label>';
 }
 
+public function mxchat_print_button_toggle_callback() {
+    // Load from mxchat_options array
+    $options = get_option('mxchat_options', []);
+
+    // Default ON — the option was previously unexposed and the button always showed.
+    $print_button_enabled = isset($options['print_button_enabled']) ? $options['print_button_enabled'] : 'on';
+    $checked = ($print_button_enabled === 'on') ? 'checked' : '';
+
+    // Output the toggle switch
+    echo '<label class="toggle-switch">';
+    echo sprintf(
+        '<input type="checkbox" id="print_button_enabled" name="print_button_enabled" value="on" %s />',
+        esc_attr($checked)
+    );
+    echo '<span class="slider"></span>';
+    echo '</label>';
+}
+
 public function mxchat_popular_question_1_callback() {
     // Load the full plugin options array
     $all_options = get_option('mxchat_options', []);
@@ -9423,6 +9449,12 @@ if (isset($input['openrouter_selected_model_name'])) {
         $new_input['chat_persistence_toggle'] = $input['chat_persistence_toggle'] === 'on' ? 'on' : 'off';
     }
 
+    // No else clause: an absent key stays absent, so the front-end default ('on') applies
+    // and the rebuild never strips a saved 'off' (autosave passes the full options array back through here).
+    if (isset($input['print_button_enabled'])) {
+        $new_input['print_button_enabled'] = $input['print_button_enabled'] === 'on' ? 'on' : 'off';
+    }
+
     if (isset($input['popular_question_1'])) {
         $new_input['popular_question_1'] = sanitize_text_field($input['popular_question_1']);
     }
@@ -9599,6 +9631,9 @@ if (isset($input['openrouter_selected_model_name'])) {
     if (isset($input['content_tool_use'])) {
         $new_input['content_tool_use'] = ($input['content_tool_use'] === 'on') ? 'on' : 'off';
     }
+    if (isset($input['content_image_count'])) {
+        $new_input['content_image_count'] = (string) max(1, min(5, (int) $input['content_image_count']));
+    }
 
     // SEO Optimize toggle fields
     foreach (array('seo_optimize_meta_desc', 'seo_optimize_seo_title', 'seo_optimize_slug', 'seo_optimize_readability', 'seo_optimize_internal_links', 'seo_optimize_img_alt', 'seo_optimize_featured_img') as $seo_key) {
@@ -9610,7 +9645,7 @@ if (isset($input['openrouter_selected_model_name'])) {
     // Preserve content generator settings when saving from main settings page
     // (where content fields are not in the form submission)
     $existing = get_option('mxchat_options', array());
-    foreach (array('content_model', 'content_image_model', 'content_image_quality', 'content_enable_images', 'content_use_placeholders', 'content_internal_linking', 'content_tool_use', 'seo_optimize_meta_desc', 'seo_optimize_seo_title', 'seo_optimize_slug', 'seo_optimize_readability', 'seo_optimize_internal_links', 'seo_optimize_img_alt', 'seo_optimize_featured_img') as $key) {
+    foreach (array('content_model', 'content_image_model', 'content_image_quality', 'content_image_count', 'content_enable_images', 'content_use_placeholders', 'content_internal_linking', 'content_tool_use', 'seo_optimize_meta_desc', 'seo_optimize_seo_title', 'seo_optimize_slug', 'seo_optimize_readability', 'seo_optimize_internal_links', 'seo_optimize_img_alt', 'seo_optimize_featured_img') as $key) {
         if (!isset($new_input[$key]) && isset($existing[$key])) {
             $new_input[$key] = $existing[$key];
         }

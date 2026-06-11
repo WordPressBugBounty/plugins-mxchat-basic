@@ -216,7 +216,10 @@ public function render_chatbot_shortcode($atts) {
     }
 
     // Add bot_id to the chatbot wrapper as a data attribute
-    echo '<div id="mxchat-chatbot-wrapper-' . esc_attr($bot_id) . '" class="mxchat-chatbot-wrapper" data-bot-id="' . esc_attr($bot_id) . '">';
+    // data-nosnippet: keep the chat widget's UI copy (greeting, title, quick-question
+    // prompts, privacy notice) out of Google search snippets. This wrapper renders in both
+    // floating and inline/shortcode modes, so it covers all in-panel copy in one place.
+    echo '<div id="mxchat-chatbot-wrapper-' . esc_attr($bot_id) . '" class="mxchat-chatbot-wrapper" data-nosnippet data-bot-id="' . esc_attr($bot_id) . '">';
   
             echo '  <div class="chatbot-top-bar" id="exit-chat-button-' . esc_attr($bot_id) . '"' . ($skip_inline_colors ? '' : ' style="background: ' . esc_attr($top_bar_bg_color) . ';"') . '>';
             echo '      <div class="chatbot-title-container">';
@@ -440,7 +443,9 @@ public function render_chatbot_shortcode($atts) {
     
                 if (!empty($pre_chat_message)) {
                     // Rendered hidden by default — JS checkPreChatDismissal() handles show/hide via localStorage
-                    echo '<div id="pre-chat-message-' . esc_attr($bot_id) . '" class="pre-chat-message" style="display:none;">';
+                    // data-nosnippet: the pre-chat teaser bubble is a sibling outside
+                    // .mxchat-chatbot-wrapper, so it needs its own marker to stay out of snippets.
+                    echo '<div id="pre-chat-message-' . esc_attr($bot_id) . '" class="pre-chat-message" data-nosnippet style="display:none;">';
                     echo nl2br(esc_html($pre_chat_message));
                     echo '<button class="close-pre-chat-message" aria-label="' . esc_attr__('Close', 'mxchat') . '">&times;</button>';
                     echo '</div>';

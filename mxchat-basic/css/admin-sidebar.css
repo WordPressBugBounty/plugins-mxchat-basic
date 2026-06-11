@@ -93,6 +93,47 @@
 }
 
 /* ==========================================================================
+   RTL locales (Arabic, Hebrew, Persian, Urdu, …)
+   On an RTL locale WordPress moves its admin menu to the RIGHT and sets the
+   `rtl` class + `direction: rtl` on <body>. The base wrapper is pinned
+   `left: 160px; right: 0` for a LEFT-side admin menu, so under RTL its right
+   edge slides under the (now right-side) WP menu and a dead 160px gap opens on
+   the left — the nav ends up hidden/overlapped. Mirror the fixed offsets and
+   the negative content margin. The internal sidebar/content flex row reverses
+   automatically under the inherited `direction: rtl`, so the sidebar lands on
+   the wrapper's right edge (just inside the WP menu) as expected for RTL — no
+   per-child repositioning needed.
+   ========================================================================== */
+body.rtl .mxch-admin-wrapper {
+    left: 0;
+    right: 160px; /* WordPress admin menu width (now on the right) */
+    margin-left: 0;
+    margin-right: -20px;
+}
+
+/* Collapsed/folded admin menu (narrower) on RTL */
+body.rtl.folded .mxch-admin-wrapper {
+    left: 0;
+    right: 36px;
+}
+
+/* On mobile the WP admin menu collapses to the top bar, so the wrapper is
+   full-width in both directions — clear the RTL right offset too. */
+@media screen and (max-width: 782px) {
+    body.rtl .mxch-admin-wrapper {
+        left: 0;
+        right: 0;
+        margin-right: 0;
+    }
+}
+
+/* Active nav-item accent sits on the sidebar's inner edge; flip it for RTL. */
+body.rtl .mxch-nav-link.active {
+    border-right: none;
+    border-left: 3px solid var(--mxch-primary);
+}
+
+/* ==========================================================================
    Sidebar Navigation
    ========================================================================== */
 .mxch-sidebar {

@@ -15,6 +15,9 @@ class MxChat_Integrator {
     private $last_vectorstore_error = null;
     private $is_streaming = false; // ADDED: Track if current request is streaming
     private $streaming_headers_sent = false; // Track if streaming headers have been sent
+    private $pending_originating_page = null; // Originating page captured at session start, consumed on row insert
+    private $current_action_instruction = null; // Success-message instruction injected into the next system context
+    private $last_action_analysis = null; // Last action-match analysis for testing_data payloads
 
 /**
  * Setup streaming headers - call this right before actually streaming
@@ -329,10 +332,75 @@ public function __construct() {
 
 /**
  * Return a fresh nonce so cached pages can replace the stale one.
+ * With `with_settings`, also returns the current behavior-gate settings so
+ * the widget can correct stale inline-localized values (plan-32db95).
  */
 public function mxchat_refresh_nonce() {
     nocache_headers();
-    wp_send_json_success(array('nonce' => wp_create_nonce('mxchat_chat_nonce')));
+    $payload = array('nonce' => wp_create_nonce('mxchat_chat_nonce'));
+    if (!empty($_REQUEST['with_settings'])) {
+        $payload['settings'] = $this->get_dynamic_widget_settings(true);
+    }
+    wp_send_json_success($payload);
+}
+
+/**
+ * Behavior-gate settings the widget may re-fetch at runtime (plan-32db95).
+ *
+ * Every widget setting ships inline in page HTML via wp_localize_script, so
+ * full-page caches (host caches, WP Rocket, LiteSpeed, W3TC, FlyingPress,
+ * WP Super Cache, Cloudflare APO, the browser itself) keep serving a stale
+ * snapshot after an admin changes a setting. MxChat_Cache_Purge clears the
+ * caches PHP can reach; this payload covers the rest — the widget requests
+ * it on first open (via the nonce-refresh endpoints) and merges it over
+ * `mxchatChat`, the same distrust-cached-HTML pattern the 3.2.7 per-request
+ * nonce uses.
+ *
+ * Behavior gates + labels ONLY — colors stay inline because they're also
+ * server-inline-styled, and a runtime swap would visibly flash.
+ *
+ * Both wp_localize_script blocks merge this exact array, so the inline and
+ * refreshed payloads cannot drift.
+ *
+ * @param bool $fresh Re-read mxchat_options from the DB (endpoint paths)
+ *                    instead of trusting the instance copy.
+ * @return array
+ */
+public function get_dynamic_widget_settings($fresh = false) {
+    $options = $fresh ? get_option('mxchat_options', array()) : $this->options;
+    if (!is_array($options)) {
+        $options = array();
+    }
+    return array(
+        'model' => isset($options['model']) ? $options['model'] : 'gpt-5.1-chat-latest',
+        'enable_streaming_toggle' => isset($options['enable_streaming_toggle']) ? $options['enable_streaming_toggle'] : 'on',
+        'rate_limit_message' => $options['rate_limit_message'] ?? 'Rate limit exceeded. Please try again later.',
+        'chat_toolbar_toggle' => $options['chat_toolbar_toggle'] ?? 'off',
+        'print_button_enabled' => $options['print_button_enabled'] ?? 'on',
+        'print_button_label' => esc_html__('Download Transcript', 'mxchat'),
+        'stop_button_label' => esc_html__('Stop response', 'mxchat'),
+        'print_header_title' => esc_html(get_bloginfo('name')) . ' — ' . esc_html__('Chat transcript', 'mxchat'),
+        // Emit 'on'/'off' STRINGS, never booleans: wp_localize_script casts
+        // scalars to string, and (string) false === '' — which the widget's
+        // old gate read as enabled (plan-4bba64). The filter keeps its
+        // boolean contract; only the emitted value is stringified.
+        'satisfaction_rating_enabled' => apply_filters(
+            'mxchat_satisfaction_rating_enabled',
+            ($options['satisfaction_rating_enabled'] ?? 'off') === 'on'
+        ) ? 'on' : 'off',
+        'satisfaction_rating_idle_seconds' => max(5, min(600, intval($options['satisfaction_rating_idle_seconds'] ?? 60))),
+        'satisfaction_rating_copy' => array(
+            'question'    => !empty($options['satisfaction_rating_question'])    ? esc_html($options['satisfaction_rating_question'])    : esc_html__('Was this helpful?', 'mxchat'),
+            'helpful'     => esc_html__('Helpful', 'mxchat'),
+            'not_helpful' => esc_html__('Not helpful', 'mxchat'),
+            'dismiss'     => esc_html__('Dismiss', 'mxchat'),
+            'thanks'      => !empty($options['satisfaction_rating_thanks'])      ? esc_html($options['satisfaction_rating_thanks'])      : esc_html__('Thanks! Anything we should improve? (optional)', 'mxchat'),
+            'placeholder' => !empty($options['satisfaction_rating_placeholder']) ? esc_html($options['satisfaction_rating_placeholder']) : esc_html__('Tell us what could be better…', 'mxchat'),
+            'send'        => esc_html__('Send', 'mxchat'),
+            'skip'        => esc_html__('Skip', 'mxchat'),
+            'saved'       => !empty($options['satisfaction_rating_saved'])       ? esc_html($options['satisfaction_rating_saved'])       : esc_html__('Thanks for the feedback.', 'mxchat'),
+        ),
+    );
 }
 
 // In your core plugin's check_actions_for_addons method:
@@ -566,10 +634,32 @@ public function mxchat_issue_chat_send_nonce(WP_REST_Request $request) {
         set_transient($key, 1, 2);
     }
 
-    return new WP_REST_Response(array(
+    // The widget calls this endpoint without an X-WP-Nonce header, so WordPress does not
+    // honor the auth cookie and the request runs as uid=0 even for logged-in users. That
+    // makes wp_create_nonce() bind the nonce to uid=0, which then fails wp_verify_nonce()
+    // at admin-ajax (which runs as the real uid) -> logged-in users get a 403 on upload.
+    // Resolve the real user from the logged_in cookie so the nonce binds to the correct uid.
+    if ( ! is_user_logged_in() ) {
+        $maybe_uid = wp_validate_auth_cookie( '', 'logged_in' );
+        if ( $maybe_uid ) {
+            wp_set_current_user( $maybe_uid );
+        }
+    }
+
+    $payload = array(
         'nonce'      => wp_create_nonce('mxchat_chat_send'),
         'expires_in' => 86400, // WP nonces live 24h; widget caches for 12h conservatively.
-    ), 200);
+    );
+
+    // plan-32db95: the widget's first-open refresh asks for current behavior
+    // settings in the same round-trip, so stale inline-localized values on
+    // cached pages get corrected without a second request. All values in
+    // this payload already ship in public page HTML — nothing sensitive.
+    if ($request->get_param('with_settings')) {
+        $payload['settings'] = $this->get_dynamic_widget_settings(true);
+    }
+
+    return new WP_REST_Response($payload, 200);
 }
 
 /**
@@ -849,8 +939,9 @@ private function mxchat_save_chat_message($session_id, $role, $message, $origina
                 
                 //error_log("[DEBUG] Setting originating page from pending_originating_page: " . $this->pending_originating_page['url']);
                 
-                // Clear after using
-                unset($this->pending_originating_page);
+                // Clear after using (= null, not unset(): unset() undeclares the property
+                // and the next assignment recreates it dynamic, re-triggering the PHP 8.2 deprecation)
+                $this->pending_originating_page = null;
             }
             // Fallback to HTTP_REFERER if nothing else is available
             else if (isset($_SERVER['HTTP_REFERER'])) {
@@ -3217,12 +3308,14 @@ private function interpret_query_with_openai($user_query, $system_prompt, $api_k
 }
 
 /**
- * Anthropic deprecated temperature/top_p/top_k starting with Opus 4.7 —
- * add new reasoning-Opus model ids here. (We don't send top_p/top_k in any
- * Claude body, so the list only needs to gate temperature stripping.)
+ * Anthropic removed temperature/top_p/top_k starting with Opus 4.7 (the API
+ * returns 400 if sent) — add new flagship model ids here. (We don't send
+ * top_p/top_k in any Claude body, so the list only needs to gate temperature
+ * stripping. We never send a `thinking` param either, which is required for
+ * claude-fable-5: it rejects an explicit thinking "disabled" — omit only.)
  */
 private function mxchat_claude_omits_temperature($model) {
-    $no_temp = array('claude-opus-4-7', 'claude-opus-4-8');
+    $no_temp = array('claude-opus-4-7', 'claude-opus-4-8', 'claude-fable-5');
     return in_array($model, $no_temp, true);
 }
 
@@ -3260,10 +3353,14 @@ private function interpret_query_with_claude($user_query, $system_prompt, $api_k
     }
 
     $body = json_decode(wp_remote_retrieve_body($response), true);
-    if (!empty($body['content'][0]['text'])) {
-        return sanitize_text_field(trim($body['content'][0]['text']));
+    // claude-fable-5 prepends a thinking block to content — take the first
+    // TEXT block, not content[0].
+    foreach ((array) ($body['content'] ?? array()) as $block) {
+        if (isset($block['type'], $block['text']) && $block['type'] === 'text' && trim($block['text']) !== '') {
+            return sanitize_text_field(trim($block['text']));
+        }
     }
-    
+
     return sanitize_text_field($user_query);
 }
 
@@ -9377,12 +9474,15 @@ private function mxchat_generate_response_claude($selected_model, $claude_api_ke
         return "Sorry, there was an error processing the API response.";
     }
 
-    // Extract and validate response content
-    if (isset($response_body['content']) && 
-        is_array($response_body['content']) && 
-        !empty($response_body['content']) && 
-        isset($response_body['content'][0]['text'])) {
-        return trim($response_body['content'][0]['text']);
+    // Extract and validate response content. claude-fable-5 prepends a
+    // thinking block to content even with no thinking param — take the first
+    // TEXT block rather than content[0].
+    if (isset($response_body['content']) && is_array($response_body['content'])) {
+        foreach ($response_body['content'] as $block) {
+            if (isset($block['type'], $block['text']) && $block['type'] === 'text') {
+                return trim($block['text']);
+            }
+        }
     }
 
     // Log unexpected response format
@@ -10317,11 +10417,8 @@ public function mxchat_enqueue_scripts_styles() {
         // but the widget refetches before each subsequent send.
         'nonce' => wp_create_nonce('mxchat_chat_send'),
         'rest_url' => esc_url_raw(trailingslashit(rest_url('mxchat/v1'))),
-        'model' => isset($this->options['model']) ? $this->options['model'] : 'gpt-5.1-chat-latest',
-        'enable_streaming_toggle' => isset($this->options['enable_streaming_toggle']) ? $this->options['enable_streaming_toggle'] : 'on',
         'contextual_awareness_toggle' => isset($this->options['contextual_awareness_toggle']) ? $this->options['contextual_awareness_toggle'] : 'off',
         'link_target_toggle' => $this->options['link_target_toggle'] ?? 'off',
-        'rate_limit_message' => $this->options['rate_limit_message'] ?? 'Rate limit exceeded. Please try again later.',
         'complianz_toggle' => isset($this->options['complianz_toggle']) && $this->options['complianz_toggle'] === 'on',
         'user_message_bg_color' => $this->options['user_message_bg_color'] ?? '#fff',
         'user_message_font_color' => $this->options['user_message_font_color'] ?? '#212121',
@@ -10338,7 +10435,6 @@ public function mxchat_enqueue_scripts_styles() {
         'appendWidgetToBody' => $this->options['append_to_body'] ?? 'off',
         'live_agent_message_bg_color' => $this->options['live_agent_message_bg_color'] ?? '#ffffff',
         'live_agent_message_font_color' => $this->options['live_agent_message_font_color'] ?? '#333333',
-        'chat_toolbar_toggle' => $this->options['chat_toolbar_toggle'] ?? 'off',
         'mode_indicator_bg_color' => $this->options['mode_indicator_bg_color'] ?? '#767676',
         'mode_indicator_font_color' => $this->options['mode_indicator_font_color'] ?? '#ffffff',
         'toolbar_icon_color' => $this->options['toolbar_icon_color'] ?? '#212121',
@@ -10349,26 +10445,13 @@ public function mxchat_enqueue_scripts_styles() {
         'pinecone_enabled' => isset($prompts_options['mxchat_use_pinecone']) && $prompts_options['mxchat_use_pinecone'] === '1',
         'skip_inline_colors' => $skip_inline_colors,
         'bot_theme_assignments' => $theme_options['bot_theme_assignments'] ?? array(),
-        'print_button_enabled' => $this->options['print_button_enabled'] ?? 'on',
-        'print_button_label' => esc_html__('Download Transcript', 'mxchat'),
-        'print_header_title' => esc_html(get_bloginfo('name')) . ' — ' . esc_html__('Chat transcript', 'mxchat'),
-        'satisfaction_rating_enabled' => apply_filters(
-            'mxchat_satisfaction_rating_enabled',
-            ($this->options['satisfaction_rating_enabled'] ?? 'off') === 'on'
-        ),
-        'satisfaction_rating_idle_seconds' => max(5, min(600, intval($this->options['satisfaction_rating_idle_seconds'] ?? 60))),
-        'satisfaction_rating_copy' => array(
-            'question'    => !empty($this->options['satisfaction_rating_question'])    ? esc_html($this->options['satisfaction_rating_question'])    : esc_html__('Was this helpful?', 'mxchat'),
-            'helpful'     => esc_html__('Helpful', 'mxchat'),
-            'not_helpful' => esc_html__('Not helpful', 'mxchat'),
-            'dismiss'     => esc_html__('Dismiss', 'mxchat'),
-            'thanks'      => !empty($this->options['satisfaction_rating_thanks'])      ? esc_html($this->options['satisfaction_rating_thanks'])      : esc_html__('Thanks! Anything we should improve? (optional)', 'mxchat'),
-            'placeholder' => !empty($this->options['satisfaction_rating_placeholder']) ? esc_html($this->options['satisfaction_rating_placeholder']) : esc_html__('Tell us what could be better…', 'mxchat'),
-            'send'        => esc_html__('Send', 'mxchat'),
-            'skip'        => esc_html__('Skip', 'mxchat'),
-            'saved'       => !empty($this->options['satisfaction_rating_saved'])       ? esc_html($this->options['satisfaction_rating_saved'])       : esc_html__('Thanks for the feedback.', 'mxchat'),
-        ),
     );
+
+    // Behavior gates + labels (model, streaming, rate-limit copy, toolbar,
+    // print/transcript, satisfaction rating) come from the shared
+    // dynamic-settings method so this inline payload and the first-open
+    // refresh endpoint can never drift (plan-32db95).
+    $style_settings = array_merge($style_settings, $this->get_dynamic_widget_settings());
 
     // For normal/defer loading, use wp_localize_script
     // For delayed loading, we store settings in a transient to be output inline
@@ -10401,11 +10484,8 @@ public function mxchat_output_delayed_script_loader() {
         // before each send. This inline value is a one-shot fallback for the first interaction.
         'nonce' => wp_create_nonce('mxchat_chat_send'),
         'rest_url' => esc_url_raw(trailingslashit(rest_url('mxchat/v1'))),
-        'model' => isset($this->options['model']) ? $this->options['model'] : 'gpt-5.1-chat-latest',
-        'enable_streaming_toggle' => isset($this->options['enable_streaming_toggle']) ? $this->options['enable_streaming_toggle'] : 'on',
         'contextual_awareness_toggle' => isset($this->options['contextual_awareness_toggle']) ? $this->options['contextual_awareness_toggle'] : 'off',
         'link_target_toggle' => $this->options['link_target_toggle'] ?? 'off',
-        'rate_limit_message' => $this->options['rate_limit_message'] ?? 'Rate limit exceeded. Please try again later.',
         'complianz_toggle' => isset($this->options['complianz_toggle']) && $this->options['complianz_toggle'] === 'on',
         'user_message_bg_color' => $this->options['user_message_bg_color'] ?? '#fff',
         'user_message_font_color' => $this->options['user_message_font_color'] ?? '#212121',
@@ -10422,7 +10502,6 @@ public function mxchat_output_delayed_script_loader() {
         'appendWidgetToBody' => $this->options['append_to_body'] ?? 'off',
         'live_agent_message_bg_color' => $this->options['live_agent_message_bg_color'] ?? '#ffffff',
         'live_agent_message_font_color' => $this->options['live_agent_message_font_color'] ?? '#333333',
-        'chat_toolbar_toggle' => $this->options['chat_toolbar_toggle'] ?? 'off',
         'mode_indicator_bg_color' => $this->options['mode_indicator_bg_color'] ?? '#767676',
         'mode_indicator_font_color' => $this->options['mode_indicator_font_color'] ?? '#ffffff',
         'toolbar_icon_color' => $this->options['toolbar_icon_color'] ?? '#212121',
@@ -10433,26 +10512,13 @@ public function mxchat_output_delayed_script_loader() {
         'pinecone_enabled' => isset($prompts_options['mxchat_use_pinecone']) && $prompts_options['mxchat_use_pinecone'] === '1',
         'skip_inline_colors' => $skip_inline_colors,
         'bot_theme_assignments' => $theme_options['bot_theme_assignments'] ?? array(),
-        'print_button_enabled' => $this->options['print_button_enabled'] ?? 'on',
-        'print_button_label' => esc_html__('Download Transcript', 'mxchat'),
-        'print_header_title' => esc_html(get_bloginfo('name')) . ' — ' . esc_html__('Chat transcript', 'mxchat'),
-        'satisfaction_rating_enabled' => apply_filters(
-            'mxchat_satisfaction_rating_enabled',
-            ($this->options['satisfaction_rating_enabled'] ?? 'off') === 'on'
-        ),
-        'satisfaction_rating_idle_seconds' => max(5, min(600, intval($this->options['satisfaction_rating_idle_seconds'] ?? 60))),
-        'satisfaction_rating_copy' => array(
-            'question'    => !empty($this->options['satisfaction_rating_question'])    ? esc_html($this->options['satisfaction_rating_question'])    : esc_html__('Was this helpful?', 'mxchat'),
-            'helpful'     => esc_html__('Helpful', 'mxchat'),
-            'not_helpful' => esc_html__('Not helpful', 'mxchat'),
-            'dismiss'     => esc_html__('Dismiss', 'mxchat'),
-            'thanks'      => !empty($this->options['satisfaction_rating_thanks'])      ? esc_html($this->options['satisfaction_rating_thanks'])      : esc_html__('Thanks! Anything we should improve? (optional)', 'mxchat'),
-            'placeholder' => !empty($this->options['satisfaction_rating_placeholder']) ? esc_html($this->options['satisfaction_rating_placeholder']) : esc_html__('Tell us what could be better…', 'mxchat'),
-            'send'        => esc_html__('Send', 'mxchat'),
-            'skip'        => esc_html__('Skip', 'mxchat'),
-            'saved'       => !empty($this->options['satisfaction_rating_saved'])       ? esc_html($this->options['satisfaction_rating_saved'])       : esc_html__('Thanks for the feedback.', 'mxchat'),
-        ),
     );
+
+    // Behavior gates + labels (model, streaming, rate-limit copy, toolbar,
+    // print/transcript, satisfaction rating) come from the shared
+    // dynamic-settings method so this inline payload and the first-open
+    // refresh endpoint can never drift (plan-32db95).
+    $style_settings = array_merge($style_settings, $this->get_dynamic_widget_settings());
 
     // Determine delay time based on strategy
     $delay_ms = 0;

@@ -89,7 +89,8 @@ class MxChat_Model_Catalog {
                 'key_option'                  => 'claude_api_key',
                 'requires_key_to_load_models' => false,
                 'models' => array(
-                    'claude-opus-4-8'             => array('label' => 'Claude Opus 4.8',     'description' => __('Latest Flagship — newest Anthropic flagship model', 'mxchat')),
+                    'claude-fable-5'              => array('label' => 'Claude Fable 5',      'description' => __('Latest Flagship — newest and most capable Anthropic model', 'mxchat')),
+                    'claude-opus-4-8'             => array('label' => 'Claude Opus 4.8',     'description' => __('Previous flagship — most capable Opus-tier model', 'mxchat')),
                     'claude-opus-4-7'             => array('label' => 'Claude Opus 4.7',     'description' => __('Previous Anthropic flagship model', 'mxchat')),
                     'claude-opus-4-6'             => array('label' => 'Claude Opus 4.6',     'description' => __('Most capable Claude model - recommended', 'mxchat')),
                     'claude-sonnet-4-6'           => array('label' => 'Claude Sonnet 4.6',   'description' => __('Latest Sonnet - excellent balance of speed and capability', 'mxchat')),

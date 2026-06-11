@@ -5,7 +5,7 @@ Tags: ai chatbot, chatgpt, woocommerce, customer support, content generation
 Requires at least: 5.0
 Tested up to: 7.0
 Requires PHP: 7.2
-Stable tag: 3.2.8
+Stable tag: 3.2.9
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -43,11 +43,14 @@ Extend the free plugin with these optional premium features:
 
 👉 [Visit our website to view all add-ons](https://mxchat.ai)
 
-## 🔥 What's New in Version 3.2.8
+## 🔥 What's New in Version 3.2.9
 
-- **NEW: Total Chatbot Message Limit** — Set a single message cap for the whole chatbot across all users and roles per timeframe (hourly / daily / weekly / monthly), independent of the per-role limits — when both are configured, whichever is hit first stops the conversation. A live usage readout shows how much of the cap is used right now ("10 of 200 used · 190 left · resets in ~6 hours") with a one-click **Reset counter**. Both the global and per-role limits now also accept **Custom** values — any positive integer, not just the presets. Defaults to Unlimited, so existing installs are unchanged.
-- **IMPROVED: Custom Provider & Azure OpenAI embeddings** — "Use custom provider for embeddings" now works end-to-end: both knowledge-base indexing and live queries use your endpoint's embedding model, so a fully local or Azure OpenAI stack retrieves correctly. Includes a new **Azure OpenAI quick-start** callout with the exact Base URL, API Key, Auth Scheme, and API Version. (If you already had custom embeddings enabled, re-index your knowledge base so the stored vectors are rebuilt with your model.)
-- **FIXED: Feedback "Send" button visibility** — The helpful / not-helpful feedback **Send** button no longer renders as an invisible white-on-white block. It now fills with your chatbot's font color with a clearly legible label, and adapts to custom colors set via either the built-in color pickers or the MxChat Theme AI customizer.
+- **NEW: Stop Button for Streaming Responses** — visitors can halt a streaming answer mid-reply; the send button becomes a Stop control while the bot is typing, keeping the text already written
+- **NEW: "Images per Article" Slider** — choose how many images (1–5) the Content Generator places in each article, instead of the AI deciding for you
+- **NEW: Download Transcript Toggle** — show or hide the chat menu's "Download Transcript" item from settings (on by default)
+- **FIXED: Google Search Snippets** — the chat widget's greeting and quick-question text no longer leak into your pages' search-result snippets
+- **FIXED: In-Chat Document Upload** — PDF and Word uploads from the chat toolbar work again, whether or not you're signed in
+- **Plus:** right-to-left admin-navigation fix, a rebuilt translation template so translators stop losing work on updates, satisfaction-prompt and message-loss fixes, and PHP 8.2 cleanup
 
 ## Core Features That Set MxChat Apart
 
@@ -63,7 +66,7 @@ Extend the free plugin with these optional premium features:
 🟢 **Web Search Integration** – Brave search provides real-time information beyond your knowledge base
 🟢 **AI Content Generator** – Create full blog posts and landing pages from a prompt with AI images, SEO metadata, real-time preview, and inline AI editing via chat
 🟢 **Image Generation** – OpenAI GPT Image and Google Imagen for visual content creation within chat conversations
-🟢 **Streaming Responses** – Real-time response streaming for OpenAI, Claude, and Grok models for the fastest possible chat experience
+🟢 **Streaming Responses** – Real-time response streaming for OpenAI, Claude, Grok, and DeepSeek models for the fastest possible chat experience
 🟢 **REST API** – Bearer-token endpoints to read transcripts, push knowledge, and bulk-delete sessions — wire MxChat into n8n, Zapier, analytics dashboards, GDPR workflows, or your own agents
 
 ## Choose from 100+ Premium AI Models
@@ -105,7 +108,7 @@ MxChat includes a built-in AI Content Generator that lets you create full blog p
 **How It Works:**
 
 1. **Describe Your Content** — Enter a topic, title, or detailed prompt and choose between a blog post or landing page layout
-2. **AI Generates Everything** — The AI produces fully styled HTML with responsive CSS, ready-to-publish content, and optional AI-generated images using DALL-E, Gemini, or Grok
+2. **AI Generates Everything** — The AI produces fully styled HTML with responsive CSS, ready-to-publish content, and optional AI-generated images using OpenAI GPT Image, Gemini, or Grok
 3. **Real-Time Preview** — See your content exactly as it will appear on your site with a live scaled preview, including desktop and mobile viewport switching
 4. **Edit with AI Chat** — Use the built-in AI chat panel to request changes like "make the heading bigger" or "change the background to blue" — the AI updates your content in real time
 5. **Publish Instantly** — Content is saved as a native WordPress post or page with clean HTML, SEO metadata, and responsive design that works with any theme
@@ -119,11 +122,11 @@ MxChat includes a built-in AI Content Generator that lets you create full blog p
 - Fullwidth and standard layout options with automatic theme compatibility
 - Content history to revisit and manage previously generated posts
 - Works with popular page builders and themes including Elementor, Bricks, Divi, Astra, Kadence, and more
-- Optional [Advanced Content Editor Add-On](https://mxchat.ai/advanced-content-editor/) for Google Search Console analytics, smart internal linking, readability analysis, and advanced SEO optimization
+- Optional [Advanced Content Editor Add-On](https://mxchat.ai/add-ons/mxchat-advanced-content/) for Google Search Console analytics, smart internal linking, readability analysis, and advanced SEO optimization
 
 ## MxChat Anywhere — Deploy Your Chatbot on Any Website
 
-Your WordPress site powers the AI, but your chatbot doesn't have to live there. The [MxChat Anywhere Add-On](https://mxchat.ai/mxchat-anywhere-deploy-your-ai-chatbot-on-any-website-with-one-script-tag/) lets you deploy your fully configured chatbot on any website with a single script tag — Shopify, Squarespace, Wix, static HTML, SaaS apps, documentation sites, or anything with an HTML page.
+Your WordPress site powers the AI, but your chatbot doesn't have to live there. The [MxChat Anywhere Add-On](https://mxchat.ai/add-ons/mxchat-embed/) lets you deploy your fully configured chatbot on any website with a single script tag — Shopify, Squarespace, Wix, static HTML, SaaS apps, documentation sites, or anything with an HTML page.
 
 **Key Features:**
 
@@ -149,7 +152,7 @@ Your WordPress site powers the AI, but your chatbot doesn't have to live there. 
 🟢 **Chat Moderation** – Advanced security with email/IP banning and content filtering
 🟢 **MxChat Anywhere** – Deploy your chatbot on any website with one script tag — Shopify, Squarespace, Wix, static HTML, and custom web apps with Shadow DOM style isolation
 🟢 **Perplexity Integration** – Real-time web search with authoritative, well-sourced responses
-🟢 **Migration Tool** – Seamlessly switch embedding models and vector databases without losing data, with batch processing and real-time progress tracking
+🟢 **MxChat Trigger** – Turn any element into a conversation starter — chat trigger buttons and links that open MxChat and send predefined messages, perfect for CTAs and guided experiences
 
 ## 📱 Mobile-Friendly & Fully Customizable
 
@@ -170,7 +173,7 @@ MxChat is optimized for performance and security. Your AI chatbot runs smoothly,
 
 MxChat offers a fully functional free plan that includes everything you need to get started with AI chatbot and customer support. With no credit card required, you can:
 
-- Access all AI models from 5 major providers
+- Access all AI models from 6 major providers
 - AI Content Generator for blog posts and landing pages with SEO scoring and AI auto-optimization
 - Train chatbot on unlimited website content
 - Loops email capture for lead generation
@@ -218,7 +221,7 @@ Please ensure compliance with applicable terms and data privacy laws.
 
 == Installation ==
 
-1. Upload the `mxchat` folder to the `/wp-content/plugins/` directory.  
+1. Upload the `mxchat-basic` folder to the `/wp-content/plugins/` directory.
 2. Activate the plugin through the 'Plugins' menu in WordPress.  
 3. Navigate to the 'MxChat' settings page to configure your OpenAI API key and other settings.
 
@@ -254,7 +257,7 @@ You can add the chatbot using the shortcode `[mxchat_chatbot floating="yes"]` fo
 
 = Does MxChat support streaming responses? =
 
-Yes. MxChat supports real-time streaming responses for OpenAI, Anthropic Claude, and xAI Grok models. Streaming displays AI responses word-by-word as they're generated, providing a faster, more engaging chat experience for your visitors.
+Yes. MxChat supports real-time streaming responses for OpenAI, Anthropic Claude, xAI Grok, and DeepSeek models. Streaming displays AI responses word-by-word as they're generated, providing a faster, more engaging chat experience for your visitors.
 
 = What is the Chat Transcripts feature? =
 
@@ -298,7 +301,7 @@ Yes. Enable document uploads to let visitors chat with PDFs and Word documents. 
 
 = Does MxChat support image generation? =
 
-Yes. With DALL-E integration, the AI chatbot can generate images based on user descriptions directly within the chat conversation.
+Yes. With OpenAI GPT Image and Google Imagen integration, the AI chatbot can generate images based on user descriptions directly within the chat conversation.
 
 = How does the knowledge base auto-sync work? =
 
@@ -329,689 +332,185 @@ Yes. MxChat is available for free on the WordPress plugin repository with full A
 
 == Changelog ==
 
+= 3.2.9 - June 11, 2026 =
+* New: Claude Fable 5 — Anthropic's newest flagship model — available in the Select AI Model picker and the Content Generator
+* Fixed: Claude Opus 4.7 and 4.8 now work as the Content Generator model (these models reject the temperature setting; it is no longer sent)
+* New: Stop button — visitors can halt a streaming response mid-answer; the text already written is kept
+* New: "Show Download Transcript Button" toggle to hide the chat menu's Download Transcript item (on by default)
+* Improved: Settings changes now apply immediately on cached sites — MxChat purges supported page caches on save, and the chat widget fetches fresh settings when opened, so toggles no longer require clearing caches
+* New: "Images per Article" slider (1–5, default 3) in the Content Generator's image settings
+* Fixed: Chat widget interface text no longer appears in your pages' Google search-result snippets
+* Fixed: Admin navigation now displays correctly on right-to-left language sites (Arabic, Hebrew, Persian, and others)
+* Fixed: In-chat PDF and Word document upload works again, including for signed-in administrators
+* Fixed: Messages sent right after a bot reply no longer vanish on sites running the Image Analysis add-on
+* Fixed: The "Was this helpful?" rating prompt only appears when its setting is turned on
+* Fixed: Rebuilt translation template (mxchat.pot) — syncing a translation no longer discards existing translations
+* Fixed: PHP 8.2 deprecation notices no longer logged during chat requests
+
 = 3.2.8 - June 4, 2026 =
-* New: Total chatbot message limit — set a single message cap across all users and roles per timeframe (hourly/daily/weekly/monthly), independent of the per-role limits, with a live usage readout ("10 of 200 used · 190 left · resets in ~6 hours") and a one-click Reset to zero the count mid-window. Both the global and per-role limits now also accept Custom values (any positive integer, not just the 1–100 presets). Defaults to Unlimited, so existing installs are unchanged.
-* Improved: Custom Provider & Azure OpenAI — "use custom provider for embeddings" now works end-to-end (both knowledge-base indexing and live queries use your endpoint's embedding model), plus a new Azure OpenAI quick-start callout with the exact Base URL, API Key, Auth Scheme, and API Version. NOTE: if you already had custom embeddings enabled, re-index your knowledge base (Knowledge → Process Selected) so vectors are rebuilt with your model.
-* Fixed: The helpful/not-helpful feedback "Send" button no longer renders as an invisible white-on-white block — it fills with your chatbot's font color and adapts to colors set via the built-in pickers or the MxChat Theme AI customizer.
+* New: Total chatbot message limit — one cap across all users and roles per timeframe, with a live usage readout and one-click reset
+* New: Global and per-role rate limits accept custom values beyond the presets
+* Improved: Custom Provider and Azure OpenAI embeddings work end-to-end for indexing and live queries (re-index if you had this enabled)
+* Fixed: Feedback "Send" button no longer renders as an invisible white-on-white block
 
 = 3.2.7 - May 29, 2026 =
-* New: Guided onboarding for new users. First-time setup is now a step-by-step wizard — pick your AI model and add your key inline, set how the chatbot should behave, choose an embedding model, optionally add a knowledge base, then finish on a “What’s next” screen that links straight to the in-dashboard test chat, your display settings, and copy-paste embed shortcodes. Reopen it any time from Settings → Tutorials.
-* New: Latest AI models, with automatic recovery when providers change theirs. Added Claude Opus 4.8 and the current Google Gemini 3.x lineup (Gemini 3.5 Flash, 3.1 Pro, 3 Flash, 3.1 Flash-Lite and more). Models that providers retired or changed are now handled for you: the discontinued Gemini 3 Pro and the retired Grok 2 have been replaced, and Claude Opus 4.7 / 4.8 no longer error on send (Anthropic dropped the temperature setting on those). Any site pinned to a discontinued model is switched to a working one automatically.
-* New: Reliable first message behind page caches. The chat widget now fetches a fresh security token for each message instead of trusting cached page HTML, eliminating the intermittent “Access denied” error on the first message under full-page caching (WP Rocket, LiteSpeed, FlyingPress, W3 Total Cache, Cloudflare APO).
-* Improved: More resilient replies. Both streaming and standard chat now automatically retry transient provider problems (overload, rate-limit, 5xx) before showing an error, and streaming fallbacks appear in a second or two instead of leaving visitors on a spinner — across every supported provider.
-* Improved: Accessibility and polish. The floating chat button is now fully keyboard-operable (Tab to focus, Enter or Space to open, Esc to close, and focus returns to the button on close — WCAG 2.1 Level A), alongside a range of admin interface refinements.
+* New: Guided onboarding wizard for first-time setup — reopen any time from Settings → Tutorials
+* New: Claude Opus 4.8 and the Google Gemini 3.x lineup; sites on retired models are migrated automatically
+* Improved: First message is reliable behind full-page caches (WP Rocket, LiteSpeed, FlyingPress, W3 Total Cache, Cloudflare APO)
+* Improved: Streaming and standard chat retry transient provider errors before showing a failure
+* Improved: Floating chat button is fully keyboard-operable (WCAG 2.1 Level A)
 
 = 3.2.6 - May 21, 2026 =
-* New: Custom Provider (OpenAI-compatible) — point MxChat at any OpenAI-compatible endpoint (Ollama, LM Studio, vLLM, llama.cpp, Azure OpenAI) under MxChat → API Keys, with opt-in routing for `/v1/embeddings` and `/v1/images/generations` through the same endpoint. Includes a one-click **Test Connection** button and a new "Custom / Local" category in the model picker.
-* New: Image Quality control for OpenAI GPT Image — new **Image Quality** dropdown in the Content Generator (Auto / Low / Medium / High), passed as the `quality` parameter to OpenAI's image API. Auto-disables when a non-GPT-Image model is selected.
-* New: Latest-generation models added to the picker — Claude Opus 4.7, GPT-5.5, and GPT Image 2 are now selectable from the Select AI Model modal, each tagged "Latest Flagship" at the top of its provider group.
-* New: ACF PDF auto-indexing — any ACF File/Image field (including PDFs nested in repeater, group, and flexible-content fields) now has its full PDF text extracted into the knowledge base alongside the post, not just the link. Opt-in per import batch via a new checkbox (default off), with per-post PDF counts reported during import, files over 25 MB safely skipped (adjustable via `mxchat_acf_pdf_max_bytes`), and a separate Knowledge → Auto-Sync toggle so editor saves don't re-parse unchanged PDFs. Extracted text is cached per attachment so re-syncs stay fast.
-* New: `DELETE /wp-json/mxchat/v1/transcripts` endpoint — bulk-delete chat sessions by session_id (bearer-token auth, capped at 1000/call) with optional cascade to translations and URL-click tracking. Useful for GDPR right-to-erasure flows and automated cleanup.
-* New: `mxchat_embedding_chunk_metadata` filter — developers can now enrich the per-chunk metadata that gets stored alongside every embedding (in both Pinecone and the WordPress DB). The filter receives the metadata array, the chunk text, and a context array (`bot_id`, `content_type`, `source_url`, `part_index`, `part_total`), and chunks now also expose alias keys (`source`, `part_index`, `part_total`) for cross-tool interoperability.
-* Improved: Page-cache compatibility — MxChat now auto-tells WP Rocket, LiteSpeed, W3 Total Cache, FlyingPress, and WP Super Cache to never cache the chat AJAX endpoint, and a new "Page Cache Compatibility" card under Settings → Optimization & Diagnostics shows per-plugin status with exclusion strings for Cloudflare APO (one-click Copy buttons included).
-* Fixed: Resolves intermittent "Access denied" error when sending the first chat message on sites running a full-page cache plugin (WP Rocket, LiteSpeed Cache, FlyingPress, W3 Total Cache, Cloudflare APO, etc.). The chat-send (and stream-send, plus PDF/Word upload) now waits for the page-cache nonce refresh to complete before firing, eliminating a race condition that affected the first message of each session.
-* Fixed: Print preview was blank on every page that had MxChat installed — a stale `@media print` rule from the old "Print Conversation" feature (replaced by "Download Transcript" in v3.2.5) was hiding all page content on print. The dead rule has been removed; printing any page now works normally regardless of whether MxChat is loaded.
-* New: End-of-session satisfaction rating — after two bot replies and a brief idle, the chat widget shows a "Was this helpful?" prompt with 👍 / 👎 thumbs and an optional feedback box, rendering inside a real bot bubble that inherits your chatbot's theme. Toggle on/off site-wide under Settings → Chatbot → Behavior, with configurable idle timeout (5–600s) and customizable prompt text. Ratings surface in admin as a badge on every Transcripts row, sort options, a **Satisfaction (last 30 days)** dashboard card, and a Feedback row in each session's details drawer.
+* New: Custom Provider (OpenAI-compatible) — point MxChat at Ollama, LM Studio, vLLM, llama.cpp, or Azure OpenAI, with a Test Connection button
+* New: End-of-session "Was this helpful?" satisfaction rating with admin reporting and a dashboard card
+* New: ACF PDF auto-indexing — PDF text from ACF file fields is extracted into the knowledge base (opt-in)
+* New: Image Quality control for OpenAI GPT Image in the Content Generator
+* New: Claude Opus 4.7, GPT-5.5, and GPT Image 2 in the model picker
+* New: REST bulk-delete endpoint for chat sessions and an embedding chunk-metadata filter for developers
+* Improved: Page-cache plugins are automatically told not to cache the chat endpoint, with a per-plugin status card
+* Fixed: Intermittent "Access denied" on the first chat message under full-page caching
+* Fixed: Print preview was blank on pages with MxChat installed
 
 = 3.2.5 - May 12, 2026 =
-* New: REST API with bearer-token auth — `GET /wp-json/mxchat/v1/transcripts` (read), `POST /wp-json/mxchat/v1/knowledge` (push), `DELETE /wp-json/mxchat/v1/transcripts` (bulk-delete sessions with cascade to translations and URL-click tracking, capped at 1000 session_ids/call), plus a public `/health` endpoint; disabled by default, with constant-time token comparison and prepared statements throughout.
-* New: API Access admin page styled to match the rest of the MxChat admin UI — sidebar navigation, branded header, themed buttons, status pill, copy-to-clipboard on newly rotated tokens, and a "Last rotated" indicator.
-* New: Chat-widget header redesign — replaced the minimize arrow with a stroke-based X-close icon and a 3-dot kebab menu (keyboard-accessible dropdown), with refined alignment so the title, "AI Agent" pill, and equal-sized 32×32 icon buttons share a single 48px baseline.
-* New: **Download Transcript** menu item (replaces "Print conversation") — saves a clean Markdown file of the conversation with sender labels and a timestamped header, toggleable via `mxchat_options[print_button_enabled]`.
-* New: Sidebar ordering — API Access now sits directly above Pro & Extensions, keeping Pro & Extensions pinned as the trailing CTA via a later `admin_menu` priority.
-* New: Content Generator now writes Rank Math / Yoast / AIOSEO SEO-title meta and syncs each inline `<img alt="...">` into the attachment's `_wp_attachment_image_alt` postmeta, so SEO plugins, schema markup, and the media library see the alt text instead of only the inline body HTML.
-* New: Transcript retention — "Custom Retention (Days)" field (1–3650) under Transcripts settings; the daily cron sweep deletes older transcripts with cascade to translations and URL-click tracking, capped at 5000 sessions per run, with a new `mxchat_transcript_retention_days` filter for programmatic overrides.
-* Fixed: 3-dot header dropdown menu now inherits the bot bubble's colors instead of being hardcoded white/black — no more white-on-white "ghost menu" when using a dark bubble theme.
+* New: REST API with bearer-token auth — read transcripts, push knowledge, bulk-delete sessions (disabled by default)
+* New: Download Transcript menu item — saves the conversation as a Markdown file (replaces Print Conversation)
+* New: Redesigned chat-widget header with X-close icon and keyboard-accessible 3-dot menu
+* New: Content Generator writes SEO-title meta for Rank Math/Yoast/AIOSEO and syncs image alt text to the media library
+* New: Transcript retention setting (1–3650 days) with automatic daily cleanup
+* Fixed: Header dropdown menu inherits the bubble theme colors instead of hardcoded white
 
 = 3.2.4 - May 3, 2026 =
-- Fixed: WooCommerce product Short Description Visual tab broken by a 404 on the Gutenberg meta-box script
-- Fixed: User's last message now scrolls to the top of the chat after streaming replies, matching non-streaming behavior
+* Fixed: WooCommerce product Short Description Visual tab broken by a script 404
+* Fixed: User's last message scrolls to the top after streaming replies
 
 = 3.2.3 - April 29, 2026 =
-- New: Embedding model switch protection — warning dialog when changing embedding models with content already embedded, plus a persistent admin notice while the active and selected models don't match. Each new embedding is now stamped with the model that produced it (KB, actions, action phrases, and Pinecone metadata) so mismatches are detectable
-- Improved: Landing Page Generator now plans more sections and writes substantially more copy per section, producing fuller, more conversion-ready pages by default
-- Fixed: Landing Page "Full Width" option not honored on WordPress block themes (Twenty Twenty-Two through Twenty Twenty-Five) — content was constrained by the theme.json layout system
-- Fixed: Chatbot citing manually submitted knowledge entries with internal `mxchat://` placeholder URLs — placeholders are now correctly treated as manual entries with no citation across both WordPress-DB and Pinecone retrieval paths
+* New: Embedding model switch protection — warning dialog and admin notice when stored embeddings don't match the selected model
+* Improved: Landing Page Generator plans more sections and writes fuller copy
+* Fixed: Landing Page "Full Width" option honored on WordPress block themes
+* Fixed: Manual knowledge entries no longer cited with internal placeholder URLs
 
 = 3.2.2 - April 21, 2026 =
-- NEW: Lead Management Dashboard — dedicated Leads tab inside Transcripts that deduplicates captured emails into a single list with conversation count, last-seen, and the page that captured them. Includes top-pages analytics, search + date/status/page filters, bulk delete with two-step confirm, CSV export (email-only or email + name), and one-click "View convo" to jump to each lead's latest conversation.
-- Fixed: Orphaned Pinecone chunk vectors left behind when posts or products were unpublished, trashed, deleted, or had their slugs renamed — deletion is now chunk-aware across all sync paths
-- Fixed: Source count and chunk count settings were being ignored on certain paths and silently fell back to default values — the configured values now apply everywhere
+* New: Lead Management Dashboard — deduplicated lead list with filters, top-pages analytics, CSV export, and one-click jump to conversations
+* Fixed: Orphaned Pinecone vectors removed when posts or products are unpublished, deleted, or renamed
+* Fixed: Source and chunk count settings now apply on all retrieval paths
 
 = 3.2.1 - April 17, 2026 =
-- Fixed: Admin Testing Tab debug panel not displaying similarity scores, action matches, or source data — including when web search + streaming are both enabled
-- Fixed: Web search responses (streaming and non-streaming) not saving RAG context to chat transcripts, causing the "sources" link to be missing
+* Fixed: Admin Testing Tab debug panel missing similarity scores and sources when web search and streaming were both enabled
+* Fixed: Web search responses now save their sources to chat transcripts
 
 = 3.2.0 - April 15, 2026 =
-- Added: `mxchat_similarity_results` filter hook after similarity search completes, allowing add-ons to access matched sources and their URLs
-- Removed: `data-no-optimize` attribute injection on MxChat CSS/JS tags, which was conflicting with third-party cache and optimization plugins
+* New: mxchat_similarity_results filter hook for add-ons
+* Fixed: Removed attribute injection that conflicted with cache and optimization plugins
 
 = 3.1.9 - April 7, 2026 =
-- Fixed: Session ownership issues that were causing "session expired" errors
+* Fixed: "Session expired" errors caused by session-ownership issues
 
 = 3.1.8 - April 6, 2026 =
-- New: Loading indicator displayed while chat is initializing
-- New: Individual trigger phrase embeddings — each key phrase now gets its own vector for more accurate action matching
-- Improved: Existing actions remain fully backwards compatible with grouped legacy phrases
-- New: Admin Testing Tab - embedded chatbot replica with real-time debug panel showing similarity scores, action matches, approved URLs, system prompt, and debug log
-- Improved: "Delete All" in Knowledge Base now respects the active content type filter — only deletes the filtered type (e.g. Pages) instead of everything
+* New: Admin Testing Tab — embedded chatbot replica with a real-time debug panel
+* New: Individual trigger-phrase embeddings for more accurate action matching
+* New: Loading indicator while chat initializes
+* Improved: "Delete All" in the Knowledge Base respects the active content-type filter
 
 = 3.1.7 - April 1, 2026 =
-- Fixed: Chat history not appearing for returning visitors until first message sent when chat persistence is enabled and email collection is off
-- Fixed: Lead capture form not displaying for new visitors when email collection is enabled
-- Fixed: Editing legacy manual knowledge base entries deleting all other manual entries sharing the same source URL
-- New: Google Drive PDF links are now automatically converted to direct downloads for knowledge base import
+* New: Google Drive PDF links auto-convert to direct downloads for knowledge import
+* Fixed: Chat history not appearing for returning visitors with persistence on and email collection off
+* Fixed: Lead capture form not displaying for new visitors when email collection is enabled
+* Fixed: Editing a legacy manual knowledge entry no longer deletes others sharing the same source URL
 
 = 3.1.6 - March 30, 2026 =
-- Fixed: Pre-chat popup reappearing on every page refresh — it now stays dismissed for 24 hours
-- Fixed: Links with certain special characters in URLs being cut off
-- Fixed: Chat history not loading for returning visitors
-- Fixed: Links displaying as plain text instead of clickable links in chat responses
+* Fixed: Pre-chat popup stays dismissed for 24 hours instead of reappearing on every refresh
+* Fixed: Chat history not loading for returning visitors
+* Fixed: Links with special characters being cut off or rendered as plain text
 
 = 3.1.5 - March 25, 2026 =
-- Improved: Lowered default RAG sources limit from 6 to 3 to reduce token usage for users on lower-tier API plans
-- Improved: Added per-source chunk cap of 5 to prevent any single document from dominating context
-- New: RAG Chunks Limit setting — control max total chunks sent to AI (range 8–20, default 15) to balance context quality and token cost
-- New: Page-level chatbot visibility — show, hide, or use global setting per page/post from the meta box
-- New: Frontend debugger and transcripts now show actual sources and chunks used counts
+* New: RAG Chunks Limit setting and tuned source defaults to balance answer quality and token cost
+* New: Per-page chatbot visibility control from the page editor meta box
+* Improved: Debugger and transcripts show the actual sources and chunks used
 
 = 3.1.4 - March 22, 2026 =
-- New: Added support for OpenAI GPT-5.4, GPT-5.4 Mini, GPT-5.4 Nano, and GPT-5.3 Chat models
-- New: Edit Default Prompt — customize the AI system prompt for blog posts and landing pages from the Content page, saved per type across sessions
-- New: Knowledge base entries can be edited inline with automatic re-chunking and re-embedding (works with both database and Pinecone)
-- New: Sitemap import now supports PDF URLs — bulk import PDFs via XML sitemap
-- Improved: Performance updates and bug fixes
-- Fixed: Clear chat session in MxChat debugger now fully clears chat sessions and context history
+* New: OpenAI GPT-5.4 family and GPT-5.3 Chat models
+* New: Editable default prompts for blog posts and landing pages in the Content Generator
+* New: Inline knowledge-entry editing with automatic re-chunking and re-embedding
+* New: Sitemap import supports PDF URLs
 
 = 3.1.3 - March 16, 2026 =
-- New: Content Calendar tab added to Content page — shows locked preview when Advanced Content Editor is not installed, fully functional when add-on is active
-- New: Chat teaser pop-up message now supports multiple lines.
-- Improved: Session cookies and tracking now deferred until first user interaction — passive visitors no longer trigger session creation or AJAX calls
-- Improved: Markdown table rendering with column alignment, responsive scrolling, and alternating row styling
+* New: Content Calendar tab on the Content page
+* New: Multi-line chat teaser pop-up messages
+* Improved: Session cookies deferred until first interaction — passive visitors no longer create sessions
+* Improved: Markdown table rendering with column alignment and responsive scrolling
 
 = 3.1.2 - March 13, 2026 =
-- New: Per-check AI fix buttons — hover any failing SEO check to see a sparkle icon that fixes just that item individually
-- New: SEO dashboard now has row checkboxes with "Optimize Selected" to batch-optimize posts (requires Advanced Content Editor add-on)
-- Improved: "AI Optimize" button renamed to "Optimize All" for clarity
-- Improved: SEO modal now includes a "View Page" link and per-check AI fix buttons are always visible
-- Improved: Post type dropdown now dynamically includes custom post types like WooCommerce Products
-- Fixed: AI Optimize now runs all addon checks (readability, internal links, image ALT, featured image) in the content editor — previously only meta description, title, and slug were included
-- Fixed: Chat transcripts not saving bot responses containing emojis due to database table using utf8mb3 charset — upgraded to utf8mb4
-- Fixed: WooCommerce product cards now display with image, price, and button in chat transcripts
-- Fixed: "Optimize All" now runs SEO fixes sequentially to prevent race conditions — previously internal links and other content-modifying fixes could overwrite each other
-- Upgraded: Image generation replaced deprecated DALL-E 3 with GPT Image (OpenAI) and added Gemini Imagen 4 action
+* New: Per-check AI fix buttons and batch "Optimize Selected" on the SEO dashboard
+* Improved: Image generation upgraded from deprecated DALL-E 3 to GPT Image and Gemini Imagen 4
+* Fixed: Emojis in bot responses no longer prevent transcripts from saving
+* Fixed: WooCommerce product cards display correctly in chat transcripts
+* Fixed: "Optimize All" runs SEO fixes sequentially so they no longer overwrite each other
 
 = 3.1.1 - March 4, 2026 =
-- New: Slack agents can now transfer users back to AI mode by typing `!endchat` in the channel
-- New: Agents can include a custom farewell message (e.g. `!endchat Thanks, have a nice day!`) — the message is delivered to the user before the handoff
-- New: SEO analysis panel with real-time scoring for posts and pages in the Content section
-- New: AI Auto-Optimize — one-click AI fixes for meta descriptions, SEO titles, and URL slugs with configurable check selection
-- New: Google Search Console integration (Pro) — per-page impressions, clicks, CTR, and top search queries directly in the Content editor
-- New: SEO optimize settings — choose which checks AI Optimize will run from Content > Settings
-- Fixed: Stale nonce causing "Invalid nonce" errors on sites with full-page caching (WP Rocket, LiteSpeed, W3 Total Cache) — nonce is now refreshed via AJAX on page load
-- Fixed: Security scanner false-positives flagging `file_put_contents` as malware — replaced with `WP_Filesystem` API for transcript and PDF temp files
-- Improved: PDF parser library now lazy-loaded on demand instead of on every page request
-
+* New: SEO analysis panel with real-time scoring and one-click AI Auto-Optimize
+* New: Google Search Console integration (Pro) in the Content editor
+* New: Slack agents can hand the conversation back to AI with !endchat, optionally with a farewell message
+* Fixed: Stale nonce causing "Invalid nonce" errors on sites with full-page caching
+* Fixed: Security-scanner false positives on transcript and PDF temp files
 
 = 3.1.0 - March 1, 2026 =
-- Fixed: Bulk deleting selected knowledge base entries with chunked content causing network timeout error when using Pinecone
-- Fixed: Manually entered knowledge base content not being used for AI context despite having high similarity scores
-- Fixed: Chat input remaining blocked after live agent handoff (Slack/Telegram)
-- Fixed: Pinecone knowledge base scan returning "Not In Knowledge Base" when using text-embedding-3-large (TE3 Large) due to hardcoded 1536 dimension instead of 3072
-- Fixed: Shortcode stripping silently losing all content on pages with large or deeply nested shortcodes (e.g. WPBakery/Visual Composer) due to regex backtracking
-- New: Added `mxchat_before_process_post` filter hook to allow developers to modify post data before knowledge base processing
-- New: Added `mxchat_system_instructions` filter hook and shortcode support in system prompt for dynamic data injection
+* New: mxchat_before_process_post and mxchat_system_instructions filter hooks, with shortcode support in the system prompt
+* Fixed: Manually entered knowledge content not used despite high similarity scores
+* Fixed: Chat input remaining blocked after live-agent handoff
+* Fixed: Pinecone scans failing with text-embedding-3-large (wrong vector dimension)
+* Fixed: Shortcode stripping losing content on pages with large or deeply nested shortcodes
 
 = 3.0.9 - February 24, 2026 =
-- New: AI Content Generator — generate full blog posts and landing pages from a single prompt with AI images, SEO metadata, real-time preview, inline AI editing, and content history
-- New: Advanced Content Editor premium add-on — smart internal linking, AI image management, and per-field AI meta generation
-- New: Dynamic post type filtering in knowledge database dropdown — automatically pulls in all registered post types
-- Improved: Compatibility with popular optimization and caching plugins
+* New: AI Content Generator — full blog posts and landing pages from a prompt, with AI images, SEO metadata, live preview, and inline AI editing
+* New: Advanced Content Editor premium add-on
+* Improved: Compatibility with optimization and caching plugins
 
 = 3.0.8 - February 20, 2026 =
-- New: Debug & optimization tools with log viewer, settings export, and reset options
-- New: Added Claude Sonnet 4.6 model
-- Improved: Performance optimizations and caching plugin compatibility
+* New: Debug and optimization tools with log viewer, settings export, and reset options
+* New: Claude Sonnet 4.6 model
 
 = 3.0.7 - February 15, 2026 =
-- New: Performance optimization
-- Fixed: GPT-5.1 Chat Latest model returning API error when web search was disabled
+* Fixed: GPT-5.1 Chat Latest returning an API error when web search was disabled
 
 = 3.0.6 - February 11, 2026 =
-- New: RAG Sources Limit slider - control how many knowledge base sources (3-10) are included in AI responses
-- New: {visitor_name} placeholder support in Intro Message and AI Behavior settings for personalized greetings
-- New: Added Claude Opus 4.6 and Claude Opus 4.5 models
-- Fixed: Chat persistence OFF now correctly starts fresh AI context on page reload (previously AI retained full history)
-- Deprecated: Removed all GPT-4 series and GPT-3.5 Turbo from model selection (OpenAI deprecation)
-- Deprecated: Removed Claude 3.x series models (3.7 Sonnet, 3.5 Sonnet, 3 Opus, 3 Sonnet, 3 Haiku) per Anthropic deprecation
-- Updated: Users on deprecated OpenAI models auto-migrated to GPT-5.1 Chat Latest (or GPT-5 Mini for mini models)
-- Updated: Users on deprecated Claude models auto-migrated to Claude Opus 4.6 (or Claude Haiku 4.5 for Haiku users)
+* New: RAG Sources Limit slider and {visitor_name} placeholder for personalized greetings
+* New: Claude Opus 4.6 and Claude Opus 4.5 models
+* Fixed: Chat persistence OFF now starts a fresh AI context on page reload
+* Updated: Deprecated OpenAI GPT-4/GPT-3.5 and Claude 3.x models removed; affected sites migrated automatically
 
 = 3.0.5 - January 28, 2026 =
-- Fixed: Updated Gemini embedding model from deprecated `gemini-embedding-exp-03-07` to stable `gemini-embedding-001`
-- Fixed: Notification settings not saving on new installations
-- Fixed: Save indicators not visible on settings fields (API keys, Slack, Telegram, Loops, Brave Search)
-- Added: Warning notice for WordPress database users recommending Pinecone for large knowledge bases
-- Improved: Minor admin UI updates for better user experience
+* Fixed: Gemini embedding model updated to the stable gemini-embedding-001
+* Fixed: Notification settings not saving on new installations
+* Fixed: Save indicators not visible on several settings fields
 
 = 3.0.4 - January 24, 2026 =
-- New: Added latest Google Gemini models (3 Pro Preview, 3 Flash Preview, 2.5 Pro, 2.5 Flash, 2.5 Flash-Lite)
-- New: Transcript translation feature - auto-translate chat transcripts to any language
-- New: Action scores visible in transcript sources modal - see document rankings and triggered actions
-- Fixed: Lead capture forms not working due to multi-bot class ID changes
+* New: Latest Google Gemini models
+* New: Transcript translation — auto-translate chat transcripts to any language
+* Fixed: Lead capture forms broken by multi-bot class ID changes
 
 = 3.0.3 - January 21, 2026 =
-- Fixed: Bug when web search was enabled the chat input was not enabled again.
+* Fixed: Chat input not re-enabling when web search was on
 
 = 3.0.2 - January 21, 2026 =
-- New: Telegram Live Agent integration for live chat handoff via Telegram forum topics
-- New: Telegram settings page (Settings > Integrations > Telegram)
-- New: Telegram action type in Actions page for intent-based handoff
-- New: Citation Links toggle to enable/disable source URLs in AI responses (Chatbot > Behavior)
-- Changed: Renamed "Live Agent" settings tab to "Slack"
+* New: Telegram Live Agent integration for live chat handoff
+* New: Citation Links toggle to show or hide source URLs in AI responses
 
 = 3.0.1 - January 18, 2026 =
-- New: Multi-select entries with bulk "Delete Selected" in knowledge base
-- New: OpenAI Vector Store integration for knowledge retrieval
-- New: Custom Post Meta whitelist for including non-ACF meta fields in embeddings
-- Improved: WordPress database search now filters to matching records only
-- Improved: WordPress import shows 100 items by default with cross-page selection
-- Fixed: ACF Field Settings now displays correctly in Knowledge Base sidebar
-- Changed: Chatbot CSS selectors migrated from IDs to classes for multi-bot support
-- Note: AI Theme Customizer users must update add-on and click "Migrate" on their theme
+* New: OpenAI Vector Store integration and custom post-meta whitelist for embeddings
+* New: Multi-select with bulk "Delete Selected" in the knowledge base
+* Improved: Chatbot CSS migrated from IDs to classes for multi-bot support (Theme Customizer users: update the add-on and click "Migrate")
 
 = 3.0.0 - January 14, 2026 =
-- New: Complete admin UI overhaul with modern sidebar navigation across all pages
-- New: Clean, professional design with consistent styling throughout the plugin
-- New: Automatic sitemap detection with one-click "Process Sitemap" button
-- New: Real-time knowledge base updates - new entries appear instantly without page refresh
-- New: Consolidated Pro Upgrade and Add-ons pages into a unified interface
-- New: Improved mobile responsiveness with collapsible menus and slide-up detail panels
-
-= 2.6.4 - January 6, 2026 =
-- New: ACF Field Control for Knowledge Base imports. Users with Advanced Custom Fields can now control which ACF fields are included when importing content to the knowledge base. A new "ACF Field Settings" section appears in the Knowledge Database Settings tab, displaying all registered ACF field groups and their fields with toggle switches. This allows you to exclude sensitive fields like private notes or internal data from being embedded in the chatbot's knowledge base.
-- Fixed: Knowledge Database entries now display in correct newest-to-oldest order. Previously, entries appeared in seemingly random order because the sorting was based on source URL rather than timestamp. New submissions now correctly appear at the top of the list.
-- Fixed: Knowledge Database pagination now works correctly when searching. Previously, clicking to page 2 or beyond while viewing search results would show an empty table because the search parameters were lost during pagination. The search query and security nonce are now properly preserved across all paginated pages.
-- Fixed: Manual content submissions no longer display a broken "View Source" link. When submitting direct content without a source URL, the Knowledge Database now correctly shows "Manual Content" instead of an empty or invalid link. This applies to both the main table view and individual entry displays.
-- Fixed: Editing knowledge entries with manual content no longer shows internal mxchat:// URLs in the source field. The URL field now correctly appears empty for manual content entries, allowing users to optionally add a real source URL if desired.
-- Fixed: Knowledge entries with short content can now be edited properly. Previously, if the content was too short to trigger the expand/collapse accordion, the edit textarea was hidden and inaccessible. The edit button now automatically expands the content area regardless of content length.
-
-= 2.6.3 - December 31, 2025 =
-- New: Text chunking for RAG - large content is automatically split into semantic chunks for improved retrieval accuracy
-- New: Chunk count display in WordPress Import modal - shows "(X chunks)" badge for multi-chunk content
-- New: Collapsible chunk groups in Knowledge Base table - entries with multiple chunks are grouped under a single expandable row
-- New: Chunk labels show "Chunk 1 of 5", "Chunk 2 of 5" etc. when chunks are expanded
-- New: Chunking settings in Knowledge Database Settings tab - configure chunk size (default 4000 chars)
-- New: Option to show/hide frontend debug panel in Chatbot Settings
-- Enhancement: Improved retrieval - finds best matching chunks, then fetches all chunks for top URLs and reassembles
-- Enhancement: Chat input is now disabled while waiting for bot response, preventing duplicate message submissions
-- Enhancement: When streaming is turned on it automatically checks if compatible and disables if not.
-- Fixed: Markdown formatting now preserved correctly when streaming is disabled (newlines were being stripped)
-
-= 2.6.2 - December 22, 2025 =
-- Fixed: Critical error when viewing Knowledge Database with large Pinecone datasets (10K+ products)
-- Fixed: Optimized Pinecone API queries to prevent memory exhaustion and PHP timeouts
-- Fixed: Chatbot no longer gets cut off when browser has bookmarks bar or is zoomed above 100%
-- New: Post type visibility control - include or exclude specific post types from auto-display chatbot
-- New: Semantic search in admin now searches ALL Pinecone records using embedded query vectors
-
-= 2.6.1 - December 17, 2025 =
-- Fixed: Send button now includes aria-label for screen reader accessibility
-- Fixed: Translations now load from /wp-content/languages/plugins/ first, preserving custom translations during updates
-
-= 2.6.0 - December 12, 2025 =
-- New: OpenAI GPT-5.2 model support - best general-purpose and agentic model with fast responses
-- New: Markdown rendering in transcripts - bot responses display formatted text with clickable links, bold, italic, code blocks, and headers
-- New: Retrieved documents viewer in transcripts - click "Sources →" link on any bot response to see knowledge base documents used, similarity scores, and citation URLs
-- Improved: Session security now auto-recovers when user IP changes instead of showing "Unauthorized access" error
-- Improved: Seamless experience for mobile users switching between WiFi and cellular networks
-
-= 2.5.9 - December 6, 2025 =
-- Fix: Shortcode stripping now preserves content inside shortcodes instead of removing it entirely
-
-= 2.5.8 - December 5, 2025 =
-- New: Auto-email full transcript feature - sends transcript as .txt file attachment after 15, 30, or 60 minutes of user inactivity
-- New: Conditional transcript emails - option to only send transcripts when visitors provide contact info (email or phone/WhatsApp) in chat
-- New: Smart contact detection - automatically detects email addresses and phone numbers (including international WhatsApp formats) in chat messages
-- Compatibility: Tested and compatible with WordPress 6.9
-
-= 2.5.7 - December 2, 2025 =
-- Fix: Streaming fallback bug - bot responses now properly saved to chat transcripts when streaming fails and falls back to regular response mode
-- Enhancement: Added comprehensive metrics dashboard to Transcripts page with 3 tabs (Overview, Activity, Insights)
-- Enhancement: Added 7-day activity trend chart with custom visualization
-- Enhancement: Added new metrics including daily/weekly/monthly chat counts, peak activity hours, and engagement rates
-- Enhancement: Added auto-delete transcripts feature with configurable intervals (1 week, 2 weeks, 1 month) for better database management and privacy
-- Enhancement: WooCommerce product imports now include complete pricing metadata (regular price, sale price, price ranges for variable products, SKU, categories)
-- Improvement: Updated transcript settings modal for better usability on desktop and mobile
-- Improvement: Various CSS fixes for metrics dashboard display
-
-= 2.5.6 - November 30, 2025 =
-- Security: Improved session ID validation with server-side checks
-- Security: Added session ownership verification to prevent unauthorized access to chat sessions
-- Fixed: Database error "Unknown column 'bot_id'" for multi-bot configurations with automatic migration
-- Improvement: Enhanced session security with consistent ownership verification
-- Improvement: Added automatic database schema migration system
-- Improvement: WooCommerce import improvements to support Custom Tabs information
-- Improvement: Database management with a new filtering option. Filter by posts, pages, products, PDF
-
-= 2.5.5 - November 21, 2025 =
-- Fixed: Issue with non-streaming mode failing to format URLs and paragraphs correctly
-- Fixed: Bug with shortcodes still appearing in the knowledge database
-- Enhancement: Minor adjustments to improve compatibility with multi-bot setups requiring email-to-chat forms
-- New: Added Grok 4.1 Fast (Reasoning) model — 2M context, reasoning
-- New: Added Grok 4.1 Fast (Non-Reasoning) model — 2M context, faster responses
-- New: Added OpenAI GPT-5.1 model — flagship for coding & agentic tasks with low reasoning and 400K context
-
-= 2.5.4 - November 12, 2025 =
-- New: Accordion-Style Knowledge Base Viewer for cleaner, expandable database entry previews
-- New: Smart Shortcode Stripping for WPBakery and Elementor during content submission to improve vectorization accuracy
-- New: Unique Citation URLs when submitting direct content, allowing multiple linked submissions without overwriting
-- Improvement: WooCommerce products now include both short and full descriptions during data processing
-
-= 2.5.3 - November 9, 2025 =
-- New: Dedicated API Key Management Tab - All API keys organized in one central location for easier management
-- Improvement: GPT-5 performance optimization with minimal reasoning effort mode for significantly faster response times
-- Fix: Resolved URL and PDF link encoding issues causing broken or unclickable links in responses
-- Improvement: Various performance enhancements for improved stability and faster processing
-
-= 2.5.2 - November 3, 2025 =
-- New: URL Hallucination Prevention System - AI only cites URLs from knowledge base or system instructions, with automatic removal of invalid links
-- Improvement: Brand new robust queue-based processing system for sitemap and PDF imports with real-time progress tracking
-- Improvement: Optimized knowledge retrieval from 5 to 3 documents for faster response times and improved accuracy
-- Improvement: Increased URL column size to TEXT type for support of long URLs and special characters (Hebrew, Arabic, etc.)
-- Fix: Resolved URL double-encoding issue causing malformed PDF and document links
-- Fix: Corrected citation-style bracket handling for AI responses containing [URL] format
-- Fix: Fixed empty markdown link processing to prevent broken link generation
-
-= 2.5.1 - October 30, 2025 =
-- New: Tag-based role restrictions for chatbot knowledge base - automatically control what content the chatbot can access based on WordPress tags and user roles
-- Update: Migrated users from deprecated Claude 3.5 Sonnet to Claude 3.7 Sonnet with improved performance
-- Fix: Removed deprecated Claude model from selection options
-
-= 2.5.0 - October 25, 2025 =
-- Fix: Resolved PDF URL encoding issue that caused broken links to PDF documents
-- Fix: Improved UI feedback when selecting chat models
-- Fix: Enhanced OpenRouter flow selection interface
-
-= 2.4.8 - October 16, 2025 =
-- New: OpenRouter integration - access 100+ AI models with a single API key
-- New: Added Claude Sonnet 4.5, Claude Opus 4.1, and Claude Haiku 4.5 support
-
-= 2.4.7 - October 13, 2025 =
-- Security: Fixed Server-Side Request Forgery (SSRF) vulnerability in PDF processing (CVE-2025-10705)
-
-= 2.4.5 - September 30, 2025 =
-- Bug Fix: Restored missing CSS properties for popular questions collapse/toggle buttons that were accidentally removed during code cleanup.
-- Bug Fix: Fixed button hover, focus, and active states for question navigation controls.
-- Bug Fix: Restored proper SVG styling and display logic for collapsible question buttons.
-
-= 2.4.4 - September 24, 2025 =
-- Bug Fix: Default similarity is now accurate across all settings.  
-- Bug Fix: Improved streaming responses to prevent dropped characters or words.  
-- Enhanced: Removed unnecessary Pinecone caching in the knowledge database for more accurate results.  
-
-= 2.4.3 - September 23, 2025 =
-- Added: Support for upcoming multi-bot update that allows for more customized settings such as individual chat models.
-- Improved: CSS for chatbot UI & more robust markdown support.
-
-= 2.4.2 - September 18, 2025 =
-- Added: Multi-bot support via the new Multi-Bot Manager premium add-on.
-- Improved: Minor CSS adjustments for better compatibility.
-- Updated: Add-on links and references throughout the plugin.
-
-= 2.4.1 - September 4, 2025 =
-- Fixed: Email collection form not submitting properly when "Require email to chat" is enabled.
-- Improved: PDF processing now provides clearer error messages with repair suggestions when corrupted files are detected.
-
-= 2.4.0 - September 3, 2025 =
-- Added new MxChat Video Generation add-on with support for Google Veo 2 and Veo 3 models, featuring audio generation and multiple aspect ratios.
-- Fixed console error when "Require email to chat" option is disabled by adding proper validation check.
-- Resolved "error chat history not found" message when chat persistence is enabled but user has no existing chat history.
-- Fixed agent indicator not updating properly when switching between live agent and chatbot modes without page refresh.
-
-= 2.3.9 - August 17, 2025 =
-- Updated Slack channel naming logic to prioritize client’s name, falling back to email, then chat ID.
-- Added streaming response support for DeepSeek models.
-- Enabled multiple direct content entries without requiring a source URL.
-- Fixed auto sync drafts so posts moved from posted to draft are removed from the knowledge database.
-- Implemented role-based chatbot information access restrictions for enhanced security and relevance.
-- Added option in the admin panel’s post edit page to hide the floating chatbot on specific pages.
-
-= 2.3.8 - August 12, 2025 =
-- Fixed extra backslashes appearing in knowledgebase content during editing.
-- Added optional name field to Require Email to Chat form; transcripts now display email and name if enabled.
-- Updated Slack channel naming for live agent notifications: uses user's email if logged in, email if Require Email to Chat is enabled, or chat ID otherwise.
-
-= 2.3.7 - August 8, 2025 =
-- New Models: Added GPT-5 family (GPT-5, GPT-5 Mini, GPT-5 Nano) to expand capabilities with faster, smarter, and more cost-efficient options.
-= 2.3.6 - August 6, 2025 =
-- Bug Fix: Fixed streaming fallback to properly display responses when streaming fails, preventing blank chat bubbles.
-- New Feature: Added streaming test button to help users verify if streaming is compatible with their setup.
-
-= 2.3.5 - August 6, 2025 =
-- Redesigned chat transcript UI for a cleaner, more professional experience.
-- Transcripts now show the page where the chat started and any links clicked.
-- Added ability to select and delete transcripts directly from the header.
-
-= 2.3.4 - July 30, 2025 =
-- Fixed streaming compatibility issues with Cloudflare and WP Engine by implementing automatic fallback to regular chat when streaming is buffered.
-- Enhanced email capture intents to use AI-generated conversational responses instead of hard-coded messages, allowing for more natural user interactions while maintaining the same functionality.
-
-= 2.3.3 - July 29, 2025 =
-- Improved streaming performance by fixing output buffering issues using enhanced flush logic.
-- Added contextual awareness support via the new `data-mxchat-context` HTML attribute.
-- Revamped license key management system with domain linking, deactivation, and real-time usage dashboard.
-- Fixed transcript timestamp display to use WordPress site's local timezone correctly.
-
-= 2.3.2 - July 24, 2025 =
-- Added full support for OpenAI Assistants API via the new Assistant add-on.
-- Improved email collection form performance and reliability with better loading states and timeout handling.
-- Enhanced WooCommerce product labeling accuracy in WordPress import with improved URL matching.
-- Fixed ACF field processing errors when handling WP_Post objects and relationship fields.
-
-= 2.3.1 - July 20, 2025 =
-- Enhanced hyperlink functionality to include mailto links, enabling email addresses in bot responses to be clickable.
-- Added full support for the new MxChat Image Analysis add-on, allowing users to upload and analyze images directly in chat using OpenAI Vision and Grok APIs.
-- Added message filtering hooks system for developers to customize prompts and responses without modifying core plugin files.
-
-= 2.3.0 - July 13, 2025 =
-- Added Grok-4 model support, the world's smartest AI model available.
-- Added streaming response support for all Grok models (Grok-4, Grok-3, etc.), delivering real-time response generation for faster and smoother chat experiences.
-
-= 2.2.9 - July 6, 2025 =
-- Improved quick question UI: suggestions now collapse after user input and can be toggled with up/down icons
-- Increased sitemap batch processing limit from 5 to 50 for faster indexing
-- Expanded action similarity threshold range to support values from 10 to 95
-
-= 2.2.8 - June 27, 2025 =
-- Added brand new contextual awareness option that automatically provides chatbot access to current page content and URL for contextually relevant responses
-- Enhanced WordPress knowledge base import to include Advanced Custom Fields (ACF) data for more comprehensive content training
-- Major README structure update with improved formatting and visual presentation
-
-= 2.2.7 =
-- Fixed a bug that occured when deleting all pinecone records & added support for markdown hyperlinking in rate limit messages.
-
-= 2.2.6 =
-- Brand New Admin Debug Panel â€“ Added a comprehensive frontend debug panel for administrators! You can now see retrieved documents, triggered actions, and other debug and setting information in real-time while testing your chatbot, making it easier than ever to fine-tune your bot's performance.
-- Fixed Pinecone Single Entry Deletion â€“ Resolved a bug that prevented individual entries from being properly deleted from Pinecone vector storage.
-- Improved Pinecone UI Records Retrieval â€“ Enhanced the Pinecone database panel with better record loading and display functionality for smoother management of your vector database.
-- Fixed WordPress KB Entry Editing â€“ Resolved an issue where editing knowledge base entries in the WordPress database wasn't working properly, ensuring seamless content management.
-
-= 2.2.5 =
-- Streaming Response Support â€“ You can now enable streaming responses for OpenAI and Claude models. This delivers a faster, smoother chat experience for users by displaying replies in real-time as theyâ€™re generated.
-- Slack Live Agent Fix â€“ Resolved a minor bug that occasionally caused duplicate messages in Slack during live agent conversations.
-- Pinecone UI Update â€“ Fixed a UI display issue in the Pinecone database panel when using the TE3 model.
-
-= 2.2.4 =
-- Critical update to error when working with large databases in Pinecone.
-
-= 2.2.3 =
-- Various critical bug fixes that occured from the codebase refactoring.
-
-= 2.2.2 =
-- Enhanced Slack integration: live agent handoff now creates new Slack channels per conversation; agents can reply directly in channel to chat with website users.
-- Major codebase refactoring for improved organization and optimization.
-- Improved sitemap and PDF processing: added retry mechanism, display of failed pages/URLs, and manual batch processing button.
-- Fixed Pinecone setting not toggling on for users who previously did not have the add-on.
-
-= 2.2.1 =
-- Added Claude Sonnet 4 and Claude Opus 4 chat models.
-- Integrated Google Gemini embedding model (gemini-embedding-001).
-- Built Pinecone vector database support directly into core plugin.
-- Removed dependency on separate Pinecone add-on.
-
-= 2.2.0 =
-- Added WordPress Content Importer for posts and pages.
-- Implemented tabbed interface for knowledge base management.
-- Added content filtering by type and knowledge base status.
-- Added bulk import with real-time progress tracking.
-
-= 2.1.9 =
-- Added email notification feature for new chat sessions.
-- Implemented pagination on transcripts page (50 per page) to improve performance.
-- Fixed bug with Brave image search not returning images correctly from the API.
-- Enhanced performance by changing chat transcripts to disable autoload.
-
-= 2.1.7 =
-- Fixed Pro activation issues when the plugin has been translated.
-- Improved tab behavior to always default to the first tab.
-- Major rework to rate limits: added custom rate limit timeframes and messages for each individual role.
-- Fixed bug with Loops where manual list selection from dropdown was required for functionality.
-
-= 2.1.6 =
-- Added new AI models: GPT-4.1 and the complete suite of Grok 3 models.
-- Updated AI service providers to use their official SVG logos for better visual representation.
-- Fixed an issue where API key fields would try to autosave when no data was entered.
-- Various other minor bug fixes for improved stability and performance.
-
-= 2.1.5 =
-- Added RTL Language support, allowing languages that align right to automatically do so in both chat input and AI responses.
-- Improved error messaging for API calls in the frontend of the chatbot, and enhanced error messages when submitting sitemaps, URLs, and PDFs.
-- Fixed an auto save issue that caused an error if no changes were made.
-- Various other minor bug fixes for improved stability and performance.
-
-= 2.1.4 =
-- Added the ability to easily customize the "AI Agent" text displayed in the top bar for greater personalization.
-- Fixed a bug where data scraping failed to retrieve all content from certain websites.
-- Added HTML support in the intro message for richer customization.
-- Resolved an issue where API input fields triggered browser autofill, improving user input accuracy.
-
-= 2.1.3 =
-- Added support for Google Gemini models: Gemini 2.0 Flash, Gemini 2.0 Flash-Lite, Gemini 1.5 Pro, and Gemini 1.5 Flash.
-- Improved chat model selection UI for a more intuitive user experience.
-- Redesigned embedding model selection UI for better clarity and usability.
-- Enhanced error handling for sitemap submissions with more helpful user feedback.
-- Fixed an issue in the knowledge database where editing entries erased or prevented changes to citation URLs.
-
-= 2.1.2 =
-- Rebranded intents page to "Actions" with a revamped UI, displaying pro/add-on requirements and brief descriptions.
-- Added ability to toggle actions on/off without deleting; moved image generation action from pro to free tier.
-- Introduced advanced knowledge base sync feature to pull in custom post data.
-
-= 2.1.1 =
-- Made Claude and X.AI API models available to all users.
-- Improved API key management UI - only showing relevant API key fields based on selected models.
-- Enhanced knowledge import interface with clear credit requirement warnings.
-- Fixed embedding error notifications for better clarity.
-
-= 2.1.0 =
-- Fixed a bug impacting the header color in the output. 
-- Updated embedding error notification when submitting sitemaps or PDFs.
-- Improved context extraction parser.
-
-= 2.0.9 =
-- Revamped UI on the main settings page to match the rest of the plugin.
-- Added real-time updates for sitemap and PDF processing.
-- Renamed "MxChat Intent Tester" add-on to "MxChat Similarity Tester".
-- Various minor bug fixes and improvements.
-
-= 2.0.8 =
-- Minor bug fix impacting similarity adjustment.
-
-= 2.0.7 =
-- **Perplexity Integration Add-On** â€“ Added Perplexity web search, integrated into intent management with a toolbar toggle.
-- **Sonnet 3.7 Support** â€“ Introduced Anthropicâ€™s Claude Sonnet 3.7, the latest high-intelligence model.
-- **Bug Fixes & Improvements** â€“ Fixed title tag formatting in responses and tightened knowledge database similarity range to 20.
-
-= 2.0.5 =
-- **Auto-Expanding AI Instructions** â€“ AI instructions text field now auto-expands to fit content.
-- **Chat Transcripts UI & Export** â€“ Redesigned chat transcripts UI and added Excel export feature.
-- **Quick Questions Rebrand** â€“ Renamed "Popular Questions" to "Quick Questions" with updated copy.
-- **Security Enhancement** â€“ Improved security to better prevent XSS attacks.
-- **Intent Testing Add-On** â€“ Integrated new Intent Tester add-on for enhanced chatbot performance.
-
-= 2.0.4 =
-- **Markdown Response Fix** â€“ Resolved markdown formatting issues in the chatbot UI.
-- **Agent Mode Customization** â€“ Improved indicator text theme and background styling.
-- **WooCommerce Core Extraction** â€“ Moved WooCommerce features to the dedicated MxChat WooCommerce add-on.
-
-= 2.0.3 =
-- **Bug Fix:** Resolved issues preventing DeepSeek and Claude models from working correctly.  
-- **New:** Added integration for the MxChat Form Collection add-on (Pro only).  
-- **New:** Forms now display dynamically within the chat interface in real-time.  
-- **New:** Automatic intent handling for seamless form triggering.  
-- **Update:** Improved submission management with CSV export functionality.  
-
-= 2.0.2 =
-- **Bug Fix:** Auto-sync now properly deletes posts/pages when enabled.  
-- **Update:** Theme customization moved to an add-on with live preview support.  
-- **New:** Added MxChat Moderation plugin to ban users by email or IP.  
-
-= 2.0.1 =
-- **Bug Fix:** Fixed a DivisionByZeroError in sitemap processing that occurred when submitting an empty or malformed sitemap.
-- **Bug Fix:** Resolved a similar DivisionByZeroError in PDF processing to prevent crashes when handling PDFs with 0 pages.
-
-= 2.0.0 =
-- **New UI & Branding:** Redesigned the entire plugin interface to align with the new MXChat brand for a modern and seamless experience.
-- **Add-Ons System Introduced:** Added a dedicated Add-Ons page, allowing users to extend the plugin with optional features. Add-ons are completely optional and do not impact core functionality.
-- **First Add-On Released â€“ Pinecone DB Manager:** Now available for free! This add-on provides an intuitive interface for managing your Pinecone vector database directly within MXChat.
-
-= 1.6.5 =
-- Optimized knowledge database retrieval to prevent memory issues with large product databases (2000+ products)
-- Fixed bug with tab switching control in chat interface
-
-= 1.6.4 =
-- Added chat notifications for improved user experience when chat persistence is enabled.
-- Made the entire plugin fully translatable, allowing compatibility with translation services like Loco Translate.
-- Improved Slack integration: When a user requests a live agent, the last five messages from the conversation are now sent to Slack for better context.
-
-= 1.6.4 =
-- Added chat notifications for improved user experience when chat persistence is enabled.
-- Made the entire plugin fully translatable, allowing compatibility with translation services like Loco Translate.
-- Improved Slack integration: When a user requests a live agent, the last five messages from the conversation are now sent to Slack for better context.
-
-= 1.6.3 =
-- Added the new "Rate Limit by User Role" feature, replacing the previous rate limit for logged-in users.
-- Introduced DeepSeek as a new AI service provider, with full support for their models.
-- Integrated DeepSeek V3, enhancing chatbot natural language understanding and performance.
-
-= 1.6.2 =
-- Fixed a bug preventing the ability to save edits in the knowledge database.
-
-= 1.6.0 =
-- Redesigned knowledgebase UI for a cleaner, more user-friendly interface.
-- Introduced auto-sync functionality for posts and pages, enabling automatic addition of new or updated content to the knowledgebase.
-- Enhanced XML sitemap submission to prevent duplicate entries by checking and updating existing pages or adding new ones as needed.
-- Reworked chatbot settings to enable individual autosave after updates, removing the need for manual saving.
-- Fixed paragraph formatting in the chatbot UI to display line breaks and improve readability.
-
-= 1.5.9 =
-- Enhanced transcripts page with new analytics dashboard and improved UI
-- Added support for X.AI's Grok model
-- Improved message formatting to preserve paragraphs in intro messages
-- Updated admin panel interface with better organization and styling
-- Added better mobile responsiveness across admin screens
-
-= 1.5.8 =
-- Introduced a new setting to require an email address before starting a chat. When enabled, this email will be displayed at the top of the chat transcript if needed.
-
-= 1.5.7 =
-- Enhanced Complianz plugin integration to support the premium version and improve reliability.
-- Fixed an issue where names were not appearing in chat transcripts for logged-in users.
-- Added the ability to customize the title bar icon in the theme settings.
-- Grouped intents by category in dropdown menus for better organization and usability.
-
-= 1.5.6 =
-- Improved "Add to Cart" and product recommendation intents for WooCommerce.
-- Enhanced Brave Search intent for more accurate and structured results.
-- Added an **Edit** button to the intent management section for easier adjustments.
-- Fixed the Word document upload toolbar button for seamless functionality.
-
-= 1.5.5 =
-- Chat transcripts now display in newest-to-oldest order and are mobile responsive.
-- Updated various setting texts with clearer descriptions for better usability.
-- Fixed issue with rate limit not working properly.
-- Added Word document upload to the frontend toolbar for direct chatbot interface use.
-- Improved chatbot's contextual response accuracy.
-- Major enhancements to "Add to Cart," "Checkout," and "Chat with PDF via URL" intents.
-
-= 1.5.4 =
-- Enhanced chat transcripts layout for improved readability, better formatting support (e.g., bold, italics), and inclusion of test agent names from **MxChat AI Agents**.
-- Introduced **MxChat AI Agents**, now available free for Pro users for a limited time, providing a revolutionary way to test and deploy your chatbot.
-
-= 1.5.3 =
-- Major bug fix to the similarity threshold comparison which prevented the chatbot from finding relevant content.
-
-= 1.5.2 =
-- Enhanced checkout intent functionality to work more robustly, no longer requiring add-to-cart intent trigger.
-- Fixed issue with send button not displaying properly on iPhone/iOS devices.
-- Added admin control for similarity threshold matching to fine-tune relevant content results.
-
-= 1.5.1 =
-- Vastly improved the ability for the chatbot to give contextually relevant responses from the knowledge database.
-- Fixed the issue with loops in the lead capture intent.
-- Updated the PDF upload icon in the frontend chatbot UI to a clearer design, now showing a PDF file icon.
-- Enhanced the order history intent, recommendation intent, and product card intent for more robust and contextually relevant responses.
-
-= 1.5 =
-- **Live Agent Transfer**: Seamless integration for live agent handoffs and AI chatbot switching.
-- **PDF Toolbar**: Added PDF upload to the chatbot interface and knowledge base processing with cron jobs.
-
-= 1.4.6 =
-- **Product Recommendation Intent**: Added personalized product recommendations based on order history, cart contents, and trending items.
-- **Custom Chatbot Icon**: Users can upload custom PNG icons for a more personalized chatbot appearance.
-- **Codeblock Copy Button**: Introduced a copy button for codeblocks to simplify copying code snippets.
-- **Expanded Popular Questions**: Increased flexibility by allowing more than the default three popular questions.
-- **CSS Compatibility Fixes**: Improved chatbot CSS for better theme compatibility.
-
-= 1.4.5 =
-- **Fixed "Open Links in New Tab" Setting**: Resolved an issue where the setting to open links in a new tab was not functioning as expected.
-
-= 1.4.4 =
-- **Custom Rate Limits**: Set different rate limits for logged-in and logged-out users.
-- **PDF Intent Enhancements**: Added customizable trigger, success, and error messages, plus a max PDF page limit setting.
-- **Improved Flexibility**: Greater control over chatbot behavior and user interactions.
-
-= 1.4.3 =
-- **PDF Intent**: Added support for processing and analyzing PDF content via provided URLs using vector embeddings.
-- **Compatibility Fix**: Fixed a rendering issue that prevented the chatbot from displaying in certain environments.
-
-= 1.4.2 =
-- **Fixed Knowledge Search**: Fixed a bug impacting the ability to search knowledge database information.
-
-= 1.4.1 =
-- **Fixed Intent Loading Issue**: Fixed a bug which prevented new intents from being shown on certain installs.
-
-= 1.4 =
-- **Customizable Sensitivity Threshold**: Added support for individual sensitivity thresholds on each intent, offering more precise control over intent recognition.
-- **Enhanced Usability Improvements**: Introduced a "Delete All" button for quick knowledgebase management, resolved activation key UI issues to prevent unnecessary re-activation, and improved chatbot viewport scrolling for better visibility of longer responses.
-
-= 1.3 =
-- **Advanced Intent Recognition**: Introduced vector embedding for enhanced intent detection, improving chatbot responsiveness.
-- **New Integrations**: Added **Brave Web Search**, **Brave Image Search**, and **DALL-E Image Generation** intents.
-- **Security Update**: Minor update to unserialization handling for enhanced security.
-
-= 1.2.1 =
-- **Product Card Display**: Added a dynamic product card for WooCommerce users, showing product image, price, and an "Add to Cart" button triggered by product-related keywords.
-- Enhanced **Popular Questions** and **Pre-Chat Message** functionalities for improved user engagement and streamlined chat initiation.
-
-= 1.2 =
-- Added **Popular Questions Buttons** with one free question and two available in the **Pro version**.
-- Added **Inline Edit Button** to the Knowledge Database for easy content management.
-
-= 1.1.9 =
-- Added integration with Claude (Anthropic) API (Pro feature) for advanced conversational models like `Claude 3.5 Sonnet` and `Claude 3 Haiku`.
-
-= 1.1.8 =
-- Added integration with X.AI API (Pro feature) for advanced chat completions using models like `grok-beta`.
-- Introduced new model selection dropdown that separates OpenAI and X.AI models, with X.AI models disabled for free users.
-- Enhanced API key management, allowing users to input and manage both OpenAI and X.AI API keys in settings.
-
-= 1.1.7 =
-* Added chat session persistence option for users to maintain conversations across visits for up to 24 hours.
-* Updated navigation tabs CSS and scripts to prevent conflicts with other plugins.
-* Rate limit settings are now available to all users, offering better control over chat usage.
-
-= 1.1.6 =
-* Minor CSS update.
-
-= 1.1.5 =
-* Fixed error when users didn't have WooCommerce it would return "Error communicating with server".
+* New: Complete admin UI overhaul with modern sidebar navigation across all pages
+* New: Automatic sitemap detection with one-click processing
+* New: Real-time knowledge base updates and improved mobile responsiveness
+
+Older releases are archived in the plugin's full version history on WordPress.org.
 
 == Upgrade Notice ==
 
-= 3.2.8 - June 4, 2026 =
-Rate limits gain a whole-chatbot total message cap (single ceiling across all users and roles, default Unlimited so existing installs are unchanged) with a live "X of Y used" usage readout, a one-click Reset, and a new "Custom…" option for setting any value beyond the 1–100 presets on both the global and per-role limits. Also fixes custom-provider embeddings end-to-end so indexing and queries use the same model (re-index your knowledge base if you had this on), adds an Azure OpenAI quick-start guide, and fixes the feedback "Send" button rendering as an invisible white-on-white block.
+= 3.2.9 - June 11, 2026 =
+Adds Claude Fable 5 — Anthropic's newest flagship model — to the model picker and Content Generator (and fixes Claude Opus 4.7/4.8 as Content Generator models). Adds a Stop button to halt streaming responses mid-answer, an "Images per Article" slider for the Content Generator, and a toggle to hide the Download Transcript menu item. Settings changes now apply immediately on cached sites — no more clearing caches after toggling. Restores in-chat PDF/Word upload, keeps chat-widget text out of your Google search snippets, and rebuilds the translation template so translators no longer lose work on updates. Also includes RTL admin-navigation, satisfaction-prompt, message-loss, and PHP 8.2 fixes.
 
 == License & Warranty ==
 

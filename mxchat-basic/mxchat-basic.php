@@ -3,7 +3,7 @@
  * Plugin Name: MxChat
  * Plugin URI: https://mxchat.ai/
  * Description: AI chatbot for WordPress with OpenAI, Claude, xAI, DeepSeek, live agent, PDF uploads, WooCommerce, and training on website data.
- * Version: 3.2.8
+ * Version: 3.2.9
  * Author: MxChat
  * Author URI: https://mxchat.ai
  * License: GPLv2 or later
@@ -359,6 +359,7 @@ function mxchat_include_classes() {
         'includes/class-mxchat-chunker.php',
         'includes/class-mxchat-word-handler.php',
         'includes/class-mxchat-content-generator.php',
+        'includes/class-mxchat-cache-purge.php',
         'includes/class-rest-api.php',
         'admin/class-ajax-handler.php',
         'admin/class-pinecone-manager.php',
@@ -1492,6 +1493,13 @@ function mxchat_init() {
         // for frontend CSS injection, plus wp_ajax_ hooks for admin.
         if (class_exists('MxChat_Content_Generator')) {
             new MxChat_Content_Generator();
+        }
+
+        // Initialize cache purge globally — settings writes can happen on any
+        // request type (admin screens, admin-ajax autosave, wp-cli), and the
+        // deferred-purge cron event fires on front-end requests.
+        if (class_exists('MxChat_Cache_Purge')) {
+            MxChat_Cache_Purge::init();
         }
 
         // Initialize REST API globally — endpoints must be registered on

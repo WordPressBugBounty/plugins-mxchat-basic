@@ -105,6 +105,61 @@ jQuery(document).ready(function($) {
         return withFreshNonce(callback);
     }
 
+    // Dynamic-settings refresh (plan-32db95).
+    //
+    // Every widget setting ships inline in cached page HTML, so behind a
+    // full-page cache the site owner can't purge (host cache, CDN, the
+    // browser itself) a toggled setting looks broken until the cache turns
+    // over. Same distrust-cached-HTML reasoning as the per-request nonce:
+    // on the FIRST widget open per page load we ask the nonce endpoint for
+    // the current behavior-gate settings (?with_settings=1), merge them over
+    // mxchatChat, and rebuild the header menu. Colors are NOT refreshed —
+    // they're server-inline-styled, so a runtime swap would visibly flash.
+    // On any failure we keep the inline values silently (nonce-fallback
+    // posture). At most one request per page load, only if a widget opens.
+    var dynamicSettingsState = 'idle'; // 'idle' | 'pending' | 'done'
+
+    function mxchatRefreshDynamicSettings() {
+        if (dynamicSettingsState !== 'idle') return;
+        if (typeof mxchatChat === 'undefined') return;
+        dynamicSettingsState = 'pending';
+
+        var applied = function (data) {
+            dynamicSettingsState = 'done';
+            if (!data) return; // endpoint unavailable — inline values stand.
+            if (data.nonce) {
+                // Seed the nonce cache too: saves the first send's REST
+                // round-trip and keeps us under the endpoint's rate limit.
+                cachedFreshNonce = data.nonce;
+                cachedFreshNonceFetchedAt = Date.now();
+                mxchatChat.nonce = data.nonce;
+            }
+            if (data.settings && typeof data.settings === 'object') {
+                $.extend(mxchatChat, data.settings);
+                mxchatRebuildHeaderMenus();
+            }
+        };
+
+        fetch(getRestNonceUrl() + '?with_settings=1', {
+            credentials: 'same-origin',
+            headers: { 'Accept': 'application/json' }
+        }).then(function (resp) {
+            if (!resp.ok) throw new Error('settings refresh failed: ' + resp.status);
+            return resp.json();
+        }).then(applied).catch(function () {
+            // Fallback: legacy admin-ajax refresh path, same as withFreshNonce.
+            if (mxchatChat.ajax_url) {
+                $.post(mxchatChat.ajax_url, { action: 'mxchat_refresh_nonce', with_settings: 1 })
+                    .done(function (res) {
+                        applied(res && res.success && res.data ? res.data : null);
+                    })
+                    .fail(function () { applied(null); });
+            } else {
+                applied(null);
+            }
+        });
+    }
+
     // ====================================
     // MULTI-INSTANCE MANAGEMENT SYSTEM
     // ====================================
@@ -549,6 +604,98 @@ function enableChatInput(botId) {
         sendButton.style.opacity = '1';
         sendButton.style.pointerEvents = 'auto';
     }
+    // Every completion path re-enables input, so this is the single restore
+    // point for the streaming Stop affordance (no-op when not in stop mode).
+    mxchatRestoreSendButton(botId);
+}
+
+// --- Streaming Stop control -------------------------------------------------
+// One live stream handle per bot instance, so Stop on one widget never aborts
+// another bot on the same page.
+var mxchatActiveStreams = {};
+// Original send-button markup, captured once per bot the first time the Stop
+// state is shown (never captured while already in stop mode, so a rapid
+// stop-then-resend can't save the stop glyph as the "original").
+var mxchatSendMarkup = {};
+
+function mxchatShowStopButton(botId) {
+    var btn = getElementDOM(botId, 'send-button');
+    if (!btn) return;
+    if (!btn.classList.contains('mxchat-stop-mode')) {
+        mxchatSendMarkup[botId] = {
+            html: btn.innerHTML,
+            label: btn.getAttribute('aria-label')
+        };
+    }
+
+    // Mirror the send icon's rendered size + color so the stop glyph looks
+    // native, including custom send images/colors and theme overrides.
+    var child = btn.querySelector('svg, img');
+    var size = 25;
+    var color = '';
+    if (child) {
+        var rect = child.getBoundingClientRect();
+        if (rect.width) {
+            size = Math.round(Math.min(rect.width, rect.height));
+        }
+        var cs = window.getComputedStyle(child);
+        color = (child.tagName.toLowerCase() === 'svg' ? cs.fill : cs.color) || '';
+    }
+    var stopLabel = (typeof mxchatChat !== 'undefined' && mxchatChat.stop_button_label) || 'Stop response';
+    btn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" aria-hidden="true" style="width:' + size + 'px;height:' + size + 'px;' + (color ? 'fill:' + color + ';' : '') + '"><rect x="5" y="5" width="14" height="14" rx="3"></rect></svg>';
+    // An add-on's DIRECT send-button handler (e.g. mxchat-vision's rebind) can
+    // start a stream synchronously while the originating click is still
+    // bubbling up to our delegated handler. Without this guard, that handler
+    // reads the just-added stop-mode class as a user Stop press and aborts the
+    // brand-new stream — the user's message renders but no reply ever fires
+    // (plan-4bba64 silent message loss). The flag only spans the current event
+    // dispatch: cleared on the next macrotask, long before a real Stop click.
+    btn.__mxchatStopJustShown = true;
+    setTimeout(function () { btn.__mxchatStopJustShown = false; }, 0);
+    btn.classList.add('mxchat-stop-mode');
+    btn.setAttribute('aria-label', stopLabel);
+    btn.setAttribute('title', stopLabel);
+    // disableChatInput() ran when the turn was sent; the Stop control itself
+    // must stay clickable while the textarea remains disabled.
+    btn.disabled = false;
+    btn.style.opacity = '1';
+    btn.style.pointerEvents = 'auto';
+}
+
+function mxchatRestoreSendButton(botId) {
+    var btn = getElementDOM(botId, 'send-button');
+    var saved = mxchatSendMarkup[botId];
+    if (!btn || !btn.classList.contains('mxchat-stop-mode') || !saved) return;
+    btn.innerHTML = saved.html;
+    btn.classList.remove('mxchat-stop-mode');
+    btn.removeAttribute('title');
+    if (saved.label) {
+        btn.setAttribute('aria-label', saved.label);
+    }
+}
+
+function mxchatStopStreaming(botId) {
+    var entry = mxchatActiveStreams[botId];
+    if (!entry || !entry.controller) return;
+    entry.aborted = true;
+    try { entry.controller.abort(); } catch (e) {}
+}
+
+// Returns true when a stream rejection came from an intentional Stop click:
+// keep the partial text as the turn's answer — no error UI, no fallback resend.
+function mxchatHandleStreamAbort(botId, accumulatedContent, callback) {
+    var entry = mxchatActiveStreams[botId];
+    if (!entry || !entry.aborted) return false;
+    delete mxchatActiveStreams[botId];
+    if (!accumulatedContent) {
+        // Stopped before the first chunk: drop the thinking bubble, no orphan message.
+        getElement(botId, 'chat-box').find('.bot-message.temporary-message').remove();
+    }
+    enableChatInput(botId); // also restores the send icon
+    if (callback) {
+        callback(accumulatedContent || '');
+    }
+    return true;
 }
 
 // Update your existing sendMessage function
@@ -691,6 +838,13 @@ function getMxChatBotId(element) {
 
 function callMxChat(message, callback, botId) {
     botId = botId || getMxChatBotId();
+
+    // Streaming fallbacks land here: drop any leftover stream handle and
+    // return the button to its send state (no-op for plain non-stream turns).
+    if (mxchatActiveStreams[botId]) {
+        delete mxchatActiveStreams[botId];
+    }
+    mxchatRestoreSendButton(botId);
 
     // Store the message in case we need to retry after session reset
     getElement(botId, 'mxchat-chatbot-wrapper').find('.mxchat-input-holder textarea').data('pending-message', message);
@@ -1000,10 +1154,18 @@ function callMxChatStream(message, callback, botId) {
     let testingDataReceived = false;
     let streamingStarted = false;
 
+    // Abortable stream: a fresh controller per turn, keyed by bot instance.
+    // The Stop control (send button swapped in place) aborts both the read
+    // loop and the underlying request.
+    var streamControl = { controller: new AbortController(), aborted: false };
+    mxchatActiveStreams[botId] = streamControl;
+    mxchatShowStopButton(botId);
+
     fetch(mxchatChat.ajax_url, {
         method: 'POST',
         body: formData,
-        credentials: 'same-origin'
+        credentials: 'same-origin',
+        signal: streamControl.controller.signal
     })
     .then(response => {
         // Store the response for potential fallback handling
@@ -1172,6 +1334,7 @@ function callMxChatStream(message, callback, botId) {
 
                 processStream();
             }).catch(streamError => {
+                if (mxchatHandleStreamAbort(botId, accumulatedContent, callback)) return;
                 getElement(botId, 'chat-box').find('.bot-message.temporary-message').remove();
                 callMxChat(message, callback, botId);
             });
@@ -1180,6 +1343,7 @@ function callMxChatStream(message, callback, botId) {
         processStream();
     })
         .catch(error => {
+            if (mxchatHandleStreamAbort(botId, accumulatedContent, callback)) return;
             // Check if we have server error data with chat mode
             if (error && error.isServerError && error.data) {
                 // Check for chat mode in error data
@@ -1405,6 +1569,15 @@ function isStreamingSupported(model) {
 // Use class-based selectors for multi-instance support
 $(document).on('click', '.send-button', function() {
     var botId = getBotIdFromElement(this);
+    // While a response is streaming the button is a Stop control.
+    if (this.classList.contains('mxchat-stop-mode')) {
+        // Same click that just started this stream (an add-on's direct handler
+        // ran before this delegated one) — not a Stop press. See
+        // mxchatShowStopButton for the full story (plan-4bba64).
+        if (this.__mxchatStopJustShown) return;
+        mxchatStopStreaming(botId);
+        return;
+    }
     var modeIndicator = getElementDOM(botId, 'chat-mode-indicator');
     if (!(modeIndicator && modeIndicator.textContent === 'Live Agent')) {
         disableChatInput(botId);
@@ -1523,28 +1696,29 @@ function mxchatSyncMenuColors(botId, $wrap) {
     if (fg) $wrap[0].style.setProperty('--mxchat-menu-fg', fg);
 }
 
-// One-time per-widget init: renders menu items, wires open/close,
-// outside-click, Escape, and arrow-key navigation. If no items, hides the trigger.
-function mxchatInitHeaderMenu(botId) {
-    var $wrap = $('.mxchat-header-menu-wrap[data-bot-id="' + botId + '"]').first();
-    if (!$wrap.length || $wrap.data('mxchatMenuReady')) return;
-
+// Renders (or re-renders) the item list for one menu wrap. Split out of
+// mxchatInitHeaderMenu so the dynamic-settings merge (plan-32db95) can
+// rebuild items + trigger visibility WITHOUT re-binding the one-time
+// open/close/keyboard wiring. closeMenu is passed in by the init closure;
+// a rebuild before init (never happens, but harmless) just skips it.
+function mxchatRenderHeaderMenuItems(botId, $wrap, closeMenuFn) {
     var $trigger = $wrap.find('.mxchat-menu-trigger');
     var $menu = $wrap.find('.mxchat-header-menu');
     var items = mxchatGetHeaderMenuItems(botId);
 
-    // Initial color sync — covers normal page load.
-    mxchatSyncMenuColors(botId, $wrap);
+    $menu.empty();
 
     if (!items.length) {
         $trigger.hide();
         $menu.hide();
-        $wrap.data('mxchatMenuReady', true);
         return;
     }
 
-    // Build the menu items.
-    $menu.empty();
+    // Clear any inline display:none a previous zero-item render left behind —
+    // open/close visibility is governed by the hidden prop + is-open class.
+    $trigger.css('display', '');
+    $menu.css('display', '');
+
     items.forEach(function(item, idx) {
         var $btn = $('<button>', {
             type: 'button',
@@ -1559,11 +1733,47 @@ function mxchatInitHeaderMenu(botId) {
         $btn.on('click', function(e) {
             e.preventDefault();
             e.stopPropagation();
-            closeMenu();
+            if (closeMenuFn) closeMenuFn();
             try { item.action(); } catch (err) { /* no-op */ }
         });
         $menu.append($btn);
     });
+}
+
+// Re-render every menu on the page after a dynamic-settings merge
+// (multi-bot: each wrap re-reads its items). An OPEN menu is left alone —
+// swapping items under the user mid-interaction yanks focus — and the
+// rebuild runs when it closes instead (closeMenu checks the pending flag).
+function mxchatRebuildHeaderMenus() {
+    $('.mxchat-header-menu-wrap').each(function() {
+        var $wrap = $(this);
+        var botId = $wrap.data('bot-id');
+        if (!botId) return;
+        if (!$wrap.data('mxchatMenuReady')) {
+            mxchatInitHeaderMenu(botId);
+            return;
+        }
+        if ($wrap.find('.mxchat-header-menu').hasClass('is-open')) {
+            $wrap.data('mxchatMenuRebuildPending', true);
+            return;
+        }
+        mxchatRenderHeaderMenuItems(botId, $wrap, $wrap.data('mxchatMenuClose'));
+    });
+}
+
+// One-time per-widget init: renders menu items, wires open/close,
+// outside-click, Escape, and arrow-key navigation. If no items, hides the
+// trigger. Wiring happens even when there are zero items at init, so a
+// later dynamic-settings rebuild that adds items has a working trigger.
+function mxchatInitHeaderMenu(botId) {
+    var $wrap = $('.mxchat-header-menu-wrap[data-bot-id="' + botId + '"]').first();
+    if (!$wrap.length || $wrap.data('mxchatMenuReady')) return;
+
+    var $trigger = $wrap.find('.mxchat-menu-trigger');
+    var $menu = $wrap.find('.mxchat-header-menu');
+
+    // Initial color sync — covers normal page load.
+    mxchatSyncMenuColors(botId, $wrap);
 
     function openMenu() {
         // Re-sync each open in case the active theme changed since init.
@@ -1580,6 +1790,12 @@ function mxchatInitHeaderMenu(botId) {
         $trigger.attr('aria-expanded', 'false');
         $menu.find('.mxchat-menu-item').attr('tabindex', '-1');
         if (returnFocus) $trigger.trigger('focus');
+        // A dynamic-settings rebuild that arrived while the menu was open
+        // was deferred (mxchatRebuildHeaderMenus) — run it now.
+        if ($wrap.data('mxchatMenuRebuildPending')) {
+            $wrap.removeData('mxchatMenuRebuildPending');
+            mxchatRenderHeaderMenuItems(botId, $wrap, closeMenu);
+        }
     }
 
     // Toggle on trigger click — stop propagation so the .chatbot-top-bar
@@ -1635,6 +1851,11 @@ function mxchatInitHeaderMenu(botId) {
         }
     });
 
+    // Expose closeMenu for out-of-closure re-renders (mxchatRebuildHeaderMenus),
+    // then do the initial item render.
+    $wrap.data('mxchatMenuClose', closeMenu);
+    mxchatRenderHeaderMenuItems(botId, $wrap, closeMenu);
+
     $wrap.data('mxchatMenuReady', true);
 }
 
@@ -1644,6 +1865,16 @@ $(function() {
         var botId = $(this).data('bot-id');
         if (botId) mxchatInitHeaderMenu(botId);
     });
+
+    // Embedded (non-floating) widgets are open from the moment the page
+    // renders — refresh dynamic settings at init (plan-32db95). Floating
+    // widgets refresh on first launcher open instead.
+    var hasEmbeddedWidget = $('.mxchat-chatbot-wrapper').filter(function() {
+        return !$(this).closest('.floating-chatbot').length;
+    }).length > 0;
+    if (hasEmbeddedWidget) {
+        mxchatRefreshDynamicSettings();
+    }
 });
 
 function appendMessage(sender, messageText = '', messageHtml = '', images = [], isTemporary = false, botId = 'default') {
@@ -2793,8 +3024,8 @@ function loadChatHistory(botId, onComplete) {
             if (data.success) {
                 container.style.display = 'none';
                 nameElement.textContent = '';
-                activePdfFile = null;
-                appendMessage('bot', 'PDF removed.');
+                instance.activePdfFile = null;
+                appendMessage('bot', 'PDF removed.', '', [], false, botId);
             }
         })
         .catch(error => {
@@ -2802,12 +3033,14 @@ function loadChatHistory(botId, onComplete) {
         });
     }
 
-    function removeActiveWord() {
-        const container = document.getElementById('active-word-container');
-        const nameElement = document.getElementById('active-word-name');
-        
-        if (!container || !nameElement || !activeWordFile) return;
-    
+    function removeActiveWord(botId) {
+        botId = botId || 'default';
+        var instance = MxChatInstances.get(botId);
+        const container = getElementDOM(botId, 'active-word-container');
+        const nameElement = getElementDOM(botId, 'active-word-name');
+
+        if (!container || !nameElement || !instance.activeWordFile) return;
+
         fetch(mxchatChat.ajax_url, {
             method: 'POST',
             headers: {
@@ -2815,7 +3048,7 @@ function loadChatHistory(botId, onComplete) {
             },
             body: new URLSearchParams({
                 'action': 'mxchat_remove_word',
-                'session_id': sessionId,
+                'session_id': getChatSession(botId),
                 'nonce': mxchatChat.nonce
             })
         })
@@ -2824,8 +3057,8 @@ function loadChatHistory(botId, onComplete) {
             if (data.success) {
                 container.style.display = 'none';
                 nameElement.textContent = '';
-                activeWordFile = null;
-                appendMessage('bot', 'Word document removed.');
+                instance.activeWordFile = null;
+                appendMessage('bot', 'Word document removed.', '', [], false, botId);
             }
         })
         .catch(error => {
@@ -3007,6 +3240,11 @@ $(document).on('click', '.questions-collapse-btn', function(e) {
             disableScroll();
             $preChat.fadeOut(250);
 
+            // First open per page load: re-fetch behavior settings in case
+            // this page's inline values came from a stale full-page cache
+            // (plan-32db95). Idempotent — later opens are a no-op.
+            mxchatRefreshDynamicSettings();
+
             // Load chat history for returning visitors (persistence)
             var chatPersistenceEnabled = typeof mxchatChat !== 'undefined' && mxchatChat.chat_persistence_toggle === 'on';
             if (chatPersistenceEnabled) {
@@ -3092,15 +3330,18 @@ $(document).on('click', '.questions-collapse-btn', function(e) {
         if (wordInput) wordInput.click();
     });
     
-    // PDF file input change handler
-    addSafeEventListener('pdf-upload', 'change', async function(e) {
-        const file = e.target.files[0];
-    
+    // PDF file input change handler - delegated, bot-aware (was bound to stale un-suffixed id 'pdf-upload')
+    $(document).on('change', '.pdf-upload', async function(e) {
+        var botId = getBotIdFromElement(this);
+        var instance = MxChatInstances.get(botId);
+        const file = this.files[0];
+        const sessionId = MxChatInstances.ensureSession(botId);
+
         if (!file || file.type !== 'application/pdf') {
             alert('Please select a valid PDF file.');
             return;
         }
-    
+
         if (!sessionId) {
             alert('Error: No session ID found');
             return;
@@ -3110,12 +3351,13 @@ $(document).on('click', '.questions-collapse-btn', function(e) {
             alert('Error: Ajax configuration missing');
             return;
         }
-    
+
         // Disable buttons and show loading state
-        const uploadBtn = document.getElementById('pdf-upload-btn');
-        const sendBtn = document.getElementById('send-button');
+        const uploadBtn = getElementDOM(botId, 'pdf-upload-btn');
+        const sendBtn = getElementDOM(botId, 'send-button');
+        if (!uploadBtn) return;
         const originalBtnContent = uploadBtn.innerHTML;
-    
+
         try {
             // Wait for page-cache nonce refresh before reading mxchatChat.nonce. See plan-c5457f.
             await new Promise(function(resolve) { refreshNonceIfNeeded(resolve); });
@@ -3124,33 +3366,32 @@ $(document).on('click', '.questions-collapse-btn', function(e) {
             formData.append('pdf_file', file);
             formData.append('session_id', sessionId);
             formData.append('nonce', mxchatChat.nonce);
-    
+
             uploadBtn.disabled = true;
-            sendBtn.disabled = true;
+            if (sendBtn) sendBtn.disabled = true;
             uploadBtn.innerHTML = `<svg class="spinner" viewBox="0 0 50 50">
                 <circle cx="25" cy="25" r="20" fill="none" stroke-width="5"></circle>
             </svg>`;
-    
+
             const response = await fetch(mxchatChat.ajax_url, {
                 method: 'POST',
                 body: formData
             });
-    
+
             const data = await response.json();
-    
+
             if (data.success) {
                 // Hide popular questions if they exist
-                const popularQuestionsContainer = document.getElementById('mxchat-popular-questions');
-                if (hasQuickQuestions()) {
-                    collapseQuickQuestions();
+                if (hasQuickQuestions(botId)) {
+                    collapseQuickQuestions(botId);
                 }
-                
+
                 // Show the active PDF name
-                showActivePdf(data.data.filename);
-                
-                appendMessage('bot', data.data.message);
-                scrollToBottom();
-                activePdfFile = data.data.filename;
+                showActivePdf(data.data.filename, botId);
+
+                appendMessage('bot', data.data.message, '', [], false, botId);
+                scrollToBottom(botId);
+                instance.activePdfFile = data.data.filename;
             } else {
                 alert('Failed to upload PDF. Please try again.');
             }
@@ -3158,31 +3399,40 @@ $(document).on('click', '.questions-collapse-btn', function(e) {
             alert('Error uploading file. Please try again.');
         } finally {
             uploadBtn.disabled = false;
-            sendBtn.disabled = false;
+            if (sendBtn) sendBtn.disabled = false;
             uploadBtn.innerHTML = originalBtnContent;
             this.value = ''; // Reset file input
         }
     });
     
-    // Word file input change handler
-    addSafeEventListener('word-upload', 'change', async function(e) {
-        const file = e.target.files[0];
-    
+    // Word file input change handler - delegated, bot-aware (was bound to stale un-suffixed id 'word-upload')
+    $(document).on('change', '.word-upload', async function(e) {
+        var botId = getBotIdFromElement(this);
+        var instance = MxChatInstances.get(botId);
+        const file = this.files[0];
+        const sessionId = MxChatInstances.ensureSession(botId);
+
         if (!file || file.type !== 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') {
             alert('Please select a valid Word document (.docx).');
             return;
         }
-    
+
         if (!sessionId) {
             alert('Error: No session ID found');
             return;
         }
 
+        if (!mxchatChat || !mxchatChat.ajax_url || !mxchatChat.nonce) {
+            alert('Error: Ajax configuration missing');
+            return;
+        }
+
         // Disable buttons and show loading state
-        const uploadBtn = document.getElementById('word-upload-btn');
-        const sendBtn = document.getElementById('send-button');
+        const uploadBtn = getElementDOM(botId, 'word-upload-btn');
+        const sendBtn = getElementDOM(botId, 'send-button');
+        if (!uploadBtn) return;
         const originalBtnContent = uploadBtn.innerHTML;
-    
+
         try {
             // Wait for page-cache nonce refresh before reading mxchatChat.nonce. See plan-c5457f.
             await new Promise(function(resolve) { refreshNonceIfNeeded(resolve); });
@@ -3191,33 +3441,32 @@ $(document).on('click', '.questions-collapse-btn', function(e) {
             formData.append('word_file', file);
             formData.append('session_id', sessionId);
             formData.append('nonce', mxchatChat.nonce);
-    
+
             uploadBtn.disabled = true;
-            sendBtn.disabled = true;
+            if (sendBtn) sendBtn.disabled = true;
             uploadBtn.innerHTML = `<svg class="spinner" viewBox="0 0 50 50">
                 <circle cx="25" cy="25" r="20" fill="none" stroke-width="5"></circle>
             </svg>`;
-    
+
             const response = await fetch(mxchatChat.ajax_url, {
                 method: 'POST',
                 body: formData
             });
-    
+
             const data = await response.json();
-    
+
             if (data.success) {
                 // Hide popular questions if they exist
-                const popularQuestionsContainer = document.getElementById('mxchat-popular-questions');
-                if (hasQuickQuestions()) {
-                    collapseQuickQuestions();
+                if (hasQuickQuestions(botId)) {
+                    collapseQuickQuestions(botId);
                 }
-    
+
                 // Show the active Word document name
-                showActiveWord(data.data.filename);
-                
-                appendMessage('bot', data.data.message);
-                scrollToBottom();
-                activeWordFile = data.data.filename;
+                showActiveWord(data.data.filename, botId);
+
+                appendMessage('bot', data.data.message, '', [], false, botId);
+                scrollToBottom(botId);
+                instance.activeWordFile = data.data.filename;
             } else {
                 alert('Failed to upload Word document. Please try again.');
             }
@@ -3225,23 +3474,23 @@ $(document).on('click', '.questions-collapse-btn', function(e) {
             alert('Error uploading file. Please try again.');
         } finally {
             uploadBtn.disabled = false;
-            sendBtn.disabled = false;
+            if (sendBtn) sendBtn.disabled = false;
             uploadBtn.innerHTML = originalBtnContent;
             this.value = ''; // Reset file input
         }
     });
     
-    // Remove button click handlers
-    document.getElementById('remove-pdf-btn')?.addEventListener('click', function(e) {
+    // Remove button click handlers - delegated, bot-aware (were bound to stale un-suffixed ids)
+    $(document).on('click', '.remove-pdf-btn', function(e) {
         e.preventDefault();
         e.stopPropagation();
-        removeActivePdf();
+        removeActivePdf(getBotIdFromElement(this));
     });
-    
-    document.getElementById('remove-word-btn')?.addEventListener('click', function(e) {
+
+    $(document).on('click', '.remove-word-btn', function(e) {
         e.preventDefault();
         e.stopPropagation();
-        removeActiveWord();
+        removeActiveWord(getBotIdFromElement(this));
     });
     
     // Window resize handlers
@@ -3944,11 +4193,24 @@ document.addEventListener("click", (e) => {
 // ============================================================================
 // Per-session 👍/👎 prompt that appears in the chat-box after 60s of user
 // inactivity following a bot reply. One prompt per session, deduped via
-// localStorage. Disabled site-wide when mxchatChat.satisfaction_rating_enabled
-// is exactly false (default ON).
+// localStorage. Runs ONLY when the satisfaction_rating_enabled option is on —
+// the option (default off) is authoritative.
 jQuery(function($) {
     if (typeof mxchatChat === 'undefined') return;
-    if (mxchatChat.satisfaction_rating_enabled === false || mxchatChat.satisfaction_rating_enabled === 'off') return;
+    // wp_localize_script stringifies scalars: a PHP boolean false arrives as
+    // '' and true as '1', so this must be an explicit-enable allowlist — the
+    // old "disabled when exactly false/'off'" check let '' through and the
+    // bubble rendered on sites with the option off/unset (plan-4bba64). PHP
+    // now emits 'on'/'off' strings; true/'1'/1 keep cached pre-fix HTML
+    // (boolean-true localizations) working.
+    // NOTE (plan-32db95): this gate reads the INLINE value at DOM ready and is
+    // deliberately NOT re-evaluated after the widget's dynamic-settings refresh
+    // merges fresh values over mxchatChat (that merge fires on first widget
+    // open, after this module has already decided). Re-evaluating would mean
+    // restructuring the whole module to late-bind its listeners — not worth it
+    // for a prompt that is at worst stale for one page load on a cached page.
+    var sre = mxchatChat.satisfaction_rating_enabled;
+    if (sre !== 'on' && sre !== true && sre !== '1' && sre !== 1) return;
 
     // wp_localize_script stringifies ints, so accept both number and numeric string.
     var idleRaw = mxchatChat.satisfaction_rating_idle_seconds;

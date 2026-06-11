@@ -523,6 +523,7 @@ function mxchat_render_content_page($admin_instance) {
                                             'gpt-5'                => 'GPT-5',
                                         ),
                                         'Anthropic' => array(
+                                            'claude-fable-5'               => 'Claude Fable 5',
                                             'claude-opus-4-8'              => 'Claude Opus 4.8',
                                             'claude-opus-4-7'              => 'Claude Opus 4.7',
                                             'claude-opus-4-6'              => 'Claude Opus 4.6',
@@ -616,6 +617,33 @@ function mxchat_render_content_page($admin_instance) {
                             </label>
                             <p class="mxch-field-description"><?php esc_html_e('When enabled, AI will generate and place images throughout your content. When disabled, pages are generated with text-only layouts.', 'mxchat'); ?></p>
                         </div>
+
+                        <!-- Images per Article -->
+                        <div class="mxch-field">
+                            <label class="mxch-field-label" for="mxch-image-count"><?php esc_html_e('Images per Article', 'mxchat'); ?></label>
+                            <div class="mxch-field-control">
+                                <?php $image_count = max(1, min(5, (int) ($options['content_image_count'] ?? 3))); ?>
+                                <?php $images_on = ($options['content_enable_images'] ?? 'on') === 'on'; ?>
+                                <div class="mxch-cg-slider-row">
+                                    <input type="range" min="1" max="5" step="1" value="<?php echo esc_attr($image_count); ?>"
+                                           data-field="content_image_count" id="mxch-image-count" class="mxch-cg-slider"<?php echo $images_on ? '' : ' disabled'; ?>>
+                                    <span id="mxch-image-count-val" class="mxch-cg-slider-value"><?php echo esc_html($image_count); ?></span>
+                                </div>
+                            </div>
+                            <p class="mxch-field-description"><?php esc_html_e('How many images to generate and place in each article (1–5). Default 3. The AI may generate fewer if the article has few sections suited to imagery.', 'mxchat'); ?></p>
+                        </div>
+                        <script>(function(){
+                            var s = document.getElementById('mxch-image-count');
+                            var v = document.getElementById('mxch-image-count-val');
+                            if (!s || !v || s._wired) { return; } s._wired = true;
+                            s.addEventListener('input', function(){ v.textContent = s.value; });
+                            var e = document.querySelector('[data-field="content_enable_images"]');
+                            if (e) {
+                                var syncCount = function(){ s.disabled = !e.checked; };
+                                e.addEventListener('change', syncCount);
+                                syncCount();
+                            }
+                        })();</script>
 
                         <!-- Internal Linking (Pro) -->
                         <div class="mxch-field mxch-cg-pro-field<?php echo $pro_internal_linking ? '' : ' mxch-cg-pro-locked'; ?>">

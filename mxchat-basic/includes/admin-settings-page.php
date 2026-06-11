@@ -359,6 +359,11 @@ function mxchat_render_settings_page($admin_instance) {
                         mxchat_render_field_wrapper('chat_persistence', __('Chat Persistence', 'mxchat'), function() use ($admin_instance) {
                             $admin_instance->mxchat_chat_persistence_toggle_callback();
                         }, __('Keep chat history when users navigate or return within 24 hours.', 'mxchat'));
+
+                        // Download Transcript button
+                        mxchat_render_field_wrapper('print_button', __('Show Download Transcript Button', 'mxchat'), function() use ($admin_instance) {
+                            $admin_instance->mxchat_print_button_toggle_callback();
+                        }, __('Show the "Download Transcript" item in the chat window menu.', 'mxchat'));
                         ?>
                     </div>
                 </div>

@@ -732,7 +732,18 @@ class MxChat_Content_Generator {
     private function plan_content($prompt, $content_type) {
         $type_label = ($content_type === 'page') ? 'landing page' : 'blog post';
 
-        $system_prompt = "You are a professional content strategist. The user wants to create a {$type_label}. Analyze their request and create a detailed content plan.\n\nYou MUST respond with ONLY valid JSON (no markdown, no code fences, no commentary). Use this exact structure:\n\n{\"title\": \"SEO-optimized title\", \"slug\": \"url-friendly-slug\", \"meta_description\": \"155 character meta description for SEO\", \"keywords\": [\"keyword1\", \"keyword2\", \"keyword3\", \"keyword4\", \"keyword5\"], \"links\": [{\"label\": \"Button or link text\", \"url\": \"https://example.com/page\"}], \"sections\": [{\"type\": \"hero\", \"heading\": \"Main heading\", \"subheading\": \"Supporting text\", \"needs_image\": true, \"image_prompt\": \"Detailed prompt for hero image\"}, {\"type\": \"content\", \"heading\": \"Section heading\", \"key_points\": [\"point 1\", \"point 2\"], \"needs_image\": true, \"image_prompt\": \"Detailed prompt for section image\"}, {\"type\": \"content\", \"heading\": \"Another section\", \"key_points\": [\"point 1\", \"point 2\"], \"needs_image\": false, \"image_prompt\": \"\"}, {\"type\": \"cta\", \"heading\": \"Call to action heading\", \"subheading\": \"CTA supporting text\", \"needs_image\": false, \"image_prompt\": \"\"}]}\n\nGuidelines:\n- Create 5-9 sections for blog posts, 7-11 for landing pages — add more if the user's request warrants extensive coverage\n- For landing pages, draw from sections like: hero, problem/solution, features, benefits, how-it-works, use cases, testimonials/social proof, pricing or comparison, FAQ, and final CTA — pick whichever fit the request\n- Each content section should include 3-5 substantive key_points (full descriptive sentences, not one-word labels) so the HTML generator has enough material to write meaningful copy\n- Include 2-4 sections that need images\n- Image prompts should be detailed, descriptive, and suitable for AI image generation\n- Image prompts should describe photorealistic or illustrative images relevant to the content\n- Keywords should be relevant long-tail SEO keywords\n- Title should be compelling and SEO-friendly\n- IMPORTANT: If the user specifies any URLs or links (for buttons, CTAs, navigation, etc.), you MUST capture every one of them in the \"links\" array with its label and exact URL. If no URLs are mentioned, use an empty array [].";
+        // "Images per article" control (1–5, default 3). Drives how many sections the
+        // planner marks needs_image:true. When image generation is off, force zero.
+        $plan_options   = get_option('mxchat_options', array());
+        $images_enabled = ($plan_options['content_enable_images'] ?? 'on') === 'on';
+        $image_count    = max(1, min(5, (int) ($plan_options['content_image_count'] ?? 3)));
+        if ($images_enabled) {
+            $image_instruction = "- Select EXACTLY {$image_count} section(s) to illustrate: set \"needs_image\": true with a detailed \"image_prompt\" on exactly those {$image_count} section(s) and \"needs_image\": false with an empty \"image_prompt\" on every other section. Spread the illustrated sections across the article (favor the hero and the most visual content sections)";
+        } else {
+            $image_instruction = "- Set \"needs_image\": false and \"image_prompt\": \"\" on ALL sections (image generation is turned off for this site)";
+        }
+
+        $system_prompt = "You are a professional content strategist. The user wants to create a {$type_label}. Analyze their request and create a detailed content plan.\n\nYou MUST respond with ONLY valid JSON (no markdown, no code fences, no commentary). Use this exact structure:\n\n{\"title\": \"SEO-optimized title\", \"slug\": \"url-friendly-slug\", \"meta_description\": \"155 character meta description for SEO\", \"keywords\": [\"keyword1\", \"keyword2\", \"keyword3\", \"keyword4\", \"keyword5\"], \"links\": [{\"label\": \"Button or link text\", \"url\": \"https://example.com/page\"}], \"sections\": [{\"type\": \"hero\", \"heading\": \"Main heading\", \"subheading\": \"Supporting text\", \"needs_image\": true, \"image_prompt\": \"Detailed prompt for hero image\"}, {\"type\": \"content\", \"heading\": \"Section heading\", \"key_points\": [\"point 1\", \"point 2\"], \"needs_image\": true, \"image_prompt\": \"Detailed prompt for section image\"}, {\"type\": \"content\", \"heading\": \"Another section\", \"key_points\": [\"point 1\", \"point 2\"], \"needs_image\": false, \"image_prompt\": \"\"}, {\"type\": \"cta\", \"heading\": \"Call to action heading\", \"subheading\": \"CTA supporting text\", \"needs_image\": false, \"image_prompt\": \"\"}]}\n\nGuidelines:\n- Create 5-9 sections for blog posts, 7-11 for landing pages — add more if the user's request warrants extensive coverage\n- For landing pages, draw from sections like: hero, problem/solution, features, benefits, how-it-works, use cases, testimonials/social proof, pricing or comparison, FAQ, and final CTA — pick whichever fit the request\n- Each content section should include 3-5 substantive key_points (full descriptive sentences, not one-word labels) so the HTML generator has enough material to write meaningful copy\n{$image_instruction}\n- Image prompts should be detailed, descriptive, and suitable for AI image generation\n- Image prompts should describe photorealistic or illustrative images relevant to the content\n- Keywords should be relevant long-tail SEO keywords\n- Title should be compelling and SEO-friendly\n- IMPORTANT: If the user specifies any URLs or links (for buttons, CTAs, navigation, etc.), you MUST capture every one of them in the \"links\" array with its label and exact URL. If no URLs are mentioned, use an empty array [].";
 
         $messages = array(
             array('role' => 'user', 'content' => "Create a {$type_label} about: {$prompt}"),
@@ -787,6 +798,13 @@ class MxChat_Content_Generator {
                     'heading' => $section['heading'] ?? 'Section',
                 );
             }
+        }
+
+        // Safety cap: never generate more than the user-configured "Images per article"
+        // count (1–5, default 3), even if the planner over-marked needs_image sections.
+        $image_count = max(1, min(5, (int) ($options['content_image_count'] ?? 3)));
+        if (count($image_sections) > $image_count) {
+            $image_sections = array_slice($image_sections, 0, $image_count);
         }
 
         if (empty($image_sections)) {
@@ -2350,6 +2368,13 @@ article .entry-content,
             'system'     => $system_prompt,
         );
 
+        // Anthropic removed temperature on Opus 4.7+ flagships (400 if sent) —
+        // same list as the integrator's mxchat_claude_omits_temperature().
+        $no_temp = array('claude-opus-4-7', 'claude-opus-4-8', 'claude-fable-5');
+        if (in_array($model, $no_temp, true)) {
+            unset($body['temperature']);
+        }
+
         $timeout = ($max_tokens > 8000) ? 300 : 120;
 
         $response = wp_remote_post('https://api.anthropic.com/v1/messages', array(
@@ -2374,8 +2399,14 @@ article .entry-content,
             return new WP_Error('claude_error', $error_msg);
         }
 
-        if (isset($decoded['content'][0]['text'])) {
-            return trim($decoded['content'][0]['text']);
+        // claude-fable-5 prepends a thinking block to content — take the
+        // first TEXT block, not content[0].
+        if (isset($decoded['content']) && is_array($decoded['content'])) {
+            foreach ($decoded['content'] as $block) {
+                if (isset($block['type'], $block['text']) && $block['type'] === 'text') {
+                    return trim($block['text']);
+                }
+            }
         }
 
         return new WP_Error('unexpected_response', __('Unexpected Claude response format.', 'mxchat'));
@@ -2487,7 +2518,7 @@ article .entry-content,
         $field = sanitize_text_field($_POST['field'] ?? '');
         $value = sanitize_text_field($_POST['value'] ?? '');
 
-        $allowed_fields = array('content_model', 'content_image_model', 'content_image_quality', 'content_enable_images', 'content_use_placeholders', 'content_internal_linking', 'content_tool_use', 'seo_optimize_meta_desc', 'seo_optimize_seo_title', 'seo_optimize_slug', 'seo_optimize_readability', 'seo_optimize_internal_links', 'seo_optimize_img_alt', 'seo_optimize_featured_img');
+        $allowed_fields = array('content_model', 'content_image_model', 'content_image_quality', 'content_image_count', 'content_enable_images', 'content_use_placeholders', 'content_internal_linking', 'content_tool_use', 'seo_optimize_meta_desc', 'seo_optimize_seo_title', 'seo_optimize_slug', 'seo_optimize_readability', 'seo_optimize_internal_links', 'seo_optimize_img_alt', 'seo_optimize_featured_img');
         if (!in_array($field, $allowed_fields, true)) {
             wp_send_json_error(array('message' => __('Invalid field.', 'mxchat')));
         }
@@ -2500,6 +2531,11 @@ article .entry-content,
         // Enum field: image quality
         if ($field === 'content_image_quality') {
             $value = in_array($value, array('auto', 'low', 'medium', 'high'), true) ? $value : 'auto';
+        }
+
+        // Integer field: images per article (clamp 1–5)
+        if ($field === 'content_image_count') {
+            $value = (string) max(1, min(5, (int) $value));
         }
 
         $options = get_option('mxchat_options', array());
