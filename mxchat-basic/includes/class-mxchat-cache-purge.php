@@ -60,11 +60,20 @@ class MxChat_Cache_Purge {
     /**
      * Option names whose writes trigger a page-cache purge.
      *
+     * Defaults cover every option whose values reach the cached page's inline
+     * widget payload: mxchat_options (settings/behavior gates),
+     * mxchat_theme_options (active AI theme CSS + bot theme assignments —
+     * written only by the MxChat Theme add-on's admin AJAX actions), and
+     * mxchat_prompts_options (Pinecone toggle — written only by the prompts
+     * autosave). All write sites are admin-action-driven; the debounce
+     * absorbs back-to-back writes like apply-and-save.
+     *
      * @return string[]
      */
     private function watched_options() {
-        $options = apply_filters('mxchat_cache_purge_watched_options', array('mxchat_options'));
-        return is_array($options) ? array_filter(array_map('strval', $options)) : array('mxchat_options');
+        $defaults = array('mxchat_options', 'mxchat_theme_options', 'mxchat_prompts_options');
+        $options  = apply_filters('mxchat_cache_purge_watched_options', $defaults);
+        return is_array($options) ? array_filter(array_map('strval', $options)) : $defaults;
     }
 
     /**

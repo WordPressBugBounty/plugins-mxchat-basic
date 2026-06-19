@@ -2344,6 +2344,10 @@ article .entry-content,
      * Call Claude (Anthropic) API
      */
     private function call_claude($model, $api_key, $system_prompt, $messages, $max_tokens) {
+        // Anthropic retired claude-opus-4-20250514 / claude-sonnet-4-20250514 on 2026-06-15.
+        // Read-time rescue: remap a saved dead ID to the current equivalent before the API call.
+        if ($model === 'claude-opus-4-20250514') { $model = 'claude-opus-4-8'; }
+        elseif ($model === 'claude-sonnet-4-20250514') { $model = 'claude-sonnet-4-6'; }
         if (empty($api_key)) {
             return new WP_Error('no_api_key', __('Claude API key not configured.', 'mxchat'));
         }

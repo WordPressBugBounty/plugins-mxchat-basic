@@ -98,8 +98,6 @@ class MxChat_Model_Catalog {
                     'claude-sonnet-4-5-20250929'  => array('label' => 'Claude Sonnet 4.5',   'description' => __('Best for complex agents and coding', 'mxchat')),
                     'claude-opus-4-1-20250805'    => array('label' => 'Claude Opus 4.1',     'description' => __('Exceptional for specialized complex tasks', 'mxchat')),
                     'claude-haiku-4-5-20251001'   => array('label' => 'Claude Haiku 4.5',    'description' => __('Fastest and most intelligent Haiku', 'mxchat')),
-                    'claude-opus-4-20250514'      => array('label' => 'Claude 4 Opus',       'description' => __('Complex tasks', 'mxchat')),
-                    'claude-sonnet-4-20250514'    => array('label' => 'Claude 4 Sonnet',     'description' => __('High performance', 'mxchat')),
                 ),
             ),
             'xai' => array(
@@ -300,5 +298,60 @@ class MxChat_Model_Catalog {
             );
         }
         return $out;
+    }
+
+    /**
+     * Whether the given chat model can do model-driven function calling (tool use).
+     *
+     * Used by the native function-calling loop (plan-mxchat-20260617-a41dee) to
+     * decide whether to offer tools to the model and to gate the admin toggle.
+     *
+     * Design: every modern flagship across the catalog's providers supports tool
+     * calling, so the DEFAULT is "capable" for any model whose id matches a known
+     * provider family prefix (or the OpenRouter meta). This deliberately avoids a
+     * per-model allowlist that would go stale the moment the catalog gains a model
+     * (the same drift trap documented in CLAUDE.md's model-registry checklist).
+     * A model can be force-excluded via the $no_tools list, and the whole verdict
+     * is overridable through the `mxchat_model_supports_tools` filter.
+     *
+     * @param string $model_id Chat model id (e.g. 'gpt-5.5', 'claude-opus-4-8') or
+     *                         the 'openrouter' meta selector.
+     * @return bool
+     */
+    public static function supports_tools($model_id) {
+        $model_id = (string) $model_id;
+
+        // The OpenRouter meta resolves to a per-account sub-model at request time;
+        // most routable models support tools, so default it capable (the loop
+        // no-ops gracefully if the chosen sub-model rejects a tools array).
+        if ($model_id === 'openrouter') {
+            return (bool) apply_filters('mxchat_model_supports_tools', true, $model_id);
+        }
+
+        // Known tool-capable provider family prefixes across the catalog.
+        $capable_prefixes = array(
+            'gpt-', 'o1-', 'o3-', 'o4-',      // OpenAI
+            'claude-',                        // Anthropic
+            'gemini-',                        // Google
+            'grok-', 'xai-',                  // xAI
+            'deepseek-',                      // DeepSeek (OpenAI-compatible tools)
+            'custom-',                        // OpenAI-compatible custom endpoints
+        );
+
+        // Explicit exclusions for any catalog model known NOT to support tools.
+        // Empty today — kept as the drift-safe escape hatch.
+        $no_tools = array();
+
+        $supported = false;
+        if (!in_array($model_id, $no_tools, true)) {
+            foreach ($capable_prefixes as $prefix) {
+                if (strpos($model_id, $prefix) === 0) {
+                    $supported = true;
+                    break;
+                }
+            }
+        }
+
+        return (bool) apply_filters('mxchat_model_supports_tools', $supported, $model_id);
     }
 }

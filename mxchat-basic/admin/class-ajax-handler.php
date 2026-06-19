@@ -511,7 +511,8 @@ public function mxchat_save_setting_callback() {
                 'enable_name_field',
                 'custom_provider_for_embeddings',
                 'custom_provider_for_images',
-                'print_button_enabled'
+                'print_button_enabled',
+                'reset_chat_enabled'
             ])) {
                 //error_log('MXChat Save: Processing toggle: ' . $field_name);
                 $options[$field_name] = ($value === 'on') ? 'on' : 'off';

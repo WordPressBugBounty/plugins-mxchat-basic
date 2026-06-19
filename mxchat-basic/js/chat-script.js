@@ -1617,6 +1617,24 @@ function mxchatGetHeaderMenuItems(botId) {
         });
     }
 
+    // "Start new chat" — surfaces the EXISTING per-conversation reset
+    // (MxChatInstances.resetChatSession) so a visitor can start a fresh thread
+    // without the site owner disabling chat persistence globally. Default OFF;
+    // gated by the reset_chat_enabled option. plan ac2e81.
+    if (settings.reset_chat_enabled === 'on') {
+        items.push({
+            id: 'reset-chat',
+            label: settings.reset_chat_label || 'Start new chat',
+            icon: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></svg>',
+            action: function() {
+                var confirmMsg = settings.reset_chat_confirm || 'Start a new chat? This clears the current conversation.';
+                if (window.confirm(confirmMsg)) {
+                    MxChatInstances.resetChatSession(botId);
+                }
+            }
+        });
+    }
+
     return items;
 }
 

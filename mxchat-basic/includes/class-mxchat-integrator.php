@@ -9,6 +9,15 @@ class MxChat_Integrator {
     private $chat_count;
     private $fallbackResponse;
     private $productCardHtml;
+    // plan-mxchat-20260617-48a57a — function-calling UI payload capture. When a
+    // model-invoked tool yields a UI element (generated image, woo product card,
+    // image-search gallery), the FC loop stashes its html here so the FC outcome
+    // handler can SURFACE it to the frontend the same way the intent path does,
+    // instead of stripping it to text for the model (the bug: UI-bearing actions
+    // rendered nothing under function calling).
+    private $fc_ui_html = '';
+    private $fc_ui_images = array();
+    private $fc_ui_captured = false;
     private $word_handler;
     private $last_similarity_analysis = null;
     private $current_valid_urls = [];
@@ -378,6 +387,10 @@ public function get_dynamic_widget_settings($fresh = false) {
         'chat_toolbar_toggle' => $options['chat_toolbar_toggle'] ?? 'off',
         'print_button_enabled' => $options['print_button_enabled'] ?? 'on',
         'print_button_label' => esc_html__('Download Transcript', 'mxchat'),
+        // "Start new chat" header-menu item (plan ac2e81). Default OFF.
+        'reset_chat_enabled' => $options['reset_chat_enabled'] ?? 'off',
+        'reset_chat_label' => !empty($options['reset_chat_label']) ? esc_html($options['reset_chat_label']) : esc_html__('Start new chat', 'mxchat'),
+        'reset_chat_confirm' => esc_html__('Start a new chat? This clears the current conversation.', 'mxchat'),
         'stop_button_label' => esc_html__('Stop response', 'mxchat'),
         'print_header_title' => esc_html(get_bloginfo('name')) . ' — ' . esc_html__('Chat transcript', 'mxchat'),
         // Emit 'on'/'off' STRINGS, never booleans: wp_localize_script casts
@@ -1484,6 +1497,10 @@ public function mxchat_handle_chat_request() {
 
     $this->fallbackResponse = ['text' => '', 'html' => '', 'images' => []];
     $this->productCardHtml = '';
+    // Reset the per-turn function-calling UI capture (plan 48a57a).
+    $this->fc_ui_html = '';
+    $this->fc_ui_images = array();
+    $this->fc_ui_captured = false;
 
     // Get the actual WordPress user ID if logged in
     $is_logged_in = is_user_logged_in();
@@ -2157,7 +2174,65 @@ if ($testing_data !== null && !empty($this->current_valid_urls)) {
 
         // Extract model from current options for bot-specific model support
         $selected_model = isset($current_options['model']) ? $current_options['model'] : 'gpt-5.1-chat-latest';
-        
+
+        // ===== Native function-calling fallback (plan-mxchat-20260617-a41dee) =====
+        // Intents already missed (we're past the intent router). If function
+        // calling is enabled and the active model is tool-capable, let the model
+        // SELECT and run registered callbacks as tools — independent of intents,
+        // works with zero Actions. The tool round is buffered; the final answer is
+        // emitted via the SAME envelopes the normal path uses. Default-off, so
+        // existing installs never enter this branch.
+        if ($this->mxchat_fc_should_run($selected_model)) {
+            $fc_outcome = $this->mxchat_fc_attempt(
+                $message,
+                $context_content,
+                $conversation_history,
+                $selected_model,
+                $current_options,
+                $session_id,
+                $user_id
+            );
+            if (is_array($fc_outcome) && !empty($fc_outcome['handled'])) {
+                $fc_text = isset($fc_outcome['text']) ? $fc_outcome['text'] : '';
+                if (!empty($this->current_valid_urls)) {
+                    $fc_text = $this->validate_and_clean_urls($fc_text, $this->current_valid_urls);
+                }
+                // plan-mxchat-20260617-48a57a — surface any UI element a tool
+                // produced (generated image / product card / image gallery) so the
+                // widget RENDERS it, instead of emitting only the model's text.
+                // The html was already saved to the transcript in
+                // mxchat_fc_execute_tool (or by the callback itself for self-saving
+                // core tools), so we persist ONLY the model's caption text here.
+                $fc_html = isset($this->fc_ui_html) ? $this->fc_ui_html : '';
+
+                if ($fc_text !== '') {
+                    $this->mxchat_save_chat_message($session_id, 'bot', $fc_text, null, null);
+                }
+
+                if ($is_streaming) {
+                    // The frontend SSE reader routes any event carrying text/html
+                    // to handleNonStreamResponse(), which renders text + html in a
+                    // single bot message — so emit one complete event (mirrors the
+                    // intent path's text/html envelope).
+                    $sse = array('session_id' => $session_id);
+                    if ($fc_text !== '') $sse['text'] = $fc_text;
+                    if ($fc_html !== '') $sse['html'] = $fc_html;
+                    if ($fc_text === '' && $fc_html === '') $sse['text'] = $this->mxchat_fc_giveup_text();
+                    echo "data: " . wp_json_encode($sse) . "\n\n";
+                    echo "data: [DONE]\n\n";
+                    flush();
+                } else {
+                    $fc_response_data = array('text' => $fc_text, 'html' => $fc_html, 'session_id' => $session_id);
+                    if ($testing_data !== null) {
+                        $fc_response_data['testing_data'] = $testing_data;
+                    }
+                    wp_send_json($fc_response_data);
+                }
+                wp_die();
+            }
+        }
+        // ===== end function-calling fallback =====
+
         $response = $this->mxchat_generate_response(
             $context_content,
             $current_options['api_key'] ?? $this->options['api_key'],
@@ -2743,7 +2818,29 @@ public function mxchat_generate_gemini_image($message, $user_id, $session_id) {
 }
 
 private function mxchat_save_generated_image($base64_data, $mime_type = 'image/png', $prefix = 'mxchat-generated') {
-    $extension = ($mime_type === 'image/jpeg') ? 'jpg' : 'png';
+    // Map the real mime type to a matching file extension so the saved file's
+    // extension always agrees with its bytes. A mismatch (e.g. Imagen returning
+    // webp bytes that were written into a ".png" file) makes the browser refuse
+    // to render the image even though the file saved successfully and the bot
+    // reported success — that was the Gemini/Imagen "image never renders" bug.
+    // OpenAI + custom-provider paths pass 'image/png' explicitly, so they are
+    // unaffected; this only matters for providers that return another type.
+    $mime_to_ext = [
+        'image/jpeg' => 'jpg',
+        'image/jpg'  => 'jpg',
+        'image/png'  => 'png',
+        'image/webp' => 'webp',
+        'image/gif'  => 'gif',
+    ];
+    $mime_type = strtolower(trim((string) $mime_type));
+    if (isset($mime_to_ext[$mime_type])) {
+        $extension = $mime_to_ext[$mime_type];
+    } else {
+        // Unknown/unsupported type: fall back to png and normalize the stored
+        // mime so the attachment record and the file extension stay consistent.
+        $extension = 'png';
+        $mime_type = 'image/png';
+    }
     $filename = sanitize_file_name($prefix . '-' . wp_generate_uuid4() . '.' . $extension);
     $decoded = base64_decode($base64_data);
 
@@ -3323,6 +3420,10 @@ private function mxchat_claude_omits_temperature($model) {
  * Interpret query using Claude models
  */
 private function interpret_query_with_claude($user_query, $system_prompt, $api_key, $model) {
+    // Anthropic retired claude-opus-4-20250514 / claude-sonnet-4-20250514 on 2026-06-15.
+    // Read-time rescue: remap a saved dead ID to the current equivalent before the API call.
+    if ($model === 'claude-opus-4-20250514') { $model = 'claude-opus-4-8'; }
+    elseif ($model === 'claude-sonnet-4-20250514') { $model = 'claude-sonnet-4-6'; }
     $url = 'https://api.anthropic.com/v1/messages';
 
     $payload = [
@@ -6994,6 +7095,501 @@ private function get_current_bot_id($session_id = '') {
     // Fall back to default
     return 'default';
 }
+/* ====================================================================== *
+ *  Native function-calling loop (plan-mxchat-20260617-a41dee)
+ *
+ *  Model-driven tool use. The model is offered MxChat's enabled callbacks as
+ *  tools (sourced from MxChat_Tool_Registry, the single source the admin AI
+ *  Tools checklist also reads). When the model calls a tool, the matching
+ *  callback runs through its EXISTING permission checks, its output is fed
+ *  back, and the loop continues up to a depth cap. INDEPENDENT of the
+ *  intent→callback router — it runs only after intents miss, and works with
+ *  ZERO Actions created.
+ *
+ *  Entered ONLY when: function calling is enabled + the active model is
+ *  tool-capable + at least one tool is enabled. Default-off, so existing
+ *  installs never enter this branch (byte-for-byte unchanged behavior). The
+ *  tool round is buffered (non-streaming) per the plan; the final answer is
+ *  emitted via the same SSE/JSON envelopes the normal path uses.
+ * ====================================================================== */
+
+/** Gate: should the function-calling loop handle this turn? */
+private function mxchat_fc_should_run($selected_model) {
+    if (!class_exists('MxChat_Tool_Registry') || !MxChat_Tool_Registry::is_enabled()) {
+        return false;
+    }
+    if (class_exists('MxChat_Model_Catalog') && !MxChat_Model_Catalog::supports_tools($selected_model)) {
+        return false;
+    }
+    $tools = MxChat_Tool_Registry::enabled_tools();
+    return !empty($tools);
+}
+
+private function mxchat_fc_log($msg) {
+    if (defined('MXCHAT_DEV_MODE') && MXCHAT_DEV_MODE) {
+        error_log('[MxChat FC] ' . $msg);
+    }
+}
+
+/**
+ * Resolve provider transport details. Returns null when FC can't run for this
+ * model/config (missing key, unsupported provider) so the caller falls back to
+ * the normal path. OpenAI/xAI/DeepSeek/OpenRouter/Custom share the
+ * OpenAI-compatible 'openai' family; Claude and Gemini are distinct.
+ */
+private function mxchat_fc_resolve_provider($selected_model, $opts) {
+    // Anthropic retired claude-opus-4-20250514 / claude-sonnet-4-20250514 on 2026-06-15.
+    // Read-time rescue: remap a saved dead ID to the current equivalent before the API call.
+    if ($selected_model === 'claude-opus-4-20250514') { $selected_model = 'claude-opus-4-8'; }
+    elseif ($selected_model === 'claude-sonnet-4-20250514') { $selected_model = 'claude-sonnet-4-6'; }
+    if ($selected_model === 'openrouter') {
+        $model = isset($opts['openrouter_selected_model']) ? $opts['openrouter_selected_model'] : '';
+        $key   = isset($opts['openrouter_api_key']) ? $opts['openrouter_api_key'] : '';
+        if ($model === '' || $key === '') return null;
+        return array('family'=>'openai','model'=>$model,'url'=>'https://openrouter.ai/api/v1/chat/completions',
+            'headers'=>array('Content-Type'=>'application/json','Authorization'=>'Bearer '.$key),'tag'=>'openai');
+    }
+    $prefix = strtolower(explode('-', $selected_model)[0]);
+    switch ($prefix) {
+        case 'gpt': case 'o1': case 'o3': case 'o4':
+            $key = isset($opts['api_key']) ? $opts['api_key'] : '';
+            if ($key === '') return null;
+            return array('family'=>'openai','model'=>$selected_model,'url'=>'https://api.openai.com/v1/chat/completions',
+                'headers'=>array('Content-Type'=>'application/json','Authorization'=>'Bearer '.$key),'tag'=>'openai');
+        case 'claude':
+            $key = isset($opts['claude_api_key']) ? $opts['claude_api_key'] : '';
+            if ($key === '') return null;
+            return array('family'=>'anthropic','model'=>$selected_model,'url'=>'https://api.anthropic.com/v1/messages',
+                'headers'=>array('Content-Type'=>'application/json','x-api-key'=>$key,'anthropic-version'=>'2023-06-01'),'tag'=>'anthropic');
+        case 'gemini':
+            $key = isset($opts['gemini_api_key']) ? $opts['gemini_api_key'] : '';
+            if ($key === '') return null;
+            return array('family'=>'gemini','model'=>$selected_model,'key'=>$key,'tag'=>'gemini');
+        case 'grok': case 'xai':
+            $key = isset($opts['xai_api_key']) ? $opts['xai_api_key'] : '';
+            if ($key === '') return null;
+            return array('family'=>'openai','model'=>$selected_model,'url'=>'https://api.x.ai/v1/chat/completions',
+                'headers'=>array('Content-Type'=>'application/json','Authorization'=>'Bearer '.$key),'tag'=>'xai');
+        case 'deepseek':
+            $key = isset($opts['deepseek_api_key']) ? $opts['deepseek_api_key'] : '';
+            if ($key === '') return null;
+            return array('family'=>'openai','model'=>$selected_model,'url'=>'https://api.deepseek.com/v1/chat/completions',
+                'headers'=>array('Content-Type'=>'application/json','Authorization'=>'Bearer '.$key),'tag'=>'openai');
+        case 'custom':
+            $base  = isset($opts['custom_provider_base_url']) ? rtrim($opts['custom_provider_base_url'], '/') : '';
+            $key   = isset($opts['custom_provider_api_key']) ? $opts['custom_provider_api_key'] : '';
+            $model = isset($opts['custom_provider_model']) ? $opts['custom_provider_model'] : '';
+            if ($base === '' || $model === '') return null;
+            $url = (strpos($base, 'chat/completions') !== false) ? $base : $base . '/chat/completions';
+            $headers = array('Content-Type'=>'application/json');
+            if ($key !== '') $headers['Authorization'] = 'Bearer '.$key;
+            return array('family'=>'openai','model'=>$model,'url'=>$url,'headers'=>$headers,'tag'=>'openai');
+    }
+    return null;
+}
+
+/**
+ * Top-level function-calling attempt. Returns:
+ *   ['handled'=>true,  'text'=>'<final answer>']  when the model used ≥1 tool
+ *   ['handled'=>false]                            otherwise (caller falls back
+ *                                                 to the normal streamed path)
+ */
+private function mxchat_fc_attempt($message, $relevant_content, $conversation_history, $selected_model, $opts, $session_id, $user_id) {
+    $prov = $this->mxchat_fc_resolve_provider($selected_model, $opts);
+    if (!$prov) {
+        return array('handled' => false);
+    }
+    $tools = MxChat_Tool_Registry::enabled_tools();
+    if (empty($tools)) {
+        return array('handled' => false);
+    }
+
+    $bot_id = $this->get_current_bot_id($session_id);
+    $system = $this->get_system_instructions($bot_id, $session_id);
+
+    // Force callbacks into return-mode (some echo SSE directly when streaming);
+    // we buffer the whole tool round, then emit once. Restored in finally.
+    $prev_streaming = $this->is_streaming;
+    $this->is_streaming = false;
+    try {
+        if ($prov['family'] === 'anthropic') {
+            return $this->mxchat_fc_loop_anthropic($prov, $system, $relevant_content, $conversation_history, $tools, $message, $user_id, $session_id);
+        } elseif ($prov['family'] === 'gemini') {
+            return $this->mxchat_fc_loop_gemini($prov, $system, $relevant_content, $conversation_history, $tools, $message, $user_id, $session_id);
+        }
+        return $this->mxchat_fc_loop_openai($prov, $system, $relevant_content, $conversation_history, $tools, $message, $user_id, $session_id);
+    } catch (\Throwable $e) {
+        $this->mxchat_fc_log('attempt threw: ' . $e->getMessage());
+        return array('handled' => false);
+    } finally {
+        $this->is_streaming = $prev_streaming;
+    }
+}
+
+/** Normalize MxChat history rows to [{role:user|assistant, content}]. */
+private function mxchat_fc_normalize_history($conversation_history) {
+    $out = array();
+    if (!is_array($conversation_history)) return $out;
+    foreach ($conversation_history as $m) {
+        if (!is_array($m) || !isset($m['role']) || !isset($m['content'])) continue;
+        $role = $m['role'];
+        if ($role === 'bot' || $role === 'agent') $role = 'assistant';
+        if (!in_array($role, array('user', 'assistant'), true)) $role = 'user';
+        $out[] = array('role' => $role, 'content' => (string) $m['content']);
+    }
+    return $out;
+}
+
+/** Execute the matched callback for a tool call. Returns ['ok'=>bool,'content'=>string]. */
+private function mxchat_fc_execute_tool($tool_name, $args, $orig_message, $user_id, $session_id) {
+    $tool = MxChat_Tool_Registry::tool_by_name($tool_name, true); // enabled-only
+    if (!$tool) {
+        return array('ok' => false, 'content' => 'This tool is not available or not enabled.');
+    }
+    $fn = $tool['callback'];
+
+    // MxChat callbacks are message-driven: hand them the model's `query`
+    // (falling back to the original user message).
+    $query = '';
+    if (is_array($args) && isset($args['query']) && is_string($args['query'])) {
+        $query = $args['query'];
+    }
+    if ($query === '') $query = $orig_message;
+
+    // Synthetic intent row (matches wp_mxchat_intents columns → no undefined-prop warnings).
+    $synthetic_intent = (object) array(
+        'id' => 0, 'intent_label' => $tool['label'], 'phrases' => '',
+        'embedding_vector' => '', 'callback_function' => $fn,
+        'similarity_threshold' => 0.0, 'enabled' => 1, 'enabled_bots' => null,
+    );
+
+    try {
+        if (!empty($tool['is_addon'])) {
+            $result = apply_filters($fn, false, $query, $user_id, $session_id, $synthetic_intent);
+        } elseif (method_exists($this, $fn)) {
+            $result = call_user_func(array($this, $fn), $query, $user_id, $session_id, $synthetic_intent, null);
+        } else {
+            return array('ok' => false, 'content' => 'Tool implementation not found.');
+        }
+    } catch (\Throwable $e) {
+        $this->mxchat_fc_log("tool {$fn} threw: " . $e->getMessage());
+        return array('ok' => false, 'content' => 'The tool failed to run.');
+    }
+
+    // plan-mxchat-20260617-48a57a — surface UI-bearing tool output.
+    // If the callback produced a UI element (generated image, product card, image
+    // gallery), its html MUST reach the FRONTEND as a real rendered bot message —
+    // NOT be stripped to text and handed to the model to paraphrase (that was the
+    // bug: under function calling, UI-bearing actions rendered nothing). Capture
+    // the html here; the FC outcome handler emits it in the response envelope.
+    $ui = $this->mxchat_fc_ui_payload_from($result);
+    if ($ui['html'] !== '' || !empty($ui['images'])) {
+        if ($ui['html'] !== '') {
+            $this->fc_ui_html .= ($this->fc_ui_html !== '' ? "\n" : '') . $ui['html'];
+        }
+        if (!empty($ui['images']) && is_array($ui['images'])) {
+            $this->fc_ui_images = array_merge($this->fc_ui_images, $ui['images']);
+        }
+        $this->fc_ui_captured = true;
+
+        // Persist the html to the transcript ONLY if the callback did not already
+        // do so itself. Core image/search callbacks self-save (text + html);
+        // add-on callbacks (e.g. woo product cards) return html for the caller to
+        // save. ui_self_saves carries this from the registry; default by source
+        // (core self-saves, add-on does not) when a tool predates the flag.
+        $self_saves = array_key_exists('ui_self_saves', $tool)
+            ? !empty($tool['ui_self_saves'])
+            : empty($tool['is_addon']);
+        if ($ui['html'] !== '' && !$self_saves) {
+            $this->mxchat_save_chat_message($session_id, 'bot', $ui['html']);
+        }
+
+        // Hand the MODEL a short acknowledgment (never the raw or stripped html)
+        // so the loop can add a one-line caption without trying to re-describe a
+        // visual it cannot see and without duplicating the displayed element.
+        $summary = isset($ui['text']) ? trim((string) $ui['text']) : '';
+        $ack = __('[A visual result has already been shown to the user in the chat. Do not repeat or describe it in detail — reply with at most a brief one-line caption.]', 'mxchat');
+        $content = $summary !== '' ? ($ack . ' ' . $summary) : $ack;
+        $this->mxchat_fc_log("executed {$fn} → [ui payload surfaced] " . substr($content, 0, 120));
+        return array('ok' => true, 'content' => $content);
+    }
+
+    $content = $this->mxchat_fc_stringify_result($result);
+    $this->mxchat_fc_log("executed {$fn} → " . substr($content, 0, 160));
+    return array('ok' => true, 'content' => $content);
+}
+
+/**
+ * Extract a UI payload (html + images + text) from a tool callback's return,
+ * falling back to $this->fallbackResponse for callbacks that return true after
+ * setting it. plan-mxchat-20260617-48a57a.
+ *
+ * @return array{html:string,images:array,text:string}
+ */
+private function mxchat_fc_ui_payload_from($result) {
+    $src = null;
+    if (is_array($result)) {
+        $src = $result;
+    } elseif ($result === true && isset($this->fallbackResponse) && is_array($this->fallbackResponse)) {
+        $src = $this->fallbackResponse;
+    }
+    $html   = (is_array($src) && isset($src['html']) && is_string($src['html'])) ? $src['html'] : '';
+    $images = (is_array($src) && isset($src['images']) && is_array($src['images'])) ? $src['images'] : array();
+    $text   = (is_array($src) && isset($src['text'])) ? (string) $src['text'] : '';
+    return array('html' => $html, 'images' => $images, 'text' => $text);
+}
+
+/** Coerce a callback's return (string|array|true|false) into a tool-result string. */
+private function mxchat_fc_stringify_result($result) {
+    if (is_string($result)) {
+        return $result === '' ? 'No result.' : $result;
+    }
+    if ($result === true) {
+        // Callbacks that set fallbackResponse and return true.
+        $fb = isset($this->fallbackResponse) ? $this->fallbackResponse : null;
+        if (is_array($fb)) {
+            if (!empty($fb['text'])) return (string) $fb['text'];
+            if (!empty($fb['html'])) return wp_strip_all_tags((string) $fb['html']);
+        }
+        return 'Done.';
+    }
+    if ($result === false || $result === null) {
+        return 'No result.';
+    }
+    if (is_array($result)) {
+        if (isset($result['text']) && $result['text'] !== '') return (string) $result['text'];
+        if (isset($result['html']) && $result['html'] !== '') return wp_strip_all_tags((string) $result['html']);
+        $json = wp_json_encode($result);
+        return $json !== false ? $json : 'No result.';
+    }
+    return (string) $result;
+}
+
+/** HTTP code + decoded body for a function-calling request. */
+private function mxchat_fc_post($url, $body, $headers, $tag) {
+    $args = array(
+        'body' => wp_json_encode($body),
+        'headers' => $headers,
+        'timeout' => 60,
+        'redirection' => 5,
+        'blocking' => true,
+        'httpversion' => '1.0',
+        'sslverify' => true,
+    );
+    $response = $this->mxchat_provider_call_with_retry($url, $args, $tag);
+    if (is_wp_error($response)) {
+        return array('code' => 0, 'data' => null, 'error' => $response->get_error_message());
+    }
+    $code = (int) wp_remote_retrieve_response_code($response);
+    $data = json_decode(wp_remote_retrieve_body($response), true);
+    return array('code' => $code, 'data' => $data, 'error' => null);
+}
+
+/* ---------------- OpenAI-compatible loop (OpenAI/xAI/DeepSeek/OpenRouter/Custom) -------------- */
+private function mxchat_fc_loop_openai($prov, $system, $relevant_content, $conversation_history, $tools, $orig_message, $user_id, $session_id) {
+    $messages = array();
+    $messages[] = array('role' => 'system', 'content' => $system . ' ' . $relevant_content);
+    foreach ($this->mxchat_fc_normalize_history($conversation_history) as $m) {
+        $messages[] = $m;
+    }
+
+    $depth = MxChat_Tool_Registry::max_depth();
+    $budget = MxChat_Tool_Registry::max_tool_calls_per_turn();
+    $tool_schema = MxChat_Tool_Registry::to_openai_tools($tools);
+    $used_tool = false;
+    $calls_made = 0;
+
+    for ($step = 0; $step <= $depth; $step++) {
+        $offer_tools = ($step < $depth) && !empty($tool_schema);
+        $body = array('model' => $prov['model'], 'messages' => $messages, 'temperature' => 1, 'stream' => false);
+        if ($offer_tools) {
+            $body['tools'] = $tool_schema;
+            $body['tool_choice'] = 'auto';
+        }
+        $r = $this->mxchat_fc_post($prov['url'], $body, $prov['headers'], $prov['tag']);
+        if ($r['code'] !== 200 || !is_array($r['data'])) {
+            $this->mxchat_fc_log('openai call failed: code=' . $r['code'] . ' err=' . ($r['error'] ?? ''));
+            return $used_tool ? array('handled' => true, 'text' => $this->mxchat_fc_giveup_text()) : array('handled' => false);
+        }
+        $msg = isset($r['data']['choices'][0]['message']) ? $r['data']['choices'][0]['message'] : null;
+        if (!$msg) {
+            return $used_tool ? array('handled' => true, 'text' => $this->mxchat_fc_giveup_text()) : array('handled' => false);
+        }
+        $tool_calls = isset($msg['tool_calls']) && is_array($msg['tool_calls']) ? $msg['tool_calls'] : array();
+        if (empty($tool_calls)) {
+            $text = isset($msg['content']) ? trim((string) $msg['content']) : '';
+            if (!$used_tool) return array('handled' => false);          // model never used a tool → normal path
+            return array('handled' => true, 'text' => ($text !== '' ? $text : $this->mxchat_fc_giveup_text()));
+        }
+        // Append the assistant tool-call turn verbatim, then a tool result per call.
+        $used_tool = true;
+        $messages[] = $msg;
+        foreach ($tool_calls as $tc) {
+            if ($calls_made >= $budget) break;
+            $calls_made++;
+            $name = isset($tc['function']['name']) ? $tc['function']['name'] : '';
+            $args = array();
+            if (isset($tc['function']['arguments'])) {
+                $decoded = json_decode($tc['function']['arguments'], true);
+                if (is_array($decoded)) $args = $decoded;
+            }
+            $exec = $this->mxchat_fc_execute_tool($name, $args, $orig_message, $user_id, $session_id);
+            $messages[] = array(
+                'role' => 'tool',
+                'tool_call_id' => isset($tc['id']) ? $tc['id'] : '',
+                'content' => $exec['content'],
+            );
+        }
+    }
+    return $used_tool ? array('handled' => true, 'text' => $this->mxchat_fc_giveup_text()) : array('handled' => false);
+}
+
+/* ---------------- Anthropic Claude loop ---------------- */
+private function mxchat_fc_loop_anthropic($prov, $system, $relevant_content, $conversation_history, $tools, $orig_message, $user_id, $session_id) {
+    $messages = $this->mxchat_fc_normalize_history($conversation_history);
+    $messages[] = array('role' => 'user', 'content' => $relevant_content);
+
+    $depth = MxChat_Tool_Registry::max_depth();
+    $budget = MxChat_Tool_Registry::max_tool_calls_per_turn();
+    $tool_schema = MxChat_Tool_Registry::to_anthropic_tools($tools);
+    $omit_temp = $this->mxchat_claude_omits_temperature($prov['model']);
+    $used_tool = false;
+    $calls_made = 0;
+
+    for ($step = 0; $step <= $depth; $step++) {
+        $offer_tools = ($step < $depth) && !empty($tool_schema);
+        $body = array('model' => $prov['model'], 'max_tokens' => 1024, 'temperature' => 0.8,
+                      'messages' => $messages, 'system' => $system);
+        if ($omit_temp) unset($body['temperature']);
+        if ($offer_tools) {
+            $body['tools'] = $tool_schema;
+            $body['tool_choice'] = array('type' => 'auto');
+        }
+        $r = $this->mxchat_fc_post($prov['url'], $body, $prov['headers'], $prov['tag']);
+        if ($r['code'] !== 200 || !is_array($r['data'])) {
+            $this->mxchat_fc_log('anthropic call failed: code=' . $r['code'] . ' err=' . ($r['error'] ?? ''));
+            return $used_tool ? array('handled' => true, 'text' => $this->mxchat_fc_giveup_text()) : array('handled' => false);
+        }
+        $content = isset($r['data']['content']) && is_array($r['data']['content']) ? $r['data']['content'] : array();
+        $tool_uses = array();
+        $text_out = '';
+        foreach ($content as $block) {
+            if (!isset($block['type'])) continue;
+            if ($block['type'] === 'tool_use') {
+                $tool_uses[] = $block;
+            } elseif ($block['type'] === 'text' && isset($block['text'])) {
+                $text_out .= $block['text'];
+            }
+        }
+        if (empty($tool_uses)) {
+            if (!$used_tool) return array('handled' => false);
+            $text_out = trim($text_out);
+            return array('handled' => true, 'text' => ($text_out !== '' ? $text_out : $this->mxchat_fc_giveup_text()));
+        }
+        // Append the assistant turn (the full content array), then a user turn of tool_result blocks.
+        $used_tool = true;
+        $messages[] = array('role' => 'assistant', 'content' => $content);
+        $results = array();
+        foreach ($tool_uses as $tu) {
+            if ($calls_made >= $budget) break;
+            $calls_made++;
+            $name = isset($tu['name']) ? $tu['name'] : '';
+            $args = isset($tu['input']) && is_array($tu['input']) ? $tu['input'] : array();
+            $exec = $this->mxchat_fc_execute_tool($name, $args, $orig_message, $user_id, $session_id);
+            $results[] = array(
+                'type' => 'tool_result',
+                'tool_use_id' => isset($tu['id']) ? $tu['id'] : '',
+                'content' => $exec['content'],
+            );
+        }
+        $messages[] = array('role' => 'user', 'content' => $results);
+    }
+    return $used_tool ? array('handled' => true, 'text' => $this->mxchat_fc_giveup_text()) : array('handled' => false);
+}
+
+/* ---------------- Google Gemini loop ---------------- */
+private function mxchat_fc_loop_gemini($prov, $system, $relevant_content, $conversation_history, $tools, $orig_message, $user_id, $session_id) {
+    $contents = array();
+    $contents[] = array('role' => 'user',  'parts' => array(array('text' => '[System Instructions] ' . $system . ' ' . $relevant_content)));
+    $contents[] = array('role' => 'model', 'parts' => array(array('text' => 'I understand and will follow these instructions.')));
+    foreach ($this->mxchat_fc_normalize_history($conversation_history) as $m) {
+        $contents[] = array('role' => ($m['role'] === 'assistant' ? 'model' : 'user'),
+                            'parts' => array(array('text' => $m['content'])));
+    }
+
+    $depth = MxChat_Tool_Registry::max_depth();
+    $budget = MxChat_Tool_Registry::max_tool_calls_per_turn();
+    $tool_schema = MxChat_Tool_Registry::to_gemini_tools($tools);
+    // Function calling (tools + functionDeclarations + toolConfig) is a v1beta feature on the
+    // Generative Language REST API. The v1 endpoint silently ignores the tools array, so a
+    // non-preview model (e.g. gemini-2.5-pro, gemini-3.5-flash, gemini-3.1-flash-lite) would
+    // just answer in text and never emit a tool call. Always use v1beta for the FC loop —
+    // confirmed against Google's function-calling docs (their REST example targets
+    // v1beta/models/gemini-3.5-flash:generateContent). v1beta is a superset, so every model
+    // reachable on v1 is also reachable here.
+    $api_version = 'v1beta';
+    $url = 'https://generativelanguage.googleapis.com/' . $api_version . '/models/' . $prov['model'] . ':generateContent?key=' . $prov['key'];
+    $headers = array('Content-Type' => 'application/json');
+    $used_tool = false;
+    $calls_made = 0;
+
+    for ($step = 0; $step <= $depth; $step++) {
+        $offer_tools = ($step < $depth) && !empty($tool_schema);
+        $body = array(
+            'contents' => $contents,
+            'generationConfig' => array('temperature' => 0.7, 'topP' => 0.95, 'topK' => 40, 'maxOutputTokens' => 8192),
+        );
+        if ($offer_tools) {
+            $body['tools'] = $tool_schema;
+            $body['toolConfig'] = array('functionCallingConfig' => array('mode' => 'AUTO'));
+        }
+        $r = $this->mxchat_fc_post($url, $body, $headers, 'gemini');
+        if ($r['code'] !== 200 || !is_array($r['data']) || isset($r['data']['error'])) {
+            $this->mxchat_fc_log('gemini call failed: code=' . $r['code'] . ' err=' . ($r['error'] ?? ''));
+            return $used_tool ? array('handled' => true, 'text' => $this->mxchat_fc_giveup_text()) : array('handled' => false);
+        }
+        $parts = isset($r['data']['candidates'][0]['content']['parts']) && is_array($r['data']['candidates'][0]['content']['parts'])
+            ? $r['data']['candidates'][0]['content']['parts'] : array();
+        $fn_calls = array();
+        $text_out = '';
+        foreach ($parts as $p) {
+            if (isset($p['functionCall'])) {
+                $fn_calls[] = $p['functionCall'];
+            } elseif (isset($p['text'])) {
+                $text_out .= $p['text'];
+            }
+        }
+        if (empty($fn_calls)) {
+            if (!$used_tool) return array('handled' => false);
+            $text_out = trim($text_out);
+            return array('handled' => true, 'text' => ($text_out !== '' ? $text_out : $this->mxchat_fc_giveup_text()));
+        }
+        // Append the model turn (its parts) then a user turn of functionResponse parts.
+        $used_tool = true;
+        $contents[] = array('role' => 'model', 'parts' => $parts);
+        $resp_parts = array();
+        foreach ($fn_calls as $fcall) {
+            if ($calls_made >= $budget) break;
+            $calls_made++;
+            $name = isset($fcall['name']) ? $fcall['name'] : '';
+            $args = isset($fcall['args']) && is_array($fcall['args']) ? $fcall['args'] : array();
+            $exec = $this->mxchat_fc_execute_tool($name, $args, $orig_message, $user_id, $session_id);
+            $fr = array('name' => $name, 'response' => array('result' => $exec['content']));
+            // Gemini 3 function calls carry a unique id; echo the matching id back in the
+            // functionResponse so the model maps the result to the right call (Google REST
+            // guidance). Older models omit the id — then we send none, exactly as before.
+            if (isset($fcall['id']) && $fcall['id'] !== '') { $fr['id'] = $fcall['id']; }
+            $resp_parts[] = array('functionResponse' => $fr);
+        }
+        $contents[] = array('role' => 'user', 'parts' => $resp_parts);
+    }
+    return $used_tool ? array('handled' => true, 'text' => $this->mxchat_fc_giveup_text()) : array('handled' => false);
+}
+
+private function mxchat_fc_giveup_text() {
+    return esc_html__('I looked into that but could not put together a final answer. Please try rephrasing your request.', 'mxchat');
+}
+
 private function mxchat_generate_response($relevant_content, $api_key, $xai_api_key, $claude_api_key, $deepseek_api_key, $gemini_api_key, $openrouter_api_key, $conversation_history, $streaming = false, $session_id = '', $testing_data = null, $selected_model = 'gpt-5.1-chat-latest') {
     try {
         if (!$relevant_content) {
@@ -7054,7 +7650,8 @@ private function mxchat_generate_response($relevant_content, $api_key, $xai_api_
                     $openrouter_selected_model,
                     $openrouter_api_key,
                     $conversation_history,
-                    $relevant_content
+                    $relevant_content,
+                    $session_id
                 );
             }
             
@@ -7089,7 +7686,8 @@ private function mxchat_generate_response($relevant_content, $api_key, $xai_api_
                     $selected_model,
                     $gemini_api_key,
                     $conversation_history,
-                    $relevant_content
+                    $relevant_content,
+                    $session_id
                 );
                 break;
                 
@@ -7118,7 +7716,8 @@ private function mxchat_generate_response($relevant_content, $api_key, $xai_api_
                         $selected_model,
                         $claude_api_key,
                         $conversation_history,
-                        $relevant_content
+                        $relevant_content,
+                        $session_id
                     );
                 }
                 break;
@@ -7148,7 +7747,8 @@ private function mxchat_generate_response($relevant_content, $api_key, $xai_api_
                         $selected_model,
                         $xai_api_key,
                         $conversation_history,
-                        $relevant_content
+                        $relevant_content,
+                        $session_id
                     );
                 }
                 break;
@@ -7178,7 +7778,8 @@ private function mxchat_generate_response($relevant_content, $api_key, $xai_api_
                         $selected_model,
                         $deepseek_api_key,
                         $conversation_history,
-                        $relevant_content
+                        $relevant_content,
+                        $session_id
                     );
                 }
                 break;
@@ -7257,7 +7858,8 @@ private function mxchat_generate_response($relevant_content, $api_key, $xai_api_
                         $selected_model,
                         $api_key,
                         $conversation_history,
-                        $relevant_content
+                        $relevant_content,
+                        $session_id
                     );
                 }
                 break;
@@ -7303,7 +7905,8 @@ private function mxchat_generate_response($relevant_content, $api_key, $xai_api_
                         $selected_model,
                         $api_key,
                         $conversation_history,
-                        $relevant_content
+                        $relevant_content,
+                        $session_id
                     );
                 }
                 break;
@@ -7369,7 +7972,8 @@ private function mxchat_generate_response_openrouter_stream($selected_model, $op
                 $selected_model,
                 $openrouter_api_key,
                 $conversation_history,
-                $relevant_content
+                $relevant_content,
+                $session_id
             );
             
             // Save bot response to transcript
@@ -7551,7 +8155,7 @@ private function mxchat_generate_response_openrouter_stream($selected_model, $op
 
         return $this->mxchat_stream_emit_fallback(
             'openai',
-            $this->mxchat_generate_response_openrouter($selected_model, $openrouter_api_key, $conversation_history, $relevant_content),
+            $this->mxchat_generate_response_openrouter($selected_model, $openrouter_api_key, $conversation_history, $relevant_content, $session_id),
             $session_id,
             $testing_data
         );
@@ -7559,7 +8163,7 @@ private function mxchat_generate_response_openrouter_stream($selected_model, $op
     } catch (Exception $e) {
         return $this->mxchat_stream_emit_fallback(
             'openai',
-            $this->mxchat_generate_response_openrouter($selected_model, $openrouter_api_key, $conversation_history, $relevant_content),
+            $this->mxchat_generate_response_openrouter($selected_model, $openrouter_api_key, $conversation_history, $relevant_content, $session_id),
             $session_id,
             $testing_data
         );
@@ -7608,7 +8212,8 @@ private function mxchat_generate_response_openai_stream($selected_model, $api_ke
                 $selected_model,
                 $api_key,
                 $conversation_history,
-                $relevant_content
+                $relevant_content,
+                $session_id
             );
             
             // Save bot response to transcript
@@ -7835,7 +8440,7 @@ private function mxchat_generate_response_openai_stream($selected_model, $api_ke
         // Failure path — branch on whether SSE channel was opened.
         return $this->mxchat_stream_emit_fallback(
             'openai',
-            $this->mxchat_generate_response_openai($selected_model, $api_key, $conversation_history, $relevant_content),
+            $this->mxchat_generate_response_openai($selected_model, $api_key, $conversation_history, $relevant_content, $session_id),
             $session_id,
             $testing_data
         );
@@ -7843,7 +8448,7 @@ private function mxchat_generate_response_openai_stream($selected_model, $api_ke
     } catch (Exception $e) {
         return $this->mxchat_stream_emit_fallback(
             'openai',
-            $this->mxchat_generate_response_openai($selected_model, $api_key, $conversation_history, $relevant_content),
+            $this->mxchat_generate_response_openai($selected_model, $api_key, $conversation_history, $relevant_content, $session_id),
             $session_id,
             $testing_data
         );
@@ -8528,6 +9133,10 @@ private function mxchat_web_search_streaming_response($request_body, $api_key, $
 }
 
 private function mxchat_generate_response_claude_stream($selected_model, $claude_api_key, $conversation_history, $relevant_content, $session_id, $testing_data = null) {
+    // Anthropic retired claude-opus-4-20250514 / claude-sonnet-4-20250514 on 2026-06-15.
+    // Read-time rescue: remap a saved dead ID to the current equivalent before the API call.
+    if ($selected_model === 'claude-opus-4-20250514') { $selected_model = 'claude-opus-4-8'; }
+    elseif ($selected_model === 'claude-sonnet-4-20250514') { $selected_model = 'claude-sonnet-4-6'; }
     try {
         // Get bot ID from session or request
         $bot_id = $this->get_current_bot_id($session_id);
@@ -8586,7 +9195,8 @@ private function mxchat_generate_response_claude_stream($selected_model, $claude
                 $selected_model,
                 $claude_api_key,
                 array_slice($conversation_history, 0, -1), // Remove the added content
-                $relevant_content
+                $relevant_content,
+                $session_id
             );
             
             // Save bot response to transcript
@@ -8753,7 +9363,7 @@ private function mxchat_generate_response_claude_stream($selected_model, $claude
         if ($errno || $http_code !== 200) {
             return $this->mxchat_stream_emit_fallback(
                 'anthropic',
-                $this->mxchat_generate_response_claude($selected_model, $claude_api_key, array_slice($conversation_history, 0, -1), $relevant_content),
+                $this->mxchat_generate_response_claude($selected_model, $claude_api_key, array_slice($conversation_history, 0, -1), $relevant_content, $session_id),
                 $session_id,
                 $testing_data
             );
@@ -8789,7 +9399,7 @@ private function mxchat_generate_response_claude_stream($selected_model, $claude
     } catch (Exception $e) {
         return $this->mxchat_stream_emit_fallback(
             'anthropic',
-            $this->mxchat_generate_response_claude($selected_model, $claude_api_key, $conversation_history, $relevant_content),
+            $this->mxchat_generate_response_claude($selected_model, $claude_api_key, $conversation_history, $relevant_content, $session_id),
             $session_id,
             $testing_data
         );
@@ -8840,7 +9450,8 @@ private function mxchat_generate_response_xai_stream($selected_model, $xai_api_k
                 $selected_model,
                 $xai_api_key,
                 $conversation_history,
-                $relevant_content
+                $relevant_content,
+                $session_id
             );
             
             // Save bot response to transcript
@@ -8993,7 +9604,7 @@ private function mxchat_generate_response_xai_stream($selected_model, $xai_api_k
         if ($errno || $http_code !== 200) {
             return $this->mxchat_stream_emit_fallback(
                 'xai',
-                $this->mxchat_generate_response_xai($selected_model, $xai_api_key, $conversation_history, $relevant_content),
+                $this->mxchat_generate_response_xai($selected_model, $xai_api_key, $conversation_history, $relevant_content, $session_id),
                 $session_id,
                 $testing_data
             );
@@ -9080,7 +9691,8 @@ private function mxchat_generate_response_deepseek_stream($selected_model, $deep
                 $selected_model,
                 $deepseek_api_key,
                 $conversation_history,
-                $relevant_content
+                $relevant_content,
+                $session_id
             );
             
             // Save bot response to transcript
@@ -9233,7 +9845,7 @@ private function mxchat_generate_response_deepseek_stream($selected_model, $deep
         if ($errno || $http_code !== 200) {
             return $this->mxchat_stream_emit_fallback(
                 'openai',
-                $this->mxchat_generate_response_deepseek($selected_model, $deepseek_api_key, $conversation_history, $relevant_content),
+                $this->mxchat_generate_response_deepseek($selected_model, $deepseek_api_key, $conversation_history, $relevant_content, $session_id),
                 $session_id,
                 $testing_data
             );
@@ -9277,13 +9889,13 @@ private function mxchat_generate_response_deepseek_stream($selected_model, $deep
 }
 
 
-private function mxchat_generate_response_openrouter($selected_model, $openrouter_api_key, $conversation_history, $relevant_content) {
+private function mxchat_generate_response_openrouter($selected_model, $openrouter_api_key, $conversation_history, $relevant_content, $session_id = '') {
     try {
         if (!is_array($conversation_history)) {
             $conversation_history = array();
         }
 
-        $bot_id = $this->get_current_bot_id('');
+        $bot_id = $this->get_current_bot_id($session_id);
         $system_prompt_instructions = $this->get_system_instructions($bot_id, $session_id);
         
         $formatted_conversation = array();
@@ -9337,7 +9949,7 @@ private function mxchat_generate_response_openrouter($selected_model, $openroute
         if (is_wp_error($response)) {
             $error_message = $response->get_error_message();
             return [
-                'error' => esc_html__('Connection error when contacting OpenRouter: ', 'mxchat') . esc_html($error_message),
+                'error' => $this->mxchat_friendly_chat_error(0, $error_message, 'OpenRouter'),
                 'error_code' => 'openrouter_connection_error',
                 'provider' => 'openrouter'
             ];
@@ -9380,8 +9992,71 @@ private function mxchat_generate_response_openrouter($selected_model, $openroute
         ];
     }
 }
-private function mxchat_generate_response_claude($selected_model, $claude_api_key, $conversation_history, $relevant_content) {
-    
+
+/**
+ * Build a chat-bubble-safe message for a non-200 provider (chat) error.
+ *
+ * Visitors must NEVER see raw API internals (model names, key/billing/quota
+ * text). Admins (manage_options) get an actionable hint — and, for the common
+ * "model not available on this key" case, a direct pointer to change the model
+ * (the site owner can fix it in one click). Anthropic returns model-access as a
+ * 4xx with a message like "Claude Fable 5 is not available. Please use Opus 4.8."
+ *
+ * Provider-agnostic by design (reusable for the xai/gemini/deepseek branches),
+ * but Anthropic is the confirmed, reproduced case wired up here (plan 1d3b0f).
+ *
+ * @param int    $http_code      HTTP status from the provider.
+ * @param string $error_message  Raw provider error.message (may be empty).
+ * @param string $provider_label Human provider name, e.g. 'Anthropic'.
+ * @return string Message safe to render as a chat bubble.
+ */
+private function mxchat_friendly_chat_error($http_code, $error_message, $provider_label = '') {
+    $raw = trim((string) $error_message);
+
+    // Detect a model-access / availability problem the site owner can fix by
+    // choosing a different model. (Anthropic phrasing + the common API shapes.)
+    $low = strtolower($raw);
+    $is_model_access = (strpos($low, 'not available') !== false)
+        || (strpos($low, 'does not have access') !== false)
+        || (strpos($low, 'do not have access') !== false)
+        || (strpos($low, 'does not exist') !== false)          // OpenAI: "model `x` does not exist or you do not have access"
+        || (strpos($low, 'model_not_found') !== false)
+        || (strpos($low, 'not_found_error') !== false)
+        || (strpos($low, 'model not found') !== false)          // xAI
+        || (strpos($low, 'not found') !== false)                // Gemini: "models/x is not found for API version ..."
+        || (strpos($low, 'permission_denied') !== false)        // Gemini gated model
+        || (strpos($low, 'permission denied') !== false);
+
+    if (current_user_can('manage_options')) {
+        if ($is_model_access) {
+            return $raw !== ''
+                ? sprintf(
+                    /* translators: %s: raw provider error detail */
+                    esc_html__('The selected AI model isn\'t available on your API key. Choose another model in MxChat → Settings. (Details: %s)', 'mxchat'),
+                    $raw
+                  )
+                : esc_html__('The selected AI model isn\'t available on your API key. Choose another model in MxChat → Settings.', 'mxchat');
+        }
+        return $raw !== ''
+            ? sprintf(
+                /* translators: 1: provider label, 2: raw provider error detail */
+                esc_html__('The AI provider (%1$s) returned an error: %2$s. Check your model and API key in MxChat → Settings.', 'mxchat'),
+                $provider_label !== '' ? $provider_label : esc_html__('AI', 'mxchat'),
+                $raw
+              )
+            : esc_html__('The AI provider returned an error. Check your model and API key in MxChat → Settings.', 'mxchat');
+    }
+
+    // Visitors: friendly, generic, no internals leaked.
+    return esc_html__('Sorry, I\'m having trouble responding right now. Please try again in a moment.', 'mxchat');
+}
+
+private function mxchat_generate_response_claude($selected_model, $claude_api_key, $conversation_history, $relevant_content, $session_id = '') {
+    // Anthropic retired claude-opus-4-20250514 / claude-sonnet-4-20250514 on 2026-06-15.
+    // Read-time rescue: remap a saved dead ID to the current equivalent before the API call.
+    if ($selected_model === 'claude-opus-4-20250514') { $selected_model = 'claude-opus-4-8'; }
+    elseif ($selected_model === 'claude-sonnet-4-20250514') { $selected_model = 'claude-sonnet-4-6'; }
+
         // Get bot ID from session or request
         $bot_id = $this->get_current_bot_id($session_id);
         
@@ -9458,11 +10133,15 @@ private function mxchat_generate_response_claude($selected_model, $claude_api_ke
         
         // Try to extract error message from response
         $error_data = json_decode($error_body, true);
-        $error_message = isset($error_data['error']['message']) ? 
-            $error_data['error']['message'] : 
+        $error_message = isset($error_data['error']['message']) ?
+            $error_data['error']['message'] :
             "HTTP error " . $http_code;
-            
-        return "Sorry, the API returned an error: " . $error_message;
+
+        // Surface an admin-actionable message (and a model-change pointer for the
+        // model-access case) without leaking raw API internals to visitors. This
+        // is the single chokepoint for BOTH the non-streaming and streaming Claude
+        // paths (the stream's non-200 fallback re-enters this method). plan 1d3b0f.
+        return $this->mxchat_friendly_chat_error($http_code, $error_message, 'Anthropic');
     }
 
     // Parse response
@@ -9489,19 +10168,21 @@ private function mxchat_generate_response_claude($selected_model, $claude_api_ke
     //error_log("Claude API unexpected response format: " . print_r($response_body, true));
     return "Sorry, I received an unexpected response format from the API.";
 }
-private function mxchat_generate_response_openai($selected_model, $api_key, $conversation_history, $relevant_content) {
+private function mxchat_generate_response_openai($selected_model, $api_key, $conversation_history, $relevant_content, $session_id = '') {
     try {
         // Ensure conversation_history is an array
         if (!is_array($conversation_history)) {
             $conversation_history = array();
         }
 
-        // Get bot ID from session or request
-        $bot_id = $this->get_current_bot_id('');
-        
+        // Get bot ID from session or request. plan eb9c38: resolve the real bot
+        // from the session (was hardcoded '' → always default bot on multi-bot
+        // installs) and fix the undefined $session_id that fed get_system_instructions.
+        $bot_id = $this->get_current_bot_id($session_id);
+
         // Get system prompt instructions using centralized function
         $system_prompt_instructions = $this->get_system_instructions($bot_id, $session_id);
-        
+
         // Create a new array for the formatted conversation
         $formatted_conversation = array();
 
@@ -9585,7 +10266,7 @@ private function mxchat_generate_response_openai($selected_model, $api_key, $con
         if (is_wp_error($response)) {
             $error_message = $response->get_error_message();
             return [
-                'error' => esc_html__('Connection error when contacting OpenAI: ', 'mxchat') . esc_html($error_message),
+                'error' => $this->mxchat_friendly_chat_error(0, $error_message, 'OpenAI'),
                 'error_code' => 'openai_connection_error',
                 'provider' => 'openai'
             ];
@@ -9638,9 +10319,11 @@ private function mxchat_generate_response_openai($selected_model, $api_key, $con
                     ];
             }
             
-            // Generic error fallback
+            // Generic error fallback only — the typed cases above already produce
+            // clean messages. Route the raw-tail generic case through the leak-safe
+            // helper so visitors never see provider internals. plan 5da59a.
             return [
-                'error' => esc_html__('OpenAI API error: ', 'mxchat') . esc_html($error_message),
+                'error' => $this->mxchat_friendly_chat_error($status_code, $error_message, 'OpenAI'),
                 'error_code' => 'openai_api_error',
                 'provider' => 'openai',
                 'status_code' => $status_code
@@ -9668,7 +10351,7 @@ private function mxchat_generate_response_openai($selected_model, $api_key, $con
     }
 }
 
-private function mxchat_generate_response_xai($selected_model, $xai_api_key, $conversation_history, $relevant_content) {
+private function mxchat_generate_response_xai($selected_model, $xai_api_key, $conversation_history, $relevant_content, $session_id = '') {
     try {
         // Get bot ID from session or request
         $bot_id = $this->get_current_bot_id($session_id);
@@ -9733,7 +10416,7 @@ private function mxchat_generate_response_xai($selected_model, $xai_api_key, $co
         $error_message = $response->get_error_message();
         //error_log('X.AI API Error: ' . $error_message);
         return [
-            'error' => esc_html__('Connection error when contacting X.AI: ', 'mxchat') . esc_html($error_message),
+            'error' => $this->mxchat_friendly_chat_error(0, $error_message, 'X.AI'),
             'error_code' => 'xai_connection_error',
             'provider' => 'xai'
         ];
@@ -9829,9 +10512,12 @@ private function mxchat_generate_response_xai($selected_model, $xai_api_key, $co
             ];
         }
 
-        // Generic error fallback with the actual error message
+        // Generic error fallback. Route the user-facing text through the
+        // leak-safe helper (admins get an actionable hint, visitors a generic
+        // fallback) instead of echoing raw provider internals. Preserve the
+        // structured contract (error_code/provider/status_code) for logging. plan 5da59a.
         return [
-            'error' => esc_html__('X.AI API error: ', 'mxchat') . esc_html($error_message),
+            'error' => $this->mxchat_friendly_chat_error($status_code, $error_message, 'xAI'),
             'error_code' => 'xai_api_error',
             'provider' => 'xai',
             'status_code' => $status_code
@@ -9862,7 +10548,7 @@ private function mxchat_generate_response_xai($selected_model, $xai_api_key, $co
 
 
 }
-private function mxchat_generate_response_deepseek($selected_model, $deepseek_api_key, $conversation_history, $relevant_content) {
+private function mxchat_generate_response_deepseek($selected_model, $deepseek_api_key, $conversation_history, $relevant_content, $session_id = '') {
     try {
         // Ensure conversation_history is an array
         if (!is_array($conversation_history)) {
@@ -9930,7 +10616,7 @@ private function mxchat_generate_response_deepseek($selected_model, $deepseek_ap
             $error_message = $response->get_error_message();
             //error_log('DeepSeek API Error: ' . $error_message);
             return [
-                'error' => esc_html__('Connection error when contacting DeepSeek: ', 'mxchat') . esc_html($error_message),
+                'error' => $this->mxchat_friendly_chat_error(0, $error_message, 'DeepSeek'),
                 'error_code' => 'deepseek_connection_error',
                 'provider' => 'deepseek'
             ];
@@ -9996,9 +10682,9 @@ private function mxchat_generate_response_deepseek($selected_model, $deepseek_ap
                     ];
             }
 
-            // Generic error fallback
+            // Generic error fallback — leak-safe helper (see plan 5da59a / 1d3b0f).
             return [
-                'error' => esc_html__('DeepSeek API error: ', 'mxchat') . esc_html($error_message),
+                'error' => $this->mxchat_friendly_chat_error($status_code, $error_message, 'DeepSeek'),
                 'error_code' => 'deepseek_api_error',
                 'provider' => 'deepseek',
                 'status_code' => $status_code
@@ -10027,7 +10713,7 @@ private function mxchat_generate_response_deepseek($selected_model, $deepseek_ap
         ];
     }
 }
-private function mxchat_generate_response_gemini($selected_model, $gemini_api_key, $conversation_history, $relevant_content) {
+private function mxchat_generate_response_gemini($selected_model, $gemini_api_key, $conversation_history, $relevant_content, $session_id = '') {
         // Read-time remap: gemini-3-pro-preview was shut down March 9, 2026.
         // Auto-rescue existing installs whose saved model is the dead ID.
         if ($selected_model === 'gemini-3-pro-preview') {
@@ -10157,16 +10843,25 @@ private function mxchat_generate_response_gemini($selected_model, $gemini_api_ke
 
     // Process the response
     if (is_wp_error($response)) {
-        return "Sorry, there was an error processing your request: " . $response->get_error_message();
+        // plan b13282: route the transport-error string through the leak-safe helper
+        // (admin-actionable, generic for visitors) instead of echoing the raw WP HTTP
+        // error. http_code 0 = no HTTP response, so the helper uses the generic branch.
+        return $this->mxchat_friendly_chat_error(0, $response->get_error_message(), 'Gemini');
     }
     
     $response_body = json_decode(wp_remote_retrieve_body($response), true);
     
-    // Handle potential errors in the response
+    // Handle potential errors in the response. Gemini surfaces errors as a
+    // 200/non-200 body with an `error` envelope; route the user-facing text
+    // through the leak-safe helper (admin-actionable, no visitor leak) rather
+    // than echoing the raw provider message. plan 5da59a.
     if (isset($response_body['error'])) {
         //error_log('Gemini API Error: ' . json_encode($response_body['error']));
-        return "Sorry, there was an error with the Gemini API: " . 
-               (isset($response_body['error']['message']) ? $response_body['error']['message'] : 'Unknown error');
+        $gemini_error_message = isset($response_body['error']['message'])
+            ? $response_body['error']['message']
+            : 'Unknown error';
+        $gemini_http_code = wp_remote_retrieve_response_code($response);
+        return $this->mxchat_friendly_chat_error($gemini_http_code, $gemini_error_message, 'Gemini');
     }
     
     // Extract the response text
@@ -10267,7 +10962,8 @@ public function test_streaming_request() {
                     $selected_model,
                     $deepseek_api_key,
                     $conversation_history,
-                    $relevant_content
+                    $relevant_content,
+                    $session_id
                 );
             }
             break;

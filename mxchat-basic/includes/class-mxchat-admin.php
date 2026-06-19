@@ -2903,6 +2903,10 @@ private function translate_with_openai($api_key, $model, $system_prompt, $text) 
  * Translate text using Claude API
  */
 private function translate_with_claude($api_key, $model, $system_prompt, $text) {
+    // Anthropic retired claude-opus-4-20250514 / claude-sonnet-4-20250514 on 2026-06-15.
+    // Read-time rescue: remap a saved dead ID to the current equivalent before the API call.
+    if ($model === 'claude-opus-4-20250514') { $model = 'claude-opus-4-8'; }
+    elseif ($model === 'claude-sonnet-4-20250514') { $model = 'claude-sonnet-4-6'; }
     $response = wp_remote_post('https://api.anthropic.com/v1/messages', [
         'timeout' => 60,
         'headers' => [
@@ -4244,6 +4248,56 @@ public function mxchat_actions_page_html() {
         $action_type_distribution[$label] = $row->count;
     }
 
+    // Native function-calling (AI Tools) data — plan-mxchat-20260617-a41dee.
+    // The AI Tools checklist reads from MxChat_Tool_Registry, the SAME single
+    // source the chat-time function-calling loop reads, so the two never drift.
+    if (!class_exists('MxChat_Tool_Registry')) {
+        require_once plugin_dir_path(__FILE__) . 'class-mxchat-tool-registry.php';
+    }
+    if (!class_exists('MxChat_Model_Catalog')) {
+        require_once plugin_dir_path(__FILE__) . 'class-mxchat-model-catalog.php';
+    }
+    $fc_options       = get_option('mxchat_options', array());
+    $fc_current_model = isset($fc_options['model']) ? $fc_options['model'] : 'gpt-5.1-chat-latest';
+    $fc_model_capable = class_exists('MxChat_Model_Catalog')
+        ? MxChat_Model_Catalog::supports_tools($fc_current_model) : true;
+    $active_tab = (isset($_GET['tab']) && $_GET['tab'] === 'ai-tools') ? 'ai-tools' : 'dashboard';
+
+    // Enrich each AI Tool with the dashicon its callback already uses on the
+    // Trigger Phrases "Choose what it does" grid, so the AI Tools cards/modal
+    // share the same iconography (plan 8bbf98 part 4). View-layer only — the
+    // registry's model-facing data is untouched. Default admin-generic.
+    $fc_tools = MxChat_Tool_Registry::available_tools();
+    foreach ($fc_tools as &$fc_tool_ref) {
+        $fc_cb_ref = $fc_tool_ref['callback'];
+        $fc_tool_ref['icon'] = isset($available_callbacks[$fc_cb_ref]['icon'])
+            ? $available_callbacks[$fc_cb_ref]['icon']
+            : 'admin-generic';
+    }
+    unset($fc_tool_ref);
+
+    // Count of ACTIVE tools — drives the AI Tools sidebar nav badge, mirroring
+    // $total_actions for Trigger Phrases. A tool in the list = active (plan
+    // d450a7), so the badge shows the same number the list pane shows (plan 5f7409).
+    $total_tools = count(array_filter($fc_tools, function ($t) {
+        return !empty($t['enabled']);
+    }));
+
+    // Brave-key dependency check (plan 183856): Web Search + Image Search run on
+    // the Brave Search API. If either is enabled as a tool but no brave_api_key is
+    // configured, surface a graceful "key not set" notice so the admin isn't met
+    // with a silently no-firing tool.
+    $fc_brave_missing = false;
+    $brave_key = isset($fc_options['brave_api_key']) ? trim($fc_options['brave_api_key']) : '';
+    if ($brave_key === '') {
+        foreach ($fc_tools as $fc_t) {
+            if (!empty($fc_t['enabled']) && isset($fc_t['requires_key']) && $fc_t['requires_key'] === 'brave_api_key') {
+                $fc_brave_missing = true;
+                break;
+            }
+        }
+    }
+
     // Prepare page data
     $page_data = array(
         'total_actions' => $total_actions,
@@ -4253,6 +4307,15 @@ public function mxchat_actions_page_html() {
         'action_type_distribution' => $action_type_distribution,
         'available_callbacks' => $available_callbacks,
         'callback_groups' => $callback_groups,
+        // AI Tools section
+        'active_tab'        => $active_tab,
+        'fc_enabled'        => MxChat_Tool_Registry::is_enabled(),
+        'total_tools'       => $total_tools,
+        'fc_tools'          => $fc_tools,
+        'fc_current_model'  => $fc_current_model,
+        'fc_model_capable'  => $fc_model_capable,
+        'fc_brave_missing'  => $fc_brave_missing,
+        'fc_saved'          => isset($_GET['mxchat_fc_saved']),
     );
 
     // Include and render the new template
@@ -5691,7 +5754,7 @@ private function mxchat_get_available_callbacks($grouped = false, $include_all =
             'pro_only'    => false,
             'group'       => __('Search Features', 'mxchat'),
             'icon'        => 'search',
-            'description' => __('Let users search the web directly from the chat', 'mxchat'),
+            'description' => __('Let users search the web directly from the chat (requires a Brave Search API key)', 'mxchat'),
             'addon'       => false,
             'installed'   => true
         ),
@@ -5700,7 +5763,7 @@ private function mxchat_get_available_callbacks($grouped = false, $include_all =
             'pro_only'    => false,
             'group'       => __('Search Features', 'mxchat'),
             'icon'        => 'format-image',
-            'description' => __('Search and display images in the chat conversation', 'mxchat'),
+            'description' => __('Search and display images in the chat conversation (requires a Brave Search API key)', 'mxchat'),
             'addon'       => false,
             'installed'   => true
         ),
@@ -6302,6 +6365,22 @@ public function mxchat_page_init() {
         'print_button_enabled',
         esc_html__('Show Download Transcript Button', 'mxchat'),
         array($this, 'mxchat_print_button_toggle_callback'),
+        'mxchat-chatbot',
+        'mxchat_chatbot_section'
+    );
+
+    add_settings_field(
+        'reset_chat_enabled',
+        esc_html__('Show Start-New-Chat Button', 'mxchat'),
+        array($this, 'mxchat_reset_chat_toggle_callback'),
+        'mxchat-chatbot',
+        'mxchat_chatbot_section'
+    );
+
+    add_settings_field(
+        'reset_chat_label',
+        esc_html__('Start-New-Chat Button Label', 'mxchat'),
+        array($this, 'mxchat_reset_chat_label_callback'),
         'mxchat-chatbot',
         'mxchat_chatbot_section'
     );
@@ -8079,6 +8158,33 @@ public function mxchat_print_button_toggle_callback() {
     echo '</label>';
 }
 
+public function mxchat_reset_chat_toggle_callback() {
+    // Load from mxchat_options array. plan ac2e81 — default OFF (new, opt-in).
+    $options = get_option('mxchat_options', []);
+    $reset_chat_enabled = isset($options['reset_chat_enabled']) ? $options['reset_chat_enabled'] : 'off';
+    $checked = ($reset_chat_enabled === 'on') ? 'checked' : '';
+
+    echo '<label class="toggle-switch">';
+    echo sprintf(
+        '<input type="checkbox" id="reset_chat_enabled" name="reset_chat_enabled" value="on" %s />',
+        esc_attr($checked)
+    );
+    echo '<span class="slider"></span>';
+    echo '</label>';
+}
+
+public function mxchat_reset_chat_label_callback() {
+    // Editable label for the "Start new chat" menu item. plan ac2e81.
+    $options = get_option('mxchat_options', []);
+    $reset_chat_label = isset($options['reset_chat_label']) ? $options['reset_chat_label'] : '';
+
+    printf(
+        '<input type="text" id="reset_chat_label" name="reset_chat_label" value="%s" placeholder="%s" class="regular-text" />',
+        esc_attr($reset_chat_label),
+        esc_attr__('Start new chat', 'mxchat')
+    );
+}
+
 public function mxchat_popular_question_1_callback() {
     // Load the full plugin options array
     $all_options = get_option('mxchat_options', []);
@@ -8749,8 +8855,8 @@ private function enqueue_page_specific_assets($current_page, $plugin_url, $versi
                 'deleteLegacyNonce' => wp_create_nonce('mxchat_delete_legacy_nonce'),
                 'isActivated' => $is_activated,
                 'i18n' => array(
-                    'confirmDelete' => __('Are you sure you want to delete this action?', 'mxchat'),
-                    'confirmBulkDelete' => __('Are you sure you want to delete the selected actions?', 'mxchat'),
+                    'confirmDelete' => __('Are you sure you want to delete this trigger phrase?', 'mxchat'),
+                    'confirmBulkDelete' => __('Are you sure you want to delete the selected trigger phrases?', 'mxchat'),
                     'saving' => __('Saving...', 'mxchat'),
                     'saved' => __('Saved successfully!', 'mxchat'),
                     'error' => __('An error occurred. Please try again.', 'mxchat'),
@@ -9453,6 +9559,17 @@ if (isset($input['openrouter_selected_model_name'])) {
     // and the rebuild never strips a saved 'off' (autosave passes the full options array back through here).
     if (isset($input['print_button_enabled'])) {
         $new_input['print_button_enabled'] = $input['print_button_enabled'] === 'on' ? 'on' : 'off';
+    }
+
+    // plan ac2e81 — "Start new chat" toggle (default OFF) + editable label.
+    // No else on the toggle: an absent key stays absent so the front-end '?? off'
+    // default applies, and the full-array autosave rebuild preserves a saved value.
+    if (isset($input['reset_chat_enabled'])) {
+        $new_input['reset_chat_enabled'] = $input['reset_chat_enabled'] === 'on' ? 'on' : 'off';
+    }
+
+    if (isset($input['reset_chat_label'])) {
+        $new_input['reset_chat_label'] = sanitize_text_field($input['reset_chat_label']);
     }
 
     if (isset($input['popular_question_1'])) {

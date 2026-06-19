@@ -6,20 +6,50 @@
 /* ==========================================================================
    Override parent content padding for split panel view
    ========================================================================== */
-.mxch-content:has(#all-actions.mxch-section.active) {
+.mxch-content:has(#all-actions.mxch-section.active),
+.mxch-content:has(#ai-tools.mxch-section.active) {
     padding: 0 !important;
     overflow: hidden;
 }
 
-#all-actions.mxch-section {
+#all-actions.mxch-section,
+#ai-tools.mxch-section {
     padding: 0;
     margin: 0;
     height: calc(100vh - 32px); /* Account for WP admin bar */
     overflow: hidden;
 }
 
-/* Ensure the admin wrapper fills the viewport */
-.mxch-actions-wrapper .mxch-content {
+/* AI Tools keeps an extra #mxch-fc-settings wrapper (autosave nonce + JS target),
+   so unlike #all-actions its split panel is NOT a direct child of the section.
+   Make the wrapper a layout-neutral full-height flex column so the split panel sits
+   edge-to-edge identical to Trigger Phrases (plan 183856). A model-not-capable or
+   Brave-key notice, when present, stacks above (with a small inset so it isn't flush
+   to the viewport edge) and the split panel flexes to fill the remaining height. */
+#mxch-fc-settings {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    overflow: hidden;
+}
+#mxch-fc-settings > .mxch-split-panel {
+    flex: 1 1 auto;
+    min-height: 0;
+}
+#mxch-fc-settings > .mxch-notice {
+    margin-top: 16px;
+    margin-left: 16px;
+    margin-right: 16px;
+}
+
+/* Fixed-viewport content for the split-panel tabs (All Actions + AI Tools — their
+   inner list + detail panels scroll independently). The Dashboard tab keeps the
+   shared scrollable .mxch-content from admin-sidebar.css (flex:1 + overflow-y:auto)
+   so it scrolls normally on desktop AND mobile — previously this rule was unscoped
+   and forced overflow:hidden on every tab, clipping tall content with no scroll
+   (worst on mobile). plan a41dee fix; AI Tools added for full-bleed parity (plan 183856). */
+.mxch-actions-wrapper .mxch-content:has(#all-actions.mxch-section.active),
+.mxch-actions-wrapper .mxch-content:has(#ai-tools.mxch-section.active) {
     height: calc(100vh - 32px);
     overflow: hidden;
 }
@@ -228,6 +258,116 @@
     font-size: 12px;
     color: var(--mxch-text-secondary);
     line-height: 1.5;
+}
+
+/* ==========================================================================
+   Actions landing — "two ways to set up" explainer (plan 8bbf98)
+   AI Tools (recommended) vs Trigger Phrases, side by side.
+   ========================================================================== */
+.mxch-approach-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    gap: var(--mxch-spacing-md);
+    margin-bottom: var(--mxch-spacing-md);
+}
+
+.mxch-approach-card {
+    display: flex;
+    flex-direction: column;
+    background: #f9fafb;
+    border: 1px solid var(--mxch-card-border);
+    border-radius: var(--mxch-radius-md);
+    padding: var(--mxch-spacing-lg);
+}
+
+.mxch-approach-card-primary {
+    background: var(--mxch-primary-light);
+    border-color: var(--mxch-primary);
+}
+
+.mxch-approach-card-head {
+    display: flex;
+    align-items: center;
+    gap: var(--mxch-spacing-sm);
+    margin-bottom: var(--mxch-spacing-md);
+}
+
+.mxch-approach-icon {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 40px;
+    height: 40px;
+    background: var(--mxch-primary);
+    border-radius: 10px;
+    color: #fff;
+    flex-shrink: 0;
+}
+
+.mxch-approach-icon-muted {
+    background: var(--mxch-text-secondary);
+}
+
+.mxch-approach-titles {
+    display: flex;
+    align-items: center;
+    gap: var(--mxch-spacing-sm);
+    flex-wrap: wrap;
+}
+
+.mxch-approach-title {
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--mxch-text-primary);
+    margin: 0;
+}
+
+.mxch-approach-pill {
+    display: inline-flex;
+    align-items: center;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+    padding: 2px 8px;
+    border-radius: 999px;
+    background: var(--mxch-primary);
+    color: #fff;
+}
+
+.mxch-approach-desc {
+    font-size: 13px;
+    line-height: 1.6;
+    color: var(--mxch-text-secondary);
+    margin: 0 0 var(--mxch-spacing-md) 0;
+    flex: 1 1 auto;
+}
+
+.mxch-approach-btn {
+    align-self: flex-start;
+}
+
+.mxch-approach-note {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--mxch-spacing-sm);
+    padding: var(--mxch-spacing-md);
+    background: #f9fafb;
+    border: 1px dashed var(--mxch-card-border);
+    border-radius: var(--mxch-radius-md);
+    font-size: 13px;
+    line-height: 1.6;
+    color: var(--mxch-text-secondary);
+}
+
+.mxch-approach-note svg {
+    flex-shrink: 0;
+    color: var(--mxch-primary);
+    margin-top: 1px;
+}
+
+.mxch-approach-note strong {
+    color: var(--mxch-text-primary);
 }
 
 /* ==========================================================================
@@ -1488,15 +1628,35 @@
 
 /* Mobile-first: Show list by default, hide detail panel until action selected */
 @media screen and (max-width: 782px) {
-    /* Remove viewport height constraints on mobile */
-    #all-actions.mxch-section {
+    /* The wrapper is position:fixed (admin-sidebar.css), so the PAGE body can't
+       scroll it — scrolling has to happen INSIDE .mxch-content (same as desktop
+       and every other MxChat admin page). The previous rules set the wrapper +
+       content to height:auto + overflow:visible, which on a FIXED wrapper just
+       pushed the overflow below the viewport with no way to reach it (the page
+       "didn't move"). Fix: make .mxch-content the bounded internal scroll
+       container on mobile, for every tab. plan a41dee follow-up. */
+    .mxch-actions-wrapper {
+        height: calc(100vh - 46px); /* WP admin bar is 46px on mobile */
+        overflow: hidden;
+    }
+    .mxch-actions-wrapper .mxch-content,
+    .mxch-actions-wrapper .mxch-content:has(#all-actions.mxch-section.active) {
+        height: 100%;
+        overflow-y: auto;
+        overflow-x: hidden;
+        -webkit-overflow-scrolling: touch;
+    }
+    /* The split-panel tabs flow + scroll inside the scrollable content on mobile. */
+    #all-actions.mxch-section,
+    #ai-tools.mxch-section {
         height: auto;
-        min-height: calc(100vh - 46px); /* WP admin bar is 46px on mobile */
+        min-height: 0;
         overflow: visible;
     }
-
-    .mxch-actions-wrapper .mxch-content,
-    .mxch-actions-wrapper {
+    /* AI Tools wrapper flows naturally on mobile (no fixed height / flex column) so
+       its split panel stacks + scrolls in the bounded .mxch-content (plan 183856). */
+    #mxch-fc-settings {
+        display: block;
         height: auto;
         overflow: visible;
     }
@@ -1504,7 +1664,7 @@
     .mxch-split-panel {
         flex-direction: column;
         height: auto;
-        min-height: calc(100vh - 46px);
+        min-height: 0;
         overflow: visible;
     }
 
@@ -1630,7 +1790,8 @@
     }
 
     /* Action items tighter on mobile */
-    .mxch-action-item {
+    .mxch-action-item,
+    .mxch-fc-list-item {
         padding: 10px;
     }
 
@@ -1835,4 +1996,313 @@ body.mxch-mobile-panel-open {
     font-size: 13px;
     color: #9ca3af;
     font-style: italic;
+}
+
+/* ============================================================
+ * AI Tools section (native function calling) — plan a41dee
+ * ============================================================ */
+.mxch-fc-intro {
+    font-size: 14px;
+    color: var(--mxch-text-secondary, #64748b);
+    margin: 0 0 var(--mxch-spacing-md, 16px);
+    line-height: 1.5;
+}
+.mxch-fc-toggle-row {
+    display: flex;
+    align-items: center;
+    gap: var(--mxch-spacing-md, 16px);
+}
+.mxch-fc-toggle-row .mxch-fc-toggle-text {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--mxch-text-primary, #1a1a2e);
+}
+.mxch-fc-note {
+    display: flex;
+    gap: 8px;
+    align-items: flex-start;
+    margin: var(--mxch-spacing-md, 16px) 0 0;
+    padding: 10px 12px;
+    border-radius: var(--mxch-radius-md, 8px);
+    background: #fff7ed;
+    border: 1px solid #fed7aa;
+    color: #9a3412;
+    font-size: 13px;
+    line-height: 1.45;
+}
+.mxch-fc-note svg { flex: 0 0 auto; margin-top: 1px; }
+.mxch-fc-saved-notice {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    margin: 0 0 var(--mxch-spacing-md, 16px);
+    padding: 10px 12px;
+    border-radius: var(--mxch-radius-md, 8px);
+    background: #ecfdf5;
+    border: 1px solid #a7f3d0;
+    color: #065f46;
+    font-size: 13px;
+    font-weight: 600;
+}
+.mxch-fc-tool-list {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+.mxch-fc-tool-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    padding: 12px 8px;
+    border-radius: var(--mxch-radius-md, 8px);
+    cursor: pointer;
+    transition: background 0.15s ease;
+}
+.mxch-fc-tool + .mxch-fc-tool { border-top: 1px solid var(--mxch-card-border, #e5e7eb); }
+.mxch-fc-tool-row:hover { background: var(--mxch-content-bg, #f0f2f5); }
+.mxch-fc-tool-row input[type="checkbox"] { margin-top: 3px; flex: 0 0 auto; }
+.mxch-fc-tool-meta { display: flex; flex-direction: column; gap: 3px; }
+.mxch-fc-tool-label {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--mxch-text-primary, #1a1a2e);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+.mxch-fc-tool-desc {
+    font-size: 13px;
+    color: var(--mxch-text-secondary, #64748b);
+    line-height: 1.45;
+}
+.mxch-fc-badge {
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    padding: 2px 7px;
+    border-radius: 999px;
+    line-height: 1.4;
+}
+.mxch-fc-badge-addon { background: #ede9fe; color: #5b21b6; }
+.mxch-fc-badge-sensitive { background: #fef3c7; color: #92400e; }
+/* Per-tool "when to use" hint (plan 27d3e6) — indented under each tool row,
+   shown only while the tool is enabled. */
+.mxch-fc-tool-hint {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 0 8px 12px 40px;
+}
+.mxch-fc-tool-hint.is-hidden { display: none; }
+.mxch-fc-hint-label {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--mxch-text-secondary, #64748b);
+}
+.mxch-fc-hint-input {
+    width: 100%;
+    box-sizing: border-box;
+    min-height: 44px;
+    resize: vertical;
+    padding: 8px 10px;
+    font-size: 13px;
+    line-height: 1.45;
+    color: var(--mxch-text-primary, #1a1a2e);
+    background: var(--mxch-card-bg, #fff);
+    border: 1px solid var(--mxch-card-border, #e5e7eb);
+    border-radius: var(--mxch-radius-md, 8px);
+    font-family: inherit;
+    transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+.mxch-fc-hint-input:focus {
+    outline: none;
+    border-color: var(--mxch-primary, #7873f5);
+    box-shadow: 0 0 0 3px var(--mxch-primary-light, rgba(120, 115, 245, 0.15));
+}
+.mxch-fc-hint-input::placeholder { color: var(--mxch-text-muted, #94a3b8); }
+@media (max-width: 782px) {
+    .mxch-fc-tool-hint { padding-left: 8px; }
+}
+.mxch-fc-actions {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-top: var(--mxch-spacing-lg, 24px);
+}
+.mxch-fc-autosave-hint {
+    font-size: 13px;
+    color: var(--mxch-text-muted, #94a3b8);
+}
+.mxch-fc-save-status {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--mxch-text-secondary, #64748b);
+    min-height: 18px;
+}
+.mxch-fc-save-status.is-saved { color: #059669; }
+.mxch-fc-save-status.is-error { color: #dc2626; }
+
+/* ==========================================================================
+   AI Tools — master-detail list + detail view (plan d450a7)
+   The left list reuses the Trigger Phrases inner classes (.mxch-action-icon,
+   .mxch-action-info, .mxch-action-name, .mxch-action-type-label,
+   .mxch-action-meta, .mxch-action-status) directly. Only the OUTER row needs a
+   dedicated class — a clone of .mxch-action-item's look — so the Trigger Phrases
+   JS (which binds clicks to .mxch-action-item) never touches these rows.
+   ========================================================================== */
+.mxch-fc-list-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 12px;
+    cursor: pointer;
+    border-bottom: 1px solid #f3f4f6;
+    transition: background 0.15s;
+    position: relative;
+}
+.mxch-fc-list-item:hover {
+    background: #f9fafb;
+}
+.mxch-fc-list-item.active {
+    background: linear-gradient(135deg, #f5f3ff 0%, #ede9fe 100%);
+    border-left: 3px solid var(--mxch-primary);
+    padding-left: 9px;
+}
+.mxch-fc-list-item.selected {
+    background: #f5f3ff;
+}
+
+/* Bulk-select checkbox on AI Tools rows — mirrors .mxch-action-checkbox so the
+   two list panes behave identically: hidden until hover / selection (plan 5f7409). */
+.mxch-fc-checkbox {
+    width: 16px;
+    height: 16px;
+    flex-shrink: 0;
+    cursor: pointer;
+    accent-color: var(--mxch-primary);
+    opacity: 0;
+    transition: opacity 0.15s;
+}
+.mxch-fc-list-item:hover .mxch-fc-checkbox,
+.mxch-fc-list-item.selected .mxch-fc-checkbox,
+.mxch-action-list.selection-mode .mxch-fc-checkbox {
+    opacity: 1;
+}
+
+/* Detail-view body text (description + the "when to use" note). */
+.mxch-fc-view-desc,
+.mxch-fc-view-hint {
+    margin: 0;
+    font-size: 14px;
+    line-height: 1.6;
+    color: var(--mxch-text-primary, #1a1a2e);
+    white-space: pre-wrap;
+}
+.mxch-fc-view-hint.is-muted {
+    color: var(--mxch-text-muted, #94a3b8);
+    font-style: italic;
+}
+
+/* ==========================================================================
+   AI Tools — add/remove card flow (plan 8bbf98 part 4)
+   A view layer over the hidden #mxch-fc-tool-store inputs.
+   ========================================================================== */
+.mxch-fc-tool-store { display: none; }
+
+.mxch-fc-card-list {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin-top: var(--mxch-spacing-md, 16px);
+}
+.mxch-fc-card {
+    display: flex;
+    align-items: flex-start;
+    gap: 14px;
+    padding: 14px;
+    background: var(--mxch-card-bg, #fff);
+    border: 1px solid var(--mxch-card-border, #e5e7eb);
+    border-radius: var(--mxch-radius-lg, 12px);
+    transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+.mxch-fc-card:hover {
+    border-color: var(--mxch-primary, #7873f5);
+    box-shadow: 0 4px 12px rgba(120, 115, 245, 0.08);
+}
+.mxch-fc-card-icon {
+    width: 40px;
+    height: 40px;
+    border-radius: 10px;
+    background: rgba(120, 115, 245, 0.1);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+}
+.mxch-fc-card-icon .dashicons { color: var(--mxch-primary, #7873f5); font-size: 20px; width: 20px; height: 20px; }
+.mxch-fc-card-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.mxch-fc-card-label {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--mxch-text-primary, #1a1a2e);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+.mxch-fc-card-hint { font-size: 13px; color: var(--mxch-text-secondary, #64748b); line-height: 1.45; }
+.mxch-fc-card-hint.is-muted { color: var(--mxch-text-muted, #94a3b8); font-style: italic; }
+.mxch-fc-card-actions { display: flex; align-items: center; gap: 4px; flex-shrink: 0; }
+
+/* Empty state */
+.mxch-fc-empty { text-align: center; padding: 32px 20px; }
+.mxch-fc-empty-icon {
+    width: 56px;
+    height: 56px;
+    margin: 0 auto 14px;
+    border-radius: 14px;
+    background: rgba(120, 115, 245, 0.1);
+    color: var(--mxch-primary, #7873f5);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.mxch-fc-empty h4 { margin: 0 0 6px; font-size: 15px; font-weight: 600; color: var(--mxch-text-primary, #1a1a2e); }
+.mxch-fc-empty p { margin: 0 auto 16px; max-width: 420px; font-size: 13px; color: var(--mxch-text-secondary, #64748b); line-height: 1.5; }
+
+/* Add-Tool modal */
+.mxch-modal-lg { max-width: 640px; }
+.mxch-fc-modal-step .mxch-modal-body { max-height: 70vh; overflow-y: auto; }
+.mxch-fc-modal-grid {
+    grid-template-columns: 1fr;
+    padding: 0;
+    gap: 10px;
+    flex: none;
+    overflow: visible;
+}
+.mxch-fc-modal-allset {
+    margin: 8px 0 0;
+    font-size: 13px;
+    color: var(--mxch-text-secondary, #64748b);
+}
+.mxch-fc-modal-sensitive-note {
+    display: flex;
+    gap: 8px;
+    align-items: flex-start;
+    margin-top: 12px;
+    padding: 10px 12px;
+    background: #fef3c7;
+    color: #92400e;
+    border-radius: var(--mxch-radius-md, 8px);
+    font-size: 12.5px;
+    line-height: 1.45;
+}
+.mxch-fc-modal-sensitive-note svg { flex-shrink: 0; margin-top: 1px; }
+
+@media screen and (max-width: 782px) {
+    .mxch-fc-card { padding: 12px; }
+    .mxch-fc-card-actions { gap: 2px; }
+    .mxch-modal-lg { width: 94%; }
 }

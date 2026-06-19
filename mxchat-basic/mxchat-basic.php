@@ -3,7 +3,7 @@
  * Plugin Name: MxChat
  * Plugin URI: https://mxchat.ai/
  * Description: AI chatbot for WordPress with OpenAI, Claude, xAI, DeepSeek, live agent, PDF uploads, WooCommerce, and training on website data.
- * Version: 3.2.9
+ * Version: 3.2.10
  * Author: MxChat
  * Author URI: https://mxchat.ai
  * License: GPLv2 or later
@@ -87,6 +87,39 @@ add_action('admin_init', function () {
         update_option('mxchat_options', $opts);
     }
     update_option('mxchat_grok_2_remap_done', 1);
+});
+
+/**
+ * One-time migration: Anthropic retired the Claude 4 (2025-05-14) snapshots on
+ * June 15, 2026 — claude-opus-4-20250514 and claude-sonnet-4-20250514 now return
+ * an API error. Existing installs with a dead ID get auto-remapped to the current
+ * equivalents Anthropic recommends (Opus 4.8 / Sonnet 4.6) the first time admin_init
+ * fires after update. Mirrors the gemini-3-pro-preview / grok-2 rescues above.
+ */
+add_action('admin_init', function () {
+    if (get_option('mxchat_claude_4_retire_remap_done')) {
+        return;
+    }
+    $map = array(
+        'claude-opus-4-20250514'   => 'claude-opus-4-8',
+        'claude-sonnet-4-20250514' => 'claude-sonnet-4-6',
+    );
+    $opts = get_option('mxchat_options');
+    if (is_array($opts)) {
+        $changed = false;
+        if (isset($opts['model']) && isset($map[$opts['model']])) {
+            $opts['model'] = $map[$opts['model']];
+            $changed = true;
+        }
+        if (isset($opts['content_model']) && isset($map[$opts['content_model']])) {
+            $opts['content_model'] = $map[$opts['content_model']];
+            $changed = true;
+        }
+        if ($changed) {
+            update_option('mxchat_options', $opts);
+        }
+    }
+    update_option('mxchat_claude_4_retire_remap_done', 1);
 });
 
 /**
@@ -350,6 +383,8 @@ add_filter('flying_press_cacheable', function($cacheable) {
 // Include classes with error handling
 function mxchat_include_classes() {
     $class_files = array(
+        'includes/class-mxchat-model-catalog.php',
+        'includes/class-mxchat-tool-registry.php',
         'includes/class-mxchat-integrator.php',
         'includes/class-mxchat-admin.php',
         'includes/class-mxchat-public.php',
@@ -373,6 +408,11 @@ function mxchat_include_classes() {
         } else {
             //error_log('MxChat: Missing class file - ' . $file);
         }
+    }
+
+    // Register the native function-calling admin-post save handler (a41dee).
+    if (class_exists('MxChat_Tool_Registry')) {
+        MxChat_Tool_Registry::init();
     }
 
     // Admin pages that aren't classes (procedural include).

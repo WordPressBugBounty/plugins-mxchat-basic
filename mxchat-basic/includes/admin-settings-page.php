@@ -364,6 +364,16 @@ function mxchat_render_settings_page($admin_instance) {
                         mxchat_render_field_wrapper('print_button', __('Show Download Transcript Button', 'mxchat'), function() use ($admin_instance) {
                             $admin_instance->mxchat_print_button_toggle_callback();
                         }, __('Show the "Download Transcript" item in the chat window menu.', 'mxchat'));
+
+                        // Start-New-Chat button (plan ac2e81) — lets a visitor reset the
+                        // conversation without the owner disabling chat persistence globally.
+                        mxchat_render_field_wrapper('reset_chat_enabled', __('Show Start-New-Chat Button', 'mxchat'), function() use ($admin_instance) {
+                            $admin_instance->mxchat_reset_chat_toggle_callback();
+                        }, __('Show a "Start new chat" item in the chat window menu that clears the current conversation and begins a fresh session.', 'mxchat'));
+
+                        mxchat_render_field_wrapper('reset_chat_label', __('Start-New-Chat Button Label', 'mxchat'), function() use ($admin_instance) {
+                            $admin_instance->mxchat_reset_chat_label_callback();
+                        }, __('Label for the Start-New-Chat menu item. Leave blank to use "Start new chat".', 'mxchat'));
                         ?>
                     </div>
                 </div>
@@ -900,7 +910,7 @@ function mxchat_render_settings_page($admin_instance) {
                     <div>
                         <?php printf(
                             esc_html__('Visit our %s for setup instructions.', 'mxchat'),
-                            '<a href="https://mxchat.ai/documentation/#slack_integration" target="_blank">' . esc_html__('documentation page', 'mxchat') . '</a>'
+                            '<a href="https://mxchat.ai/documentation/mxchat-core#slack-live-agent-handoff" target="_blank">' . esc_html__('documentation page', 'mxchat') . '</a>'
                         ); ?>
                     </div>
                 </div>

@@ -5,7 +5,7 @@ Tags: ai chatbot, chatgpt, woocommerce, customer support, content generation
 Requires at least: 5.0
 Tested up to: 7.0
 Requires PHP: 7.2
-Stable tag: 3.2.9
+Stable tag: 3.2.10
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -60,7 +60,8 @@ Extend the free plugin with these optional premium features:
 🟢 **WooCommerce Product Training** – Train your AI chatbot on your entire product catalog including descriptions, pricing, SKUs, and categories for intelligent shopping assistance
 🟢 **Live Agent Handoff** – Seamlessly escalate conversations from AI to human support via Slack when customers need personal assistance
 🟢 **ACF Field Control** – Choose exactly which Advanced Custom Fields are included in your knowledge base—perfect for excluding private notes or internal data
-🟢 **Advanced Action Recognition** – Smart vector embedding system understands user intent and triggers lead capture, appointments, redirects, and custom actions automatically
+🟢 **Advanced Action Recognition** – Trigger Phrases use a smart vector embedding system to understand user intent and fire lead capture, appointments, redirects, and custom actions automatically — precise, deterministic control over when each action runs
+🟢 **AI Tools (Function Calling)** – Let the chatbot decide on its own when to run an enabled action straight from natural language, with no phrases to set up. Use Trigger Phrases, AI Tools, or both together (function calling needs a tool-capable AI model)
 🟢 **Document Processing** – Let visitors upload and chat with PDFs and Word documents directly on your frontend
 🟢 **Pinecone Vector Storage** – Optional lightning-fast knowledge retrieval for large datasets and enterprise-scale deployments
 🟢 **Web Search Integration** – Brave search provides real-time information beyond your knowledge base
@@ -293,7 +294,12 @@ Yes. MxChat integrates with Slack for live agent handoff. When the AI cannot hel
 
 = What are Actions and how do they work? =
 
-Actions are custom triggers that execute when user intent is detected. Create actions for lead capture, appointment booking, support tickets, page redirects, or custom JavaScript. The AI automatically recognizes when users want to perform these actions and triggers them contextually.
+Actions are capabilities your chatbot can perform — lead capture, appointment booking, support tickets, page redirects, image generation, web search, or custom JavaScript. MxChat gives you two ways to fire them, and you can use either one or both together:
+
+* **Trigger Phrases** – the original system. A smart vector embedding match fires an action when a visitor's message matches a phrase you've set up. Precise, deterministic control over exactly when each action runs.
+* **AI Tools (function calling)** – the chatbot decides on its own when to run an enabled action, straight from natural language, with no phrases to configure. The easiest way to get started; it needs a tool-capable AI model.
+
+Manage both from the Actions area in your MxChat settings, which holds Trigger Phrases and AI Tools side by side.
 
 = Can visitors upload documents to chat? =
 
@@ -324,13 +330,24 @@ Yes. MxChat is available for free on the WordPress plugin repository with full A
 1. **Chat Transcripts Insights** - Review and analyze conversations insights to see engagement rate, peak activity, and user distribution.
 2. **Chat Transcripts Insights** - View 7 day activity trend graph.  
 3. **Knowledge & Sitemap Submission** - Submit custom content to enhance the chatbot's responses.  
-4. **Action Page** - Set custom action triggers to complete specific actions.  
+4. **Action Page** - Set up Trigger Phrases and AI Tools (function calling) to complete specific actions.
 5. **Plugin Settings Page** - Configure your API key and other settings.  
 6. **MxChat Debug Panel** - Easily debug and view your content matching scores, citation URLs, triggered actions and more.  
 
 *(Note: Screenshots will be added in future updates)*
 
 == Changelog ==
+
+= 3.2.10 - June 19, 2026 =
+* New: AI Tools (function calling) — the chatbot can now decide on its own when to use your enabled tools, such as web search, image generation, answering from an uploaded PDF, and active add-on actions like WooCommerce, straight from natural language with no trigger phrases to set up. Turn it on under Actions then AI Tools (off by default; needs a tool-capable AI model), add the tools you want with a guided picker, and optionally tell the assistant in plain language when to use each one. Tools that spend money, expose customer data, or hand off to a human stay off until you enable them deliberately
+* New: Optional "Start new chat" button in the chat window menu — lets visitors clear the current conversation and start fresh in one click, without turning off chat persistence (off by default; enable it under Chatbot then Display, with a customizable label)
+* Improved: The Actions area is clearer — the original phrase-matching system is now called Trigger Phrases and sits alongside AI Tools under one Actions menu, with AI Tools listed first as the recommended path and a plain-language explainer of when to use each
+* Improved: Readable, leak-safe AI error messages now cover every provider (Claude, OpenAI, xAI, Google Gemini, DeepSeek and OpenRouter) for both API errors and connection or timeout failures — site admins get an actionable hint such as choosing another model in Settings, while visitors only ever see a friendly fallback and never raw API or network details
+* Improved: Applying or changing an AI theme, and toggling Pinecone, now auto-clears supported page caches the same way other settings changes do — no more stale widget appearance after a theme change
+* Fixed: On multi-bot sites, non-streaming replies now correctly use the bot assigned to the visitor's session instead of falling back to the default bot's prompt and knowledge, and a repeated PHP notice in the debug log is gone
+* Fixed: Images created with the Gemini image generator now display correctly in the chat window — previously the bot reported it had made an image but nothing appeared, because the file was saved with the wrong file type
+* Fixed: The Slack live-agent setup notice in Settings now links to the current setup guide on the MxChat Core documentation page
+* Fixed: Two older Claude models that Anthropic has now retired (Claude 4 Opus and Claude 4 Sonnet, the May 2025 versions) have been removed from the model pickers; if your site had either one selected, it is automatically switched to the current equivalent (Claude Opus 4.8 or Claude Sonnet 4.6) so chat keeps working without any action from you
 
 = 3.2.9 - June 11, 2026 =
 * New: Claude Fable 5 — Anthropic's newest flagship model — available in the Select AI Model picker and the Content Generator
@@ -509,8 +526,8 @@ Older releases are archived in the plugin's full version history on WordPress.or
 
 == Upgrade Notice ==
 
-= 3.2.9 - June 11, 2026 =
-Adds Claude Fable 5 — Anthropic's newest flagship model — to the model picker and Content Generator (and fixes Claude Opus 4.7/4.8 as Content Generator models). Adds a Stop button to halt streaming responses mid-answer, an "Images per Article" slider for the Content Generator, and a toggle to hide the Download Transcript menu item. Settings changes now apply immediately on cached sites — no more clearing caches after toggling. Restores in-chat PDF/Word upload, keeps chat-widget text out of your Google search snippets, and rebuilds the translation template so translators no longer lose work on updates. Also includes RTL admin-navigation, satisfaction-prompt, message-loss, and PHP 8.2 fixes.
+= 3.2.10 - June 19, 2026 =
+New AI Tools (function calling): the chatbot can decide on its own when to use your enabled tools — web search, image generation, uploaded-PDF answers, and add-on actions like WooCommerce — from natural language, with no trigger phrases required (off by default; enable and pick the allowed tools under Actions then AI Tools, where the phrase-matching system is now called Trigger Phrases). Readable, leak-safe AI error messages now cover every provider for both API and connection or timeout failures, so admins get an actionable hint while visitors only see a friendly fallback. Also adds an optional "Start new chat" menu button, auto-clears page caches when you change an AI theme, and fixes multi-bot non-streaming replies using the wrong bot, Gemini-generated images not displaying, and the Slack setup link. Two Claude models Anthropic retired (4 Opus and 4 Sonnet, the May 2025 versions) are removed and any site using one is auto-switched to its current equivalent.
 
 == License & Warranty ==
 
