@@ -7023,6 +7023,7 @@ public function api_key_callback() {
     echo '<input type="text" id="api_key" name="api_key" value="' . $apiKey . '" class="regular-text mxchat-autosave-field mxchat-api-key-field" autocomplete="new-password" data-lpignore="true" data-form-type="other" data-nonce="' . $nonce . '" />';
     echo '<button type="button" id="toggleApiKeyVisibility">' . esc_html__('Show', 'mxchat') . '</button>';
     echo '<p class="description">' . esc_html__('Required for OpenAI GPT models and OpenAI embeddings. Get your API key from OpenAI Platform.', 'mxchat') . '</p>';
+    echo $this->mxchat_provider_key_test_button('openai', 'api_key');
     echo '</div>';
 }
 
@@ -7035,6 +7036,7 @@ public function xai_api_key_callback() {
     echo '<input type="text" id="xai_api_key" name="xai_api_key" value="' . $xaiApiKey . '" class="regular-text mxchat-autosave-field mxchat-api-key-field" autocomplete="new-password" data-lpignore="true" data-form-type="other" data-nonce="' . $nonce . '" />';
     echo '<button type="button" id="toggleXaiApiKeyVisibility">' . esc_html__('Show', 'mxchat') . '</button>';
     echo '<p class="description">' . esc_html__('Required for X.AI Grok models. Get your API key from X.AI Console.', 'mxchat') . '</p>';
+    echo $this->mxchat_provider_key_test_button('xai', 'xai_api_key');
     echo '</div>';
 }
 // Claude API Key
@@ -7046,6 +7048,7 @@ public function claude_api_key_callback() {
     echo '<input type="text" id="claude_api_key" name="claude_api_key" value="' . $claudeApiKey . '" class="regular-text mxchat-autosave-field mxchat-api-key-field" autocomplete="new-password" data-lpignore="true" data-form-type="other" data-nonce="' . $nonce . '" />';
     echo '<button type="button" id="toggleClaudeApiKeyVisibility">' . esc_html__('Show', 'mxchat') . '</button>';
     echo '<p class="description">' . esc_html__('Required for Anthropic Claude models. Get your API key from Anthropic Console.', 'mxchat') . '</p>';
+    echo $this->mxchat_provider_key_test_button('claude', 'claude_api_key');
     echo '</div>';
 }
 
@@ -7058,6 +7061,7 @@ public function deepseek_api_key_callback() {
     echo '<input type="text" id="deepseek_api_key" name="deepseek_api_key" value="' . $apiKey . '" class="regular-text mxchat-autosave-field mxchat-api-key-field" autocomplete="new-password" data-lpignore="true" data-form-type="other" data-nonce="' . $nonce . '" />';
     echo '<button type="button" id="toggleDeepSeekApiKeyVisibility">' . esc_html__('Show', 'mxchat') . '</button>';
     echo '<p class="description">' . esc_html__('Required for DeepSeek models. Get your API key from DeepSeek Platform.', 'mxchat') . '</p>';
+    echo $this->mxchat_provider_key_test_button('deepseek', 'deepseek_api_key');
     echo '</div>';
 }
 
@@ -7070,6 +7074,7 @@ public function gemini_api_key_callback() {
     echo '<input type="text" id="gemini_api_key" name="gemini_api_key" value="' . $geminiApiKey . '" class="regular-text mxchat-autosave-field mxchat-api-key-field" autocomplete="new-password" data-lpignore="true" data-form-type="other" data-nonce="' . $nonce . '" />';
     echo '<button type="button" id="toggleGeminiApiKeyVisibility">' . esc_html__('Show', 'mxchat') . '</button>';
     echo '<p class="description">' . esc_html__('Required for Google Gemini models and embeddings. Get your API key from Google AI Studio.', 'mxchat') . '</p>';
+    echo $this->mxchat_provider_key_test_button('gemini', 'gemini_api_key');
     echo '</div>';
 }
 
@@ -7083,7 +7088,71 @@ public function openrouter_api_key_callback() {
     echo '<input type="text" id="openrouter_api_key" name="openrouter_api_key" value="' . $openrouterApiKey . '" class="regular-text mxchat-autosave-field mxchat-api-key-field" autocomplete="new-password" data-lpignore="true" data-form-type="other" data-nonce="' . $nonce . '" />';
     echo '<button type="button" id="toggleOpenRouterApiKeyVisibility">' . esc_html__('Show', 'mxchat') . '</button>';
     echo '<p class="description">' . esc_html__('Required for OpenRouter models. Get your API key from OpenRouter.ai', 'mxchat') . '</p>';
+    echo $this->mxchat_provider_key_test_button('openrouter', 'openrouter_api_key');
     echo '</div>';
+}
+
+/**
+ * Renders a "Test key" button + result target next to a built-in provider key
+ * field, and emits the shared delegated click handler ONCE (static guard). The
+ * button carries data-target = the key field id so the owner can test the value
+ * they just typed (test-before-save); the AJAX handler falls back to the saved
+ * key when the field is empty. Styled with the WP `button` class to match the
+ * adjacent Custom-provider "Test Connection" button on this same page.
+ * plan-mxchat-20260623-c41f74.
+ */
+public function mxchat_provider_key_test_button($provider, $target_id) {
+    static $script_emitted = false;
+    $nonce = wp_create_nonce('mxchat_test_provider_key');
+    $html  = '<div class="mxchat-key-test" style="margin-top:8px;">'
+           . '<button type="button" class="button mxchat-test-provider-key" data-provider="' . esc_attr($provider) . '" data-target="' . esc_attr($target_id) . '" data-nonce="' . esc_attr($nonce) . '">' . esc_html__('Test key', 'mxchat') . '</button>'
+           . '<span class="mxchat-test-provider-key-result" style="margin-left:10px;font-size:13px;vertical-align:middle;"></span>'
+           . '</div>';
+    if (!$script_emitted) {
+        $script_emitted = true;
+        $html .= $this->mxchat_provider_key_test_script();
+    }
+    return $html;
+}
+
+/**
+ * One-time delegated click handler shared by every .mxchat-test-provider-key
+ * button. Posts the typed key value + provider to mxchat_test_provider_key and
+ * renders the success/error message inline. Mirrors the Custom-provider test.
+ */
+private function mxchat_provider_key_test_script() {
+    $t_testing = esc_js(__('Testing...', 'mxchat'));
+    $t_valid   = esc_js(__('Key is valid.', 'mxchat'));
+    $t_failed  = esc_js(__('Failed', 'mxchat'));
+    $t_req     = esc_js(__('Request failed', 'mxchat'));
+    return '<script>(function(){'
+        . 'if (window.__mxchatProviderKeyTestWired) { return; }'
+        . 'window.__mxchatProviderKeyTestWired = true;'
+        . 'document.addEventListener("click", function(e){'
+        . 'var btn = e.target && e.target.closest ? e.target.closest(".mxchat-test-provider-key") : null;'
+        . 'if (!btn) { return; }'
+        . 'e.preventDefault();'
+        . 'var field = btn.getAttribute("data-target") ? document.getElementById(btn.getAttribute("data-target")) : null;'
+        . 'var out = btn.parentNode ? btn.parentNode.querySelector(".mxchat-test-provider-key-result") : null;'
+        . 'if (out) { out.textContent = "' . $t_testing . '"; out.style.color = "#646970"; }'
+        . 'btn.disabled = true;'
+        . 'var fd = new FormData();'
+        . 'fd.append("action", "mxchat_test_provider_key");'
+        . 'fd.append("_wpnonce", btn.getAttribute("data-nonce"));'
+        . 'fd.append("provider", btn.getAttribute("data-provider") || "");'
+        . 'fd.append("key", field ? field.value : "");'
+        . 'fetch(ajaxurl, { method:"POST", credentials:"same-origin", body: fd })'
+        . '.then(function(r){ return r.json(); })'
+        . '.then(function(j){'
+        . 'if (out) {'
+        . 'if (j && j.success) { out.textContent = "✓ " + ((j.data && j.data.message) ? j.data.message : "' . $t_valid . '"); out.style.color = "#00a32a"; }'
+        . 'else { out.textContent = "⚠ " + ((j && j.data && j.data.message) ? j.data.message : "' . $t_failed . '"); out.style.color = "#d63638"; }'
+        . '}'
+        . 'btn.disabled = false;'
+        . '})'
+        . '.catch(function(){ if (out) { out.textContent = "⚠ ' . $t_req . '"; out.style.color = "#d63638"; } btn.disabled = false; });'
+        . '});'
+        . '})();</script>';
 }
 
 // Custom (OpenAI-compatible) Provider — Ollama, LM Studio, vLLM, llama.cpp, Azure OpenAI, etc.
@@ -7565,9 +7634,13 @@ public function enable_web_search_toggle_callback() {
     // future OpenAI model that lacks Responses-API web_search support is added here.
     $unsupported_models = array('gpt-4.1-nano');
 
-    // OpenAI chat-model allowlist for the Web Search toggle, derived from the central
-    // model catalog (class-mxchat-model-catalog.php). When a new OpenAI chat model is
-    // added there, the Web Search toggle picks it up automatically — no edit here.
+    // Web-search-capable chat-model allowlists, derived from the central model catalog
+    // (class-mxchat-model-catalog.php). When a new OpenAI/Gemini chat model is added there,
+    // the Web Search toggle picks it up automatically — no edit here.
+    // OpenAI grounds via the Responses-API web_search tool; Gemini grounds natively via the
+    // Google Search tool (plan 46b9ea wired the Gemini dispatch — every shipped Gemini chat
+    // model is 2.x/3.x and grounds, matching that path's empty opt-out list, so all catalog
+    // Gemini models are supported here).
     if (!class_exists('MxChat_Model_Catalog')) {
         require_once plugin_dir_path(__FILE__) . 'class-mxchat-model-catalog.php';
     }
@@ -7575,12 +7648,16 @@ public function enable_web_search_toggle_callback() {
     $openai_models = (isset($chat_catalog['openai']['models']) && is_array($chat_catalog['openai']['models']))
         ? array_keys($chat_catalog['openai']['models'])
         : array();
+    $gemini_models = (isset($chat_catalog['gemini']['models']) && is_array($chat_catalog['gemini']['models']))
+        ? array_keys($chat_catalog['gemini']['models'])
+        : array();
 
-    $is_openai = in_array($current_model, $openai_models);
-    $is_supported = $is_openai && !in_array($current_model, $unsupported_models);
+    $is_capable   = in_array($current_model, $openai_models) || in_array($current_model, $gemini_models);
+    $is_supported = $is_capable && !in_array($current_model, $unsupported_models);
 
-    // Wrapper div with data attributes for JS to show/hide
-    echo '<div id="web-search-toggle-wrapper" data-openai-models="' . esc_attr(implode(',', $openai_models)) . '" data-unsupported-models="' . esc_attr(implode(',', $unsupported_models)) . '"' . (!$is_supported ? ' style="display:none;"' : '') . '>';
+    // Wrapper div with data attributes for JS to show/hide. data-openai-models is kept for
+    // back-compat; data-gemini-models is the added second provider the JS now also honors.
+    echo '<div id="web-search-toggle-wrapper" data-openai-models="' . esc_attr(implode(',', $openai_models)) . '" data-gemini-models="' . esc_attr(implode(',', $gemini_models)) . '" data-unsupported-models="' . esc_attr(implode(',', $unsupported_models)) . '"' . (!$is_supported ? ' style="display:none;"' : '') . '>';
 
     echo '<label class="toggle-switch">';
     echo sprintf(
@@ -7592,10 +7669,10 @@ public function enable_web_search_toggle_callback() {
 
     echo '</div>';
 
-    // Message shown when non-OpenAI model is selected
+    // Message shown when a model that can't ground (Claude, Grok, DeepSeek, OpenRouter, etc.) is selected
     echo '<p id="web-search-unavailable-message" class="description" style="color: #666;' . ($is_supported ? ' display:none;' : '') . '">';
     echo '<span class="dashicons dashicons-info" style="font-size: 16px; vertical-align: middle; margin-right: 4px;"></span>';
-    echo esc_html__('Web search is only available for OpenAI models.', 'mxchat');
+    echo esc_html__('Web search is only available for OpenAI and Gemini models.', 'mxchat');
     echo '</p>';
 }
 
@@ -7806,9 +7883,10 @@ public function mxchat_intro_message_callback() {
     // Retrieve the saved intro message or use the default
     $default_message = __('Hello! How can I assist you today?', 'mxchat');
     $saved_message = isset($all_options['intro_message']) ? $all_options['intro_message'] : $default_message;
-    // Output the textarea with the saved value without escaping HTML
+    // Escape on output (esc_textarea) — neutralizes any payload already stored before the
+    // Wordfence Stored-XSS fix (CWE-79, plan-3f8158) and prevents </textarea> context-breakout.
     ?>
-    <textarea id="intro_message" name="intro_message" rows="5" cols="50"><?php echo $saved_message; ?></textarea>
+    <textarea id="intro_message" name="intro_message" rows="5" cols="50"><?php echo esc_textarea( $saved_message ); ?></textarea>
     <p class="description" style="margin-top: 8px;">
         <?php esc_html_e('Use {visitor_name} to personalize greetings when lead capture is enabled.', 'mxchat'); ?><br>
         <code style="font-size: 12px;"><?php esc_html_e('Example: Hello {visitor_name}! How can I help you today?', 'mxchat'); ?></code>
@@ -8718,6 +8796,27 @@ public function mxchat_similarity_threshold_callback() {
     echo '</div>';
 }
 
+public function mxchat_max_input_length_callback() {
+    // Load from mxchat_options array (plan a3fae2 part C).
+    $options = get_option('mxchat_options', []);
+
+    // 0 = unlimited (default — preserves current behavior, no cap).
+    $max_input_length = isset($options['max_input_length']) ? intval($options['max_input_length']) : 0;
+
+    echo sprintf(
+        '<input type="number"
+               id="max_input_length"
+               name="max_input_length"
+               min="0"
+               max="100000"
+               step="1"
+               value="%s"
+               placeholder="0"
+               class="mxch-input mxch-input-sm" />',
+        esc_attr($max_input_length)
+    );
+}
+
 public function mxchat_rag_sources_limit_callback() {
     // Load from mxchat_options array
     $options = get_option('mxchat_options', []);
@@ -8823,6 +8922,11 @@ private function enqueue_page_specific_assets($current_page, $plugin_url, $versi
             wp_enqueue_script('mxchat-content-selector-js', $plugin_url . 'js/content-selector.js', array('jquery'), $version, true);
             //  Add the knowledge processing script (common script needed for WordPress dismiss functionality)
             wp_enqueue_script('mxchat-knowledge-processing', $plugin_url . 'js/knowledge-processing.js', array('jquery', 'common'), $version, true);
+            // Per-entry "View indexed content" inspector (plan-d8cb4b) reuses the
+            // Testing tab's match-card / chunk-detail components, which are scoped
+            // under .mxch-testing-results. Load that stylesheet here so the inspector
+            // modal renders identically to the Testing tab.
+            wp_enqueue_style('mxchat-admin-testing-css', $plugin_url . 'css/admin-testing-tab.css', array('mxchat-admin-sidebar-css'), $version);
             break;
 
         case 'mxchat-transcripts':
@@ -9312,6 +9416,15 @@ public function mxchat_sanitize($input) {
     // preserved so the integrator falls back to translated defaults.
     if (array_key_exists('satisfaction_rating_idle_seconds', $input)) {
         $new_input['satisfaction_rating_idle_seconds'] = max(5, min(600, intval($input['satisfaction_rating_idle_seconds'])));
+    }
+
+    // Max input length in characters (plan a3fae2 part C). 0 = unlimited (default,
+    // preserves current behavior). Clamp to a sane ceiling so a typo can't lock out
+    // all input. REQUIRED here — mxchat_sanitize() rebuilds the array from a whitelist,
+    // so without this isset-handler the key is stripped on the next save of ANY field
+    // (the 2c02ea global-rate-limit footgun).
+    if (array_key_exists('max_input_length', $input)) {
+        $new_input['max_input_length'] = max(0, min(100000, intval($input['max_input_length'])));
     }
     if (array_key_exists('satisfaction_rating_question', $input)) {
         $new_input['satisfaction_rating_question'] = mb_substr(sanitize_text_field($input['satisfaction_rating_question']), 0, 200);

@@ -263,10 +263,10 @@ function mxchat_render_settings_page($admin_instance) {
                             $admin_instance->enable_streaming_toggle_callback();
                         }, __('Enable real-time streaming responses for supported models (OpenAI, Claude, DeepSeek, Grok).', 'mxchat'));
 
-                        // Enable Web Search (OpenAI only)
+                        // Enable Web Search (OpenAI & Gemini)
                         mxchat_render_field_wrapper('enable_web_search', __('Enable Web Search', 'mxchat'), function() use ($admin_instance) {
                             $admin_instance->enable_web_search_toggle_callback();
-                        }, __('Allow the chatbot to search the web for current information (OpenAI models only).', 'mxchat'));
+                        }, __('Allow the chatbot to search the web for current information (OpenAI and Gemini models).', 'mxchat'));
                         ?>
                     </div>
                 </div>
@@ -406,6 +406,11 @@ function mxchat_render_settings_page($admin_instance) {
                         mxchat_render_field_wrapper('input_copy', __('Input Placeholder', 'mxchat'), function() use ($admin_instance) {
                             $admin_instance->mxchat_input_copy_callback();
                         }, __('Placeholder text in the chat input field.', 'mxchat'));
+
+                        // Max Input Length (characters) — plan a3fae2 part C
+                        mxchat_render_field_wrapper('max_input_length', __('Max Input Length (characters)', 'mxchat'), function() use ($admin_instance) {
+                            $admin_instance->mxchat_max_input_length_callback();
+                        }, __('Cap how many characters a visitor can type or paste into a single message. Set to 0 for unlimited (default).', 'mxchat'));
 
                         // Chat Teaser
                         mxchat_render_field_wrapper('pre_chat_message', __('Chat Teaser Pop-up', 'mxchat'), function() use ($admin_instance) {

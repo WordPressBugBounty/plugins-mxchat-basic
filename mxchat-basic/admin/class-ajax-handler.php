@@ -54,6 +54,9 @@ private function mxchat_init_ajax_hooks() {
 
     // Custom (OpenAI-compatible) Provider connection test
     add_action('wp_ajax_mxchat_test_custom_provider', array($this, 'mxchat_test_custom_provider_callback'));
+
+    // Built-in provider key validation — cheap per-provider auth check (plan-mxchat-20260623-c41f74)
+    add_action('wp_ajax_mxchat_test_provider_key', array($this, 'mxchat_test_provider_key_callback'));
 }
 
 /**
@@ -126,6 +129,120 @@ public function mxchat_test_custom_provider_callback() {
     ));
 }
 
+/**
+ * Validate a BUILT-IN provider key with the lightest authenticated call per
+ * provider (a /models or key-info GET — never a generation). Reads the posted
+ * key value so the owner can test BEFORE saving; falls back to the saved option
+ * when the field is empty. Mirrors mxchat_test_custom_provider_callback and the
+ * add-on test buttons (cf5bd5 veo / 8d16f1 perplexity). The key is never logged.
+ * plan-mxchat-20260623-c41f74.
+ */
+public function mxchat_test_provider_key_callback() {
+    check_ajax_referer('mxchat_test_provider_key');
+    if (!current_user_can('manage_options')) {
+        wp_send_json_error(array('message' => esc_html__('Unauthorized', 'mxchat')));
+    }
+
+    $provider   = isset($_POST['provider']) ? sanitize_key(wp_unslash($_POST['provider'])) : '';
+    $posted_key = isset($_POST['key']) ? trim((string) wp_unslash($_POST['key'])) : '';
+
+    $option_map = array(
+        'openai'     => 'api_key',
+        'xai'        => 'xai_api_key',
+        'claude'     => 'claude_api_key',
+        'deepseek'   => 'deepseek_api_key',
+        'gemini'     => 'gemini_api_key',
+        'openrouter' => 'openrouter_api_key',
+    );
+    if (!isset($option_map[$provider])) {
+        wp_send_json_error(array('message' => esc_html__('Unknown provider.', 'mxchat')));
+    }
+
+    // Prefer the just-typed value (test-before-save); fall back to the saved key.
+    $key = $posted_key;
+    if ($key === '') {
+        $options = get_option('mxchat_options', array());
+        $key = isset($options[$option_map[$provider]]) ? trim((string) $options[$option_map[$provider]]) : '';
+    }
+    if ($key === '') {
+        wp_send_json_error(array('message' => esc_html__('No API key entered or saved for this provider.', 'mxchat')));
+    }
+
+    // Lightest authenticated metadata call per provider — model-agnostic, no generation.
+    $headers = array();
+    switch ($provider) {
+        case 'openai':
+            $url = 'https://api.openai.com/v1/models';
+            $headers = array('Authorization' => 'Bearer ' . $key);
+            break;
+        case 'xai':
+            $url = 'https://api.x.ai/v1/models';
+            $headers = array('Authorization' => 'Bearer ' . $key);
+            break;
+        case 'deepseek':
+            $url = 'https://api.deepseek.com/models';
+            $headers = array('Authorization' => 'Bearer ' . $key);
+            break;
+        case 'openrouter':
+            // /auth/key validates the key itself (the public /models list does not).
+            $url = 'https://openrouter.ai/api/v1/auth/key';
+            $headers = array('Authorization' => 'Bearer ' . $key);
+            break;
+        case 'gemini':
+            $url = add_query_arg(array('pageSize' => 1, 'key' => $key), 'https://generativelanguage.googleapis.com/v1beta/models');
+            break;
+        case 'claude':
+            $url = 'https://api.anthropic.com/v1/models';
+            $headers = array('x-api-key' => $key, 'anthropic-version' => '2023-06-01');
+            break;
+        default:
+            wp_send_json_error(array('message' => esc_html__('Unknown provider.', 'mxchat')));
+    }
+
+    $response = wp_remote_get($url, array(
+        'headers' => $headers,
+        'timeout' => 10,
+    ));
+
+    if (is_wp_error($response)) {
+        wp_send_json_error(array('message' => sprintf(esc_html__('Network error: %s', 'mxchat'), esc_html($response->get_error_message()))));
+    }
+
+    $code = (int) wp_remote_retrieve_response_code($response);
+    if ($code >= 200 && $code < 300) {
+        wp_send_json_success(array('message' => esc_html__('Key is valid.', 'mxchat')));
+    }
+
+    // Surface the provider's own error text when present (trimmed; key never echoed).
+    $detail = '';
+    $body   = json_decode(wp_remote_retrieve_body($response), true);
+    if (is_array($body)) {
+        if (isset($body['error']['message'])) {
+            $detail = $body['error']['message'];
+        } elseif (isset($body['error']) && is_string($body['error'])) {
+            $detail = $body['error'];
+        } elseif (isset($body['message'])) {
+            $detail = $body['message'];
+        }
+    }
+    $detail = trim((string) $detail);
+    if (strlen($detail) > 200) {
+        $detail = substr($detail, 0, 200) . '…';
+    }
+
+    if ($code === 401 || $code === 403) {
+        $msg = ($detail !== '')
+            ? sprintf(esc_html__('Key rejected (HTTP %1$d): %2$s', 'mxchat'), $code, esc_html($detail))
+            : sprintf(esc_html__('Key rejected (HTTP %d). Check the API key.', 'mxchat'), $code);
+        wp_send_json_error(array('message' => $msg));
+    }
+
+    $msg = ($detail !== '')
+        ? sprintf(esc_html__('Provider returned HTTP %1$d: %2$s', 'mxchat'), $code, esc_html($detail))
+        : sprintf(esc_html__('Provider returned HTTP %d.', 'mxchat'), $code);
+    wp_send_json_error(array('message' => $msg));
+}
+
     // ========================================
     // SETTINGS AJAX HANDLERS
     // ========================================
@@ -141,8 +258,8 @@ public function mxchat_save_setting_callback() {
     }
 
     $name = isset($_POST['name']) ? $_POST['name'] : '';
-    // Strip slashes from the value before saving
-    $value = isset($_POST['value']) ? stripslashes($_POST['value']) : '';
+    // Remove WP's added slashes before saving (wp_unslash is the canonical form; plan-3f8158).
+    $value = isset($_POST['value']) ? wp_unslash($_POST['value']) : '';
 
     //error_log('MXChat Save: Processing field name: ' . $name);
     //error_log('MXChat Save: Field value: ' . $value);
@@ -236,6 +353,13 @@ public function mxchat_save_setting_callback() {
         case 'email_blocker_header_content':
             //error_log('MXChat Save: Processing email_blocker_header_content');
             // Allow HTML content but sanitize it safely
+            $options[$field_name] = wp_kses_post($value);
+            break;
+        case 'intro_message':
+            // Stored-XSS hardening (Wordfence CWE-79, plan-3f8158): sanitize on save as
+            // defense in depth. wp_kses_post mirrors mxchat_sanitize() (the options.php
+            // save path) so both save routes treat intro_message identically and strip
+            // <script>/</textarea> breakout while keeping basic formatting + {visitor_name}.
             $options[$field_name] = wp_kses_post($value);
             break;
         case 'email_blocker_button_text':

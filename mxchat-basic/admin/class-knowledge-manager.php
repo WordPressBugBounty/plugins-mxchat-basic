@@ -59,6 +59,7 @@ private function mxchat_init_hooks() {
     add_action('wp_ajax_mxchat_paginate_entries', array($this, 'ajax_mxchat_paginate_entries'));
     add_action('wp_ajax_mxchat_get_entry_content', array($this, 'ajax_mxchat_get_entry_content'));
     add_action('wp_ajax_mxchat_save_entry_content', array($this, 'ajax_mxchat_save_entry_content'));
+    add_action('wp_ajax_mxchat_inspect_entry', array($this, 'ajax_mxchat_inspect_entry'));
 
     // WordPress post management hooks
     add_action('pre_post_update', array($this, 'mxchat_store_pre_update_status'), 10, 2);
@@ -811,6 +812,228 @@ private function get_pinecone_entry_content( $source_url, $entry_id, $bot_id ) {
         'is_chunked'   => count($chunks) > 1,
         'chunk_count'  => count($chunks),
         'content_type' => $content_type,
+    );
+}
+
+/**
+ * AJAX: Inspect a knowledge entry — returns the per-chunk stored text + metadata
+ * WITHOUT collapsing it, so a site owner can see exactly what was indexed for an
+ * entry (plan-mxchat-20260628-d8cb4b). READ-ONLY: never re-embeds or mutates.
+ */
+public function ajax_mxchat_inspect_entry() {
+    check_ajax_referer('mxchat_inspect_entry_nonce', 'nonce');
+
+    if ( ! current_user_can('manage_options') ) {
+        wp_send_json_error( array( 'message' => esc_html__('Permission denied.', 'mxchat') ) );
+    }
+
+    $source_url  = isset($_POST['source_url']) ? sanitize_text_field( wp_unslash($_POST['source_url']) ) : '';
+    $entry_id    = isset($_POST['entry_id']) ? absint($_POST['entry_id']) : 0;
+    $data_source = isset($_POST['data_source']) ? sanitize_key($_POST['data_source']) : 'wordpress';
+    $bot_id      = isset($_POST['bot_id']) ? sanitize_key($_POST['bot_id']) : 'default';
+
+    if ( $data_source === 'pinecone' ) {
+        $result = $this->inspect_pinecone_entry( $source_url, $entry_id, $bot_id );
+    } else {
+        $result = $this->inspect_wordpress_entry( $source_url, $entry_id );
+    }
+
+    if ( is_wp_error( $result ) ) {
+        wp_send_json_error( array( 'message' => $result->get_error_message() ) );
+    }
+
+    wp_send_json_success( $result );
+}
+
+/**
+ * Read-only inspector for WordPress-DB entries. Mirrors get_wordpress_entry_content()
+ * but returns each STORED chunk's exact text + length (no implode), plus the assembled
+ * embedded text. This shows what is actually in the index, not a re-derivation from the post.
+ */
+private function inspect_wordpress_entry( $source_url, $entry_id ) {
+    global $wpdb;
+    $table = $wpdb->prefix . 'mxchat_system_prompt_content';
+
+    $rows = array();
+
+    // Group by the real stored source_url — this INCLUDES "mxchat://" manual
+    // Direct Content entries (the spec's manual-entry case), which share one
+    // source_url across their chunk rows. Only the synthetic "_ungrouped_<id>"
+    // display key (invented by the table view for rows with no source_url) is
+    // excluded; those fall through to the entry_id lookup below.
+    if ( ! empty( $source_url ) && strpos( $source_url, '_ungrouped_' ) !== 0 ) {
+        $rows = $wpdb->get_results( $wpdb->prepare(
+            "SELECT id, article_content, source_url, content_type FROM {$table} WHERE source_url = %s ORDER BY id ASC",
+            $source_url
+        ) );
+    }
+
+    // Fallback / manual "Direct Content" entries: fetch the single row by id.
+    if ( empty( $rows ) && $entry_id > 0 ) {
+        $row = $wpdb->get_row( $wpdb->prepare(
+            "SELECT id, article_content, source_url, content_type FROM {$table} WHERE id = %d",
+            $entry_id
+        ) );
+        if ( $row ) {
+            $rows = array( $row );
+        }
+    }
+
+    if ( empty( $rows ) ) {
+        return new WP_Error( 'not_found', esc_html__('Entry not found in the local knowledge database.', 'mxchat') );
+    }
+
+    $chunks       = array();
+    $content_type = '';
+    foreach ( $rows as $row ) {
+        $parsed = MxChat_Chunker::parse_stored_chunk( $row->article_content );
+        $text   = isset( $parsed['text'] ) ? $parsed['text'] : '';
+        $index  = isset( $parsed['metadata']['chunk_index'] ) ? intval( $parsed['metadata']['chunk_index'] ) : count( $chunks );
+        $content_type = $row->content_type;
+        $chunks[] = array(
+            'index'  => $index,
+            'text'   => $text,
+            'length' => function_exists('mb_strlen') ? mb_strlen( $text ) : strlen( $text ),
+            'row_id' => intval( $row->id ),
+        );
+    }
+
+    usort( $chunks, function( $a, $b ) { return $a['index'] - $b['index']; } );
+
+    $assembled = implode( "\n\n", wp_list_pluck( $chunks, 'text' ) );
+
+    return array(
+        'store'            => 'wordpress',
+        'source_url'       => $source_url,
+        'content_type'     => $content_type,
+        'is_chunked'       => count( $chunks ) > 1,
+        'chunk_count'      => count( $chunks ),
+        'assembled'        => $assembled,
+        'assembled_length' => function_exists('mb_strlen') ? mb_strlen( $assembled ) : strlen( $assembled ),
+        'chunks'           => array_values( $chunks ),
+        // WP-DB storage carries no separate vector metadata; surface that fact
+        // rather than letting the owner guess (the spec's taxonomy question).
+        'metadata'         => array(),
+        'metadata_note'    => esc_html__('Stored in the local WordPress database. Only the assembled text shown here is embedded — there are no separate vector metadata fields (e.g. taxonomy terms are not stored unless they were injected into the text itself).', 'mxchat'),
+    );
+}
+
+/**
+ * Read-only inspector for Pinecone entries. Mirrors get_pinecone_entry_content()
+ * but keeps each vector's text + metadata instead of imploding, so the owner can
+ * confirm exactly which metadata fields (text/source_url/type/last_updated/created_at/bot_id)
+ * are present per chunk. READ-ONLY.
+ */
+private function inspect_pinecone_entry( $source_url, $entry_id, $bot_id ) {
+    if ( ! class_exists('MxChat_Pinecone_Manager') ) {
+        return new WP_Error( 'pinecone_unavailable', esc_html__('Pinecone manager not available.', 'mxchat') );
+    }
+
+    if ( $bot_id === 'default' || ! class_exists('MxChat_Multi_Bot_Manager') ) {
+        $pinecone_options = get_option('mxchat_pinecone_addon_options');
+        $api_key   = $pinecone_options['mxchat_pinecone_api_key'] ?? '';
+        $host      = $pinecone_options['mxchat_pinecone_host'] ?? '';
+        $namespace = $pinecone_options['mxchat_pinecone_namespace'] ?? '';
+    } else {
+        $bot_config = apply_filters('mxchat_get_bot_pinecone_config', array(), $bot_id);
+        $api_key   = $bot_config['api_key'] ?? '';
+        $host      = $bot_config['host'] ?? '';
+        $namespace = $bot_config['namespace'] ?? '';
+    }
+
+    if ( empty($host) || empty($api_key) ) {
+        return new WP_Error( 'pinecone_config', esc_html__('Pinecone not configured.', 'mxchat') );
+    }
+
+    $base_id    = md5( $source_url );
+    $vector_ids = array( $base_id );
+
+    $list_url  = "https://{$host}/vectors/list";
+    $list_body = array( 'prefix' => $base_id . '_chunk_', 'limit' => 100 );
+    if ( ! empty($namespace) ) {
+        $list_body['namespace'] = $namespace;
+    }
+
+    $list_resp = wp_remote_post( $list_url, array(
+        'headers' => array( 'Api-Key' => $api_key, 'Content-Type' => 'application/json' ),
+        'body'    => wp_json_encode( $list_body ),
+        'timeout' => 15,
+    ) );
+
+    if ( ! is_wp_error($list_resp) ) {
+        $list_data = json_decode( wp_remote_retrieve_body($list_resp), true );
+        if ( ! empty($list_data['vectors']) ) {
+            foreach ( $list_data['vectors'] as $v ) {
+                $vector_ids[] = $v['id'];
+            }
+        }
+    }
+
+    $fetch_url  = "https://{$host}/vectors/fetch";
+    $fetch_body = array( 'ids' => $vector_ids );
+    if ( ! empty($namespace) ) {
+        $fetch_body['namespace'] = $namespace;
+    }
+
+    $fetch_resp = wp_remote_post( $fetch_url, array(
+        'headers' => array( 'Api-Key' => $api_key, 'Content-Type' => 'application/json' ),
+        'body'    => wp_json_encode( $fetch_body ),
+        'timeout' => 15,
+    ) );
+
+    if ( is_wp_error($fetch_resp) ) {
+        return new WP_Error( 'pinecone_fetch', esc_html__('Failed to fetch from Pinecone.', 'mxchat') );
+    }
+
+    $fetch_data = json_decode( wp_remote_retrieve_body($fetch_resp), true );
+    $vectors    = $fetch_data['vectors'] ?? array();
+
+    if ( empty($vectors) ) {
+        return new WP_Error( 'not_found', esc_html__('Entry not found in Pinecone.', 'mxchat') );
+    }
+
+    // Whitelisted metadata fields the spec calls out — shown so devs can confirm
+    // what is (and is NOT) stored per vector.
+    $meta_fields  = array( 'text', 'source_url', 'type', 'last_updated', 'created_at', 'bot_id', 'chunk_index', 'total_chunks' );
+    $chunks       = array();
+    $content_type = '';
+    foreach ( $vectors as $vid => $vector ) {
+        $meta  = isset($vector['metadata']) && is_array($vector['metadata']) ? $vector['metadata'] : array();
+        $text  = $meta['text'] ?? '';
+        $index = isset($meta['chunk_index']) ? intval($meta['chunk_index']) : count($chunks);
+        $content_type = $meta['type'] ?? $content_type;
+
+        $clean_meta = array();
+        foreach ( $meta_fields as $field ) {
+            if ( array_key_exists( $field, $meta ) && $field !== 'text' ) {
+                $clean_meta[ $field ] = is_scalar( $meta[ $field ] ) ? (string) $meta[ $field ] : wp_json_encode( $meta[ $field ] );
+            }
+        }
+
+        $chunks[] = array(
+            'index'     => $index,
+            'text'      => $text,
+            'length'    => function_exists('mb_strlen') ? mb_strlen( $text ) : strlen( $text ),
+            'vector_id' => (string) $vid,
+            'metadata'  => $clean_meta,
+        );
+    }
+
+    usort( $chunks, function( $a, $b ) { return $a['index'] - $b['index']; } );
+
+    $assembled = implode( "\n\n", wp_list_pluck( $chunks, 'text' ) );
+
+    return array(
+        'store'            => 'pinecone',
+        'source_url'       => $source_url,
+        'content_type'     => $content_type,
+        'is_chunked'       => count( $chunks ) > 1,
+        'chunk_count'      => count( $chunks ),
+        'assembled'        => $assembled,
+        'assembled_length' => function_exists('mb_strlen') ? mb_strlen( $assembled ) : strlen( $assembled ),
+        'chunks'           => array_values( $chunks ),
+        'metadata'         => array(),
+        'metadata_note'    => esc_html__('Stored in Pinecone. Each chunk above lists the vector metadata fields actually present — if a field you expect (such as taxonomy terms) is missing here, it was not stored as metadata and is only searchable if it appears in the embedded text.', 'mxchat'),
     );
 }
 
@@ -6629,28 +6852,39 @@ public function ajax_add_tag_role_mapping() {
         exit;
     }
     
-    $tag_slug = isset($_POST['tag_slug']) ? sanitize_text_field($_POST['tag_slug']) : '';
+    $tag_input = isset($_POST['tag_slug']) ? sanitize_text_field($_POST['tag_slug']) : '';
     $role_restriction = isset($_POST['role_restriction']) ? sanitize_text_field($_POST['role_restriction']) : 'public';
-    
-    if (empty($tag_slug)) {
-        wp_send_json_error('Tag slug is required');
+
+    if (empty($tag_input)) {
+        wp_send_json_error('Please enter a tag name or slug');
         exit;
     }
-    
+
     // Validate role restriction
     $valid_roles = array_keys($this->mxchat_get_role_options());
     if (!in_array($role_restriction, $valid_roles)) {
         wp_send_json_error('Invalid role restriction');
         exit;
     }
-    
-    // Check if tag exists in WordPress
-    $term = get_term_by('slug', $tag_slug, 'post_tag');
+
+    // Resolve the tag by slug first, then fall back to its display name, so users can
+    // enter either "premium-content" or "Premium Content". (plan b8bcf5 — the field is
+    // labeled by name but previously validated by slug only, producing the confusing
+    // "Tag does not exist in WordPress" error when a real tag's name was typed.)
+    $term = get_term_by('slug', $tag_input, 'post_tag');
     if (!$term) {
-        wp_send_json_error('Tag does not exist in WordPress');
+        $term = get_term_by('name', $tag_input, 'post_tag');
+    }
+    if (!$term) {
+        wp_send_json_error('No tag with that name or slug exists yet. Create it under Posts → Tags first, then enter its name or slug.');
         exit;
     }
-    
+
+    // Always key the mapping by the RESOLVED slug — apply_role_restriction_to_post()
+    // compares against each post's tag slugs, so the stored key must be a slug,
+    // never the raw (possibly display-name) input.
+    $tag_slug = $term->slug;
+
     // Get existing mappings
     $mappings = get_option('mxchat_tag_role_mappings', array());
     

@@ -720,6 +720,7 @@ function sendMessage(botId) {
 
         appendMessage("user", message, '', [], false, botId);
         $chatInput.val('');
+        mxchatUpdateCharCounter($chatInput[0]); // reset the char counter after send (plan 7091a2)
         $chatInput.css('height', 'auto');
 
         if (hasQuickQuestions(botId)) {
@@ -1596,6 +1597,71 @@ $(document).on('keypress', '.chat-input', function(e) {
         }
         sendMessage(botId);
     }
+});
+
+// Chat input character counter + soft limit feedback (plan 7091a2).
+// Language-neutral: numbers + color only, no translatable strings. The counter
+// reveals near the cap and ramps neutral -> amber -> red; an over-limit keystroke
+// or trimmed paste produces a brief border-flash/shake so the maxlength cap (plan
+// a3fae2) is never a silent "input jumps back". Per-bot scoped via .input-container.
+function mxchatUpdateCharCounter(inputEl) {
+    if (!inputEl || !inputEl.closest) return;
+    var max = parseInt(inputEl.getAttribute('maxlength'), 10);
+    var container = inputEl.closest('.input-container');
+    if (!container || !max || max <= 0) return;
+    var counter = container.querySelector('.mxchat-char-counter');
+    if (!counter) return;
+    var len = inputEl.value.length;
+    var ratio = len / max;
+    var nearThreshold = 0.8; // start surfacing the counter at 80% of the cap
+    var cur = counter.querySelector('.mxchat-char-counter-current');
+    if (cur) cur.textContent = len;
+    var warn = ratio >= nearThreshold && len < max;
+    var full = len >= max;
+    counter.classList.toggle('is-visible', ratio >= nearThreshold);
+    counter.classList.toggle('is-warn', warn);
+    counter.classList.toggle('is-full', full);
+    container.classList.toggle('mxchat-input-near-limit', warn);
+    container.classList.toggle('mxchat-input-at-limit', full);
+}
+
+function mxchatBumpInput(inputEl) {
+    var container = inputEl && inputEl.closest ? inputEl.closest('.input-container') : null;
+    if (!container) return;
+    container.classList.remove('mxchat-input-bump');
+    void container.offsetWidth; // reflow so a rapid second hit retriggers the animation
+    container.classList.add('mxchat-input-bump');
+    clearTimeout($(container).data('mxchatBumpTimeout'));
+    var t = setTimeout(function() { container.classList.remove('mxchat-input-bump'); }, 220);
+    $(container).data('mxchatBumpTimeout', t);
+}
+
+// Live counter update on every input.
+$(document).on('input', '.chat-input', function() {
+    mxchatUpdateCharCounter(this);
+});
+
+// Visible "you've hit the edge" feedback when a printable keystroke is about to be
+// rejected at the cap (maxlength silently swallows it otherwise).
+$(document).on('keydown', '.chat-input', function(e) {
+    var max = parseInt(this.getAttribute('maxlength'), 10);
+    if (!max || max <= 0 || this.value.length < max) return;
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+    // A single printable char with no selection to overwrite WILL be rejected.
+    if (e.key && e.key.length === 1 && this.selectionStart === this.selectionEnd) {
+        mxchatBumpInput(this);
+    }
+});
+
+// A paste that gets trimmed to the cap also bumps, so truncation is never silent.
+$(document).on('paste', '.chat-input', function() {
+    var el = this;
+    var max = parseInt(el.getAttribute('maxlength'), 10);
+    if (!max || max <= 0) return;
+    setTimeout(function() {
+        mxchatUpdateCharCounter(el);
+        if (el.value.length >= max) mxchatBumpInput(el);
+    }, 0);
 });
 
 // Builds the list of overflow-menu items for a given bot.

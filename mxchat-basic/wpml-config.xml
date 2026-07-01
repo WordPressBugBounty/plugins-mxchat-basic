@@ -1,0 +1,37 @@
+<wpml-config>
+    <!--
+        MxChat WPML / Polylang compatibility.
+
+        Registers the chat widget's user-facing display strings (sub-keys of the
+        single `mxchat_options` array option) as WPML "admin texts" so they appear
+        automatically under WPML -> String Translation (domain: admin_texts_mxchat_options).
+        Polylang reads this same file. No PHP behavior change; installs without a
+        multilingual plugin are unaffected.
+
+        Scope rule: ONLY natural-language strings a visitor actually sees in the
+        widget. API keys, toggles, colors, numbers, model ids, and internal config
+        are deliberately excluded so an owner never sees a key or a hex code in the
+        translation editor. Plan: plan-mxchat-20260624-6bebb0.
+    -->
+    <admin-texts>
+        <key name="mxchat_options">
+            <!-- Widget chrome -->
+            <key name="top_bar_title" />
+            <key name="ai_agent_text" />
+            <key name="intro_message" />
+            <key name="input_copy" />
+            <key name="pre_chat_message" />
+            <key name="reset_chat_label" />
+            <key name="rate_limit_message" />
+            <!-- Email / name capture gate -->
+            <key name="email_blocker_header_content" />
+            <key name="email_blocker_button_text" />
+            <key name="name_field_placeholder" />
+            <!-- Satisfaction rating prompts -->
+            <key name="satisfaction_rating_question" />
+            <key name="satisfaction_rating_thanks" />
+            <key name="satisfaction_rating_placeholder" />
+            <key name="satisfaction_rating_saved" />
+        </key>
+    </admin-texts>
+</wpml-config>

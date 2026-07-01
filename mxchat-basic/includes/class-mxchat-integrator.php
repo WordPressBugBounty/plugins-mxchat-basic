@@ -1557,8 +1557,26 @@ public function mxchat_handle_chat_request() {
         wp_send_json_error(esc_html__('No message received.', 'mxchat'));
         wp_die();
     }
-    
-    
+
+    // Enforce the configurable max input length (plan a3fae2 part C). 0 = unlimited.
+    // Server-side guard backing the textarea's client-side maxlength (which is bypassable).
+    // Reads the global core setting and measures characters (mb_strlen on the unslashed
+    // raw POST), matching the maxlength semantics.
+    $mxchat_max_input_length = isset($this->options['max_input_length']) ? intval($this->options['max_input_length']) : 0;
+    if ($mxchat_max_input_length > 0) {
+        $mxchat_incoming_raw = is_string($_POST['message']) ? wp_unslash($_POST['message']) : '';
+        if (mb_strlen($mxchat_incoming_raw) > $mxchat_max_input_length) {
+            wp_send_json([
+                'success' => false,
+                /* translators: %d: maximum allowed characters */
+                'message' => sprintf(esc_html__('Your message is too long. Please keep it under %d characters.', 'mxchat'), $mxchat_max_input_length),
+                'status'  => 'message_too_long'
+            ]);
+            wp_die();
+        }
+    }
+
+
     //   Track originating page for first message in session
     $table_name = $wpdb->prefix . 'mxchat_chat_transcripts';
 
@@ -4204,8 +4222,20 @@ public function mxchat_live_agent_handover($message, $user_id, $session_id) {
     // Send message to channel
     $channel_message = "ðŸ”” *New Live Agent Request*\n\n";
     $channel_message .= "*Session ID:* `{$session_id}`\n";
-    $channel_message .= "*User ID:* `{$user_id}`\n\n";
-    
+    $channel_message .= "*User ID:* `{$user_id}`\n";
+
+    // Surface the captured visitor identity so the agent knows who they're talking to —
+    // guest User IDs are 0, but the pre-chat gate / login / transcript often has name+email (plan-e2195b).
+    $visitor = $this->mxchat_get_visitor_identity($session_id);
+    if (!empty($visitor['name']) && !empty($visitor['email'])) {
+        $channel_message .= "*Visitor:* {$visitor['name']} <{$visitor['email']}>\n";
+    } elseif (!empty($visitor['email'])) {
+        $channel_message .= "*Visitor:* <{$visitor['email']}>\n";
+    } elseif (!empty($visitor['name'])) {
+        $channel_message .= "*Visitor:* {$visitor['name']}\n";
+    }
+    $channel_message .= "\n";
+
     if (!empty($conversation_context)) {
         $channel_message .= $conversation_context;
     }
@@ -4920,6 +4950,88 @@ public function mxchat_handle_switch_to_chatbot_intent($message, $user_id, $sess
     return $this->fallbackResponse;
 }
 
+/**
+ * Normalize Slack mrkdwn before relaying an agent's message to the web visitor.
+ * Slack's Events API auto-wraps URLs as <https://url> or <https://url|Label>, wraps
+ * mentions as <@U…>/<#C…|name>, and HTML-escapes &, <, >. Relayed raw, the visitor
+ * sees a broken/doubled link with a trailing > (plan-e2195b). Unwrap links FIRST, then
+ * unescape entities LAST so extracted URLs (which can contain &amp;) are not corrupted.
+ */
+private function normalize_slack_text($text) {
+    if (!is_string($text) || $text === '') {
+        return $text;
+    }
+
+    $text = preg_replace_callback('/<([^>|]+)(?:\|([^>]*))?>/', function ($m) {
+        $target = $m[1];
+        $label  = isset($m[2]) ? $m[2] : '';
+
+        // User/channel mentions: <@U…> or <#C…|name> — prefer the human label, else drop the id.
+        if (isset($target[0]) && ($target[0] === '@' || $target[0] === '#')) {
+            return $label !== '' ? $label : '';
+        }
+        // mailto:/tel: — strip the scheme for display.
+        if (stripos($target, 'mailto:') === 0) {
+            $addr = substr($target, 7);
+            return ($label !== '' && $label !== $addr) ? "{$label} ({$addr})" : $addr;
+        }
+        if (stripos($target, 'tel:') === 0) {
+            $num = substr($target, 4);
+            return ($label !== '' && $label !== $num) ? "{$label} ({$num})" : $num;
+        }
+        // Regular URL: <url|Label> -> "Label (url)"; bare <url> -> "url".
+        if ($label !== '' && $label !== $target) {
+            return "{$label} ({$target})";
+        }
+        return $target;
+    }, $text);
+
+    // Entity-unescape LAST (after link extraction) so &amp; inside URLs is repaired too.
+    $text = str_replace(array('&amp;', '&lt;', '&gt;'), array('&', '<', '>'), $text);
+
+    return $text;
+}
+
+/**
+ * Resolve the visitor's name + email for a session, mirroring generate_channel_name()'s
+ * priority order: logged-in user, then the pre-chat gate options (mxchat_email_/mxchat_name_),
+ * then the chat transcript. Returns ['name' => ..., 'email' => ...] (either may be ''). plan-e2195b.
+ */
+private function mxchat_get_visitor_identity($session_id) {
+    $email = '';
+    $name  = '';
+
+    if (is_user_logged_in()) {
+        $current_user = wp_get_current_user();
+        if (!empty($current_user->user_email))   { $email = $current_user->user_email; }
+        if (!empty($current_user->display_name)) { $name  = $current_user->display_name; }
+    }
+
+    if (empty($email)) {
+        $saved_email = get_option("mxchat_email_{$session_id}", '');
+        if (!empty($saved_email)) { $email = $saved_email; }
+    }
+    if (empty($name)) {
+        $saved_name = get_option("mxchat_name_{$session_id}", '');
+        if (!empty($saved_name)) { $name = $saved_name; }
+    }
+
+    if (empty($email) || empty($name)) {
+        global $wpdb;
+        $table_name = $wpdb->prefix . 'mxchat_chat_transcripts';
+        $existing_data = $wpdb->get_row($wpdb->prepare(
+            "SELECT user_email, user_name FROM $table_name WHERE session_id = %s AND (user_email IS NOT NULL OR user_name IS NOT NULL) LIMIT 1",
+            $session_id
+        ));
+        if ($existing_data) {
+            if (empty($email) && !empty($existing_data->user_email)) { $email = $existing_data->user_email; }
+            if (empty($name)  && !empty($existing_data->user_name))  { $name  = $existing_data->user_name; }
+        }
+    }
+
+    return array('name' => $name, 'email' => $email);
+}
+
 public function handle_slack_messages(WP_REST_Request $request) {
     // Log the incoming request for debugging
     //error_log('Slack events request received: ' . $request->get_body());
@@ -5016,7 +5128,7 @@ public function handle_slack_messages(WP_REST_Request $request) {
 
                 // Send the agent's custom farewell message if provided
                 if (!empty($custom_message)) {
-                    $this->mxchat_save_chat_message($session_id, 'agent', $custom_message);
+                    $this->mxchat_save_chat_message($session_id, 'agent', $this->normalize_slack_text($custom_message));
                 }
 
                 // Confirm in Slack channel
@@ -5037,8 +5149,8 @@ public function handle_slack_messages(WP_REST_Request $request) {
                 return new WP_REST_Response(['ok' => true]);
             }
 
-            // Save the agent message
-            $this->mxchat_save_chat_message($session_id, 'agent', $message_text);
+            // Save the agent message (normalize Slack link/entity formatting first — plan-e2195b)
+            $this->mxchat_save_chat_message($session_id, 'agent', $this->normalize_slack_text($message_text));
 
             // Send confirmation back to Slack (only once)
             if (!empty($slack_bot_token)) {
@@ -6166,7 +6278,17 @@ private function find_relevant_content_pinecone($user_embedding, $bot_id = 'defa
                     $content .= "URL: " . $source_url . "\n\n";
                 }
             } else {
-                // Manual entry — no reference number, no citation
+                // Manual entry — no reference number, no citation. Count it as a USED
+                // source (plan-mxchat-20260622-c1fe6a): without this, manual/Direct-Content
+                // entries (empty or mxchat:// source_url) never increment $matches_used, so
+                // the gate below (`if ($matches_used === 0)`) discards manual-only context on
+                // the Pinecone backend and the model is told "No reference information was
+                // found" — even though the testing panel reports used_for_context:true. It
+                // also corrects the cosmetic sources_used:0 the panel/transcript showed. The
+                // sibling local/WP-DB builder gates on empty($top_urls), so it never had this
+                // bug; this brings Pinecone to parity. Manual entries are still uncited (not
+                // added to $valid_urls, no "URL:" line).
+                $matches_used++;
                 $content .= "## Information ##\n";
                 $content .= $full_text . "\n\n";
             }
@@ -10791,8 +10913,22 @@ private function mxchat_generate_response_gemini($selected_model, $gemini_api_ke
         ];
     }
     
+    // Built-in Web Search grounding for Gemini (plan 46b9ea).
+    // The enable_web_search toggle historically routed ONLY to OpenAI's web_search
+    // tool; for a Gemini chat model it was a silent no-op. Gemini grounds natively
+    // (and free) via the Google Search tool, so when the toggle is on we attach it
+    // here on the PLAIN dispatch path. The function-calling loop (mxchat_fc_loop_gemini)
+    // is a SEPARATE path reached only when AI Tools are active, so grounding here
+    // never double-fires with function calling.
+    $web_search_enabled = isset($this->options['enable_web_search']) && $this->options['enable_web_search'] === 'on';
+    // Gemini ids that do NOT support Google Search grounding (none today — every
+    // shipped chat model is 2.x/3.x and grounds natively). Kept as the explicit
+    // opt-out list mirroring the OpenAI $unsupported_web_search_models pattern.
+    $gemini_unsupported_grounding = array();
+    $grounding_active = $web_search_enabled && !in_array($selected_model, $gemini_unsupported_grounding, true);
+
     // Build the request body
-    $body = json_encode([
+    $request_payload = [
         'contents' => $formatted_messages,
         'generationConfig' => [
             'temperature' => 0.7,
@@ -10818,11 +10954,27 @@ private function mxchat_generate_response_gemini($selected_model, $gemini_api_ke
                 'threshold' => 'BLOCK_MEDIUM_AND_ABOVE'
             ]
         ]
-    ]);
-    
+    ];
+
+    if ($grounding_active) {
+        // Gemini 1.5 used the older google_search_retrieval shape; 2.0+ uses the
+        // bare google_search tool. Branch by model family so a future 1.5 id still
+        // grounds (no 1.5 ships today, so this resolves to google_search). The empty
+        // tool config must serialize as a JSON object {}, not an array [].
+        if (strpos($selected_model, 'gemini-1.5') !== false) {
+            $request_payload['tools'] = [ ['google_search_retrieval' => new \stdClass()] ];
+        } else {
+            $request_payload['tools'] = [ ['google_search' => new \stdClass()] ];
+        }
+    }
+
+    $body = json_encode($request_payload);
+
     // Prepare the API endpoint
-    // Use v1beta for preview models (Gemini 3, experimental), v1 for stable models
-    $api_version = (strpos($selected_model, 'preview') !== false || strpos($selected_model, 'exp') !== false) ? 'v1beta' : 'v1';
+    // Use v1beta for preview models (Gemini 3, experimental), v1 for stable models.
+    // Grounding (the google_search tool) is a v1beta feature, so force v1beta whenever
+    // it's active — otherwise a stable model on v1 would silently drop the tool.
+    $api_version = ($grounding_active || strpos($selected_model, 'preview') !== false || strpos($selected_model, 'exp') !== false) ? 'v1beta' : 'v1';
     $api_endpoint = 'https://generativelanguage.googleapis.com/' . $api_version . '/models/' . $selected_model . ':generateContent?key=' . $gemini_api_key;
     
     // Set up the API request

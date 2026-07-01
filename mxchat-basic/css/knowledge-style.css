@@ -3824,6 +3824,41 @@ tr.mxchat-row-error td:first-child::before {
     flex-shrink: 0;
 }
 
+/* ── Knowledge Inspector modal (plan-d8cb4b) ──────────────────────────
+   Read-only "View indexed content" viewer. Reuses the Testing tab's
+   match-card / chunk-detail components (admin-testing-tab.css, scoped under
+   .mxch-testing-results) so it looks native; this block only adds the modal
+   body scroll + the chunk-text container the Testing tab doesn't have. */
+.mxchat-kb-inspect-body {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    padding: 20px;
+    overflow-y: auto;
+    gap: 12px;
+}
+/* The modal body is the scroll container — let the inner results grow naturally
+   instead of the Testing tab's own 400px inner scroll (avoids a double scrollbar). */
+.mxchat-kb-inspect-body .mxch-testing-results {
+    max-height: none;
+    overflow: visible;
+}
+.mxch-kb-inspect-chunk-text {
+    margin: 8px 0 0;
+    padding: 12px 14px;
+    background: #f8fafc;
+    border: 1px solid #e2e8f0;
+    border-radius: 6px;
+    max-height: 260px;
+    overflow-y: auto;
+    white-space: pre-wrap;
+    word-break: break-word;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    font-size: 13px;
+    line-height: 1.6;
+    color: var(--mxch-text-primary, #334155);
+}
+
 .mxchat-kb-edit-save-spinner {
     display: inline-flex;
     align-items: center;

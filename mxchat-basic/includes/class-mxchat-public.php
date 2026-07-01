@@ -343,7 +343,19 @@ public function render_chatbot_shortcode($atts) {
             echo '          </div>';
     
             echo '          <div id="input-container-' . esc_attr($bot_id) . '" class="input-container">';
-            echo '              <textarea id="chat-input-' . esc_attr($bot_id) . '" class="chat-input" dir="auto" placeholder="' . esc_attr($input_copy) . '"' . ($skip_inline_colors ? '' : ' style="color: ' . esc_attr($chat_input_font_color) . ';"') . '></textarea>';
+            // Max input length (plan a3fae2 part C) — global core setting, 0 = unlimited.
+            // Hard-caps typing/paste client-side; the chat handler enforces it server-side too.
+            $mxchat_max_input_length = isset($this->options['max_input_length']) ? intval($this->options['max_input_length']) : 0;
+            $mxchat_maxlength_attr = $mxchat_max_input_length > 0 ? ' maxlength="' . esc_attr($mxchat_max_input_length) . '"' : '';
+            echo '              <textarea id="chat-input-' . esc_attr($bot_id) . '" class="chat-input" dir="auto"' . $mxchat_maxlength_attr . ' placeholder="' . esc_attr($input_copy) . '"' . ($skip_inline_colors ? '' : ' style="color: ' . esc_attr($chat_input_font_color) . ';"') . '></textarea>';
+            // Language-neutral character counter (plan 7091a2). Numbers only — no
+            // translatable strings — so it reads correctly on every-language install.
+            // Only rendered when a cap is set; hidden until ~80% of the cap, then
+            // ramps neutral -> amber -> red. Decorative (aria-hidden); the textarea's
+            // maxlength carries the real semantics for assistive tech.
+            if ($mxchat_max_input_length > 0) {
+                echo '              <div id="mxchat-char-counter-' . esc_attr($bot_id) . '" class="mxchat-char-counter" aria-hidden="true"><span class="mxchat-char-counter-current">0</span><span class="mxchat-char-counter-sep">/</span><span class="mxchat-char-counter-max">' . esc_html($mxchat_max_input_length) . '</span></div>';
+            }
             echo '              <button id="send-button-' . esc_attr($bot_id) . '" class="send-button" aria-label="' . esc_attr__('Send message', 'mxchat') . '">';
             if (!empty($custom_send_image)) {
                 echo '                  <img src="' . esc_url($custom_send_image) . '" alt="' . esc_attr__('Send', 'mxchat') . '" style="width: ' . intval($send_width) . 'px; height: ' . intval($send_height) . 'px; transform: rotate(' . intval($send_rotation) . 'deg);" />';

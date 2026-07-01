@@ -5,7 +5,7 @@ Tags: ai chatbot, chatgpt, woocommerce, customer support, content generation
 Requires at least: 5.0
 Tested up to: 7.0
 Requires PHP: 7.2
-Stable tag: 3.2.10
+Stable tag: 3.2.12
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -338,6 +338,22 @@ Yes. MxChat is available for free on the WordPress plugin repository with full A
 
 == Changelog ==
 
+= 3.2.12 - June 30, 2026 =
+* Fixed: Resolved a WordPress.org packaging issue from the previous release that could cause the update to fail to download or appear to hang in the WordPress dashboard on some sites. This maintenance release republishes the plugin so every site can update normally and receive the recent improvements from 3.2.11 — including the per-provider Test API key buttons, built-in WPML and Polylang translation for the chat widget, Google Gemini web search, the optional Max Input Length character counter, cleaner Slack live-agent links, the Knowledge View indexed content panel, and the security and Pinecone matching fixes. No functional changes from 3.2.11; no settings or data are affected.
+
+= 3.2.11 - June 29, 2026 =
+* New: Each AI provider API key field (OpenAI, X.AI, Claude, DeepSeek, Google Gemini, OpenRouter) now has a Test key button that checks whether the key actually works in one click, so you can confirm a key is valid right after pasting it instead of finding out only when a chat fails. It runs a quick, free validation check and never spends credits.
+* Fixed: When restricting knowledge by tag under Knowledge then Role Restrictions, you can now enter a tag by its display name or its slug. Previously only the exact slug worked, so typing a real tag's name returned a confusing error; the field is now labeled Tag (name or slug) and gives an actionable message when no matching tag exists.
+* Fixed: On sites using Pinecone for knowledge, answers added directly through Knowledge then Import Options then Direct Content (manual entries with no source link) are now used by the chatbot when they are the best match. Previously the bot could reply that it did not have the information even though the manual entry clearly matched, and the testing panel showed zero sources used; both are now correct.
+* New: Built-in WPML and Polylang compatibility for the chat widget text. The widget's visible strings (top bar title, greeting, AI agent label, input placeholder, the email and name capture form copy, and the satisfaction prompts) now show up automatically in WPML String Translation, so you can translate the widget into each language without registering every field by hand.
+* New: Optional Max Input Length setting caps how many characters a visitor can type or paste into a single message, so you can stop overly long pastes from being sent to the AI. It sits just below the Input Placeholder option in the chatbot settings. Leave it at 0 for unlimited, which is the default and keeps existing behavior unchanged.
+* Fixed: Security hardening for the chat intro message setting, following a Wordfence advisory. The intro message is now escaped when shown on the settings page and sanitized when saved, so a crafted value can no longer run script in the admin area on multisite sites or sites where unfiltered HTML is disabled.
+* Fixed: When a live agent replies from Slack with a link, the website visitor now sees a clean, clickable link instead of Slack's raw formatting with a stray closing bracket. Slack user and channel mentions and escaped characters are also tidied up before the message reaches the visitor.
+* New: The Slack live-agent channel now shows the visitor's name and email at the top of the conversation when they were captured at the start of the chat, so your agent can see who they are talking to instead of just a session ID and a user ID of zero for guests.
+* Improved: When a maximum message length is set, the chat box now shows a small live character counter as the visitor nears the limit, ramping from a neutral color to amber to red, with a gentle nudge if they reach the cap. This replaces the old behavior where typing past the limit silently did nothing and looked broken. The counter uses only numbers, so it reads correctly on sites in any language.
+* New: When the built-in Web Search option is on, chatbots using a Google Gemini model now answer using live Google Search results, just like OpenAI models already do. Previously the Web Search setting only affected OpenAI models and silently did nothing for Gemini, so Gemini users had to add the separate Perplexity add-on to get web-grounded answers. Gemini's built-in search uses the Google API key you already configured, at no extra cost.
+* New: Each Knowledge entry now has a View indexed content button that opens a read-only panel showing exactly what the chatbot indexed for it: the stored text broken into the same chunks the search uses, each chunk's length, and for Pinecone the stored metadata fields. This makes it easy to confirm what was actually saved and searched for a page or a manual entry, so you can tell at a glance why a piece of content is or is not being matched, without changing anything.
+
 = 3.2.10 - June 19, 2026 =
 * New: AI Tools (function calling) — the chatbot can now decide on its own when to use your enabled tools, such as web search, image generation, answering from an uploaded PDF, and active add-on actions like WooCommerce, straight from natural language with no trigger phrases to set up. Turn it on under Actions then AI Tools (off by default; needs a tool-capable AI model), add the tools you want with a guided picker, and optionally tell the assistant in plain language when to use each one. Tools that spend money, expose customer data, or hand off to a human stay off until you enable them deliberately
 * New: Optional "Start new chat" button in the chat window menu — lets visitors clear the current conversation and start fresh in one click, without turning off chat persistence (off by default; enable it under Chatbot then Display, with a customizable label)
@@ -348,7 +364,6 @@ Yes. MxChat is available for free on the WordPress plugin repository with full A
 * Fixed: Images created with the Gemini image generator now display correctly in the chat window — previously the bot reported it had made an image but nothing appeared, because the file was saved with the wrong file type
 * Fixed: The Slack live-agent setup notice in Settings now links to the current setup guide on the MxChat Core documentation page
 * Fixed: Two older Claude models that Anthropic has now retired (Claude 4 Opus and Claude 4 Sonnet, the May 2025 versions) have been removed from the model pickers; if your site had either one selected, it is automatically switched to the current equivalent (Claude Opus 4.8 or Claude Sonnet 4.6) so chat keeps working without any action from you
-
 = 3.2.9 - June 11, 2026 =
 * New: Claude Fable 5 — Anthropic's newest flagship model — available in the Select AI Model picker and the Content Generator
 * Fixed: Claude Opus 4.7 and 4.8 now work as the Content Generator model (these models reject the temperature setting; it is no longer sent)
@@ -526,8 +541,8 @@ Older releases are archived in the plugin's full version history on WordPress.or
 
 == Upgrade Notice ==
 
-= 3.2.10 - June 19, 2026 =
-New AI Tools (function calling): the chatbot can decide on its own when to use your enabled tools — web search, image generation, uploaded-PDF answers, and add-on actions like WooCommerce — from natural language, with no trigger phrases required (off by default; enable and pick the allowed tools under Actions then AI Tools, where the phrase-matching system is now called Trigger Phrases). Readable, leak-safe AI error messages now cover every provider for both API and connection or timeout failures, so admins get an actionable hint while visitors only see a friendly fallback. Also adds an optional "Start new chat" menu button, auto-clears page caches when you change an AI theme, and fixes multi-bot non-streaming replies using the wrong bot, Gemini-generated images not displaying, and the Slack setup link. Two Claude models Anthropic retired (4 Opus and 4 Sonnet, the May 2025 versions) are removed and any site using one is auto-switched to its current equivalent.
+= 3.2.12 =
+This maintenance release fixes a WordPress.org packaging problem that could make the previous update fail to install from the WordPress dashboard. Updating ensures you receive the latest improvements and security fixes from the recent releases. No settings or data are affected.
 
 == License & Warranty ==
 

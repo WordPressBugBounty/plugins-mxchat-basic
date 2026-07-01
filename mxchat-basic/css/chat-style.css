@@ -887,6 +887,70 @@
     scrollbar-color: linear-gradient(135deg, #fa73e6, #7873f5, #3ac9d1) #f1f1f1;
 }
 
+/* Chat input character counter + soft limit feedback (plan 7091a2).
+   Language-neutral: numbers + color only. Hidden until ~80% of the cap, then
+   fades in and ramps neutral -> amber -> red. The input border mirrors the same
+   cue, and an over-limit keystroke/paste triggers a brief shake so the hard
+   maxlength cap (plan a3fae2) is never a silent "input jumps back". */
+.mxchat-chatbot .chat-container .input-container .mxchat-char-counter {
+    position: absolute;
+    bottom: 3px;
+    right: 44px; /* clear the absolutely-positioned send button */
+    font-size: 11px;
+    line-height: 1;
+    font-variant-numeric: tabular-nums;
+    color: #9aa0a6;
+    background: rgba(255, 255, 255, 0.85);
+    padding: 1px 5px;
+    border-radius: 8px;
+    pointer-events: none;
+    opacity: 0;
+    visibility: hidden;
+    transition: opacity 0.18s ease, color 0.18s ease;
+    z-index: 2;
+}
+.mxchat-chatbot .chat-container .input-container .mxchat-char-counter.is-visible {
+    opacity: 1;
+    visibility: visible;
+}
+.mxchat-chatbot .chat-container .input-container .mxchat-char-counter.is-warn {
+    color: #d98300; /* amber: approaching the cap */
+}
+.mxchat-chatbot .chat-container .input-container .mxchat-char-counter.is-full {
+    color: #d93025; /* red: at the cap */
+    font-weight: 600;
+}
+/* RTL widgets: counter on the opposite side. */
+.mxchat-chatbot[dir="rtl"] .chat-container .input-container .mxchat-char-counter,
+[dir="rtl"] .mxchat-chatbot .chat-container .input-container .mxchat-char-counter {
+    right: auto;
+    left: 44px;
+}
+/* Input border affordance mirrors the counter color. */
+.mxchat-chatbot .chat-container .input-container.mxchat-input-near-limit {
+    border-color: #f0b048;
+}
+.mxchat-chatbot .chat-container .input-container.mxchat-input-at-limit {
+    border-color: #e5675c;
+}
+/* Soft "you hit the edge" bump when an over-limit keystroke/paste is rejected. */
+.mxchat-chatbot .chat-container .input-container.mxchat-input-bump {
+    animation: mxchat-input-bump 0.2s ease;
+}
+@keyframes mxchat-input-bump {
+    0%   { transform: translateX(0); }
+    25%  { transform: translateX(-3px); }
+    50%  { transform: translateX(3px); }
+    75%  { transform: translateX(-2px); }
+    100% { transform: translateX(0); }
+}
+/* Respect reduced-motion: drop the shake; the red border/counter still signals the cap. */
+@media (prefers-reduced-motion: reduce) {
+    .mxchat-chatbot .chat-container .input-container.mxchat-input-bump {
+        animation: none;
+    }
+}
+
 .mxchat-chatbot .chat-container .input-container .send-button {
     position: absolute;
     right: 10px;

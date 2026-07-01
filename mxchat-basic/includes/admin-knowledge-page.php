@@ -276,6 +276,9 @@ function mxchat_render_knowledge_page($admin_instance, $knowledge_manager, $page
     // Render the Edit Entry Modal
     mxchat_render_edit_entry_modal();
 
+    // Render the read-only Knowledge Inspector modal (plan-d8cb4b)
+    mxchat_render_inspect_entry_modal();
+
     // Render the navigation JavaScript
     mxchat_render_knowledge_page_scripts();
 }
@@ -990,6 +993,16 @@ function mxchat_render_knowledge_base_section($admin_instance, $knowledge_manage
                                                 <?php endif; ?>
                                             </td>
                                             <td class="mxchat-actions-cell" style="padding: 12px 16px; white-space: nowrap;">
+                                                <button type="button"
+                                                        class="mxch-btn mxch-btn-ghost mxch-btn-sm mxchat-inspect-entry-btn"
+                                                        data-source-url="<?php echo esc_attr($source_url); ?>"
+                                                        data-entry-id="<?php echo esc_attr($first_prompt->id); ?>"
+                                                        data-data-source="<?php echo esc_attr($data_source); ?>"
+                                                        data-bot-id="<?php echo esc_attr($current_bot_id); ?>"
+                                                        data-nonce="<?php echo wp_create_nonce('mxchat_inspect_entry_nonce'); ?>"
+                                                        title="<?php esc_attr_e('View indexed content', 'mxchat'); ?>">
+                                                    <span class="dashicons dashicons-visibility" style="font-size: 14px;"></span>
+                                                </button>
                                                 <?php if ($data_source !== 'pinecone') : ?>
                                                 <button type="button"
                                                         class="mxch-btn mxch-btn-ghost mxch-btn-sm mxchat-edit-entry-btn"
@@ -1140,6 +1153,16 @@ function mxchat_render_knowledge_base_section($admin_instance, $knowledge_manage
                                             <?php endif; ?>
                                         </td>
                                         <td style="padding: 12px 16px; white-space: nowrap;">
+                                            <button type="button"
+                                                    class="mxch-btn mxch-btn-ghost mxch-btn-sm mxchat-inspect-entry-btn"
+                                                    data-source-url="<?php echo esc_attr($prompt->source_url ?? ''); ?>"
+                                                    data-entry-id="<?php echo esc_attr($prompt->id); ?>"
+                                                    data-data-source="<?php echo esc_attr($data_source); ?>"
+                                                    data-bot-id="<?php echo esc_attr($current_bot_id); ?>"
+                                                    data-nonce="<?php echo wp_create_nonce('mxchat_inspect_entry_nonce'); ?>"
+                                                    title="<?php esc_attr_e('View indexed content', 'mxchat'); ?>">
+                                                <span class="dashicons dashicons-visibility" style="font-size: 14px;"></span>
+                                            </button>
                                             <?php if ($data_source !== 'pinecone') : ?>
                                             <button type="button"
                                                     class="mxch-btn mxch-btn-ghost mxch-btn-sm mxchat-edit-entry-btn"
@@ -1367,8 +1390,9 @@ function mxchat_render_role_restrictions_section($knowledge_manager) {
                 <h4 style="margin: 0 0 16px 0;"><?php esc_html_e('Add Tag-Role Mapping', 'mxchat'); ?></h4>
                 <div style="display: flex; gap: 15px; align-items: flex-end; flex-wrap: wrap; margin-bottom: 24px;">
                     <div class="mxch-field" style="flex: 1; min-width: 200px; margin-bottom: 0;">
-                        <label class="mxch-field-label" for="mxchat-tag-input"><?php esc_html_e('Tag Name', 'mxchat'); ?></label>
-                        <input type="text" id="mxchat-tag-input" class="mxch-input" placeholder="<?php esc_attr_e('e.g., premium, members-only', 'mxchat'); ?>">
+                        <label class="mxch-field-label" for="mxchat-tag-input"><?php esc_html_e('Tag (name or slug)', 'mxchat'); ?></label>
+                        <input type="text" id="mxchat-tag-input" class="mxch-input" placeholder="<?php esc_attr_e('e.g., Premium Content or premium-content', 'mxchat'); ?>">
+                        <span class="mxch-field-hint"><?php esc_html_e('Enter an existing post tag by its display name or its slug.', 'mxchat'); ?></span>
                     </div>
                     <div class="mxch-field" style="flex: 1; min-width: 200px; margin-bottom: 0;">
                         <label class="mxch-field-label" for="mxchat-role-select"><?php esc_html_e('Required Role', 'mxchat'); ?></label>
@@ -1835,6 +1859,207 @@ function mxchat_render_edit_entry_modal() {
             </div>
         </div>
     </div>
+    <?php
+}
+
+/**
+ * Render the read-only Knowledge Inspector modal (plan-mxchat-20260628-d8cb4b).
+ * Shows exactly what was indexed for an entry: the per-chunk stored text + lengths
+ * and (for Pinecone) the stored metadata fields, rendered with the Testing tab's
+ * own card components so the two surfaces feel like one system. Self-contained
+ * markup + JS so it doesn't entangle the edit-modal init.
+ */
+function mxchat_render_inspect_entry_modal() {
+    ?>
+    <div id="mxchat-kb-inspect-modal" class="mxchat-kb-modal">
+        <div class="mxchat-kb-modal-content mxchat-kb-inspect-modal-content">
+            <div class="mxchat-kb-modal-header">
+                <h3 id="mxchat-kb-inspect-title"><?php esc_html_e('Indexed Content', 'mxchat'); ?></h3>
+                <span class="mxchat-kb-modal-close" id="mxchat-kb-inspect-close">&times;</span>
+            </div>
+            <div class="mxchat-kb-inspect-body">
+                <div class="mxchat-kb-edit-source" id="mxchat-kb-inspect-source"></div>
+                <div class="mxch-testing-results" id="mxchat-kb-inspect-results">
+                    <div class="mxch-testing-no-data"><?php esc_html_e('Loading indexed content…', 'mxchat'); ?></div>
+                </div>
+            </div>
+            <div class="mxchat-kb-edit-footer">
+                <div class="mxchat-kb-edit-notice" id="mxchat-kb-inspect-notice"></div>
+                <div class="mxchat-kb-edit-actions">
+                    <button type="button" id="mxchat-kb-inspect-close-btn" class="mxch-btn mxch-btn-primary">
+                        <?php esc_html_e('Close', 'mxchat'); ?>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+    <script>
+    (function() {
+        'use strict';
+        document.addEventListener('DOMContentLoaded', function() {
+            var modal    = document.getElementById('mxchat-kb-inspect-modal');
+            if (!modal) return;
+            var closeX   = document.getElementById('mxchat-kb-inspect-close');
+            var closeBtn = document.getElementById('mxchat-kb-inspect-close-btn');
+            var sourceEl = document.getElementById('mxchat-kb-inspect-source');
+            var resultsEl= document.getElementById('mxchat-kb-inspect-results');
+            var titleEl  = document.getElementById('mxchat-kb-inspect-title');
+            var noticeEl = document.getElementById('mxchat-kb-inspect-notice');
+
+            var I18N = {
+                title:    <?php echo wp_json_encode( esc_html__('Indexed Content', 'mxchat') ); ?>,
+                loading:  <?php echo wp_json_encode( esc_html__('Loading indexed content…', 'mxchat') ); ?>,
+                manual:   <?php echo wp_json_encode( esc_html__('Manual Content', 'mxchat') ); ?>,
+                source:   <?php echo wp_json_encode( esc_html__('Source', 'mxchat') ); ?>,
+                store:    <?php echo wp_json_encode( esc_html__('Storage', 'mxchat') ); ?>,
+                type:     <?php echo wp_json_encode( esc_html__('Content type', 'mxchat') ); ?>,
+                chunksLbl:<?php echo wp_json_encode( esc_html__('Chunks', 'mxchat') ); ?>,
+                totalLen: <?php echo wp_json_encode( esc_html__('Total indexed length', 'mxchat') ); ?>,
+                chunk:    <?php echo wp_json_encode( esc_html__('Chunk', 'mxchat') ); ?>,
+                indexed:  <?php echo wp_json_encode( esc_html__('Indexed', 'mxchat') ); ?>,
+                chars:    <?php echo wp_json_encode( esc_html__('chars', 'mxchat') ); ?>,
+                showText: <?php echo wp_json_encode( esc_html__('Show indexed text', 'mxchat') ); ?>,
+                hideText: <?php echo wp_json_encode( esc_html__('Hide indexed text', 'mxchat') ); ?>,
+                wpStore:  <?php echo wp_json_encode( esc_html__('Local WordPress database', 'mxchat') ); ?>,
+                pcStore:  <?php echo wp_json_encode( esc_html__('Pinecone', 'mxchat') ); ?>,
+                meta:     <?php echo wp_json_encode( esc_html__('Vector metadata', 'mxchat') ); ?>,
+                loadFail: <?php echo wp_json_encode( esc_html__('Failed to load indexed content.', 'mxchat') ); ?>,
+                netErr:   <?php echo wp_json_encode( esc_html__('Network error: ', 'mxchat') ); ?>
+            };
+
+            function esc(str) {
+                var d = document.createElement('div');
+                d.textContent = (str === null || str === undefined) ? '' : String(str);
+                return d.innerHTML;
+            }
+            function fmt(n) { try { return Number(n).toLocaleString(); } catch (e) { return n; } }
+
+            document.addEventListener('click', function(e) {
+                var btn = e.target.closest('.mxchat-inspect-entry-btn');
+                if (btn) { e.preventDefault(); open(btn); }
+            });
+            if (closeX)   closeX.addEventListener('click', close);
+            if (closeBtn) closeBtn.addEventListener('click', close);
+            modal.addEventListener('click', function(e) { if (e.target === modal) close(); });
+            document.addEventListener('keydown', function(e) {
+                if (e.key === 'Escape' && modal.classList.contains('active')) close();
+            });
+
+            function close() { modal.classList.remove('active'); }
+
+            function open(btn) {
+                var entry = {
+                    sourceUrl:  btn.getAttribute('data-source-url') || '',
+                    entryId:    btn.getAttribute('data-entry-id') || '',
+                    dataSource: btn.getAttribute('data-data-source') || 'wordpress',
+                    botId:      btn.getAttribute('data-bot-id') || 'default',
+                    nonce:      btn.getAttribute('data-nonce') || ''
+                };
+
+                titleEl.textContent = I18N.title;
+                noticeEl.textContent = '';
+                noticeEl.className = 'mxchat-kb-edit-notice';
+                resultsEl.innerHTML = '<div class="mxch-testing-no-data">' + esc(I18N.loading) + '</div>';
+
+                if (entry.sourceUrl && entry.sourceUrl.indexOf('mxchat://') !== 0 && entry.sourceUrl.indexOf('_ungrouped_') !== 0) {
+                    sourceEl.innerHTML = esc(I18N.source) + ': <a href="' + esc(entry.sourceUrl) + '" target="_blank" rel="noopener">' + esc(entry.sourceUrl) + '</a>';
+                } else {
+                    sourceEl.textContent = I18N.manual;
+                }
+
+                modal.classList.add('active');
+
+                var fd = new FormData();
+                fd.append('action', 'mxchat_inspect_entry');
+                fd.append('nonce', entry.nonce);
+                fd.append('source_url', entry.sourceUrl);
+                fd.append('entry_id', entry.entryId);
+                fd.append('data_source', entry.dataSource);
+                fd.append('bot_id', entry.botId);
+
+                fetch(ajaxurl, { method: 'POST', body: fd })
+                    .then(function(r) { return r.json(); })
+                    .then(function(resp) {
+                        if (resp && resp.success) {
+                            render(resp.data);
+                        } else {
+                            var msg = (resp && resp.data && resp.data.message) || I18N.loadFail;
+                            resultsEl.innerHTML = '';
+                            showNotice(msg, 'error');
+                        }
+                    })
+                    .catch(function(err) {
+                        resultsEl.innerHTML = '';
+                        showNotice(I18N.netErr + err.message, 'error');
+                    });
+            }
+
+            function render(data) {
+                var storeLabel = data.store === 'pinecone' ? I18N.pcStore : I18N.wpStore;
+                var html = '';
+
+                // Summary card — what this entry is + how much was indexed.
+                html += '<div class="match-card above-threshold">' +
+                    '<div class="match-header">' +
+                        '<div class="match-title"><span class="status-icon">&#128230;</span> ' + esc(data.chunk_count) + ' ' + esc(I18N.chunksLbl.toLowerCase()) + '</div>' +
+                        '<span class="context-label">' + esc(storeLabel) + '</span>' +
+                    '</div>' +
+                    '<div class="mxch-testing-field"><label>' + esc(I18N.type) + '</label><code>' + esc(data.content_type || '—') + '</code> ' +
+                        '&nbsp; <label style="display:inline; text-transform:none; letter-spacing:0; font-weight:600;">' + esc(I18N.totalLen) + ':</label> ' + esc(fmt(data.assembled_length)) + ' ' + esc(I18N.chars) + '</div>';
+                if (data.metadata_note) {
+                    html += '<div class="match-source"><span class="source-icon">&#8505;&#65039;</span> ' + esc(data.metadata_note) + '</div>';
+                }
+                html += '</div>';
+
+                // One card per stored chunk — the actual embedded text.
+                var chunks = data.chunks || [];
+                chunks.forEach(function(chunk, i) {
+                    var num = (chunk.index !== null && chunk.index !== undefined) ? (chunk.index + 1) : (i + 1);
+                    var metaRows = '';
+                    if (chunk.metadata && typeof chunk.metadata === 'object') {
+                        var keys = Object.keys(chunk.metadata);
+                        if (keys.length) {
+                            metaRows += '<div class="chunk-detail-row chunk-used" style="display:block;"><span class="chunk-detail-num">' + esc(I18N.meta) + '</span></div>';
+                            keys.forEach(function(k) {
+                                metaRows += '<div class="chunk-detail-row"><span class="chunk-detail-num">' + esc(k) + '</span><span class="chunk-detail-score">' + esc(chunk.metadata[k]) + '</span></div>';
+                            });
+                        }
+                    }
+                    html += '<div class="match-card above-threshold">' +
+                        '<div class="match-header">' +
+                            '<div class="match-title"><span class="status-icon">&#10003;</span> ' + esc(I18N.chunk) + ' ' + esc(num) +
+                                '<span class="chunk-summary">' + esc(fmt(chunk.length)) + ' ' + esc(I18N.chars) + '</span>' +
+                            '</div>' +
+                            '<span class="context-label">' + esc(I18N.indexed) + '</span>' +
+                        '</div>' +
+                        '<span class="chunk-expand-toggle" data-chunk="' + i + '">&#9654; ' + esc(I18N.showText) + '</span>' +
+                        '<div class="chunk-details" data-chunk="' + i + '">' +
+                            '<pre class="mxch-kb-inspect-chunk-text">' + esc(chunk.text) + '</pre>' +
+                            metaRows +
+                        '</div>' +
+                    '</div>';
+                });
+
+                resultsEl.innerHTML = html;
+
+                resultsEl.querySelectorAll('.chunk-expand-toggle').forEach(function(toggle) {
+                    toggle.addEventListener('click', function() {
+                        var id = this.getAttribute('data-chunk');
+                        var details = resultsEl.querySelector('.chunk-details[data-chunk="' + id + '"]');
+                        if (!details) return;
+                        var expanded = details.classList.toggle('expanded');
+                        this.innerHTML = (expanded ? '&#9660; ' + esc(I18N.hideText) : '&#9654; ' + esc(I18N.showText));
+                    });
+                });
+            }
+
+            function showNotice(msg, type) {
+                noticeEl.textContent = msg;
+                noticeEl.className = 'mxchat-kb-edit-notice' + (type ? ' ' + type : '');
+            }
+        });
+    })();
+    </script>
     <?php
 }
 
