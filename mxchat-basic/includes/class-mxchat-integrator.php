@@ -3430,7 +3430,7 @@ private function interpret_query_with_openai($user_query, $system_prompt, $api_k
  * claude-fable-5: it rejects an explicit thinking "disabled" — omit only.)
  */
 private function mxchat_claude_omits_temperature($model) {
-    $no_temp = array('claude-opus-4-7', 'claude-opus-4-8', 'claude-fable-5');
+    $no_temp = array('claude-opus-4-7', 'claude-opus-4-8', 'claude-fable-5', 'claude-sonnet-5');
     return in_array($model, $no_temp, true);
 }
 
@@ -3759,9 +3759,13 @@ private function fetch_and_split_pdf_pages($pdf_source, $max_pages) {
             $temp_file = wp_tempnam($pdf_source);
             
             // SECURITY FIX: Changed from wp_remote_get to wp_safe_remote_get
+            // Route through the shared MXChat crawler identity (plan bae78f/b6d93c) so
+            // every remote-content fetch presents one honest, versioned, filterable,
+            // allowlistable User-Agent. function_exists guard keeps the front-end/nopriv
+            // path safe if the helper (in the always-loaded main file) is ever unavailable.
             $response = wp_safe_remote_get($pdf_source, [
                 'timeout' => 60,
-                'headers' => ['User-Agent' => 'MxChat PDF Processor']
+                'headers' => ['User-Agent' => function_exists('mxchat_ingest_user_agent') ? mxchat_ingest_user_agent() : 'MxChat PDF Processor']
             ]);
             
             if (is_wp_error($response) || wp_remote_retrieve_response_code($response) !== 200) {

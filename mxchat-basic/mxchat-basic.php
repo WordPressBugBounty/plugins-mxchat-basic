@@ -3,7 +3,7 @@
  * Plugin Name: MxChat
  * Plugin URI: https://mxchat.ai/
  * Description: AI chatbot for WordPress with OpenAI, Claude, xAI, DeepSeek, live agent, PDF uploads, WooCommerce, and training on website data.
- * Version: 3.2.12
+ * Version: 3.2.13
  * Author: MxChat
  * Author URI: https://mxchat.ai
  * License: GPLv2 or later
@@ -28,6 +28,25 @@ if (!defined('MXCHAT_VERSION')) {
         $version .= '.' . time();
     }
     define('MXCHAT_VERSION', $version);
+}
+
+/**
+ * Honest, versioned User-Agent for MXChat remote-content ingestion fetches
+ * (Knowledge Base PDF import, URL import, sitemap / website crawl).
+ *
+ * WAF rulesets (SiteGround/ModSecurity, Wordfence, Cloudflare managed rules)
+ * flag stale spoofed-browser UAs as scrapers and return 403 — which silently
+ * broke the single most common KB source: self-hosted media on the site's own
+ * domain. A truthful crawler identifier is the industry norm for well-behaved
+ * bots and lets a site owner allowlist "MXChatBot" in their WAF. Filterable so
+ * a locked-down host can supply a different string without a code change.
+ */
+if (!function_exists('mxchat_ingest_user_agent')) {
+    function mxchat_ingest_user_agent() {
+        $version = defined('MXCHAT_VERSION') ? MXCHAT_VERSION : '1.0';
+        $ua = 'MXChatBot/' . $version . ' (+https://mxchat.ai/bot)';
+        return apply_filters('mxchat_ingest_user_agent', $ua);
+    }
 }
 
 function mxchat_load_textdomain() {

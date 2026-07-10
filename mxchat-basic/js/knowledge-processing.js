@@ -2273,4 +2273,115 @@ function checkForActiveQueues() {
             setTimeout(initDismissibleNotices, 10);
         }
     });
+
+    // ========================================
+    // CUSTOM META-KEY DISCOVERY PICKER (plan-mxchat-20260709-fe8e4e)
+    // Mirror the ACF picker's discover-and-click UX for non-ACF post meta: scan
+    // published content for meta keys, render clickable chips, and append chosen
+    // keys into the existing whitelist textarea (its autosave then persists them).
+    // ========================================
+    (function() {
+        var $scanBtn = $('#mxchat-scan-meta-btn');
+        if (!$scanBtn.length) { return; }
+
+        var $results  = $('#mxchat-meta-scan-results');
+        var $textarea = $('#mxchat_custom_meta_whitelist');
+        var $internal = $('#mxchat-scan-internal');
+        var $label    = $scanBtn.find('.mxchat-scan-label');
+        var defaultLabel = $label.text();
+
+        function currentKeys() {
+            return ($textarea.val() || '')
+                .split('\n')
+                .map(function(k) { return k.trim(); })
+                .filter(function(k) { return k.length; });
+        }
+
+        function addKey(key) {
+            var keys = currentKeys();
+            if (keys.indexOf(key) !== -1) { return false; }
+            keys.push(key);
+            $textarea.val(keys.join('\n'));
+            // Fire the existing autosave (bound on 'change' in mxchat-admin.js).
+            $textarea.trigger('change');
+            return true;
+        }
+
+        function escapeHtml(s) {
+            return String(s).replace(/[&<>"']/g, function(c) {
+                return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+            });
+        }
+
+        function humanize(key) {
+            var h = key.replace(/^_+/, '').replace(/[_-]+/g, ' ').trim();
+            return h.length ? h.charAt(0).toUpperCase() + h.slice(1) : key;
+        }
+
+        function renderChips(keys) {
+            if (!keys || !keys.length) {
+                $results.html('<p class="mxchat-meta-scan-empty">' +
+                    'No custom meta keys found on your published content. Try enabling internal keys, or add keys manually below.' +
+                    '</p>');
+                return;
+            }
+            var existing = currentKeys();
+            var html = '<div class="mxchat-meta-chip-grid">';
+            keys.forEach(function(item) {
+                var already = existing.indexOf(item.key) !== -1;
+                html += '<button type="button" class="mxchat-meta-chip' + (already ? ' is-added' : '') +
+                    '" data-key="' + escapeHtml(item.key) + '"' + (already ? ' aria-pressed="true"' : '') + '>' +
+                        '<span class="mxchat-meta-chip-main">' +
+                            '<span class="mxchat-meta-chip-name">' + escapeHtml(humanize(item.key)) + '</span>' +
+                            '<span class="mxchat-meta-chip-key">' + escapeHtml(item.key) + '</span>' +
+                        '</span>' +
+                        '<span class="mxchat-meta-chip-meta">on ' + item.count + ' post' + (item.count === 1 ? '' : 's') +
+                            (item.sample ? ' · e.g. ' + escapeHtml(item.sample) : '') + '</span>' +
+                        '<span class="mxchat-meta-chip-tick">' + (already ? '✓ Added' : '+ Add') + '</span>' +
+                    '</button>';
+            });
+            html += '</div>';
+            $results.html(html);
+        }
+
+        $scanBtn.on('click', function() {
+            var nonce = $scanBtn.data('nonce') ||
+                (window.mxchatAdmin && mxchatAdmin.settings_nonce) || '';
+            var ajaxUrl = (window.mxchatAdmin && (mxchatAdmin.ajax_url || mxchatAdmin.ajaxurl)) ||
+                window.ajaxurl || '/wp-admin/admin-ajax.php';
+
+            $scanBtn.prop('disabled', true);
+            $label.text('Scanning…');
+            $results.html('<p class="mxchat-meta-scan-loading">Scanning your content for meta keys…</p>');
+
+            $.post(ajaxUrl, {
+                action: 'mxchat_scan_custom_meta_keys',
+                _ajax_nonce: nonce,
+                include_internal: $internal.is(':checked') ? '1' : '0'
+            }).done(function(resp) {
+                if (resp && resp.success && resp.data && resp.data.keys) {
+                    renderChips(resp.data.keys);
+                } else {
+                    var msg = (resp && resp.data && resp.data.message) ? resp.data.message : 'Scan failed. Please try again.';
+                    $results.html('<p class="mxchat-meta-scan-empty">' + escapeHtml(msg) + '</p>');
+                }
+            }).fail(function() {
+                $results.html('<p class="mxchat-meta-scan-empty">Scan request failed. Please try again.</p>');
+            }).always(function() {
+                $scanBtn.prop('disabled', false);
+                $label.text(defaultLabel);
+            });
+        });
+
+        // Chip click -> add the raw key to the whitelist textarea (dedup) + autosave.
+        $results.on('click', '.mxchat-meta-chip', function() {
+            var $chip = $(this);
+            if ($chip.hasClass('is-added')) { return; }
+            var key = String($chip.data('key'));
+            if (addKey(key)) {
+                $chip.addClass('is-added').attr('aria-pressed', 'true');
+                $chip.find('.mxchat-meta-chip-tick').text('✓ Added');
+            }
+        });
+    })();
 });

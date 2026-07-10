@@ -3,9 +3,9 @@ Contributors: mxchat
 Author: [MxChat](https://mxchat.ai)
 Tags: ai chatbot, chatgpt, woocommerce, customer support, content generation
 Requires at least: 5.0
-Tested up to: 7.0
+Tested up to: 7.0.1
 Requires PHP: 7.2
-Stable tag: 3.2.12
+Stable tag: 3.2.13
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -42,15 +42,6 @@ Extend the free plugin with these optional premium features:
 - [Image Analysis Add-On](https://mxchat.ai/add-ons/mxchat-vision/) – Enable AI-powered image analysis and OCR inside chats
 
 👉 [Visit our website to view all add-ons](https://mxchat.ai)
-
-## 🔥 What's New in Version 3.2.9
-
-- **NEW: Stop Button for Streaming Responses** — visitors can halt a streaming answer mid-reply; the send button becomes a Stop control while the bot is typing, keeping the text already written
-- **NEW: "Images per Article" Slider** — choose how many images (1–5) the Content Generator places in each article, instead of the AI deciding for you
-- **NEW: Download Transcript Toggle** — show or hide the chat menu's "Download Transcript" item from settings (on by default)
-- **FIXED: Google Search Snippets** — the chat widget's greeting and quick-question text no longer leak into your pages' search-result snippets
-- **FIXED: In-Chat Document Upload** — PDF and Word uploads from the chat toolbar work again, whether or not you're signed in
-- **Plus:** right-to-left admin-navigation fix, a rebuilt translation template so translators stop losing work on updates, satisfaction-prompt and message-loss fixes, and PHP 8.2 cleanup
 
 ## Core Features That Set MxChat Apart
 
@@ -338,6 +329,14 @@ Yes. MxChat is available for free on the WordPress plugin repository with full A
 
 == Changelog ==
 
+= 3.2.13 - July 10, 2026 =
+* New: Claude Sonnet 5 is now selectable as both a chat model and a content generation model.
+* New: The Knowledge Base Custom Post Meta section can scan your content and suggest custom meta keys as clickable options, so you can add non-ACF meta to the embedding whitelist without knowing the exact key names.
+* Fixed: Knowledge Base imports of PDFs and web pages no longer fail with a 403 error on firewall-protected hosts (SiteGround, Wordfence, Cloudflare) — MXChat now identifies itself with an honest, versioned MXChatBot user agent you can allowlist if needed.
+* Fixed: PDFs a visitor links in a live chat now use the same MXChatBot identity, so a firewall that allowlists MXChatBot lets them through too.
+* Fixed: The close button on the pre-chat greeting bubble now works on chatbots with a custom bot ID, including Multi-Bot setups, not just the default chatbot.
+* Improved: The Custom Post Meta help text now points to the built-in key scanner and notes that array and repeater values are flattened during embedding.
+
 = 3.2.12 - June 30, 2026 =
 * Fixed: Resolved a WordPress.org packaging issue from the previous release that could cause the update to fail to download or appear to hang in the WordPress dashboard on some sites. This maintenance release republishes the plugin so every site can update normally and receive the recent improvements from 3.2.11 — including the per-provider Test API key buttons, built-in WPML and Polylang translation for the chat widget, Google Gemini web search, the optional Max Input Length character counter, cleaner Slack live-agent links, the Knowledge View indexed content panel, and the security and Pinecone matching fixes. No functional changes from 3.2.11; no settings or data are affected.
 
@@ -541,8 +540,8 @@ Older releases are archived in the plugin's full version history on WordPress.or
 
 == Upgrade Notice ==
 
-= 3.2.12 =
-This maintenance release fixes a WordPress.org packaging problem that could make the previous update fail to install from the WordPress dashboard. Updating ensures you receive the latest improvements and security fixes from the recent releases. No settings or data are affected.
+= 3.2.13 =
+Adds Claude Sonnet 5 and a one-click scanner for adding your custom post meta keys to the Knowledge Base, and fixes Knowledge Base import 403 errors on firewall-protected hosts by sending an honest MXChatBot user agent. Also fixes the pre-chat greeting bubble's close button on Multi-Bot and custom-bot-ID chatbots; no settings or data are affected.
 
 == License & Warranty ==
 

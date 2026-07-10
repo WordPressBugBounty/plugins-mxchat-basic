@@ -1214,14 +1214,19 @@ public function mxchat_handle_sitemap_submission() {
         exit;
     }
 
-    // Fetch URL — use browser-like headers so servers with bot protection don't block us
+    // Fetch URL — send an honest, versioned MXChat crawler UA (not a spoofed
+    // browser). Stale browser UAs are exactly what WAFs like SiteGround's
+    // ModSecurity flag as scrapers, 403-ing the fetch (including PDFs served
+    // from the site's own media library, which route through this same call).
+    // See mxchat_ingest_user_agent(). Accept is kept for content negotiation;
+    // the browser-only Accept-Language fingerprint is dropped so it stays
+    // coherent with a bot identity.
     $response = wp_remote_get($submitted_url, array(
         'timeout' => 30,
         'sslverify' => false,
-        'user-agent' => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+        'user-agent' => mxchat_ingest_user_agent(),
         'headers' => array(
             'Accept' => 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-            'Accept-Language' => 'en-US,en;q=0.9',
         ),
     ));
 
@@ -3062,7 +3067,7 @@ public function ajax_mxchat_detect_sitemaps() {
             'timeout' => 10,
             'sslverify' => false,
             'redirection' => 1,
-            'user-agent' => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+            'user-agent' => mxchat_ingest_user_agent(),
         ));
 
         if (!is_wp_error($response) && wp_remote_retrieve_response_code($response) === 200) {
@@ -3124,10 +3129,9 @@ private function parse_sitemap_index($url) {
     $response = wp_remote_get($url, array(
         'timeout' => 30,
         'sslverify' => false,
-        'user-agent' => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+        'user-agent' => mxchat_ingest_user_agent(),
         'headers' => array(
             'Accept' => 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-            'Accept-Language' => 'en-US,en;q=0.9',
         ),
     ));
 
@@ -3183,10 +3187,9 @@ private function get_sitemap_url_count($url) {
     $response = wp_remote_get($url, array(
         'timeout' => 30,
         'sslverify' => false,
-        'user-agent' => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+        'user-agent' => mxchat_ingest_user_agent(),
         'headers' => array(
             'Accept' => 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-            'Accept-Language' => 'en-US,en;q=0.9',
         ),
     ));
 
@@ -3214,7 +3217,7 @@ private function get_sitemaps_from_robots($site_url) {
     $response = wp_remote_get($robots_url, array(
         'timeout' => 15,
         'sslverify' => false,
-        'user-agent' => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+        'user-agent' => mxchat_ingest_user_agent(),
     ));
 
     if (is_wp_error($response)) {
@@ -7756,7 +7759,7 @@ private function mxchat_process_queue_url($item_data, $bot_id = 'default', $queu
     $response = wp_remote_get($url, array(
         'timeout' => $is_likely_pdf ? 120 : 30,
         'redirection' => 5,
-        'user-agent' => 'MxChat/1.0'
+        'user-agent' => mxchat_ingest_user_agent(),
     ));
 
     if (is_wp_error($response)) {

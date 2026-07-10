@@ -1533,6 +1533,26 @@ function mxchat_render_custom_meta_section() {
                     <span><?php esc_html_e('Enter post meta keys to include in embeddings. This is useful for OptionTree fields, theme meta boxes, or any custom post meta that is not managed by ACF.', 'mxchat'); ?></span>
                 </div>
 
+                <!-- Meta-key discovery scanner (plan-mxchat-20260709-fe8e4e): mirror the ACF picker's
+                     discover-for-you UX for non-ACF meta, so owners click keys instead of typing them blind. -->
+                <div class="mxch-field mxchat-meta-scan">
+                    <label class="mxch-field-label"><?php esc_html_e('Discover meta keys', 'mxchat'); ?></label>
+                    <p class="mxch-field-description" style="margin-top: 0;">
+                        <?php esc_html_e('Scan your published content for custom meta keys, then click any you want to include. This gives non-ACF meta the same discover-and-click experience as the ACF picker.', 'mxchat'); ?>
+                    </p>
+                    <div class="mxchat-meta-scan-controls">
+                        <button type="button" id="mxchat-scan-meta-btn" class="mxch-btn mxch-btn-secondary" data-nonce="<?php echo esc_attr(wp_create_nonce('mxchat_prompts_setting_nonce')); ?>">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+                            <span class="mxchat-scan-label"><?php esc_html_e('Scan my content for meta keys', 'mxchat'); ?></span>
+                        </button>
+                        <label class="mxchat-meta-scan-internal">
+                            <input type="checkbox" id="mxchat-scan-internal">
+                            <?php esc_html_e('Include internal keys (underscore-prefixed)', 'mxchat'); ?>
+                        </label>
+                    </div>
+                    <div id="mxchat-meta-scan-results" class="mxchat-meta-scan-results" aria-live="polite"></div>
+                </div>
+
                 <div class="mxch-field">
                     <label class="mxch-field-label" for="mxchat_custom_meta_whitelist">
                         <?php esc_html_e('Meta Key Whitelist', 'mxchat'); ?>
@@ -1547,7 +1567,7 @@ function mxchat_render_custom_meta_section() {
                         style="font-family: monospace;"
                     ><?php echo esc_textarea($whitelist); ?></textarea>
                     <p class="mxch-field-description">
-                        <?php esc_html_e('Enter one meta key per line. These fields will be appended to the content during embedding. Only string values are included.', 'mxchat'); ?>
+                        <?php esc_html_e('Enter one meta key per line. These fields will be appended to the content during embedding. Text values are added as-is; array or repeater values are flattened into a comma-separated list. Empty values are skipped.', 'mxchat'); ?>
                     </p>
                 </div>
 
@@ -1556,7 +1576,7 @@ function mxchat_render_custom_meta_section() {
                     <ul style="margin: 0; padding-left: 20px; color: var(--mxch-text-secondary); font-size: 13px;">
                         <li><?php esc_html_e('Check your theme documentation for meta key names', 'mxchat'); ?></li>
                         <li><?php esc_html_e('Look in the wp_postmeta database table', 'mxchat'); ?></li>
-                        <li><?php esc_html_e('Use a plugin like "Show Post Meta" to view meta keys on any post', 'mxchat'); ?></li>
+                        <li><?php esc_html_e('Use the Scan my content for meta keys button above to discover the keys on your published content automatically', 'mxchat'); ?></li>
                         <li><?php esc_html_e('Meta keys starting with underscore (_) are usually hidden/internal', 'mxchat'); ?></li>
                     </ul>
                 </div>

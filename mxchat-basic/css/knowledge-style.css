@@ -3891,3 +3891,103 @@ tr.mxchat-row-error td:first-child::before {
         text-align: center;
     }
 }
+/* ==========================================================================
+   Custom Meta-key discovery picker (plan-mxchat-20260709-fe8e4e)
+   Canon-token chip picker mirroring the ACF discovery UX for non-ACF meta.
+   ========================================================================== */
+.mxchat-meta-scan-controls {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 12px;
+    margin-bottom: 12px;
+}
+#mxchat-scan-meta-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+}
+.mxchat-meta-scan-internal {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 13px;
+    color: var(--mxch-text-secondary, #64748b);
+    cursor: pointer;
+}
+.mxchat-meta-scan-loading,
+.mxchat-meta-scan-empty {
+    font-size: 13px;
+    color: var(--mxch-text-secondary, #64748b);
+    margin: 8px 0 0;
+}
+.mxchat-meta-chip-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+    gap: 10px;
+    margin-top: 12px;
+}
+.mxchat-meta-chip {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
+    text-align: left;
+    width: 100%;
+    padding: 10px 12px;
+    background: var(--mxch-card-bg, #fff);
+    border: 1px solid var(--mxch-card-border, #e2e8f0);
+    border-radius: var(--mxch-radius-md, 8px);
+    cursor: pointer;
+    transition: border-color 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
+}
+.mxchat-meta-chip:hover {
+    border-color: var(--mxch-primary, #7873f5);
+    box-shadow: 0 1px 4px rgba(120, 115, 245, 0.15);
+}
+.mxchat-meta-chip-main {
+    display: flex;
+    align-items: baseline;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+.mxchat-meta-chip-name {
+    font-weight: 600;
+    color: var(--mxch-text-primary, #1a1a2e);
+    font-size: 13px;
+}
+.mxchat-meta-chip-key {
+    font-family: monospace;
+    font-size: 11px;
+    color: var(--mxch-text-muted, #94a3b8);
+    background: #f1f5f9;
+    padding: 1px 6px;
+    border-radius: 4px;
+}
+.mxchat-meta-chip-meta {
+    font-size: 11px;
+    color: var(--mxch-text-muted, #94a3b8);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 100%;
+}
+.mxchat-meta-chip-tick {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--mxch-primary, #7873f5);
+    margin-top: 2px;
+}
+.mxchat-meta-chip.is-added {
+    border-color: var(--mxch-success, #10b981);
+    background: rgba(16, 185, 129, 0.06);
+    cursor: default;
+}
+.mxchat-meta-chip.is-added .mxchat-meta-chip-tick {
+    color: var(--mxch-success, #10b981);
+}
+@media (max-width: 782px) {
+    .mxchat-meta-chip-grid {
+        grid-template-columns: 1fr;
+    }
+}

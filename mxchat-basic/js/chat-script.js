@@ -344,6 +344,18 @@ jQuery(document).ready(function($) {
             var match = id.match(/floating-chatbot-(.+)/);
             if (match) return match[1];
         }
+        // Fallback: the pre-chat teaser bubble (#pre-chat-message-{bot_id}) is a SIBLING
+        // outside .mxchat-chatbot-wrapper / .floating-chatbot, so its children — e.g. the
+        // .close-pre-chat-message button, which carries only a class and no id — miss both
+        // branches above. Walk to the nearest ancestor whose id is pre-chat-message-{bot_id}
+        // and read the suffix. (closest() includes the element itself, so a click directly on
+        // #pre-chat-message-{bot_id} resolves here too.)
+        var $preChat = $(element).closest('[id^="pre-chat-message-"]');
+        if ($preChat.length) {
+            var preId = $preChat.attr('id') || '';
+            var preMatch = preId.match(/^pre-chat-message-(.+)$/);
+            if (preMatch) return preMatch[1];
+        }
         // Fallback: check if element itself has an ID with bot suffix (e.g., floating-chatbot-button-{bot_id})
         var elementId = $(element).attr('id') || '';
         if (elementId) {

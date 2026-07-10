@@ -2374,7 +2374,7 @@ article .entry-content,
 
         // Anthropic removed temperature on Opus 4.7+ flagships (400 if sent) —
         // same list as the integrator's mxchat_claude_omits_temperature().
-        $no_temp = array('claude-opus-4-7', 'claude-opus-4-8', 'claude-fable-5');
+        $no_temp = array('claude-opus-4-7', 'claude-opus-4-8', 'claude-fable-5', 'claude-sonnet-5');
         if (in_array($model, $no_temp, true)) {
             unset($body['temperature']);
         }

@@ -57,6 +57,111 @@ private function mxchat_init_ajax_hooks() {
 
     // Built-in provider key validation — cheap per-provider auth check (plan-mxchat-20260623-c41f74)
     add_action('wp_ajax_mxchat_test_provider_key', array($this, 'mxchat_test_provider_key_callback'));
+
+    // Custom Post Meta discovery scan for the KB whitelist picker (plan-mxchat-20260709-fe8e4e)
+    add_action('wp_ajax_mxchat_scan_custom_meta_keys', array($this, 'mxchat_scan_custom_meta_keys_callback'));
+}
+
+/**
+ * Discover non-ACF custom post-meta keys present on published public content, so the
+ * KB → Custom Post Meta section can offer a click-to-add picker instead of a blind
+ * "type the exact key you already know" textarea. plan-mxchat-20260709-fe8e4e.
+ *
+ * Bounded + button-triggered only (never on page load). Returns up to 50 keys by
+ * frequency, each with a short sample value, so the owner can judge relevance before
+ * whitelisting. Underscore-prefixed (protected/internal) keys are hidden unless the
+ * caller opts in; ACF-managed keys are excluded so this picker never double-lists the
+ * sibling ACF discovery picker on the same page.
+ */
+public function mxchat_scan_custom_meta_keys_callback() {
+    check_ajax_referer('mxchat_prompts_setting_nonce');
+
+    if (!current_user_can('manage_options')) {
+        wp_send_json_error(['message' => esc_html__('Unauthorized', 'mxchat')]);
+    }
+
+    global $wpdb;
+
+    $include_internal = isset($_POST['include_internal']) && $_POST['include_internal'] === '1';
+
+    // Restrict discovery to public post types (the content the KB actually embeds).
+    $post_types = get_post_types(array('public' => true), 'names');
+    if (empty($post_types)) {
+        wp_send_json_success(array('keys' => array(), 'scanned' => 0));
+    }
+    $pt_placeholders = implode(',', array_fill(0, count($post_types), '%s'));
+
+    // Build the set of ACF-managed meta keys to exclude. ACF stores, alongside each
+    // value key `foo`, a reference key `_foo` whose value is the ACF field key
+    // (`field_xxxxx`). Strip the leading underscore from every such reference key to
+    // get the real meta key, and exclude those — the ACF picker on this page owns them.
+    $acf_managed = array();
+    $acf_refs = $wpdb->get_col(
+        $wpdb->prepare(
+            "SELECT DISTINCT meta_key FROM {$wpdb->postmeta} WHERE meta_key LIKE %s AND meta_value LIKE %s",
+            $wpdb->esc_like('_') . '%',
+            $wpdb->esc_like('field_') . '%'
+        )
+    );
+    foreach ((array) $acf_refs as $ref_key) {
+        if (strlen($ref_key) > 1 && $ref_key[0] === '_') {
+            $acf_managed[substr($ref_key, 1)] = true;
+        }
+    }
+
+    // Discover keys + counts + a sample value in one bounded aggregate query.
+    // SUBSTRING(MIN(...)) keeps the sample selection ONLY_FULL_GROUP_BY-safe.
+    $params = $post_types;
+    $sql = "SELECT pm.meta_key AS mk, COUNT(*) AS n, SUBSTRING(MIN(pm.meta_value), 1, 200) AS sample
+            FROM {$wpdb->postmeta} pm
+            INNER JOIN {$wpdb->posts} p ON p.ID = pm.post_id
+            WHERE p.post_status = 'publish'
+              AND p.post_type IN ($pt_placeholders)
+              AND pm.meta_key <> ''";
+    if (!$include_internal) {
+        $sql .= " AND pm.meta_key NOT LIKE %s";
+        $params[] = $wpdb->esc_like('_') . '%';
+    }
+    $sql .= " GROUP BY pm.meta_key ORDER BY n DESC, pm.meta_key ASC LIMIT 200";
+
+    // phpcs:ignore WordPress.DB.PreparedSQL — placeholders assembled above, values in $params.
+    $rows = $wpdb->get_results($wpdb->prepare($sql, $params));
+
+    $keys = array();
+    foreach ((array) $rows as $row) {
+        $mk = $row->mk;
+        if (isset($acf_managed[$mk])) {
+            continue; // already offered by the ACF picker
+        }
+
+        $raw = (string) $row->sample;
+        if ($raw !== '' && (is_serialized($raw) || preg_match('/^(a:\d+:\{|O:\d+:"|s:\d+:")/', $raw))) {
+            $sample = esc_html__('[structured value]', 'mxchat');
+        } else {
+            $sample = trim(preg_replace('/\s+/', ' ', $raw));
+            if (function_exists('mb_strlen') ? mb_strlen($sample) > 60 : strlen($sample) > 60) {
+                $sample = (function_exists('mb_substr') ? mb_substr($sample, 0, 60) : substr($sample, 0, 60)) . '…';
+            }
+            if ($sample === '') {
+                $sample = esc_html__('(empty value)', 'mxchat');
+            }
+        }
+
+        $keys[] = array(
+            'key'    => $mk,
+            'count'  => (int) $row->n,
+            'sample' => $sample,
+        );
+
+        if (count($keys) >= 50) {
+            break;
+        }
+    }
+
+    wp_send_json_success(array(
+        'keys'    => $keys,
+        'scanned' => is_array($rows) ? count($rows) : 0,
+    ));
 }
 
 /**
