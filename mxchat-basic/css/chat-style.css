@@ -1627,6 +1627,104 @@ pre {
     border-radius: 0 0 8px 8px;
 }
 
+/* Consent-safe YouTube embed (click-to-load facade → nocookie iframe).
+   Caption colors INHERIT from the message bubble (same idiom as
+   .mxchat-product-card) so the embed reads correctly on any widget theme —
+   bot bubbles commonly force their own text color. */
+.mxchat-youtube-embed {
+    max-width: 340px;
+    margin-top: 8px;
+}
+
+.mxchat-youtube-facade {
+    position: relative;
+    display: block;
+    width: 100%;
+    padding: 0;
+    margin: 0;
+    border: none;
+    background: #000;
+    cursor: pointer;
+    aspect-ratio: 16 / 9;
+    border-radius: 10px;
+    overflow: hidden;
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.15);
+}
+
+.mxchat-youtube-thumb {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+    opacity: 0.92;
+    transition: opacity 0.2s;
+}
+
+.mxchat-youtube-facade:hover .mxchat-youtube-thumb {
+    opacity: 1;
+}
+
+.mxchat-youtube-play {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 52px;
+    height: 52px;
+    border-radius: 50%;
+    background: rgba(0, 0, 0, 0.72);
+    color: #fff;
+    transition: transform 0.2s, background 0.2s;
+}
+
+.mxchat-youtube-play svg {
+    margin-left: 3px;
+}
+
+.mxchat-youtube-facade:hover .mxchat-youtube-play {
+    transform: translate(-50%, -50%) scale(1.08);
+    background: rgba(0, 0, 0, 0.85);
+}
+
+.mxchat-youtube-iframe {
+    width: 100%;
+    aspect-ratio: 16 / 9;
+    border: none;
+    display: block;
+    border-radius: 10px;
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.15);
+}
+
+.mxchat-youtube-caption {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 8px 2px 0;
+    background: transparent;
+    color: inherit;
+}
+
+.mxchat-youtube-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: inherit;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
+
+.mxchat-youtube-link {
+    font-size: 12px;
+    white-space: nowrap;
+    color: inherit;
+    opacity: 0.85;
+    text-decoration: underline;
+}
+
 #widget_icon, #widget_icon_2, #widget_icon_3, #widget_icon_5, #widget_icon_4, #widget_icon_6, #widget_icon_7 {
     padding: 10px;
 }

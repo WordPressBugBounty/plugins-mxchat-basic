@@ -402,7 +402,52 @@ class MxChat_Tool_Registry {
                 $tools[] = $t;
             }
         }
-        return $tools;
+        return self::apply_live_agent_schedule($tools);
+    }
+
+    /**
+     * Withhold each live-agent handover tool outside ITS channel's availability
+     * schedule (plans 8ccaa2 + 99d7a4). Slack and Telegram carry independent
+     * schedules: if Slack is off-hours but Telegram is staffed, the Telegram
+     * handoff stays offered and only the Slack one is withheld — and vice
+     * versa. Off-hours the bot must not DANGLE a human it cannot reach, so the
+     * tool never reaches the model in the first place.
+     *
+     * Applied HERE and deliberately NOT in available_tools(): that function
+     * feeds the admin AI Tools checklist, which must keep showing the owner's
+     * real configuration. A tool that vanished from the admin list every evening
+     * would read as a bug, not a schedule.
+     *
+     * tool_by_name() resolves through this same list, so an off-hours model that
+     * emits the tool name anyway (e.g. echoing conversation history) cannot get
+     * it executed either.
+     *
+     * All call sites tolerate an empty result — mxchat_fc_should_run() and
+     * mxchat_fc_attempt() each fall back to the normal path — so this is safe
+     * even on a site whose ONLY enabled tool is a handover.
+     */
+    private static function apply_live_agent_schedule($tools) {
+        if (!class_exists('MxChat_Live_Agent_Schedule')) {
+            return $tools;
+        }
+        $withhold = array();
+        if (!MxChat_Live_Agent_Schedule::is_within_hours('slack')) {
+            $withhold[] = 'mxchat_live_agent_handover';
+        }
+        if (!MxChat_Live_Agent_Schedule::is_within_hours('telegram')) {
+            $withhold[] = 'mxchat_telegram_live_agent_handover';
+        }
+        if (empty($withhold)) {
+            return $tools;
+        }
+        $out = array();
+        foreach ($tools as $t) {
+            if (in_array($t['callback'], $withhold, true)) {
+                continue;
+            }
+            $out[] = $t;
+        }
+        return $out;
     }
 
     /** Resolve a model-emitted tool name back to its tool entry. */

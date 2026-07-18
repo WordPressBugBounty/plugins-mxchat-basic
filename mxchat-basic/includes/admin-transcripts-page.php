@@ -924,6 +924,28 @@ function mxchat_render_transcripts_page($admin_instance, $page_data) {
                                     <option value="1month" <?php selected($auto_delete, '1month'); ?>><?php esc_html_e('After 1 Month', 'mxchat'); ?></option>
                                 </select>
                                 <p class="mxch-field-description"><?php esc_html_e('Automatically delete old chat transcripts to manage database size and privacy.', 'mxchat'); ?></p>
+                                <?php
+                                // Surface the cron's real state next to the setting that
+                                // depends on it (plan-bc08a6): a configured retention whose
+                                // cleanup event is missing was previously invisible.
+                                $mxch_retention_days = isset($options['mxchat_retention_days']) ? (int) $options['mxchat_retention_days'] : 0;
+                                if ($auto_delete !== 'never' || $mxch_retention_days > 0) :
+                                    $mxch_next_cleanup = wp_next_scheduled('mxchat_cleanup_old_transcripts');
+                                    ?>
+                                    <p class="mxch-field-description" id="mxchat-next-cleanup-status">
+                                        <?php
+                                        if ($mxch_next_cleanup) {
+                                            printf(
+                                                /* translators: %s: localized date and time of the next scheduled transcript cleanup */
+                                                esc_html__('Next cleanup: %s', 'mxchat'),
+                                                esc_html(wp_date(get_option('date_format') . ' ' . get_option('time_format'), $mxch_next_cleanup))
+                                            );
+                                        } else {
+                                            esc_html_e('Next cleanup: not currently scheduled.', 'mxchat');
+                                        }
+                                        ?>
+                                    </p>
+                                <?php endif; ?>
                             </div>
                         </div>
                     </div>

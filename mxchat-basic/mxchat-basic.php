@@ -3,7 +3,7 @@
  * Plugin Name: MxChat
  * Plugin URI: https://mxchat.ai/
  * Description: AI chatbot for WordPress with OpenAI, Claude, xAI, DeepSeek, live agent, PDF uploads, WooCommerce, and training on website data.
- * Version: 3.2.13
+ * Version: 3.2.14
  * Author: MxChat
  * Author URI: https://mxchat.ai
  * License: GPLv2 or later
@@ -403,6 +403,7 @@ add_filter('flying_press_cacheable', function($cacheable) {
 function mxchat_include_classes() {
     $class_files = array(
         'includes/class-mxchat-model-catalog.php',
+        'includes/class-mxchat-live-agent-schedule.php',
         'includes/class-mxchat-tool-registry.php',
         'includes/class-mxchat-integrator.php',
         'includes/class-mxchat-admin.php',
@@ -414,6 +415,7 @@ function mxchat_include_classes() {
         'includes/class-mxchat-word-handler.php',
         'includes/class-mxchat-content-generator.php',
         'includes/class-mxchat-cache-purge.php',
+        'includes/class-mxchat-editor-assistant.php',
         'includes/class-rest-api.php',
         'admin/class-ajax-handler.php',
         'admin/class-pinecone-manager.php',
@@ -432,6 +434,13 @@ function mxchat_include_classes() {
     // Register the native function-calling admin-post save handler (a41dee).
     if (class_exists('MxChat_Tool_Registry')) {
         MxChat_Tool_Registry::init();
+    }
+
+    // Editor Assistant — free, OFF-by-default block-editor AI actions (plan-8cb0cb).
+    // init() wires REST + streaming AJAX + sidebar enqueue ONLY when the
+    // mxchat_editor_assistant_enabled option is 'on'; otherwise zero footprint.
+    if (class_exists('MxChat_Editor_Assistant')) {
+        MxChat_Editor_Assistant::init();
     }
 
     // Admin pages that aren't classes (procedural include).
@@ -1166,21 +1175,27 @@ function mxchat_setup_cron_jobs() {
         // Set flag to use fallback system
         update_option('mxchat_use_fallback_rate_limits', true);
         update_option('mxchat_next_rate_limit_check', time() + 3600);
-        return;
-    }
-    
-    // Schedule the rate limit reset cron job
-    $result = wp_schedule_event(time() + 300, 'hourly', 'mxchat_reset_rate_limits');
-    
-    if ($result === false) {
-        // Fallback if scheduling fails
-        update_option('mxchat_use_fallback_rate_limits', true);
-        update_option('mxchat_next_rate_limit_check', time() + 3600);
+        // Deliberately NO early return (plan-bc08a6): transcript cleanup below
+        // must still be scheduled. DISABLE_WP_CRON only changes HOW cron events
+        // execute (a server-side runner hitting wp-cron.php instead of loopback
+        // spawns) — scheduling still just writes the cron option. The old early
+        // return here meant a deactivate/reactivate cycle on a DISABLE_WP_CRON
+        // site permanently lost the transcript cleanup event while the retention
+        // setting still claimed to be active.
     } else {
-        // Clear fallback flags if cron scheduling succeeded
-        delete_option('mxchat_use_fallback_rate_limits');
+        // Schedule the rate limit reset cron job
+        $result = wp_schedule_event(time() + 300, 'hourly', 'mxchat_reset_rate_limits');
+
+        if ($result === false) {
+            // Fallback if scheduling fails
+            update_option('mxchat_use_fallback_rate_limits', true);
+            update_option('mxchat_next_rate_limit_check', time() + 3600);
+        } else {
+            // Clear fallback flags if cron scheduling succeeded
+            delete_option('mxchat_use_fallback_rate_limits');
+        }
     }
-    
+
     // Schedule transcript cleanup if configured (bucket dropdown OR custom retention-days > 0)
     $transcript_options = get_option('mxchat_transcripts_options', array());
     $cleanup_interval = isset($transcript_options['mxchat_auto_delete_transcripts']) ? $transcript_options['mxchat_auto_delete_transcripts'] : 'never';

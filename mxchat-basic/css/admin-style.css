@@ -6565,3 +6565,94 @@ tr.mxchat-setting-row[data-provider="openrouter"],
     background: #8c2122 !important;
     border-color: #8c2122 !important;
 }
+
+/* ------------------------------------------------------------------ *
+ *  Live agent availability schedule (plan 8ccaa2)
+ *  Design tokens come from admin-sidebar.css (:root), which is enqueued
+ *  alongside this file on every MxChat admin page.
+ * ------------------------------------------------------------------ */
+.mxchat-la-days {
+    margin-top: var(--mxch-spacing-md, 16px);
+    border: 1px solid var(--mxch-card-border, #e2e8f0);
+    border-radius: var(--mxch-radius-md, 8px);
+    overflow: hidden;
+    max-width: 420px;
+    /* Inert until the master toggle is on — visibly secondary, not hidden, so
+       the owner can see what they're about to switch on. */
+    opacity: 0.45;
+    pointer-events: none;
+    transition: opacity 0.15s ease-in-out;
+}
+
+.mxchat-la-schedule.is-active .mxchat-la-days {
+    opacity: 1;
+    pointer-events: auto;
+}
+
+.mxchat-la-day {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--mxch-spacing-md, 16px);
+    padding: 10px var(--mxch-spacing-md, 16px);
+    border-bottom: 1px solid var(--mxch-card-border, #e2e8f0);
+}
+
+.mxchat-la-day:last-child {
+    border-bottom: none;
+}
+
+.mxchat-la-day-label {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    cursor: pointer;
+    min-width: 130px;
+}
+
+.mxchat-la-day-name {
+    font-weight: 500;
+    color: var(--mxch-text-secondary, #64748b);
+}
+
+.mxchat-la-day.is-on .mxchat-la-day-name {
+    color: var(--mxch-text-primary, #1a1a2e);
+}
+
+.mxchat-la-times {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    opacity: 0.5;
+    transition: opacity 0.15s ease-in-out;
+}
+
+.mxchat-la-day.is-on .mxchat-la-times {
+    opacity: 1;
+}
+
+.mxchat-la-times input[type="time"] {
+    border: 1px solid var(--mxch-card-border, #e2e8f0);
+    border-radius: var(--mxch-radius-sm, 4px);
+    padding: 4px 6px;
+    font-size: 13px;
+    color: var(--mxch-text-primary, #1a1a2e);
+}
+
+.mxchat-la-times input[type="time"]:focus {
+    border-color: var(--mxch-primary, #7873f5);
+    outline: none;
+    box-shadow: 0 0 0 1px var(--mxch-primary, #7873f5);
+}
+
+.mxchat-la-dash {
+    color: var(--mxch-text-muted, #94a3b8);
+}
+
+@media (max-width: 782px) {
+    .mxchat-la-day {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 8px;
+    }
+}

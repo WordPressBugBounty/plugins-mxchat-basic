@@ -2265,6 +2265,21 @@ article .entry-content,
     /**
      * Call OpenAI-compatible API (OpenAI, xAI, DeepSeek)
      */
+    /**
+     * plan-mxchat-20260714-dcb71c: frozen pre-dcb71c 'content' reasoning ladder,
+     * used only when the core model catalog is unavailable. Byte-identical to the
+     * old inline if/elseif at the call site.
+     */
+    private function mxchat_cg_reasoning_effort_fallback($model) {
+        if (strpos($model, 'gpt-5') !== 0) return null;
+        if ($model === 'gpt-5.2' || $model === 'gpt-5.1-chat-latest') return null;
+        if ($model === 'gpt-5.1-2025-11-13') return 'low';
+        if ($model === 'gpt-5.5') return 'low';
+        if ($model === 'gpt-5.4') return 'low';
+        if (in_array($model, array('gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna'), true)) return 'low';
+        return 'minimal';
+    }
+
     private function call_openai_compatible($model, $api_key, $endpoint, $system_prompt, $messages, $max_tokens) {
         if (empty($api_key)) {
             return new WP_Error('no_api_key', __('API key not configured for the selected content model.', 'mxchat'));
@@ -2279,9 +2294,15 @@ article .entry-content,
             );
         }
 
-        // GPT-5.x models require max_completion_tokens and only support temperature=1
-        $is_gpt5 = strpos($model, 'gpt-5') === 0;
-        $token_key = $is_gpt5 ? 'max_completion_tokens' : 'max_tokens';
+        // GPT-5.x models require max_completion_tokens and only support temperature=1.
+        // Token key, temperature gate, and reasoning_effort are sourced from the
+        // core model catalog (plan-dcb71c); frozen fallbacks preserve exact
+        // pre-dcb71c behavior if the catalog class is unavailable.
+        $is_gpt5   = strpos($model, 'gpt-5') === 0;
+        $catalog   = class_exists('MxChat_Model_Catalog');
+        $token_key = ($catalog && method_exists('MxChat_Model_Catalog', 'openai_token_param'))
+            ? MxChat_Model_Catalog::openai_token_param($model)
+            : ($is_gpt5 ? 'max_completion_tokens' : 'max_tokens');
 
         $body = array(
             'model'       => $model,
@@ -2290,23 +2311,18 @@ article .entry-content,
             'stream'      => false,
         );
 
-        if (!$is_gpt5) {
+        $temp_ok = ($catalog && method_exists('MxChat_Model_Catalog', 'supports_temperature'))
+            ? MxChat_Model_Catalog::supports_temperature($model)
+            : !$is_gpt5;
+        if ($temp_ok) {
             $body['temperature'] = 0.7;
         }
 
-        // Add reasoning_effort only for GPT-5 models that support it
-        // gpt-5.2 and gpt-5.1-chat-latest don't support reasoning_effort parameter
-        if ($is_gpt5 && $model !== 'gpt-5.2' && $model !== 'gpt-5.1-chat-latest') {
-            // GPT-5.1 uses 'low' instead of 'minimal'
-            if ($model === 'gpt-5.1-2025-11-13') {
-                $body['reasoning_effort'] = 'low';
-            } elseif ($model === 'gpt-5.5') {
-                $body['reasoning_effort'] = 'low';
-            } elseif ($model === 'gpt-5.4') {
-                $body['reasoning_effort'] = 'low';
-            } else {
-                $body['reasoning_effort'] = 'minimal';
-            }
+        $effort = ($catalog && method_exists('MxChat_Model_Catalog', 'reasoning_effort_for'))
+            ? MxChat_Model_Catalog::reasoning_effort_for($model, 'content')
+            : $this->mxchat_cg_reasoning_effort_fallback($model);
+        if ($effort !== null) {
+            $body['reasoning_effort'] = $effort;
         }
 
         // Scale timeout with token count — large generation calls need more time
@@ -2373,9 +2389,11 @@ article .entry-content,
         );
 
         // Anthropic removed temperature on Opus 4.7+ flagships (400 if sent) —
-        // same list as the integrator's mxchat_claude_omits_temperature().
-        $no_temp = array('claude-opus-4-7', 'claude-opus-4-8', 'claude-fable-5', 'claude-sonnet-5');
-        if (in_array($model, $no_temp, true)) {
+        // sourced from the core model catalog (plan-dcb71c); frozen list fallback.
+        $omit_temp = (class_exists('MxChat_Model_Catalog') && method_exists('MxChat_Model_Catalog', 'supports_temperature'))
+            ? !MxChat_Model_Catalog::supports_temperature($model)
+            : in_array($model, array('claude-opus-4-7', 'claude-opus-4-8', 'claude-fable-5', 'claude-sonnet-5'), true);
+        if ($omit_temp) {
             unset($body['temperature']);
         }
 

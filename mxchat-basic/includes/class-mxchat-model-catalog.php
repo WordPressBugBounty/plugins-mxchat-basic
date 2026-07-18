@@ -71,7 +71,10 @@ class MxChat_Model_Catalog {
                 'key_option'                  => 'api_key',
                 'requires_key_to_load_models' => false,
                 'models' => array(
-                    'gpt-5.5'              => array('label' => 'GPT-5.5',              'description' => __('Latest Flagship — newest OpenAI reasoning and coding model', 'mxchat')),
+                    'gpt-5.6-sol'          => array('label' => 'GPT-5.6 Sol',          'description' => __('Latest Flagship — newest OpenAI reasoning and coding model', 'mxchat')),
+                    'gpt-5.6-terra'        => array('label' => 'GPT-5.6 Terra',        'description' => __('Balanced GPT-5.6 — strong capability at lower cost', 'mxchat')),
+                    'gpt-5.6-luna'         => array('label' => 'GPT-5.6 Luna',         'description' => __('Fastest and cheapest GPT-5.6 for lightweight tasks', 'mxchat')),
+                    'gpt-5.5'              => array('label' => 'GPT-5.5',              'description' => __('Previous flagship — powerful reasoning and coding model', 'mxchat')),
                     'gpt-5.4'              => array('label' => 'GPT-5.4',              'description' => __('Flagship reasoning and coding model', 'mxchat')),
                     'gpt-5.4-mini'         => array('label' => 'GPT-5.4 Mini',         'description' => __('Fast and affordable with 400K context', 'mxchat')),
                     'gpt-5.4-nano'         => array('label' => 'GPT-5.4 Nano',         'description' => __('Fastest and cheapest for lightweight tasks', 'mxchat')),
@@ -354,5 +357,194 @@ class MxChat_Model_Catalog {
         }
 
         return (bool) apply_filters('mxchat_model_supports_tools', $supported, $model_id);
+    }
+
+    /**
+     * The catalog's CURRENT recommended model for image analysis, per provider.
+     *
+     * plan-mxchat-20260717-eb371e: add-ons that need "a vision-capable model"
+     * (mxchat-vision's analysis paths, mxchat-admin-chat's in-admin image
+     * analysis) previously froze a model id at their own call sites — and those
+     * pins silently aged out (mxchat-vision was still sending gpt-4o). This is
+     * the ONE place that opinion lives now; add-ons ask, with their old pin
+     * demoted to a fallback for when mxchat-basic is absent or too old.
+     *
+     * Choices are deliberate:
+     *   - openai: gpt-5.1-chat-latest — vision-capable and chat-tuned; it takes
+     *     no reasoning_effort, so a bounded completion budget is spent on the
+     *     ANSWER rather than hidden reasoning (the 4287cc truncation class).
+     *   - claude: the current Haiku — image analysis wants fast + cheap; Haiku
+     *     is vision-capable and the catalog's newest Haiku generation.
+     *   - xai: the catalog's dated id for what the bare 'grok-4' alias resolves
+     *     to today — documented vision-capable. The grok-4-1-fast pair is newer
+     *     but its image-input support is unconfirmed; promote it HERE once
+     *     confirmed and every asking add-on follows.
+     *   - gemini: current stable Flash — vision-capable, no per-image surcharge.
+     *
+     * NOT covered: image-GENERATION models (Gemini Imagen / Flash Image etc.).
+     * Those are a different capability the catalog does not model; add-ons that
+     * pin one (mxchat-vision's editing endpoints) are correctly pinned.
+     *
+     * @param string $provider 'openai' | 'claude' | 'xai' | 'gemini'.
+     * @return string Model id, or '' for an unknown provider (caller keeps its
+     *                fallback). Overridable via mxchat_default_vision_model.
+     */
+    public static function default_vision_model($provider) {
+        $map = array(
+            'openai' => 'gpt-5.1-chat-latest',
+            'claude' => 'claude-haiku-4-5-20251001',
+            'xai'    => 'grok-4-0709',
+            'gemini' => 'gemini-3.5-flash',
+        );
+        $model = isset($map[$provider]) ? $map[$provider] : '';
+        return (string) apply_filters('mxchat_default_vision_model', $model, $provider);
+    }
+
+    /**
+     * Per-model, per-surface reasoning_effort value.
+     *
+     * plan-mxchat-20260714-dcb71c: the single source of truth for the
+     * reasoning_effort ladder that was previously hand-maintained in FIVE
+     * parallel places (integrator streaming/non-streaming chat, integrator
+     * web-search Responses, content-generator, mxchat-advanced-content
+     * class-ai-client + class-content-calendar). Adding a model to
+     * chat_models() and updating THIS method now propagates the routing to
+     * every surface — no more drift-on-every-model-add.
+     *
+     * The mapping is DELIBERATELY per-context because the surfaces genuinely
+     * differ today (they are NOT a single clamped ladder):
+     *   - 'chat'      — /v1/chat/completions main chat. gpt-5.5 and gpt-5.4 use
+     *                   'none'; the *-chat-latest / mini / nano / gpt-5.2 ids
+     *                   send NO reasoning_effort.
+     *   - 'content'   — content generation (content-generator, AC ai-client,
+     *                   AC content-calendar). gpt-5.5 / gpt-5.4 use 'low';
+     *                   gpt-5.3-chat-latest / gpt-5.4-mini / gpt-5.4-nano use
+     *                   'minimal'; only gpt-5.2 and gpt-5.1-chat-latest send
+     *                   nothing. This is an ALLOWLIST (5621dd safe-default):
+     *                   a future gpt-5* id not listed gets NO param rather than
+     *                   a guessed value that might 400.
+     *   - 'websearch' — /v1/responses web-search. Only the gpt-5.6 trio, 5.5,
+     *                   5.4, and 5.1-2025-11-13 send 'low'; every other gpt-5 id
+     *                   (including gpt-5 / mini / nano / chat-latest) sends
+     *                   nothing.
+     *
+     * @param string $model   Chat model id.
+     * @param string $context 'chat' | 'content' | 'websearch'. Defaults to 'chat'.
+     * @return string|null    'none'|'low'|'minimal' to send, or null to omit the
+     *                        reasoning_effort / reasoning.effort param entirely.
+     */
+    public static function reasoning_effort_for($model, $context = 'chat') {
+        $model = (string) $model;
+
+        // Only the gpt-5 family carries reasoning_effort. Everything else omits.
+        if (strpos($model, 'gpt-5') !== 0) {
+            return null;
+        }
+
+        switch ($context) {
+            case 'websearch':
+                // integrator web-search (Responses API). Explicit allowlist, no
+                // "else" — anything not listed omits reasoning entirely.
+                $map = array(
+                    'gpt-5.6-sol'        => 'low',
+                    'gpt-5.6-terra'      => 'low',
+                    'gpt-5.6-luna'       => 'low',
+                    'gpt-5.5'            => 'low',
+                    'gpt-5.4'            => 'low',
+                    'gpt-5.1-2025-11-13' => 'low',
+                );
+                return isset($map[$model]) ? $map[$model] : null;
+
+            case 'content':
+                // content-generator + AC class-ai-client + AC content-calendar.
+                // ALLOWLIST (5621dd): a gpt-5* id absent here sends nothing.
+                $map = array(
+                    'gpt-5.6-sol'         => 'low',
+                    'gpt-5.6-terra'       => 'low',
+                    'gpt-5.6-luna'        => 'low',
+                    'gpt-5.5'             => 'low',
+                    'gpt-5.4'             => 'low',
+                    'gpt-5.1-2025-11-13'  => 'low',
+                    'gpt-5.4-mini'        => 'minimal',
+                    'gpt-5.4-nano'        => 'minimal',
+                    'gpt-5.3-chat-latest' => 'minimal',
+                    'gpt-5'               => 'minimal',
+                    'gpt-5-mini'          => 'minimal',
+                    'gpt-5-nano'          => 'minimal',
+                );
+                return isset($map[$model]) ? $map[$model] : null;
+
+            case 'chat':
+            default:
+                // integrator streaming + non-streaming main chat.
+                $no_reasoning = array('gpt-5.2', 'gpt-5.1-chat-latest', 'gpt-5.3-chat-latest', 'gpt-5.4-mini', 'gpt-5.4-nano');
+                if (in_array($model, $no_reasoning, true)) {
+                    return null;
+                }
+                if ($model === 'gpt-5.1-2025-11-13') {
+                    return 'low';
+                }
+                if ($model === 'gpt-5.5') {
+                    return 'none';
+                }
+                if ($model === 'gpt-5.4') {
+                    return 'none';
+                }
+                if (in_array($model, array('gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna'), true)) {
+                    return 'low';
+                }
+                return 'minimal';
+        }
+    }
+
+    /**
+     * Whether a NON-DEFAULT temperature value may be sent to this model.
+     *
+     * plan-mxchat-20260714-dcb71c: consolidates the scattered temperature
+     * omissions. Two families reject a custom temperature:
+     *   - gpt-5* — accept only the default (1); any other value 400s. Callers
+     *     that send temperature=1 (the main chat path) need not consult this —
+     *     1 is the default and is accepted. Callers that send a NON-default
+     *     value (content-generator 0.7, AC 0.7) gate on this and omit for gpt-5.
+     *   - The Anthropic flagships that removed the temperature param entirely
+     *     (claude-opus-4-7 / 4-8, claude-fable-5, claude-sonnet-5) — 400 if sent
+     *     at all. This is the list the integrator's mxchat_claude_omits_temperature()
+     *     and content-generator's call_claude() have hand-maintained.
+     *
+     * @param string $model Chat model id.
+     * @return bool         true if a custom temperature may be sent.
+     */
+    public static function supports_temperature($model) {
+        $model = (string) $model;
+
+        // gpt-5 family accepts only the default temperature (1).
+        if (strpos($model, 'gpt-5') === 0) {
+            return false;
+        }
+
+        // Anthropic flagships that reject the temperature param outright.
+        $claude_no_temp = array('claude-opus-4-7', 'claude-opus-4-8', 'claude-fable-5', 'claude-sonnet-5');
+        if (in_array($model, $claude_no_temp, true)) {
+            return false;
+        }
+
+        return true;
+    }
+
+    /**
+     * The completion-token parameter key an OpenAI /v1/chat/completions call
+     * must use for this model. gpt-5* require 'max_completion_tokens'; the
+     * legacy 'max_tokens' 400s. All other OpenAI-compatible providers
+     * (xAI, DeepSeek, custom) use 'max_tokens'.
+     *
+     * plan-mxchat-20260714-dcb71c: centralizes the `$is_gpt5 ?
+     * 'max_completion_tokens' : 'max_tokens'` switch duplicated in
+     * content-generator and AC class-ai-client.
+     *
+     * @param string $model Chat model id.
+     * @return string       'max_completion_tokens' | 'max_tokens'
+     */
+    public static function openai_token_param($model) {
+        return strpos((string) $model, 'gpt-5') === 0 ? 'max_completion_tokens' : 'max_tokens';
     }
 }

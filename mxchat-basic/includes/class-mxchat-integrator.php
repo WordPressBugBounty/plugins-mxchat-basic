@@ -9,6 +9,11 @@ class MxChat_Integrator {
     private $chat_count;
     private $fallbackResponse;
     private $productCardHtml;
+    // plan-mxchat-20260717-03ba33 — consent-safe YouTube embed queued during RAG
+    // retrieval when a video-backed KB entry is used as context. Emitted on the
+    // response 'html' channel alongside productCardHtml (non-streaming path,
+    // same constraint as product cards).
+    private $videoEmbedHtml = '';
     // plan-mxchat-20260617-48a57a — function-calling UI payload capture. When a
     // model-invoked tool yields a UI element (generated image, woo product card,
     // image-search gallery), the FC loop stashes its html here so the FC outcome
@@ -758,9 +763,20 @@ public function verify_telegram_request($request) {
     //error_log('[MxChat Telegram DEBUG] Stored secret: ' . (empty($secret_token) ? 'EMPTY' : substr($secret_token, 0, 10) . '...'));
 
     if (empty($secret_token)) {
-        // If no secret is configured, allow the request (for initial setup)
-        //error_log('[MxChat Telegram DEBUG] No secret configured, allowing request');
-        return true;
+        // No secret configured (legacy setup). Do NOT fail open to the whole
+        // internet — that lets an unauthenticated caller write agent-branded
+        // messages. Fall back to verifying the request originates from
+        // Telegram's published webhook IP ranges so existing no-secret installs
+        // keep working while an arbitrary-internet caller is blocked. Setting a
+        // real secret (see the admin notice) is the recommended path.
+        // (plan-0c17b5)
+        $peer = isset($_SERVER['REMOTE_ADDR']) ? (string) $_SERVER['REMOTE_ADDR'] : '';
+        if ($this->mxchat_ip_in_telegram_ranges($peer)) {
+            return true;
+        }
+        error_log('MxChat: Telegram webhook has no secret configured and the request '
+            . 'is not from a Telegram IP range; rejected. Set a webhook secret to secure it.');
+        return false;
     }
 
     // Telegram sends the secret token in the X-Telegram-Bot-Api-Secret-Token header
@@ -777,6 +793,45 @@ public function verify_telegram_request($request) {
     $result = hash_equals($secret_token, $request_token);
     //error_log('[MxChat Telegram DEBUG] Token comparison result: ' . ($result ? 'MATCH' : 'MISMATCH'));
     return $result;
+}
+
+/**
+ * Whether $ip falls within Telegram's published webhook IPv4 ranges
+ * (149.154.160.0/20 and 91.108.4.0/22). Used as an authenticity fallback for
+ * the Telegram webhook when no secret token is configured, so a legacy
+ * no-secret install keeps working without failing open to the entire internet.
+ *
+ * Uses the real TCP peer (REMOTE_ADDR); a spoofable X-Forwarded-For is NOT
+ * consulted. Behind a reverse proxy / CDN that rewrites REMOTE_ADDR this may
+ * not match — which is exactly why configuring a real webhook secret is the
+ * recommended path. (plan-0c17b5)
+ *
+ * @param string $ip Candidate IPv4 address.
+ * @return bool
+ */
+private function mxchat_ip_in_telegram_ranges($ip) {
+    if (!is_string($ip) || $ip === '' || filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4) === false) {
+        return false;
+    }
+    $ip_long = ip2long($ip);
+    if ($ip_long === false) {
+        return false;
+    }
+    $ranges = array(
+        array('149.154.160.0', 20),
+        array('91.108.4.0', 22),
+    );
+    foreach ($ranges as $range) {
+        $subnet_long = ip2long($range[0]);
+        if ($subnet_long === false) {
+            continue;
+        }
+        $mask = (0xFFFFFFFF << (32 - $range[1])) & 0xFFFFFFFF;
+        if (($ip_long & $mask) === ($subnet_long & $mask)) {
+            return true;
+        }
+    }
+    return false;
 }
 
 public function mxchat_stream_events(WP_REST_Request $request) {
@@ -1497,6 +1552,7 @@ public function mxchat_handle_chat_request() {
 
     $this->fallbackResponse = ['text' => '', 'html' => '', 'images' => []];
     $this->productCardHtml = '';
+    $this->videoEmbedHtml = '';
     // Reset the per-turn function-calling UI capture (plan 48a57a).
     $this->fc_ui_html = '';
     $this->fc_ui_images = array();
@@ -2213,7 +2269,7 @@ if ($testing_data !== null && !empty($this->current_valid_urls)) {
             if (is_array($fc_outcome) && !empty($fc_outcome['handled'])) {
                 $fc_text = isset($fc_outcome['text']) ? $fc_outcome['text'] : '';
                 if (!empty($this->current_valid_urls)) {
-                    $fc_text = $this->validate_and_clean_urls($fc_text, $this->current_valid_urls);
+                    $fc_text = $this->validate_and_clean_urls($fc_text, $this->current_valid_urls, $session_id, $bot_id);
                 }
                 // plan-mxchat-20260617-48a57a — surface any UI element a tool
                 // produced (generated image / product card / image gallery) so the
@@ -2225,6 +2281,16 @@ if ($testing_data !== null && !empty($this->current_valid_urls)) {
 
                 if ($fc_text !== '') {
                     $this->mxchat_save_chat_message($session_id, 'bot', $fc_text, null, null);
+                }
+
+                // A video-backed KB source queued during retrieval (03ba33) must
+                // surface on the FC path too — the FC envelopes below are the ONLY
+                // exit for this turn, so append it to the html channel and persist
+                // it (tool html was already saved in mxchat_fc_execute_tool; the
+                // video embed has no other save point on this path).
+                if (!empty($this->videoEmbedHtml)) {
+                    $fc_html .= $this->videoEmbedHtml;
+                    $this->mxchat_save_chat_message($session_id, 'bot', $this->videoEmbedHtml);
                 }
 
                 if ($is_streaming) {
@@ -2251,6 +2317,22 @@ if ($testing_data !== null && !empty($this->current_valid_urls)) {
         }
         // ===== end function-calling fallback =====
 
+        // Streaming + a queued video embed (03ba33): the provider handlers own the
+        // token stream and the [DONE] terminator, so the embed rides a dedicated
+        // append_html SSE event emitted BEFORE the stream starts. The client
+        // stashes it and appends it as its own bot bubble after [DONE] — old
+        // cached widget JS simply ignores the unknown key (no content/text/html/
+        // error field, so no branch matches). Transcript save happens after the
+        // stream completes, so history order matches the live order (text, then
+        // embed).
+        if ($is_streaming && !empty($this->videoEmbedHtml)) {
+            echo "data: " . wp_json_encode(array(
+                'append_html' => $this->videoEmbedHtml,
+                'session_id'  => $session_id,
+            )) . "\n\n";
+            flush();
+        }
+
         $response = $this->mxchat_generate_response(
             $context_content,
             $current_options['api_key'] ?? $this->options['api_key'],
@@ -2270,6 +2352,12 @@ if ($testing_data !== null && !empty($this->current_valid_urls)) {
         if ($is_streaming) {
             // Check if streaming actually happened or if it fell back to regular response
             if ($response === true) {
+                // Persist the video embed AFTER the provider saved the streamed
+                // text, so history replays in the same order the visitor saw
+                // (text bubble, then embed bubble). See 03ba33.
+                if (!empty($this->videoEmbedHtml)) {
+                    $this->mxchat_save_chat_message($session_id, 'bot', $this->videoEmbedHtml);
+                }
                 wp_die();
             }
             // If we get here, streaming fell back to regular response, continue
@@ -2309,7 +2397,7 @@ if ($testing_data !== null && !empty($this->current_valid_urls)) {
         // If we get here, the response is valid text - now validate URLs
         if (!empty($this->current_valid_urls)) {
             //error_log("CALLING validate_and_clean_urls");
-            $response = $this->validate_and_clean_urls($response, $this->current_valid_urls);
+            $response = $this->validate_and_clean_urls($response, $this->current_valid_urls, $session_id, $bot_id);
         } else {
             //error_log("SKIPPING validation - current_valid_urls is empty");
         }
@@ -2352,15 +2440,26 @@ if ($testing_data !== null && !empty($this->current_valid_urls)) {
             $this->mxchat_save_chat_message($session_id, 'bot', $this->fallbackResponse['html']);
         }
 
+        if (!empty($this->videoEmbedHtml)) {
+            $this->mxchat_save_chat_message($session_id, 'bot', $this->videoEmbedHtml);
+        }
+
         // Step 6: Return the response
         // DEBUG: Check if newlines exist in the response
         //error_log("=== MXCHAT NON-STREAMING RESPONSE DEBUG ===");
         //error_log("Response has newlines: " . (strpos($response, "\n") !== false ? 'YES' : 'NO'));
         //error_log("Response first 500 chars: " . substr($response, 0, 500));
 
+        // Product cards and action html keep their existing either/or precedence;
+        // a queued video embed (03ba33) is APPENDED so it can coexist with both.
+        $additional_html = !empty($this->productCardHtml) ? $this->productCardHtml : ($this->fallbackResponse['html'] ?? '');
+        if (!empty($this->videoEmbedHtml)) {
+            $additional_html .= $this->videoEmbedHtml;
+        }
+
         $response_data = [
             'text' => $response,
-            'html' => !empty($this->productCardHtml) ? $this->productCardHtml : ($this->fallbackResponse['html'] ?? ''),
+            'html' => $additional_html,
             'session_id' => $session_id
         ];
 
@@ -2390,7 +2489,15 @@ if ($testing_data !== null && !empty($this->current_valid_urls)) {
 // Also debug the bot options retrieval
 private function get_bot_options($bot_id = 'default') {
     //error_log("MXCHAT DEBUG: get_bot_options called for bot: " . $bot_id);
-    
+
+    // The admin Testing tab renders the real widget as bot_id "testing", which
+    // is not a registered multi-bot. It must resolve the DEFAULT bot's config
+    // so the Testing chat behaves exactly like the front-end (same precedent
+    // as the Actions enabled_bots check).
+    if ($bot_id === 'testing') {
+        $bot_id = 'default';
+    }
+
     if ($bot_id === 'default' || !class_exists('MxChat_Multi_Bot_Manager')) {
         //error_log("MXCHAT DEBUG: Using default options (no multi-bot or bot is 'default')");
         return array();
@@ -2415,7 +2522,16 @@ private function get_bot_options($bot_id = 'default') {
 // Also add debugging to your get_bot_pinecone_config function
 private function get_bot_pinecone_config($bot_id = 'default') {
     //error_log("MXCHAT DEBUG: get_bot_pinecone_config called for bot: " . $bot_id);
-    
+
+    // Admin Testing tab bot → resolve the DEFAULT bot's backend. Without this,
+    // on a multi-bot + Pinecone site the filter below gets an unknown bot id
+    // with an EMPTY default, returns array(), and the dispatcher silently
+    // searches the WordPress DB while the front-end searches Pinecone — the
+    // Testing panel then reports similarity results from a different KB.
+    if ($bot_id === 'testing') {
+        $bot_id = 'default';
+    }
+
     // If default bot or multi-bot add-on not active, use default Pinecone config
     if ($bot_id === 'default' || !class_exists('MxChat_Multi_Bot_Manager')) {
         //error_log("MXCHAT DEBUG: Using default Pinecone config (no multi-bot or bot is 'default')");
@@ -3348,17 +3464,26 @@ private function interpret_query_with_custom($user_query, $system_prompt) {
     if (empty($cfg['base_url'])) {
         return sanitize_text_field($user_query);
     }
+    // plan-mxchat-20260715-7124f4: a custom OpenAI-compatible endpoint pointed at
+    // a gpt-5-class model rejects temperature!=1 and the legacy max_tokens key.
+    // Byte-identical for ordinary custom models (temperature kept, max_tokens
+    // used); only gpt-5-class custom models change (best-effort — custom
+    // endpoints vary).
+    $token_key = $this->mxchat_openai_token_param_for($cfg['model']);
+    $payload   = [
+        'model'    => $cfg['model'],
+        'messages' => [
+            ['role' => 'system', 'content' => $system_prompt],
+            ['role' => 'user',   'content' => sanitize_text_field($user_query)],
+        ],
+        $token_key => 20,
+    ];
+    if ($this->mxchat_openai_supports_temperature_for($cfg['model'])) {
+        $payload['temperature'] = 0.2;
+    }
     $args = [
         'headers' => $this->mxchat_custom_provider_assoc_headers($cfg),
-        'body'    => wp_json_encode([
-            'model'       => $cfg['model'],
-            'messages'    => [
-                ['role' => 'system', 'content' => $system_prompt],
-                ['role' => 'user',   'content' => sanitize_text_field($user_query)],
-            ],
-            'temperature' => 0.2,
-            'max_tokens'  => 20,
-        ]),
+        'body'    => wp_json_encode($payload),
         'method'  => 'POST',
         'timeout' => 15,
     ];
@@ -3393,20 +3518,31 @@ private function mxchat_custom_provider_assoc_headers($cfg) {
  */
 private function interpret_query_with_openai($user_query, $system_prompt, $api_key, $model = 'gpt-5.1-chat-latest') {
     $url = 'https://api.openai.com/v1/chat/completions';
+    // plan-mxchat-20260715-7124f4: the default chat model is gpt-5.1-chat-latest
+    // and every gpt-5* rejects both a non-default temperature and the legacy
+    // max_tokens key (400). This call swallowed the 400 and silently degraded to
+    // the raw query on every gpt-5 install, quietly disabling product/image
+    // search-query interpretation. Derive capability from the core catalog
+    // (dcb71c) so this tracks future model adds; strpos fallback for a
+    // partial-upgrade window where the catalog method isn't loaded.
+    $token_key = $this->mxchat_openai_token_param_for($model);
+    $payload   = [
+        'model' => $model,
+        'messages' => [
+            ['role' => 'system', 'content' => $system_prompt],
+            ['role' => 'user', 'content' => sanitize_text_field($user_query)],
+        ],
+        $token_key => 20,
+    ];
+    if ($this->mxchat_openai_supports_temperature_for($model)) {
+        $payload['temperature'] = 0.2;
+    }
     $args = [
         'headers' => [
             'Authorization' => 'Bearer ' . $api_key,
             'Content-Type' => 'application/json',
         ],
-        'body' => wp_json_encode([
-            'model' => $model,
-            'messages' => [
-                ['role' => 'system', 'content' => $system_prompt],
-                ['role' => 'user', 'content' => sanitize_text_field($user_query)],
-            ],
-            'temperature' => 0.2,
-            'max_tokens' => 20,
-        ]),
+        'body' => wp_json_encode($payload),
         'method' => 'POST',
         'timeout' => 15,
     ];
@@ -3430,8 +3566,89 @@ private function interpret_query_with_openai($user_query, $system_prompt, $api_k
  * claude-fable-5: it rejects an explicit thinking "disabled" — omit only.)
  */
 private function mxchat_claude_omits_temperature($model) {
+    // plan-mxchat-20260714-dcb71c: derive from the core model catalog (single
+    // source of truth). Every caller here passes a Claude model, so
+    // !supports_temperature() reproduces the old 4-id in_array() result exactly.
+    // Frozen list kept as fallback for a partial-upgrade window where the
+    // catalog method isn't loaded.
+    if (class_exists('MxChat_Model_Catalog') && method_exists('MxChat_Model_Catalog', 'supports_temperature')) {
+        return !MxChat_Model_Catalog::supports_temperature($model);
+    }
     $no_temp = array('claude-opus-4-7', 'claude-opus-4-8', 'claude-fable-5', 'claude-sonnet-5');
     return in_array($model, $no_temp, true);
+}
+
+/**
+ * plan-mxchat-20260715-7124f4: OpenAI completion-token key for this model,
+ * sourced from the core catalog (gpt-5* → max_completion_tokens; else
+ * max_tokens). strpos fallback for a partial-upgrade window where the catalog
+ * method isn't loaded.
+ *
+ * @param string $model OpenAI(-compatible) model id.
+ * @return string       'max_completion_tokens' | 'max_tokens'
+ */
+private function mxchat_openai_token_param_for($model) {
+    if (class_exists('MxChat_Model_Catalog') && method_exists('MxChat_Model_Catalog', 'openai_token_param')) {
+        return MxChat_Model_Catalog::openai_token_param($model);
+    }
+    return strpos((string) $model, 'gpt-5') === 0 ? 'max_completion_tokens' : 'max_tokens';
+}
+
+/**
+ * plan-mxchat-20260715-7124f4: whether a NON-default temperature may be sent to
+ * this OpenAI(-compatible) model. gpt-5* accept only the default (1) — sending
+ * any other value 400s. Sourced from the core catalog; strpos fallback for a
+ * partial-upgrade window.
+ *
+ * @param string $model OpenAI(-compatible) model id.
+ * @return bool
+ */
+private function mxchat_openai_supports_temperature_for($model) {
+    if (class_exists('MxChat_Model_Catalog') && method_exists('MxChat_Model_Catalog', 'supports_temperature')) {
+        return MxChat_Model_Catalog::supports_temperature($model);
+    }
+    return strpos((string) $model, 'gpt-5') !== 0;
+}
+
+/**
+ * plan-mxchat-20260714-dcb71c: per-surface reasoning_effort, sourced from the
+ * core model catalog so a model add propagates automatically. The fallback is
+ * the frozen pre-dcb71c inline ladder, used only if the catalog method is
+ * unavailable (a partial-upgrade window). Byte-identical to the old inline
+ * blocks by construction — proven by the dcb71c equivalence harness.
+ *
+ * @param string $model   Chat model id.
+ * @param string $context 'chat' | 'websearch'.
+ * @return string|null    Effort to send, or null to omit the param.
+ */
+private function mxchat_reasoning_effort_for($model, $context) {
+    if (class_exists('MxChat_Model_Catalog') && method_exists('MxChat_Model_Catalog', 'reasoning_effort_for')) {
+        return MxChat_Model_Catalog::reasoning_effort_for($model, $context);
+    }
+    return $this->mxchat_reasoning_effort_fallback($model, $context);
+}
+
+private function mxchat_reasoning_effort_fallback($model, $context) {
+    if (strpos($model, 'gpt-5') !== 0) {
+        return null;
+    }
+    if ($context === 'websearch') {
+        $no_reasoning_web = array('gpt-5.2', 'gpt-5.3-chat-latest', 'gpt-5.4-mini', 'gpt-5.4-nano');
+        if (in_array($model, $no_reasoning_web, true)) return null;
+        if ($model === 'gpt-5.1-2025-11-13') return 'low';
+        if ($model === 'gpt-5.5') return 'low';
+        if ($model === 'gpt-5.4') return 'low';
+        if (in_array($model, array('gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna'), true)) return 'low';
+        return null;
+    }
+    // 'chat'
+    $no_reasoning_models = array('gpt-5.2', 'gpt-5.1-chat-latest', 'gpt-5.3-chat-latest', 'gpt-5.4-mini', 'gpt-5.4-nano');
+    if (in_array($model, $no_reasoning_models, true)) return null;
+    if ($model === 'gpt-5.1-2025-11-13') return 'low';
+    if ($model === 'gpt-5.5') return 'none';
+    if ($model === 'gpt-5.4') return 'none';
+    if (in_array($model, array('gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna'), true)) return 'low';
+    return 'minimal';
 }
 
 /**
@@ -4099,9 +4316,16 @@ function mxchat_fetch_new_messages() {
     wp_die();
 }
 public function mxchat_live_agent_handover($message, $user_id, $session_id) {
-    // First check if live agents are available
+    // First check if live agents are available.
+    // Outside the SLACK availability schedule this behaves exactly like the
+    // manual toggle being off — same away message, same stay-in-AI-mode path
+    // (plans 8ccaa2 + 99d7a4: each channel owns its own schedule). The schedule
+    // normally stops the tool being offered at all; this is the backstop for
+    // any path that calls the handover directly.
     $live_agent_available = $this->options['live_agent_status'] ?? 'off';
-    if ($live_agent_available !== 'on') {
+    $within_hours = !class_exists('MxChat_Live_Agent_Schedule')
+        || MxChat_Live_Agent_Schedule::is_within_hours('slack');
+    if ($live_agent_available !== 'on' || !$within_hours) {
         $away_message = $this->options['live_agent_away_message'] ?? 'Sorry, live agents are currently unavailable. I can continue helping you as an AI assistant.';
         $this->fallbackResponse = [
             'text' => $away_message,
@@ -4399,9 +4623,14 @@ private function generate_channel_name($session_id) {
  * Creates a forum topic in the Telegram group and notifies agents
  */
 public function mxchat_telegram_live_agent_handover($message, $user_id, $session_id) {
-    // Check if Telegram agents are available
+    // Check if Telegram agents are available. Telegram has its OWN availability
+    // schedule, independent of Slack's (plan 99d7a4 — each Integrations tab
+    // owns its scheduler). Backstop only; the tool is normally withheld
+    // off-hours.
     $telegram_available = $this->options['telegram_status'] ?? 'off';
-    if ($telegram_available !== 'on') {
+    $within_hours = !class_exists('MxChat_Live_Agent_Schedule')
+        || MxChat_Live_Agent_Schedule::is_within_hours('telegram');
+    if ($telegram_available !== 'on' || !$within_hours) {
         $away_message = $this->options['telegram_away_message'] ?? 'Sorry, live agents are currently unavailable. I can continue helping you as an AI assistant.';
         $this->fallbackResponse = [
             'text' => $away_message,
@@ -5870,6 +6099,9 @@ private function find_relevant_content_wordpress($user_embedding, $bot_id = 'def
                     $valid_urls[] = $source_url;
                     $content .= "URL: " . $source_url . "\n\n";
                 }
+
+                // Video-backed source → queue the consent-safe embed (03ba33)
+                $this->maybe_queue_youtube_embed($source_url, $full_text);
             } else {
                 // Manual entry — no reference number, no citation
                 $content .= "## Information ##\n";
@@ -5926,6 +6158,66 @@ private function find_relevant_content_wordpress($user_embedding, $bot_id = 'def
     }
 
     return trim($content);
+}
+
+/**
+ * plan-mxchat-20260717-03ba33 — if a KB source used for context is a single
+ * YouTube video, queue ONE consent-safe embed for the response html channel.
+ * Called from BOTH retrieval builders (WordPress DB + Pinecone) inside their
+ * real-URL winner branch, in ranked order — so the first (best) video wins and
+ * later matches are ignored. Only KB/admin-ingested sources ever reach this
+ * point; a URL a visitor pastes in chat never does.
+ */
+private function maybe_queue_youtube_embed($source_url, $full_text) {
+    if (!empty($this->videoEmbedHtml)) {
+        return; // one video per response
+    }
+    $video_id = MxChat_Utils::parse_youtube_id($source_url);
+    if (empty($video_id)) {
+        return;
+    }
+    // Ingestion writes "YouTube Video: {title}" / "Channel: {name}" / "URL: …"
+    // header lines into the indexed text. NOTE: when citation links are
+    // disabled the winner loop collapses ALL whitespace to single spaces
+    // before this runs, so the title must be terminated by the next header
+    // label, not by end-of-line. Fall back to a generic label when absent
+    // (e.g. a YouTube watch page imported through the plain URL source).
+    $title = '';
+    if (preg_match('/YouTube Video:\s*(.+?)(?=\s+Channel:\s|\s+URL:\s|\r|\n|$)/i', (string) $full_text, $m)) {
+        $title = trim(mb_substr(trim($m[1]), 0, 140));
+        if (preg_match('#^https?://#i', $title)) {
+            $title = ''; // header carried the URL, not a real title
+        }
+    }
+    $this->videoEmbedHtml = $this->build_youtube_embed_html($video_id, $title, $source_url);
+}
+
+/**
+ * Consent-safe click-to-load YouTube facade. No Google iframe is created until
+ * the visitor taps play (chat-script.js swaps the facade for a
+ * youtube-nocookie.com iframe). The caption always carries a plain "Watch on
+ * YouTube" link, which is also the graceful degrade on strict-CSP sites where
+ * third-party frames are blocked.
+ */
+private function build_youtube_embed_html($video_id, $title, $watch_url) {
+    $video_id = preg_replace('/[^A-Za-z0-9_-]/', '', (string) $video_id);
+    if ($video_id === '') {
+        return '';
+    }
+    $thumb = 'https://i.ytimg.com/vi/' . $video_id . '/hqdefault.jpg';
+    $label = ($title !== '') ? $title : __('YouTube video', 'mxchat');
+
+    $html  = '<div class="mxchat-youtube-embed" data-video-id="' . esc_attr($video_id) . '">';
+    $html .= '<button type="button" class="mxchat-youtube-facade" aria-label="' . esc_attr(sprintf(__('Play video: %s', 'mxchat'), $label)) . '">';
+    $html .= '<img class="mxchat-youtube-thumb" src="' . esc_url($thumb) . '" alt="' . esc_attr($label) . '" loading="lazy" />';
+    $html .= '<span class="mxchat-youtube-play" aria-hidden="true"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="22" height="22" fill="currentColor" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg></span>';
+    $html .= '</button>';
+    $html .= '<div class="mxchat-youtube-caption">';
+    $html .= '<span class="mxchat-youtube-title">' . esc_html($label) . '</span>';
+    $html .= '<a class="mxchat-youtube-link" href="' . esc_url($watch_url) . '" target="_blank" rel="noopener noreferrer">' . esc_html__('Watch on YouTube', 'mxchat') . '</a>';
+    $html .= '</div>';
+    $html .= '</div>';
+    return $html;
 }
 
 /**
@@ -6281,6 +6573,9 @@ private function find_relevant_content_pinecone($user_embedding, $bot_id = 'defa
                     $valid_urls[] = $source_url;
                     $content .= "URL: " . $source_url . "\n\n";
                 }
+
+                // Video-backed source → queue the consent-safe embed (03ba33)
+                $this->maybe_queue_youtube_embed($source_url, $full_text);
             } else {
                 // Manual entry — no reference number, no citation. Count it as a USED
                 // source (plan-mxchat-20260622-c1fe6a): without this, manual/Direct-Content
@@ -6928,6 +7223,14 @@ private function is_openai_chat_model($model) {
  * @return array Configuration array
  */
 private function get_bot_vectorstore_config($bot_id = 'default') {
+    // Admin Testing tab bot → resolve the DEFAULT bot's backend (see
+    // get_bot_pinecone_config). This getter already passes the real default
+    // config into the filter, so it was not broken — normalized anyway so the
+    // Testing bot can never drift from the front-end default.
+    if ($bot_id === 'testing') {
+        $bot_id = 'default';
+    }
+
     $vectorstore_options = get_option('mxchat_openai_vectorstore_options', array());
 
     // Default global settings
@@ -8362,16 +8665,6 @@ private function mxchat_generate_response_openai_stream($selected_model, $api_ke
             return true;
         }
 
-        // Check if this is a GPT-5 model (supports reasoning_effort parameter)
-        $is_gpt5_model = (
-            strpos($selected_model, 'gpt-5') === 0 ||
-            $selected_model === 'gpt-5.2' ||
-            $selected_model === 'gpt-5.1-2025-11-13' ||
-            $selected_model === 'gpt-5' ||
-            $selected_model === 'gpt-5-mini' ||
-            $selected_model === 'gpt-5-nano'
-        );
-
         // Build request body with optimal settings for fast streaming
         $request_body = [
             'model' => $selected_model,
@@ -8380,20 +8673,11 @@ private function mxchat_generate_response_openai_stream($selected_model, $api_ke
             'stream' => true
         ];
 
-        // Add reasoning_effort only for GPT-5 models that support it
-        // These chat models don't support reasoning_effort parameter
-        $no_reasoning_models = array('gpt-5.2', 'gpt-5.1-chat-latest', 'gpt-5.3-chat-latest', 'gpt-5.4-mini', 'gpt-5.4-nano');
-        if ($is_gpt5_model && !in_array($selected_model, $no_reasoning_models, true)) {
-            // GPT-5.1 uses 'low' instead of 'minimal'
-            if ($selected_model === 'gpt-5.1-2025-11-13') {
-                $request_body['reasoning_effort'] = 'low';
-            } elseif ($selected_model === 'gpt-5.5') {
-                $request_body['reasoning_effort'] = 'none';
-            } elseif ($selected_model === 'gpt-5.4') {
-                $request_body['reasoning_effort'] = 'none';
-            } else {
-                $request_body['reasoning_effort'] = 'minimal';
-            }
+        // reasoning_effort — sourced from the core model catalog (plan-dcb71c);
+        // frozen inline ladder lives in mxchat_reasoning_effort_fallback().
+        $effort = $this->mxchat_reasoning_effort_for($selected_model, 'chat');
+        if ($effort !== null) {
+            $request_body['reasoning_effort'] = $effort;
         }
 
         $body = json_encode($request_body);
@@ -8975,17 +9259,11 @@ private function mxchat_generate_response_openai_web_search($selected_model, $ap
             ];
         }
 
-        // Add reasoning effort for supported models
-        $is_gpt5_model = strpos($selected_model, 'gpt-5') === 0;
-        $no_reasoning_web = array('gpt-5.2', 'gpt-5.3-chat-latest', 'gpt-5.4-mini', 'gpt-5.4-nano');
-        if ($is_gpt5_model && !in_array($selected_model, $no_reasoning_web, true)) {
-            if ($selected_model === 'gpt-5.1-2025-11-13') {
-                $request_body['reasoning'] = ['effort' => 'low'];
-            } elseif ($selected_model === 'gpt-5.5') {
-                $request_body['reasoning'] = ['effort' => 'low'];
-            } elseif ($selected_model === 'gpt-5.4') {
-                $request_body['reasoning'] = ['effort' => 'low'];
-            }
+        // reasoning.effort — sourced from the core model catalog (plan-dcb71c),
+        // 'websearch' surface; frozen inline ladder in mxchat_reasoning_effort_fallback().
+        $effort = $this->mxchat_reasoning_effort_for($selected_model, 'websearch');
+        if ($effort !== null) {
+            $request_body['reasoning'] = ['effort' => $effort];
         }
 
         //error_log("MXCHAT WEB SEARCH: Request body: " . json_encode($request_body));
@@ -10338,16 +10616,6 @@ private function mxchat_generate_response_openai($selected_model, $api_key, $con
             }
         }
 
-        // Check if this is a GPT-5 model (supports reasoning_effort parameter)
-        $is_gpt5_model = (
-            strpos($selected_model, 'gpt-5') === 0 ||
-            $selected_model === 'gpt-5.2' ||
-            $selected_model === 'gpt-5.1-2025-11-13' ||
-            $selected_model === 'gpt-5' ||
-            $selected_model === 'gpt-5-mini' ||
-            $selected_model === 'gpt-5-nano'
-        );
-
         // Build request body with optimal settings for fast responses
         $request_body = [
             'model' => $selected_model,
@@ -10356,20 +10624,11 @@ private function mxchat_generate_response_openai($selected_model, $api_key, $con
             'stream' => false
         ];
 
-        // Add reasoning_effort only for GPT-5 models that support it
-        // These chat models don't support reasoning_effort parameter
-        $no_reasoning_models = array('gpt-5.2', 'gpt-5.1-chat-latest', 'gpt-5.3-chat-latest', 'gpt-5.4-mini', 'gpt-5.4-nano');
-        if ($is_gpt5_model && !in_array($selected_model, $no_reasoning_models, true)) {
-            // GPT-5.1 uses 'low' instead of 'minimal'
-            if ($selected_model === 'gpt-5.1-2025-11-13') {
-                $request_body['reasoning_effort'] = 'low';
-            } elseif ($selected_model === 'gpt-5.5') {
-                $request_body['reasoning_effort'] = 'none';
-            } elseif ($selected_model === 'gpt-5.4') {
-                $request_body['reasoning_effort'] = 'none';
-            } else {
-                $request_body['reasoning_effort'] = 'minimal';
-            }
+        // reasoning_effort — sourced from the core model catalog (plan-dcb71c);
+        // frozen inline ladder lives in mxchat_reasoning_effort_fallback().
+        $effort = $this->mxchat_reasoning_effort_for($selected_model, 'chat');
+        if ($effort !== null) {
+            $request_body['reasoning_effort'] = $effort;
         }
 
         $body = json_encode($request_body);
@@ -12182,7 +12441,10 @@ public function mxchat_start_fresh_session() {
     
     // If no new session ID provided, generate one
     if (empty($new_session_id)) {
-        $new_session_id = 'mxchat_chat_' . substr(md5(uniqid()), 0, 9);
+        // Cryptographically strong session id (plan-0c17b5). Prefix preserved
+        // exactly (other code pattern-matches on 'mxchat_chat_'). random_bytes
+        // is guaranteed on all supported PHP (7+).
+        $new_session_id = 'mxchat_chat_' . bin2hex(random_bytes(16));
     }
     
     // Clear ALL data associated with the old session
@@ -12425,14 +12687,34 @@ public function mxchat_track_originating_page() {
  * @param array $valid_urls Array of URLs from the knowledge base
  * @return string Cleaned response with invalid URLs removed/flagged
  */
-private function validate_and_clean_urls($response_text, $valid_urls) {
-    // DEBUG: Log what we're working with
-    //error_log("=== MxChat URL Validation Debug ===");
-    //error_log("Valid URLs count: " . count($valid_urls));
-    //error_log("Valid URLs: " . print_r($valid_urls, true));
-    //error_log("Response text length: " . strlen($response_text));
-    //error_log("Response text preview: " . substr($response_text, 0, 500));
-    
+private function validate_and_clean_urls($response_text, $valid_urls, $session_id = null, $bot_id = null) {
+    /**
+     * Filter the list of URLs treated as valid (allowlisted) BEFORE the
+     * response URL sanitizer strips any link not in the list. Lets a site
+     * owner / developer whitelist links their custom function-calling tools
+     * return (e.g. session or speaker pages), which are otherwise absent from
+     * the RAG/system-prompt-derived list and get stripped to plain text.
+     *
+     * Purely additive: with no hook registered, apply_filters returns
+     * $valid_urls untouched, so there is zero behavior change for anyone who
+     * does not use the filter. Applied before the empty-check so a hooked
+     * allowlist can participate.  (plan-mxchat-20260710-13a471)
+     *
+     * @param array       $valid_urls URLs already known-valid (RAG + system prompt).
+     * @param string|null $session_id Current chat session id, if available.
+     * @param string|null $bot_id     Current bot id, if available.
+     */
+    $valid_urls = apply_filters('mxchat_valid_urls', $valid_urls, $session_id, $bot_id);
+
+    // A bad mu-plugin returning a non-array (or non-string entries) must never
+    // fatal the response path — coerce defensively before any use.
+    if (!is_array($valid_urls)) {
+        $valid_urls = array();
+    }
+    $valid_urls = array_values(array_filter($valid_urls, static function ($u) {
+        return is_string($u) && $u !== '';
+    }));
+
     // If no valid URLs provided or empty response, return as-is
     if (empty($valid_urls) || empty($response_text)) {
         //error_log("Validation skipped - empty valid_urls or response");

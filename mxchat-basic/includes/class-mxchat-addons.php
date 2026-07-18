@@ -19,6 +19,45 @@ class MxChat_Addons {
     public function __construct() {
         $this->addons_config = array(
 
+            'mxchat-ai-search' => array(
+                'title' => __('MxChat AI Search', 'mxchat'),
+                'sidebar_title' => __('AI Search', 'mxchat'),
+                'description' => __('Bring AI Overviews to your own site search. Visitors ask a question in your search bar and get a real answer drawn from your knowledge base, with sources — above your theme\'s normal results, as a full AI results page, or as a search box you can drop on any page.', 'mxchat'),
+                'key_benefits' => array(
+                    __('AI answers above your theme\'s search results', 'mxchat'),
+                    __('Embeddable search box via shortcode or block', 'mxchat'),
+                    __('Grounded in your knowledge base, with sources', 'mxchat')
+                ),
+                'license' => 'MxChat PRO',
+                'accent' => '#0ea5e9',
+                'url' => 'https://mxchat.ai/add-ons/mxchat-search/',
+                'download_url' => 'https://mxchat.ai/add-ons/mxchat-search/',
+                'plugin_file' => 'mxchat-search/mxchat-search.php',
+                'config_page' => 'mxchat-search',
+                'hero_features' => array(
+                    array(
+                        'icon' => '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>',
+                        'title' => __('AI Overview', 'mxchat'),
+                        'desc' => __('Answers above your normal results', 'mxchat'),
+                    ),
+                    array(
+                        'icon' => '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="7" y1="14" x2="14" y2="14"/></svg>',
+                        'title' => __('Drop It Anywhere', 'mxchat'),
+                        'desc' => __('Shortcode or block on any page', 'mxchat'),
+                    ),
+                    array(
+                        'icon' => '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>',
+                        'title' => __('Your Own Content', 'mxchat'),
+                        'desc' => __('Grounded answers that cite sources', 'mxchat'),
+                    ),
+                    array(
+                        'icon' => '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>',
+                        'title' => __('Cost Controls', 'mxchat'),
+                        'desc' => __('Caching, rate limits, cheaper model', 'mxchat'),
+                    ),
+                ),
+            ),
+
             'mxchat-mcp' => array(
                 'title' => __('MxChat MCP Server', 'mxchat'),
                 'sidebar_title' => __('MCP Server', 'mxchat'),

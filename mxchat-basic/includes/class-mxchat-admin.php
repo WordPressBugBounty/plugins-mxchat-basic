@@ -76,6 +76,11 @@ class MxChat_Admin {
         add_action('wp_ajax_dismiss_live_agent_notice', array($this, 'dismiss_live_agent_notice'));
         add_action('wp_ajax_dismiss_theme_migration_notice', array($this, 'dismiss_theme_migration_notice'));
         add_action('mxchat_cleanup_old_transcripts', array($this, 'cleanup_old_transcripts'));
+        // Self-heal: the cleanup event is otherwise only scheduled at activation or
+        // when the retention setting CHANGES — if it is ever lost (deactivate cycle,
+        // cron-option wipe, DB restore) nothing re-registers it and retention goes
+        // silently inert while the UI still says it is on (plan-bc08a6).
+        add_action('admin_init', array($this, 'ensure_transcript_cleanup_scheduled'));
 
          add_action('admin_init', array($this, 'register_pinecone_settings'));
          add_action('admin_init', array($this, 'register_openai_vectorstore_settings'));
@@ -112,7 +117,70 @@ class MxChat_Admin {
         // 3.2.3: Embedding model switch protection
         add_action('wp_ajax_mxchat_check_embedding_switch', array($this, 'mxchat_check_embedding_switch_ajax'));
         add_action('wp_ajax_mxchat_dismiss_embedding_mismatch', array($this, 'mxchat_dismiss_embedding_mismatch_ajax'));
+        add_action('wp_ajax_mxchat_dismiss_telegram_secret_notice', array($this, 'mxchat_dismiss_telegram_secret_notice_ajax'));
         add_action('admin_notices', array($this, 'mxchat_embedding_mismatch_notice'));
+        add_action('admin_notices', array($this, 'mxchat_telegram_secret_notice'));
+    }
+
+    /**
+     * Nudge admins to configure a Telegram webhook secret (plan-0c17b5).
+     *
+     * Shown only when a Telegram bot token is configured (integration active)
+     * AND no webhook secret is set. Without a secret the webhook falls back to a
+     * Telegram source-IP check — safer than the old fail-open, but a real secret
+     * is the recommended protection. Dismissible; does not block anything.
+     */
+    public function mxchat_telegram_secret_notice() {
+        if (!current_user_can('manage_options')) {
+            return;
+        }
+        $options = get_option('mxchat_options', array());
+        $has_token   = !empty($options['telegram_bot_token']);
+        $has_secret  = !empty($options['telegram_webhook_secret']);
+        if (!$has_token || $has_secret) {
+            return;
+        }
+        if (get_option('mxchat_dismissed_telegram_secret_notice', '') === '1') {
+            return;
+        }
+        $settings_url = admin_url('admin.php?page=mxchat-max');
+        ?>
+        <div class="notice notice-warning is-dismissible mxchat-telegram-secret-notice">
+            <p><strong><?php esc_html_e('MxChat: Telegram webhook is running without a secret token', 'mxchat'); ?></strong></p>
+            <p>
+                <?php esc_html_e('Your Telegram integration is active but no webhook secret is configured. Requests are currently verified only by origin IP. For full protection, set a webhook secret token in the Telegram settings and re-register your webhook.', 'mxchat'); ?>
+            </p>
+            <p>
+                <a href="<?php echo esc_url($settings_url); ?>" class="button button-primary"><?php esc_html_e('Open Telegram settings', 'mxchat'); ?></a>
+            </p>
+        </div>
+        <script>
+        (function(){
+            var n = document.querySelector('.mxchat-telegram-secret-notice');
+            if (!n) return;
+            n.addEventListener('click', function(e){
+                if (e.target && e.target.classList.contains('notice-dismiss')) {
+                    var d = new FormData();
+                    d.append('action', 'mxchat_dismiss_telegram_secret_notice');
+                    d.append('nonce', '<?php echo esc_js(wp_create_nonce('mxchat_dismiss_telegram_secret')); ?>');
+                    fetch('<?php echo esc_url(admin_url('admin-ajax.php')); ?>', { method: 'POST', body: d, credentials: 'same-origin' });
+                }
+            });
+        })();
+        </script>
+        <?php
+    }
+
+    /**
+     * AJAX: persist dismissal of the Telegram-secret admin notice (plan-0c17b5).
+     */
+    public function mxchat_dismiss_telegram_secret_notice_ajax() {
+        if (!current_user_can('manage_options')
+            || !check_ajax_referer('mxchat_dismiss_telegram_secret', 'nonce', false)) {
+            wp_send_json_error();
+        }
+        update_option('mxchat_dismissed_telegram_secret_notice', '1', 'no');
+        wp_send_json_success();
     }
 
     /**
@@ -1709,6 +1777,33 @@ public function schedule_transcript_cleanup($interval) {
         // Schedule to run daily at 3 AM
         $next_run = strtotime('tomorrow 3:00 AM');
         wp_schedule_event($next_run, 'daily', 'mxchat_cleanup_old_transcripts');
+    }
+}
+
+/**
+ * Self-heal guard: keep the cleanup cron in sync with the retention setting.
+ *
+ * Runs on admin_init. Cost when nothing is wrong: one get_option() (cached) and
+ * one wp_next_scheduled() (reads the cached cron option) — no writes. It only
+ * schedules when retention is active but the event is missing, and only
+ * unschedules when retention is off but the event survived. Both directions
+ * reuse schedule_transcript_cleanup() so there is exactly one scheduling path.
+ * Legacy dropdown values (1week/2weeks/1month) count as active, matching the
+ * helper's own semantics. Deliberately not gated on DISABLE_WP_CRON: scheduling
+ * writes the cron option regardless of how cron is executed, so a server-side
+ * cron runner still picks the event up.
+ */
+public function ensure_transcript_cleanup_scheduled() {
+    $options  = get_option('mxchat_transcripts_options', array());
+    $interval = isset($options['mxchat_auto_delete_transcripts']) ? $options['mxchat_auto_delete_transcripts'] : 'never';
+    $days     = isset($options['mxchat_retention_days']) ? (int) $options['mxchat_retention_days'] : 0;
+    $active   = ($interval !== 'never') || ($days > 0);
+    $scheduled = (bool) wp_next_scheduled('mxchat_cleanup_old_transcripts');
+
+    if ($active && !$scheduled) {
+        $this->schedule_transcript_cleanup('active');
+    } elseif (!$active && $scheduled) {
+        $this->schedule_transcript_cleanup('never');
     }
 }
 
@@ -6592,6 +6687,18 @@ public function mxchat_page_init() {
         'mxchat_live_agent_section'
     );
 
+    // Slack availability schedule (plans 8ccaa2 + 99d7a4). Each handoff channel
+    // owns an independent schedule rendered under its own Integrations tab; this
+    // one governs Slack only. Same callback as Telegram's, parameterized.
+    add_settings_field(
+        'live_agent_schedule_slack',
+        __('Availability Schedule', 'mxchat'),
+        array($this, 'mxchat_live_agent_schedule_callback'),
+        'mxchat-embed',
+        'mxchat_live_agent_section',
+        array('channel' => 'slack')
+    );
+
     add_settings_field(
         'live_agent_notification_message',
         __('Notification Message', 'mxchat'),
@@ -6655,6 +6762,17 @@ public function mxchat_page_init() {
         array($this, 'mxchat_telegram_status_callback'),
         'mxchat-embed',
         'mxchat_telegram_section'
+    );
+
+    // Telegram availability schedule (plan 99d7a4) — independent of Slack's,
+    // rendered right under the Telegram status toggle it extends.
+    add_settings_field(
+        'live_agent_schedule_telegram',
+        __('Availability Schedule', 'mxchat'),
+        array($this, 'mxchat_live_agent_schedule_callback'),
+        'mxchat-embed',
+        'mxchat_telegram_section',
+        array('channel' => 'telegram')
     );
 
     add_settings_field(
@@ -8236,6 +8354,24 @@ public function mxchat_print_button_toggle_callback() {
     echo '</label>';
 }
 
+/**
+ * Editor Assistant toggle (plan-8cb0cb). Standalone option, NOT in mxchat_options
+ * (bypasses the mxchat_sanitize strip-trap + autosave normalization). Default OFF.
+ * Saved by the mxchat_editor_assistant_enabled case in class-ajax-handler.php.
+ */
+public function mxchat_editor_assistant_toggle_callback() {
+    $enabled = get_option('mxchat_editor_assistant_enabled', 'off');
+    $checked = ($enabled === 'on') ? 'checked' : '';
+
+    echo '<label class="toggle-switch">';
+    echo sprintf(
+        '<input type="checkbox" id="mxchat_editor_assistant_enabled" name="mxchat_editor_assistant_enabled" value="on" %s />',
+        esc_attr($checked)
+    );
+    echo '<span class="slider"></span>';
+    echo '</label>';
+}
+
 public function mxchat_reset_chat_toggle_callback() {
     // Load from mxchat_options array. plan ac2e81 — default OFF (new, opt-in).
     $options = get_option('mxchat_options', []);
@@ -8617,6 +8753,91 @@ public function mxchat_live_agent_status_callback() {
     echo '<label for="live_agent_status" class="mxchat-status-label">';
     echo '<span class="status-text">' . ($status === 'on' ? esc_html__('Online', 'mxchat') : esc_html__('Offline', 'mxchat')) . '</span>';
     echo '</label>';
+}
+
+/**
+ * Availability-schedule editor (plans 8ccaa2 + 99d7a4).
+ *
+ * ONE callback, parameterized by channel ('slack' | 'telegram' via the
+ * add_settings_field $args) — the markup and CSS are shared, only the bound
+ * option and the helper text differ. Each channel's editor renders under its
+ * own Integrations tab and governs ONLY that channel's handoff. While the
+ * master toggle is off the day grid is inert and handoff availability stays
+ * governed solely by that channel's manual status toggle.
+ *
+ * The day inputs carry NO name attribute and are marked .mxchat-la-field so the
+ * generic autosave skips them; the editor JS folds them into the channel's
+ * hidden live_agent_schedule_<channel> input and fires one change, reusing the
+ * existing autosave transport rather than growing a second one. All hooks the
+ * JS needs are CLASSES scoped inside .mxchat-la-schedule, never ids — the
+ * markup exists twice on the page.
+ */
+public function mxchat_live_agent_schedule_callback($args = array()) {
+    if (!class_exists('MxChat_Live_Agent_Schedule')) {
+        return;
+    }
+    $channel = (isset($args['channel']) && $args['channel'] === 'telegram') ? 'telegram' : 'slack';
+    $field   = 'live_agent_schedule_' . $channel;
+    $sched   = MxChat_Live_Agent_Schedule::get($channel);
+    $labels  = MxChat_Live_Agent_Schedule::day_labels();
+    $tz      = MxChat_Live_Agent_Schedule::timezone_label();
+    $enabled = !empty($sched['enabled']);
+    $channel_label = ($channel === 'telegram') ? __('Telegram', 'mxchat') : __('Slack', 'mxchat');
+    ?>
+    <div class="mxchat-la-schedule<?php echo $enabled ? ' is-active' : ''; ?>"
+         id="mxchat-la-schedule-<?php echo esc_attr($channel); ?>"
+         data-channel="<?php echo esc_attr($channel); ?>">
+        <label class="toggle-switch">
+            <input type="checkbox" id="<?php echo esc_attr($field); ?>_enabled"
+                   class="mxchat-la-field mxchat-la-enabled" <?php checked($enabled); ?> />
+            <span class="slider"></span>
+        </label>
+        <label for="<?php echo esc_attr($field); ?>_enabled" class="mxchat-status-label">
+            <span class="status-text mxchat-la-status-text">
+                <?php echo $enabled
+                    ? esc_html__('Scheduled hours', 'mxchat')
+                    : esc_html__('Always available', 'mxchat'); ?>
+            </span>
+        </label>
+
+        <div class="mxchat-la-days" aria-hidden="<?php echo $enabled ? 'false' : 'true'; ?>">
+            <?php foreach ($labels as $n => $label) :
+                $day = $sched['days'][$n];
+                $on  = !empty($day['enabled']);
+                ?>
+                <div class="mxchat-la-day<?php echo $on ? ' is-on' : ''; ?>" data-day="<?php echo esc_attr($n); ?>">
+                    <label class="mxchat-la-day-label">
+                        <input type="checkbox" class="mxchat-la-field mxchat-la-day-enabled"
+                               data-day="<?php echo esc_attr($n); ?>" <?php checked($on); ?> />
+                        <span class="mxchat-la-day-name"><?php echo esc_html($label); ?></span>
+                    </label>
+                    <div class="mxchat-la-times">
+                        <input type="time" class="mxchat-la-field mxchat-la-start"
+                               data-day="<?php echo esc_attr($n); ?>"
+                               value="<?php echo esc_attr($day['start']); ?>"
+                               aria-label="<?php echo esc_attr(sprintf(__('%s start time', 'mxchat'), $label)); ?>" />
+                        <span class="mxchat-la-dash">&ndash;</span>
+                        <input type="time" class="mxchat-la-field mxchat-la-end"
+                               data-day="<?php echo esc_attr($n); ?>"
+                               value="<?php echo esc_attr($day['end']); ?>"
+                               aria-label="<?php echo esc_attr(sprintf(__('%s end time', 'mxchat'), $label)); ?>" />
+                    </div>
+                </div>
+            <?php endforeach; ?>
+        </div>
+
+        <input type="hidden" name="<?php echo esc_attr($field); ?>" id="<?php echo esc_attr($field); ?>"
+               class="mxchat-la-hidden" value="<?php echo esc_attr(wp_json_encode($sched)); ?>" />
+    </div>
+    <p class="description">
+        <?php printf(
+            /* translators: 1: the handoff channel, e.g. Slack or Telegram; 2: the site's timezone, e.g. America/New_York */
+            esc_html__('When on, visitors are only offered a %1$s human handoff during these hours — outside them the chatbot keeps answering and never offers to fetch an agent. Applies to %1$s only. Times use the site timezone (%2$s). Set a day\'s end time earlier than its start for an overnight shift; identical start and end means all day.', 'mxchat'),
+            '<strong>' . esc_html($channel_label) . '</strong>',
+            '<strong>' . esc_html($tz) . '</strong>'
+        ); ?>
+    </p>
+    <?php
 }
 
 public function mxchat_live_agent_away_message_callback() {
@@ -9126,6 +9347,10 @@ private function localize_admin_scripts($current_page) {
         'fetch_openrouter_models_nonce' => wp_create_nonce('mxchat_fetch_openrouter_models'),
         'is_activated' => $this->is_activated ? '1' : '0',
         'status_refresh_interval' => 5000,
+        'discard_changes_confirm' => __('Discard your unsaved changes?', 'mxchat'),
+        // Live-agent schedule status text (plan 8ccaa2).
+        'i18n_scheduled_hours' => __('Scheduled hours', 'mxchat'),
+        'i18n_always_available' => __('Always available', 'mxchat'),
         'prompts_setting_nonce' => wp_create_nonce('mxchat_prompts_setting_nonce'),
         'ajaxurl' => admin_url('admin-ajax.php')
     );

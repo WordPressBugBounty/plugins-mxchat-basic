@@ -5,7 +5,7 @@ Tags: ai chatbot, chatgpt, woocommerce, customer support, content generation
 Requires at least: 5.0
 Tested up to: 7.0.1
 Requires PHP: 7.2
-Stable tag: 3.2.13
+Stable tag: 3.2.14
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -13,14 +13,14 @@ MxChat is the best free AI chatbot and content generation plugin for WordPress i
 
 == Description ==
 
-**MxChat is the most powerful free AI chatbot and content generation plugin for WordPress** — connecting your website to ChatGPT, Claude, Gemini, Grok, DeepSeek, and 100+ AI models through a single, easy-to-use interface. Train your AI chatbot on your website content, WooCommerce products, PDFs, and more using advanced RAG (Retrieval-Augmented Generation) technology. Now with a built-in AI Content Generator to create full blog posts and landing pages complete with images, SEO metadata, and inline AI editing.
+**MxChat is the most powerful free AI chatbot and content generation plugin for WordPress** — connecting your website to ChatGPT, Claude, Gemini, Grok, DeepSeek, and 100+ AI models through a single, easy-to-use interface. Train your AI chatbot on your website content, WooCommerce products, PDFs, YouTube videos, and more using advanced RAG (Retrieval-Augmented Generation) technology. Now with a built-in AI Content Generator to create full blog posts and landing pages complete with images, SEO metadata, and inline AI editing.
 
 [Documentation](https://mxchat.ai/documentation/) | [Demo Videos](https://www.youtube.com/@MxChat/videos)
 
 ## Why Choose MxChat as Your WordPress AI Chatbot?
 
 ✅ **6 Major AI Providers in One Plugin**: OpenRouter, OpenAI GPT, Claude, Gemini, xAI Grok, and DeepSeek - switch between 100+ models instantly
-✅ **Train on Your Website Data**: Advanced RAG technology learns from sitemaps, PDFs, URLs, or manual input for ultra-relevant responses
+✅ **Train on Your Website Data**: Advanced RAG technology learns from sitemaps, PDFs, URLs, YouTube videos, or manual input for ultra-relevant responses
 ✅ **Live Agent Handoff via Slack**: Seamlessly escalate from AI to human support when customers need personal assistance
 ✅ **Real-Time Debug Panel**: See exactly what your chatbot retrieves and triggers with our admin testing interface
 ✅ **Boost Sales with WooCommerce**: Product cards, cart management, and AI-powered shopping assistance
@@ -329,6 +329,19 @@ Yes. MxChat is available for free on the WordPress plugin repository with full A
 
 == Changelog ==
 
+= 3.2.14 - July 18, 2026 =
+* New: Editor Assistant — optional AI writing actions right inside the WordPress block editor. Select a paragraph, heading, list, or quote block and rewrite it (concise, expanded, formal, or casual), summarize it, translate it to another language, continue writing, or fix grammar and spelling, then Accept or Discard. It is off by default and uses the AI model you already configured.
+* New: You can now add YouTube videos to your knowledge base. A new YouTube option on the Import screen takes a video link and, per video, either auto-fetches its title, channel, and captions or lets you write your own description. When a visitor's question matches a video, the answer includes it as a playable embed right inside the chat that loads no YouTube player or Google cookies until the visitor taps play.
+* New: Live agent handoff can now follow an availability schedule, so visitors are only offered a human during the days and hours your team is actually reachable, and the chatbot simply keeps answering outside them. Slack and Telegram each get their own independent schedule on their own settings tab, so a channel staffed at different hours keeps its own calendar. It is off by default and uses your site timezone.
+* New: Added the latest OpenAI GPT-5.6 models — Sol, Terra, and Luna — for both your chatbot and content generation.
+* New: MxChat AI Search now appears on the Pro and Extensions page alongside the other add-ons, so you can discover it from inside your dashboard.
+* New: Developers can now add their own trusted links to the chatbot's allowed-links list with the new mxchat_valid_urls filter, so links returned by custom function-calling tools stay clickable in replies.
+* Fixed: Editing a Knowledge Base entry no longer throws away your work. Clicking outside the edit box, or selecting text and releasing the mouse just past its edge, used to close it and discard everything you had typed. The box now closes only when you ask it to — the close or cancel button, the Escape key, or a successful save — and confirms first if you have unsaved changes. The same fix applies to the Add Tool and Edit Tool dialog on the Actions screen.
+* Fixed: Product and image search now correctly refine your search terms when a GPT-5 model is selected. Previously the refinement step silently stopped working and fell back to the raw text, weakening results.
+* Fixed: The Telegram live-agent webhook is no longer accepted without verification when a secret token has not been set; requests are now validated by origin and a reminder is shown to configure a secret.
+* Fixed: The Testing page's chatbot replica now uses the exact same knowledge base as your live chatbot. On sites running Pinecone with the Multi-Bot add-on active, the testing chat was quietly searching the WordPress database instead.
+* Fixed: Automatic transcript deletion now repairs its own schedule if the scheduled cleanup task is ever lost, so old transcripts no longer stop being deleted while your settings still say retention is on. The Transcripts settings also now show when the next cleanup will run.
+
 = 3.2.13 - July 10, 2026 =
 * New: Claude Sonnet 5 is now selectable as both a chat model and a content generation model.
 * New: The Knowledge Base Custom Post Meta section can scan your content and suggest custom meta keys as clickable options, so you can add non-ACF meta to the embedding whitelist without knowing the exact key names.
@@ -540,8 +553,8 @@ Older releases are archived in the plugin's full version history on WordPress.or
 
 == Upgrade Notice ==
 
-= 3.2.13 =
-Adds Claude Sonnet 5 and a one-click scanner for adding your custom post meta keys to the Knowledge Base, and fixes Knowledge Base import 403 errors on firewall-protected hosts by sending an honest MXChatBot user agent. Also fixes the pre-chat greeting bubble's close button on Multi-Bot and custom-bot-ID chatbots; no settings or data are affected.
+= 3.2.14 =
+Adds the Editor Assistant, YouTube videos in the knowledge base with consent-safe in-chat embeds, independent Slack and Telegram live agent availability schedules, and the latest GPT-5.6 models. Also fixes a Knowledge Base edit data-loss bug, GPT-5 product and image search, and self-healing automatic transcript deletion — existing sites are unaffected until you turn the new features on.
 
 == License & Warranty ==
 

@@ -267,6 +267,12 @@ div.mxchat-hero h1.mxchat-main-title {
     text-align: center;
 }
 
+/* YouTube import: multi-line radio/description stack reads left-aligned,
+   unlike the single-row URL forms the centered default was made for. */
+#mxchat-youtube-input-area {
+    text-align: left;
+}
+
 /* PDF Upload Area */
 #mxchat-pdf-upload-area input[type="file"] {
     margin-bottom: 12px;

@@ -55,7 +55,7 @@ $('.mxchat-import-box').on('click', function() {
     $box.addClass('active');
 
     // Hide all input areas
-    $('#mxchat-url-input-area, #mxchat-content-input-area, #mxchat-pdf-upload-area').hide();
+    $('#mxchat-url-input-area, #mxchat-content-input-area, #mxchat-pdf-upload-area, #mxchat-youtube-input-area').hide();
 
     // Hide sitemap-specific sections (but NOT for sitemap option - let detection logic handle it)
     if (option !== 'sitemap') {
@@ -112,8 +112,32 @@ $('.mxchat-import-box').on('click', function() {
             // Add or update bot_id hidden field for PDF upload form
             updateBotIdInForm('#mxchat-pdf-upload-form');
             break;
+
+        case 'youtube':
+            // Show YouTube import area
+            $('#mxchat-youtube-input-area').show();
+
+            // Add or update bot_id hidden field for YouTube form
+            updateBotIdInForm('#mxchat-youtube-form');
+            break;
     }
 });
+
+// YouTube import: toggle the manual-description box with the mode radios, and
+// only require the textarea when "Write my own" is selected.
+$(document).on('change', 'input[name="youtube_description_mode"]', function() {
+    const manual = $('input[name="youtube_description_mode"]:checked').val() === 'manual';
+    $('#mxchat-youtube-description-field').toggle(manual);
+    $('#mxchat-youtube-description').prop('required', manual);
+});
+
+// If the server bounced back with prefill state (auto-import found no
+// transcript), reopen the YouTube form in manual mode ready to augment.
+if ($('#mxchat-youtube-form').data('yt-prefill')) {
+    $('.mxchat-import-box[data-option="youtube"]').trigger('click');
+    $('input[name="youtube_description_mode"]').trigger('change');
+    $('#mxchat-youtube-description').trigger('focus');
+}
 
 // Helper function to add/update bot_id hidden field in forms
 function updateBotIdInForm(formSelector) {

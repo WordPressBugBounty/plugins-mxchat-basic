@@ -322,6 +322,11 @@ function mxchat_render_settings_page($admin_instance) {
                         mxchat_render_field_wrapper('satisfaction_rating', __('Satisfaction Rating Prompt', 'mxchat'), function() use ($admin_instance) {
                             $admin_instance->mxchat_satisfaction_rating_toggle_callback();
                         }, __('Show a 👍 / 👎 prompt after a conversation has had a couple of bot replies and the visitor has been idle for a moment. Disable to hide the prompt site-wide.', 'mxchat'));
+
+                        // Editor Assistant — free, off-by-default block-editor AI actions (plan-8cb0cb).
+                        mxchat_render_field_wrapper('mxchat_editor_assistant_enabled', __('Editor Assistant', 'mxchat'), function() use ($admin_instance) {
+                            $admin_instance->mxchat_editor_assistant_toggle_callback();
+                        }, __('Add magic-wand AI writing actions (rewrite, summarize, translate, continue, fix grammar) to the WordPress block editor. Opens a sidebar in the post editor. Uses the AI model configured above. Off by default.', 'mxchat'));
                         ?>
                     </div>
                 </div>

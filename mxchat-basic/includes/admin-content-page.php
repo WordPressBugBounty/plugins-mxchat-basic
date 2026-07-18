@@ -516,6 +516,9 @@ function mxchat_render_content_page($admin_instance) {
                                     $content_model = $options['content_model'] ?? ($options['model'] ?? 'gpt-5.1-chat-latest');
                                     $models = array(
                                         'OpenAI' => array(
+                                            'gpt-5.6-sol'          => 'GPT-5.6 Sol',
+                                            'gpt-5.6-terra'        => 'GPT-5.6 Terra',
+                                            'gpt-5.6-luna'         => 'GPT-5.6 Luna',
                                             'gpt-5.5'              => 'GPT-5.5',
                                             'gpt-5.4'              => 'GPT-5.4',
                                             'gpt-5.2'              => 'GPT-5.2',

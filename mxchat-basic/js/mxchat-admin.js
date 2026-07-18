@@ -11,6 +11,63 @@ function debounce(func, wait) {
     };
 }
 
+// ─── Modal close safety ──────────────────────────────────────────────────
+// A click event fires on the common ancestor of its mousedown and mouseup, so
+// releasing a text-selection drag past a dialog's edge dispatches the click on
+// the overlay. Modals holding editable fields therefore never close on the
+// overlay and confirm before discarding; read-only ones require the whole
+// gesture to land on the overlay.
+
+// Serializes a modal's visible fields so edits can be detected on close.
+function mxchatModalSnapshot(modal) {
+    const parts = [];
+    modal.querySelectorAll('input, textarea, select').forEach((field) => {
+        if (field.type === 'hidden') return;
+        parts.push(field.type === 'checkbox' || field.type === 'radio' ? (field.checked ? '1' : '0') : field.value);
+    });
+    return JSON.stringify(parts);
+}
+
+// Wraps a modal's closeModal so an explicit close confirms when fields changed.
+function mxchatGuardedClose(modal, closeModal) {
+    const snapshot = mxchatModalSnapshot(modal);
+    const message = (typeof mxchatAdmin !== 'undefined' && mxchatAdmin.discard_changes_confirm)
+        ? mxchatAdmin.discard_changes_confirm
+        : 'Discard your unsaved changes?';
+    return (e) => {
+        if (mxchatModalSnapshot(modal) !== snapshot && !window.confirm(message)) return;
+        closeModal(e);
+    };
+}
+
+// Esc-to-close for a modal. Binds one named keydown handler and returns the detach
+// function the modal's own close path must call. `{ once: true }` cannot be used
+// here: it removes the listener on the first keydown of ANY key, so typing a single
+// character killed Esc for the rest of the modal's life, and every open that saw no
+// keypress left another listener stacked on document.
+function mxchatBindEscClose(modal, onEscape) {
+    function onKeydown(e) {
+        if (e.key === 'Escape' && modal.classList.contains('active')) {
+            onEscape(e);
+        }
+    }
+    document.addEventListener('keydown', onKeydown);
+    return function detachEsc() {
+        document.removeEventListener('keydown', onKeydown);
+    };
+}
+
+// Overlay-close for read-only modals, ignoring clicks that began inside.
+function mxchatDragSafeOverlayClose(modal, closeModal) {
+    let downOnOverlay = false;
+    modal.addEventListener('mousedown', (e) => { downOnOverlay = (e.target === modal); });
+    modal.addEventListener('click', (e) => {
+        const overlayGesture = downOnOverlay;
+        downOnOverlay = false;
+        if (e.target === modal && overlayGesture) closeModal(e);
+    });
+}
+
 // Helper function to open edit modal for intents/actions
 function mxchatOpenEditModal(intentId, phrases) {
     const modal = document.getElementById('mxchat-edit-modal');
@@ -31,31 +88,35 @@ function mxchatOpenEditModal(intentId, phrases) {
     });
 
     // Set up close handlers
+    let detachEsc = null;
     const closeModal = () => {
+        if (detachEsc) {
+            detachEsc();
+            detachEsc = null;
+        }
         modal.classList.remove('active');
         setTimeout(() => {
             modal.style.display = 'none';
         }, 300); // Match the CSS transition time
     };
 
+    // This modal holds edits: close only on explicit controls, confirming when dirty.
+    const guardedClose = mxchatGuardedClose(modal, closeModal);
+
     // Close button handler
     const closeBtn = modal.querySelector('.mxchat-modal-close');
     if (closeBtn) {
-        closeBtn.onclick = closeModal;
+        closeBtn.onclick = guardedClose;
     }
 
     // Cancel button handler
     const cancelBtn = modal.querySelector('.mxchat-modal-cancel');
     if (cancelBtn) {
-        cancelBtn.onclick = closeModal;
+        cancelBtn.onclick = guardedClose;
     }
 
-    // Click outside modal to close
-    modal.onclick = (e) => {
-        if (e.target === modal) {
-            closeModal();
-        }
-    };
+    // Escape key to close modal
+    detachEsc = mxchatBindEscClose(modal, guardedClose);
 
     // Focus the textarea
     phrasesField.focus();
@@ -169,38 +230,35 @@ function mxchatOpenActionModal(isEdit = false, actionId = '', label = '', phrase
     });
 
     // Set up close handlers
+    let detachEsc = null;
     const closeModal = () => {
+        if (detachEsc) {
+            detachEsc();
+            detachEsc = null;
+        }
         modal.classList.remove('active');
         setTimeout(() => {
             modal.style.display = 'none';
         }, 300); // Match the CSS transition time
     };
 
+    // This modal holds edits: close only on explicit controls, confirming when dirty.
+    const guardedClose = mxchatGuardedClose(modal, closeModal);
+
     // Close button handler
     const closeBtn = modal.querySelector('.mxchat-modal-close');
     if (closeBtn) {
-        closeBtn.onclick = closeModal;
+        closeBtn.onclick = guardedClose;
     }
 
     // Cancel button handler
     const cancelBtn = modal.querySelector('.mxchat-modal-cancel');
     if (cancelBtn) {
-        cancelBtn.onclick = closeModal;
+        cancelBtn.onclick = guardedClose;
     }
 
-    // Click outside modal to close
-    modal.onclick = (e) => {
-        if (e.target === modal) {
-            closeModal();
-        }
-    };
-
     // Escape key to close modal
-    document.addEventListener('keydown', function(e) {
-        if (e.key === 'Escape' && modal.classList.contains('active')) {
-            closeModal();
-        }
-    }, { once: true });
+    detachEsc = mxchatBindEscClose(modal, guardedClose);
 
     // Focus the first field
     labelField.focus();
@@ -478,7 +536,13 @@ jQuery(document).ready(function($) {
             });
         }
 
-        $autosaveSections.find('input, textarea, select').not('#model, #openrouter_selected_model').on('change', function() {
+        // .mxchat-la-field — the live-agent schedule editors' day inputs (plans
+        // 8ccaa2 + 99d7a4, one editor per channel). They are nameless by design:
+        // each editor folds them into its own hidden live_agent_schedule_<channel>
+        // input and fires ONE change, which this same handler then saves. Without
+        // the exclusion each keystroke would POST a nameless field the server can
+        // only reject.
+        $autosaveSections.find('input, textarea, select').not('#model, #openrouter_selected_model, .mxchat-la-field').on('change', function() {
                     const $field = $(this);
                     const name = $field.attr('name');
 
@@ -2084,6 +2148,53 @@ $('.save-button').on('click', function() {
         });
     }
     
+    // Live agent availability schedules (plans 8ccaa2 + 99d7a4).
+    // The editor markup exists once PER CHANNEL (Slack + Telegram tabs), so
+    // everything is scoped inside each .mxchat-la-schedule container via classes
+    // — no page-global ids. Each editor collects its own day grid into its own
+    // hidden live_agent_schedule_<channel> input as JSON and fires one change
+    // event, so the existing autosave handler above does the POST.
+    $('.mxchat-la-schedule').each(function() {
+        const $laSchedule = $(this);
+        const $laEnabled = $laSchedule.find('.mxchat-la-enabled');
+        const $laHidden = $laSchedule.find('.mxchat-la-hidden');
+        const $laDays = $laSchedule.find('.mxchat-la-days');
+        const $laStatus = $laSchedule.find('.mxchat-la-status-text');
+
+        function laCollect() {
+            const days = {};
+            $laDays.find('.mxchat-la-day').each(function() {
+                const $day = $(this);
+                const n = $day.data('day');
+                days[n] = {
+                    enabled: $day.find('.mxchat-la-day-enabled').is(':checked'),
+                    start: $day.find('.mxchat-la-start').val() || '09:00',
+                    end: $day.find('.mxchat-la-end').val() || '17:00'
+                };
+            });
+            return { enabled: $laEnabled.is(':checked'), days: days };
+        }
+
+        function laSync() {
+            const schedule = laCollect();
+            $laSchedule.toggleClass('is-active', schedule.enabled);
+            $laDays.attr('aria-hidden', schedule.enabled ? 'false' : 'true');
+            $laStatus.text(
+                schedule.enabled
+                    ? (mxchatAdmin.i18n_scheduled_hours || 'Scheduled hours')
+                    : (mxchatAdmin.i18n_always_available || 'Always available')
+            );
+            $laDays.find('.mxchat-la-day').each(function() {
+                const $day = $(this);
+                $day.toggleClass('is-on', $day.find('.mxchat-la-day-enabled').is(':checked'));
+            });
+            // Hand this channel's schedule to the shared autosave transport.
+            $laHidden.val(JSON.stringify(schedule)).trigger('change');
+        }
+
+        $laSchedule.find('.mxchat-la-field').on('change', laSync);
+    });
+
     // Function to adjust the textarea height to content
     function adjustTextareaHeight() {
         this.style.height = 'auto'; // Reset to auto to calculate scrollHeight
@@ -2301,12 +2412,10 @@ document.addEventListener('DOMContentLoaded', function() {
                         noticeContainer.remove();
                     }, 300);
                 });
-                
-                // Click outside to close
-                noticeContainer.addEventListener('click', function(e) {
-                    if (e.target === noticeContainer) {
-                        closeButton.click();
-                    }
+
+                // Click outside to close (drag-safe)
+                mxchatDragSafeOverlayClose(noticeContainer, function() {
+                    closeButton.click();
                 });
                 
                 // Show with animation
@@ -2354,12 +2463,10 @@ document.addEventListener('DOMContentLoaded', function() {
                         noticeContainer.remove();
                     }, 300);
                 });
-                
-                // Click outside to close
-                noticeContainer.addEventListener('click', function(e) {
-                    if (e.target === noticeContainer) {
-                        closeButton.click();
-                    }
+
+                // Click outside to close (drag-safe)
+                mxchatDragSafeOverlayClose(noticeContainer, function() {
+                    closeButton.click();
                 });
                 
                 // Show with animation
@@ -2530,41 +2637,38 @@ document.addEventListener('DOMContentLoaded', function() {
             });
             
             // Set up close handlers
+            let detachEsc = null;
             const closeModal = () => {
                 //console.log('Closing modal');
+                if (detachEsc) {
+                    detachEsc();
+                    detachEsc = null;
+                }
                 modal.classList.remove('active');
                 setTimeout(() => {
                     modal.style.display = 'none';
                 }, 300); // Match the CSS transition time
             };
-            
+
+            // This modal holds edits: close only on explicit controls, confirming when dirty.
+            const guardedClose = mxchatGuardedClose(modal, closeModal);
+
             // Close button handler
             const closeBtn = modal.querySelector('.mxchat-modal-close');
             if (closeBtn) {
-                closeBtn.onclick = closeModal;
+                closeBtn.onclick = guardedClose;
             }
-            
+
             // Cancel button handler
             const cancelBtns = modal.querySelectorAll('.mxchat-modal-cancel');
             if (cancelBtns) {
                 cancelBtns.forEach(btn => {
-                    btn.onclick = closeModal;
+                    btn.onclick = guardedClose;
                 });
             }
-            
-            // Click outside modal to close
-            modal.onclick = (e) => {
-                if (e.target === modal) {
-                    closeModal();
-                }
-            };
-            
+
             // Escape key to close modal
-            document.addEventListener('keydown', function(e) {
-                if (e.key === 'Escape' && modal.classList.contains('active')) {
-                    closeModal();
-                }
-            }, { once: true });
+            detachEsc = mxchatBindEscClose(modal, guardedClose);
             
             // Focus appropriate field based on current step
             if (isEdit || actionStep2.classList.contains('active')) {
@@ -2672,13 +2776,10 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
 
-    // Close on backdrop click ONLY (not on hover)
-    modal.addEventListener('click', function(e) {
-        // Only close if clicking directly on the overlay, not on child elements
-        if (e.target === modal) {
-            closeModal(e);
-        }
-    });
+    // Close on backdrop click ONLY (not on hover), and only when the whole gesture
+    // happened on the backdrop — selecting the sample text and releasing past the
+    // dialog edge otherwise dispatches the click on the overlay and closes it.
+    mxchatDragSafeOverlayClose(modal, closeModal);
 
     // Prevent modal content clicks from closing the modal
     if (modalContent) {

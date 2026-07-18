@@ -397,7 +397,25 @@ jQuery(document).ready(function($) {
     }
 
     function generateSessionId() {
-        return 'mxchat_chat_' + Math.random().toString(36).substr(2, 9);
+        // Session IDs function as the de-facto bearer token for an anonymous
+        // chat, so generate them with a CSPRNG when available. Math.random is a
+        // legacy fallback for ancient/sandboxed environments that lack
+        // window.crypto. The 'mxchat_chat_' prefix is preserved exactly (other
+        // code pattern-matches on it). (plan-0c17b5)
+        var rand;
+        try {
+            if (window.crypto && window.crypto.getRandomValues) {
+                var buf = new Uint8Array(16); // 128 bits
+                window.crypto.getRandomValues(buf);
+                rand = Array.prototype.map.call(buf, function (b) {
+                    return ('0' + b.toString(16)).slice(-2);
+                }).join('');
+            }
+        } catch (e) {}
+        if (!rand) {
+            rand = Math.random().toString(36).substr(2, 9); // legacy fallback
+        }
+        return 'mxchat_chat_' + rand;
     }
 
     // Legacy function - now delegates to instance manager
@@ -1166,6 +1184,10 @@ function callMxChatStream(message, callback, botId) {
     let accumulatedContent = '';
     let testingDataReceived = false;
     let streamingStarted = false;
+    // Server-pushed html to append as its OWN bot bubble once the stream
+    // finishes (e.g. the consent-safe YouTube embed, plan 03ba33). Rendering is
+    // deferred to [DONE] so the embed always lands BELOW the streamed text.
+    let pendingAppendHtml = '';
 
     // Abortable stream: a fresh controller per turn, keyed by bot instance.
     // The Stop control (send button swapped in place) aborts both the read
@@ -1281,6 +1303,15 @@ function callMxChatStream(message, callback, botId) {
                             // Re-enable chat input after streaming completes
                             enableChatInput(botId);
 
+                            // Render any server-pushed appendix html (e.g. the
+                            // YouTube embed) as its own bot bubble below the
+                            // streamed text — mirrors how it is saved in the
+                            // transcript, so history replays identically.
+                            if (pendingAppendHtml) {
+                                appendMessage("bot", "", pendingAppendHtml, [], false, botId);
+                                pendingAppendHtml = '';
+                            }
+
                             // Scroll the user's last message to the top now
                             // that the bot's full reply has rendered.
                             var $chatBoxStreamDone = getElement(botId, 'chat-box');
@@ -1315,6 +1346,10 @@ function callMxChatStream(message, callback, botId) {
                                 streamingStarted = true;
                                 accumulatedContent += json.content;
                                 updateStreamingMessage(accumulatedContent, botId);
+                            }
+                            // Stash appendix html (e.g. video embed) for [DONE]
+                            else if (json.append_html) {
+                                pendingAppendHtml = json.append_html;
                             }
                             // Handle complete response in stream (fallback response)
                             else if (json.text || json.message || json.html) {
@@ -3001,6 +3036,7 @@ function loadChatHistory(botId, onComplete) {
                                 if (content.includes("mxchat-product-card") ||
                                     content.includes("mxchat-image-gallery") ||
                                     content.includes("mxchat-featured-products") ||
+                                    content.includes("mxchat-youtube-embed") ||
                                     content.includes("<form") ||
                                     content.includes("<input") ||
                                     content.includes("<select") ||
@@ -3314,6 +3350,28 @@ $(document).on('click', '.questions-collapse-btn', function(e) {
     e.stopPropagation();
     var botId = getBotIdFromElement(this);
     collapseQuickQuestions(botId);
+});
+
+// Consent-safe YouTube embed (plan 03ba33): the server only ever ships a
+// thumbnail facade — no Google iframe exists until the visitor taps play.
+// Delegated so it also works for embeds restored from chat history.
+$(document).on('click', '.mxchat-youtube-embed .mxchat-youtube-facade', function(e) {
+    e.preventDefault();
+    var $wrap = $(this).closest('.mxchat-youtube-embed');
+    var videoId = String($wrap.data('video-id') || '').replace(/[^A-Za-z0-9_-]/g, '');
+    if (!videoId) {
+        return;
+    }
+    var title = $wrap.find('.mxchat-youtube-title').text() || 'YouTube video';
+    var $iframe = $('<iframe>', {
+        src: 'https://www.youtube-nocookie.com/embed/' + videoId + '?autoplay=1&rel=0',
+        title: title,
+        allow: 'accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture',
+        allowfullscreen: true,
+        frameborder: 0
+    }).addClass('mxchat-youtube-iframe');
+    $wrap.addClass('mxchat-youtube-playing');
+    $(this).replaceWith($iframe);
 });
     
     // Chatbot visibility toggle handlers - use class selector for multi-instance support

@@ -32,6 +32,7 @@ private function mxchat_init_hooks() {
     add_action('admin_post_mxchat_submit_content', array($this, 'mxchat_handle_content_submission'));
     add_action('admin_post_mxchat_submit_sitemap', array($this, 'mxchat_handle_sitemap_submission'));
     add_action('admin_post_mxchat_submit_pdf_file', array($this, 'mxchat_handle_pdf_file_submission'));
+    add_action('admin_post_mxchat_submit_youtube', array($this, 'mxchat_handle_youtube_submission'));
     add_action('admin_post_mxchat_stop_processing', array($this, 'mxchat_stop_processing'));
     
     // AJAX handlers for real-time processing and status updates
@@ -156,6 +157,251 @@ public function mxchat_handle_content_submission() {
     
     wp_safe_redirect(esc_url(admin_url('admin.php?page=mxchat-prompts')));
     exit;
+}
+
+/**
+ * Handle the "YouTube" KB import source (admin-post form submission).
+ *
+ * Per-video description mode:
+ *  - auto:   fetch oEmbed metadata (reliable) + best-effort captions transcript.
+ *            If no usable transcript, index the metadata anyway, tell the admin,
+ *            and bounce back with the manual box pre-filled (never fail silently).
+ *  - manual: the admin's own description is what gets indexed; metadata rides along.
+ *
+ * The row is stored with content_type 'youtube' and source_url = the canonical
+ * watch URL, so re-importing the same video UPDATES the entry (source_url
+ * duplicate handling in MxChat_Utils::store_in_wordpress_db) — that is also the
+ * "augment a metadata-only entry" path.
+ */
+public function mxchat_handle_youtube_submission() {
+    if (!isset($_POST['submit_youtube']) || !current_user_can('manage_options')) {
+        wp_die(esc_html__('Unauthorized access', 'mxchat'));
+    }
+
+    check_admin_referer('mxchat_submit_youtube_action', 'mxchat_submit_youtube_nonce');
+
+    $redirect_url = admin_url('admin.php?page=mxchat-prompts');
+
+    $youtube_url = isset($_POST['youtube_url']) ? esc_url_raw(wp_unslash($_POST['youtube_url'])) : '';
+    $video_id = MxChat_Utils::parse_youtube_id($youtube_url);
+
+    if (empty($video_id)) {
+        set_transient('mxchat_admin_notice_error',
+            esc_html__('That does not look like a link to a single YouTube video. Please paste a watch, youtu.be, or Shorts URL.', 'mxchat'),
+            30
+        );
+        wp_safe_redirect(esc_url($redirect_url));
+        exit;
+    }
+
+    $canonical_url = 'https://www.youtube.com/watch?v=' . $video_id;
+
+    $description_mode = (isset($_POST['youtube_description_mode']) && $_POST['youtube_description_mode'] === 'manual') ? 'manual' : 'auto';
+    $manual_description = isset($_POST['youtube_description']) ? trim(wp_kses_post(wp_unslash($_POST['youtube_description']))) : '';
+
+    $bot_id = isset($_POST['bot_id']) ? sanitize_key($_POST['bot_id']) : 'default';
+
+    // Resolve the embedding API key exactly like the sibling handlers.
+    $bot_options = $this->get_bot_options($bot_id);
+    $options = !empty($bot_options) ? $bot_options : get_option('mxchat_options');
+    $selected_model = $options['embedding_model'] ?? 'text-embedding-ada-002';
+
+    if (strpos($selected_model, 'voyage') === 0) {
+        $api_key = $options['voyage_api_key'] ?? '';
+        $provider_name = 'Voyage AI';
+    } elseif (strpos($selected_model, 'gemini-embedding') === 0) {
+        $api_key = $options['gemini_api_key'] ?? '';
+        $provider_name = 'Google Gemini';
+    } else {
+        $api_key = $options['api_key'] ?? '';
+        $provider_name = 'OpenAI';
+    }
+
+    if (empty($api_key)) {
+        set_transient('mxchat_admin_notice_error',
+            sprintf(
+                esc_html__('%s API key is not configured. Please add your API key in the settings before submitting content.', 'mxchat'),
+                $provider_name
+            ),
+            30
+        );
+        wp_safe_redirect(esc_url($redirect_url));
+        exit;
+    }
+
+    // Metadata is fetched in BOTH modes — it is the reliable half of auto, and in
+    // manual mode it enriches the indexed text with the real title/channel.
+    $meta = $this->mxchat_fetch_youtube_oembed($video_id);
+    $video_title = isset($meta['title']) ? sanitize_text_field($meta['title']) : '';
+    $video_channel = isset($meta['author_name']) ? sanitize_text_field($meta['author_name']) : '';
+
+    $header_lines = 'YouTube Video: ' . ($video_title !== '' ? $video_title : $canonical_url) . "\n";
+    if ($video_channel !== '') {
+        $header_lines .= 'Channel: ' . $video_channel . "\n";
+    }
+    $header_lines .= 'URL: ' . $canonical_url . "\n\n";
+
+    $transcript_missing = false;
+
+    if ($description_mode === 'manual') {
+        if ($manual_description === '') {
+            set_transient('mxchat_admin_notice_error',
+                esc_html__('Please write a description for the video, or switch to auto-fetch.', 'mxchat'),
+                30
+            );
+            wp_safe_redirect(esc_url($redirect_url));
+            exit;
+        }
+        $indexed_text = $header_lines . $manual_description;
+    } else {
+        $transcript = $this->mxchat_fetch_youtube_transcript($video_id);
+
+        if (strlen($transcript) >= 200) {
+            $indexed_text = $header_lines . $transcript;
+        } else {
+            // Graceful fallback: captions disabled / blocked / no speech. Auto
+            // reliably gets metadata; it does NOT guarantee a transcript.
+            $transcript_missing = true;
+
+            if ($video_title === '' && $video_channel === '') {
+                // Both halves failed — nothing meaningful to index.
+                set_transient('mxchat_admin_notice_error',
+                    esc_html__('Could not retrieve any information for that video (no metadata and no captions). Please check the URL, or use the manual description option.', 'mxchat'),
+                    30
+                );
+                wp_safe_redirect(esc_url($redirect_url));
+                exit;
+            }
+
+            $indexed_text = $header_lines . sprintf(
+                /* translators: 1: video title, 2: channel name */
+                __('A YouTube video titled "%1$s" from the channel %2$s.', 'mxchat'),
+                $video_title !== '' ? $video_title : $canonical_url,
+                $video_channel !== '' ? $video_channel : 'YouTube'
+            );
+        }
+    }
+
+    $result = MxChat_Utils::submit_content_to_db($indexed_text, $canonical_url, $api_key, null, $bot_id, 'youtube');
+
+    if (is_wp_error($result)) {
+        set_transient('mxchat_admin_notice_error',
+            esc_html__('Error storing video in the knowledge base: ', 'mxchat') . $result->get_error_message(),
+            30
+        );
+        wp_safe_redirect(esc_url($redirect_url));
+        exit;
+    }
+
+    if ($transcript_missing) {
+        set_transient('mxchat_admin_notice_success',
+            esc_html__('Video indexed from its title and channel — no captions were available for a transcript. The form below is pre-filled: write your own description and import again to improve matching (it updates the same entry).', 'mxchat'),
+            30
+        );
+        // Bounce back with prefill args so the page reopens the YouTube form in
+        // manual mode with the URL + fetched title ready to augment.
+        $redirect_url = add_query_arg(array(
+            'mxchat_yt_prefill' => '1',
+            'yt_url'            => rawurlencode($canonical_url),
+            'yt_title'          => rawurlencode($video_title),
+        ), $redirect_url);
+    } else {
+        set_transient('mxchat_admin_notice_success',
+            esc_html__('YouTube video successfully added to the knowledge base!', 'mxchat'),
+            30
+        );
+    }
+
+    wp_safe_redirect(esc_url_raw($redirect_url));
+    exit;
+}
+
+/**
+ * Fetch YouTube oEmbed metadata for a video (no API key required).
+ * Returns the decoded array (title, author_name, thumbnail_url, ...) or array().
+ */
+private function mxchat_fetch_youtube_oembed($video_id) {
+    $oembed_url = 'https://www.youtube.com/oembed?url=' . rawurlencode('https://www.youtube.com/watch?v=' . $video_id) . '&format=json';
+    $response = wp_remote_get($oembed_url, array('timeout' => 15));
+    if (is_wp_error($response) || wp_remote_retrieve_response_code($response) !== 200) {
+        return array();
+    }
+    $data = json_decode(wp_remote_retrieve_body($response), true);
+    return is_array($data) ? $data : array();
+}
+
+/**
+ * Best-effort captions transcript for a video. Deliberately ISOLATED: this uses
+ * YouTube's unofficial timedtext route (the caption track list embedded in the
+ * watch page), which YouTube has broken before and will break again. Every
+ * failure mode returns '' so a break degrades to the metadata-only import path
+ * instead of erroring the whole submission. Do not let anything in here throw.
+ */
+private function mxchat_fetch_youtube_transcript($video_id) {
+    $watch_url = 'https://www.youtube.com/watch?v=' . $video_id . '&hl=en';
+
+    // First try the honest ingest UA; some responses omit the player config for
+    // bot UAs, so retry once with a browser UA before giving up.
+    $user_agents = array(
+        mxchat_ingest_user_agent(),
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+    );
+
+    $tracks = array();
+    foreach ($user_agents as $ua) {
+        $response = wp_remote_get($watch_url, array(
+            'timeout'    => 20,
+            'user-agent' => $ua,
+        ));
+        if (is_wp_error($response) || wp_remote_retrieve_response_code($response) !== 200) {
+            continue;
+        }
+        $body = wp_remote_retrieve_body($response);
+        if (!is_string($body) || $body === '' || !preg_match('/"captionTracks":(\[.*?\])(?=,")/s', $body, $m)) {
+            continue;
+        }
+        $decoded = json_decode($m[1], true);
+        if (is_array($decoded) && !empty($decoded)) {
+            $tracks = $decoded;
+            break;
+        }
+    }
+
+    if (empty($tracks)) {
+        return '';
+    }
+
+    // Prefer an English track, else take the first offered.
+    $chosen = null;
+    foreach ($tracks as $track) {
+        if (isset($track['languageCode']) && strpos($track['languageCode'], 'en') === 0) {
+            $chosen = $track;
+            break;
+        }
+    }
+    if ($chosen === null) {
+        $chosen = $tracks[0];
+    }
+    if (empty($chosen['baseUrl']) || !is_string($chosen['baseUrl'])) {
+        return '';
+    }
+
+    $timedtext = wp_remote_get($chosen['baseUrl'], array('timeout' => 20));
+    if (is_wp_error($timedtext) || wp_remote_retrieve_response_code($timedtext) !== 200) {
+        return '';
+    }
+    $xml = wp_remote_retrieve_body($timedtext);
+    if (!is_string($xml) || strpos($xml, '<text') === false) {
+        return '';
+    }
+
+    // <text start=".." dur="..">caption</text> — strip tags, decode the
+    // double-encoded entities timedtext ships, collapse whitespace.
+    $text = preg_replace('/<[^>]+>/', ' ', $xml);
+    $text = html_entity_decode(html_entity_decode($text, ENT_QUOTES | ENT_HTML5, 'UTF-8'), ENT_QUOTES | ENT_HTML5, 'UTF-8');
+    $text = trim(preg_replace('/\s+/u', ' ', $text));
+
+    return $text;
 }
 
 public function mxchat_is_pdf_url($url, $response) {

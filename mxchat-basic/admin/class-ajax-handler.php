@@ -387,6 +387,51 @@ public function mxchat_save_setting_callback() {
 
     // Handle special cases
     switch ($field_name) {
+        // Editor Assistant enable toggle (plan-8cb0cb). STANDALONE option — NOT part
+        // of mxchat_options, so it skips the mxchat_sanitize strip-trap entirely. Save
+        // it directly and short-circuit (mirrors the mxchat_transcripts_options pattern
+        // below); never falls through to the generic mxchat_options save. Default OFF.
+        case 'mxchat_editor_assistant_enabled':
+            $ea_value = ($value === 'on' || $value === '1') ? 'on' : 'off';
+            update_option('mxchat_editor_assistant_enabled', $ea_value);
+            wp_send_json_success(['message' => esc_html__('Setting saved', 'mxchat')]);
+            return;
+
+        // Live-agent availability schedules (plans 8ccaa2 + 99d7a4). STANDALONE
+        // options, same reasoning as the Editor Assistant case above — nested
+        // structures that mxchat_sanitize() would strip on the next autosave of any
+        // other field. Each channel's value arrives as JSON from its own hidden
+        // input, which that channel's schedule editor keeps in sync; the class owns
+        // all validation. The bare legacy name is kept as a defense against a
+        // browser still running pre-split cached admin JS: that UI edited "both
+        // channels" as one, so its save writes both.
+        case 'live_agent_schedule_slack':
+        case 'live_agent_schedule_telegram':
+        case 'live_agent_schedule':
+            if (!class_exists('MxChat_Live_Agent_Schedule')) {
+                wp_send_json_error(['message' => esc_html__('Schedule unavailable', 'mxchat')]);
+                return;
+            }
+            $decoded = json_decode($value, true);
+            if (!is_array($decoded)) {
+                wp_send_json_error(['message' => esc_html__('Invalid schedule', 'mxchat')]);
+                return;
+            }
+            $channels = ($field_name === 'live_agent_schedule')
+                ? array('slack', 'telegram')
+                : array(substr($field_name, strlen('live_agent_schedule_')));
+            $saved_schedule = null;
+            foreach ($channels as $schedule_channel) {
+                $saved_schedule = MxChat_Live_Agent_Schedule::save($schedule_channel, $decoded);
+            }
+            // Echo the normalized result so the editor can reconcile if it ever
+            // disagrees with the server (e.g. a time the class rejected).
+            wp_send_json_success([
+                'message'  => esc_html__('Setting saved', 'mxchat'),
+                'schedule' => $saved_schedule,
+            ]);
+            return;
+
         case 'model':
             //error_log('MXChat Save: Processing model selection');
             //error_log('MXChat Save: Model value received: ' . $value);

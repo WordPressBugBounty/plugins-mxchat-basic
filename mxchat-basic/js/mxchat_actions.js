@@ -134,6 +134,7 @@ jQuery(document).ready(function($) {
             var $fcModal  = $('#mxch-fc-tool-modal');
             var fcCurrentCb = null; // tool being added/edited in the modal
             var fcViewCb    = null; // tool currently shown in the detail panel
+            var fcGuardedClose = null; // dirty-checked close, re-armed on each open
             var fcSelected  = new Set(); // callbacks ticked for bulk remove (plan 5f7409)
 
             var fcI18n = {
@@ -266,10 +267,23 @@ jQuery(document).ready(function($) {
                 $fcModal.find('.mxch-fc-modal-step').hide();
                 $fcModal.find('.mxch-fc-modal-step[data-step="' + n + '"]').show();
             }
-            function fcCloseModal() { $fcModal.hide(); fcCurrentCb = null; }
+            function fcCloseModal() { $fcModal.hide(); fcCurrentCb = null; fcGuardedClose = null; }
+
+            // The modal holds an editable "when to use" hint, so it never closes on the
+            // backdrop and confirms before discarding. fcArmGuard must run AFTER a step
+            // populates its fields: mxchatGuardedClose snapshots at call time, so arming
+            // it earlier would measure "dirty" against empty and confirm on every close.
+            function fcArmGuard() {
+                if (typeof mxchatGuardedClose !== 'function' || !$fcModal.length) return;
+                fcGuardedClose = mxchatGuardedClose($fcModal[0], fcCloseModal);
+            }
+            function fcRequestClose(e) { (fcGuardedClose || fcCloseModal)(e); }
 
             // Step 1: grid of tools not yet added.
             function fcOpenAddModal() {
+                // Back-to-step-1 keeps the step-2 baseline: re-arming here would treat a
+                // hint typed before Back as clean and discard it silently on close.
+                var fcWasOpen = $fcModal.is(':visible');
                 var $grid = $('#mxch-fc-modal-grid').empty();
                 var addable = 0;
                 $fcStore.find('.mxch-fc-tool').each(function () {
@@ -299,6 +313,7 @@ jQuery(document).ready(function($) {
                 $grid.toggle(addable > 0);
                 fcShowStep(1);
                 $fcModal.css('display', 'flex');
+                if (!fcWasOpen) fcArmGuard();
             }
 
             // Step 2: confirm + when-to-use (shared by Add and Edit).
@@ -316,6 +331,7 @@ jQuery(document).ready(function($) {
                 $fcSaveBtn.text(editing ? FC_BTN_SAVE : FC_BTN_ADD);
                 fcShowStep(2);
                 $fcModal.css('display', 'flex');
+                fcArmGuard(); // after the hint is loaded: that value is the clean baseline
             }
 
             // ---- wiring ----
@@ -323,9 +339,11 @@ jQuery(document).ready(function($) {
             $fc.on('click', '.js-mxch-fc-add', fcOpenAddModal);
             $fcModal.on('click', '.mxch-fc-type-card', function () { fcOpenConfigStep($(this).data('fc-callback')); });
             $('#mxch-fc-modal-back').on('click', fcOpenAddModal);
-            $fcModal.on('click', '[data-fc-modal-close]', fcCloseModal);
-            $fcModal.on('click', function (e) { if (e.target === this) fcCloseModal(); }); // backdrop
-            $(document).on('keydown', function (e) { if (e.key === 'Escape' && $fcModal.is(':visible')) fcCloseModal(); });
+            $fcModal.on('click', '[data-fc-modal-close]', fcRequestClose); // X + Cancel
+            // No backdrop close: a click dispatches on the common ancestor of its mousedown
+            // and mouseup, so releasing a selection past the dialog edge targets the backdrop
+            // and would discard the hint — and a plain backdrop click discarded it outright.
+            $(document).on('keydown', function (e) { if (e.key === 'Escape' && $fcModal.is(':visible')) fcRequestClose(e); });
 
             // Modal Save (Add or Edit): write the store inputs, autosave, refresh
             // the list, and show the tool's detail on the right.

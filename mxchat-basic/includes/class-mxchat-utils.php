@@ -49,6 +49,36 @@ public static function stamp_active_embedding_model($model) {
 }
 
 /**
+ * Extract the 11-character YouTube video ID from a URL, or '' if the URL is
+ * not a single-video YouTube link. Single source of truth for both the KB
+ * ingestion side and the chat render side — do not duplicate this parsing.
+ * Channel, playlist, and search URLs deliberately return '' (only a URL that
+ * identifies one video can be embedded).
+ */
+public static function parse_youtube_id($url) {
+    if (!is_string($url) || $url === '' || !preg_match('#^https?://#i', $url)) {
+        return '';
+    }
+    $host = strtolower((string) wp_parse_url($url, PHP_URL_HOST));
+    $host = preg_replace('/^(www|m)\./', '', $host);
+    $path = (string) wp_parse_url($url, PHP_URL_PATH);
+    $id = '';
+    if ($host === 'youtu.be') {
+        $segments = explode('/', ltrim($path, '/'));
+        $id = $segments[0] ?? '';
+    } elseif (in_array($host, array('youtube.com', 'youtube-nocookie.com'), true)) {
+        if (preg_match('#^/(?:shorts|embed|live|v)/([A-Za-z0-9_-]+)#', $path, $m)) {
+            $id = $m[1];
+        } elseif ($path === '/watch') {
+            parse_str((string) wp_parse_url($url, PHP_URL_QUERY), $query_vars);
+            $id = isset($query_vars['v']) ? (string) $query_vars['v'] : '';
+        }
+    }
+    $id = preg_replace('/[^A-Za-z0-9_-]/', '', (string) $id);
+    return (strlen($id) === 11) ? $id : '';
+}
+
+/**
  * UPDATED: Submit or update content (and its embedding) in the database.
  * Stores in Pinecone if enabled, otherwise stores in WordPress DB.
  *

@@ -556,6 +556,17 @@ function mxchat_render_import_options_section($admin_instance, $knowledge_manage
                             <p><?php esc_html_e('Upload a PDF file from your computer.', 'mxchat'); ?></p>
                         </div>
                     </button>
+
+                    <!-- YouTube Video Import Option -->
+                    <button type="button" class="mxchat-import-box" data-option="youtube" data-type="youtube">
+                        <div class="mxchat-import-icon">
+                            <span class="dashicons dashicons-youtube"></span>
+                        </div>
+                        <div class="mxchat-import-content">
+                            <h4><?php esc_html_e('YouTube', 'mxchat'); ?></h4>
+                            <p><?php esc_html_e('Index a video so the chat can surface it as a playable embed.', 'mxchat'); ?></p>
+                        </div>
+                    </button>
                 </div>
 
                 <!-- Detected Sitemaps Section (hidden by default, shown when Sitemap Import is clicked) -->
@@ -656,6 +667,52 @@ function mxchat_render_import_options_section($admin_instance, $knowledge_manage
                         </p>
                         <button type="submit" name="submit_pdf_file" class="mxch-btn mxch-btn-primary">
                             <?php esc_html_e('Import PDF', 'mxchat'); ?>
+                        </button>
+                    </form>
+                </div>
+
+                <?php
+                // Prefill state: set when an auto-import found no transcript — the
+                // handler bounced back here so the admin can augment the entry with
+                // a manual description (re-importing the same URL updates the row).
+                $yt_prefill        = isset($_GET['mxchat_yt_prefill']) && $_GET['mxchat_yt_prefill'] === '1';
+                $yt_prefill_url    = $yt_prefill && isset($_GET['yt_url']) ? esc_url_raw(rawurldecode(wp_unslash($_GET['yt_url']))) : '';
+                $yt_prefill_title  = $yt_prefill && isset($_GET['yt_title']) ? sanitize_text_field(rawurldecode(wp_unslash($_GET['yt_title']))) : '';
+                ?>
+                <div class="mxchat-import-input-area" id="mxchat-youtube-input-area" style="display: none; margin-top: 20px;">
+                    <form id="mxchat-youtube-form" method="post" action="<?php echo esc_url(admin_url('admin-post.php?action=mxchat_submit_youtube')); ?>"<?php echo $yt_prefill ? ' data-yt-prefill="1"' : ''; ?>>
+                        <?php wp_nonce_field('mxchat_submit_youtube_action', 'mxchat_submit_youtube_nonce'); ?>
+                        <?php if ($multibot_active && $current_bot_id !== 'default') : ?>
+                            <input type="hidden" name="bot_id" value="<?php echo esc_attr($current_bot_id); ?>">
+                        <?php endif; ?>
+                        <div class="mxch-field">
+                            <input type="url" name="youtube_url" id="mxchat-youtube-url" class="mxch-input" placeholder="<?php esc_attr_e('Paste a YouTube video URL (watch, youtu.be, or Shorts link)', 'mxchat'); ?>" required value="<?php echo esc_attr($yt_prefill_url); ?>">
+                        </div>
+                        <div class="mxch-field">
+                            <span class="mxch-field-label"><?php esc_html_e('How should this video be described for matching?', 'mxchat'); ?></span>
+                            <div style="display: flex; flex-direction: column; gap: 6px; margin-top: 8px;">
+                                <label style="display: flex; align-items: baseline; gap: 8px; cursor: pointer;">
+                                    <input type="radio" name="youtube_description_mode" value="auto" <?php checked(!$yt_prefill); ?>>
+                                    <span>
+                                        <strong><?php esc_html_e('Auto-fetch', 'mxchat'); ?></strong>
+                                        <span class="mxch-field-description" style="display: block; margin: 2px 0 0;"><?php esc_html_e('We pull the video\'s title, channel, and captions (when available) to describe it.', 'mxchat'); ?></span>
+                                    </span>
+                                </label>
+                                <label style="display: flex; align-items: baseline; gap: 8px; cursor: pointer;">
+                                    <input type="radio" name="youtube_description_mode" value="manual" <?php checked($yt_prefill); ?>>
+                                    <span>
+                                        <strong><?php esc_html_e('Write my own', 'mxchat'); ?></strong>
+                                        <span class="mxch-field-description" style="display: block; margin: 2px 0 0;"><?php esc_html_e('You write the description the chatbot matches against — best for curated guides.', 'mxchat'); ?></span>
+                                    </span>
+                                </label>
+                            </div>
+                        </div>
+                        <div class="mxch-field" id="mxchat-youtube-description-field" style="<?php echo $yt_prefill ? '' : 'display: none;'; ?>">
+                            <textarea name="youtube_description" id="mxchat-youtube-description" class="mxch-textarea" rows="5" placeholder="<?php esc_attr_e('Describe what this video covers and the questions it answers...', 'mxchat'); ?>"><?php echo esc_textarea($yt_prefill_title !== '' ? $yt_prefill_title . "\n\n" : ''); ?></textarea>
+                            <p class="mxch-field-description"><?php esc_html_e('This text is what gets matched against visitor questions. Importing the same video URL again updates its existing entry.', 'mxchat'); ?></p>
+                        </div>
+                        <button type="submit" name="submit_youtube" value="1" class="mxch-btn mxch-btn-primary">
+                            <?php esc_html_e('Import Video', 'mxchat'); ?>
                         </button>
                     </form>
                 </div>
@@ -1960,7 +2017,16 @@ function mxchat_render_inspect_entry_modal() {
             });
             if (closeX)   closeX.addEventListener('click', close);
             if (closeBtn) closeBtn.addEventListener('click', close);
-            modal.addEventListener('click', function(e) { if (e.target === modal) close(); });
+            // Overlay click closes, but only when the whole gesture happened on the
+            // overlay — otherwise selecting indexed text and releasing past the
+            // dialog edge dispatches the click on the overlay and closes it.
+            var downOnOverlay = false;
+            modal.addEventListener('mousedown', function(e) { downOnOverlay = (e.target === modal); });
+            modal.addEventListener('click', function(e) {
+                var overlayGesture = downOnOverlay;
+                downOnOverlay = false;
+                if (e.target === modal && overlayGesture) close();
+            });
             document.addEventListener('keydown', function(e) {
                 if (e.key === 'Escape' && modal.classList.contains('active')) close();
             });
@@ -2281,6 +2347,11 @@ function mxchat_render_knowledge_page_scripts() {
             if (!modal) return;
 
             var currentEntry = {};
+            var loadedContent = '';
+
+            var EDIT_I18N = {
+                discard: <?php echo wp_json_encode( __('Discard your unsaved changes to this entry?', 'mxchat') ); ?>
+            };
 
             // Bind edit buttons (delegated)
             document.addEventListener('click', function(e) {
@@ -2291,11 +2362,14 @@ function mxchat_render_knowledge_page_scripts() {
                 }
             });
 
-            // Close handlers
-            if (closeBtn) closeBtn.addEventListener('click', closeModal);
-            if (cancelBtn) cancelBtn.addEventListener('click', closeModal);
-            modal.addEventListener('click', function(e) {
-                if (e.target === modal) closeModal();
+            // Close handlers. The overlay deliberately has no click-to-close: a click
+            // fires on the common ancestor of its mousedown and mouseup, so releasing
+            // a text-selection drag past the dialog edge targets the overlay and would
+            // discard the edit. Closing is explicit only, and confirms when dirty.
+            if (closeBtn) closeBtn.addEventListener('click', requestClose);
+            if (cancelBtn) cancelBtn.addEventListener('click', requestClose);
+            document.addEventListener('keydown', function(e) {
+                if (e.key === 'Escape' && modal.classList.contains('active')) requestClose();
             });
 
             // Character count
@@ -2319,6 +2393,7 @@ function mxchat_render_knowledge_page_scripts() {
 
                 // Reset state
                 textarea.value = '';
+                loadedContent = '';
                 textarea.placeholder = 'Loading content...';
                 textarea.disabled = true;
                 saveBtn.disabled = true;
@@ -2351,6 +2426,7 @@ function mxchat_render_knowledge_page_scripts() {
                     .then(function(resp) {
                         if (resp.success) {
                             textarea.value = resp.data.content || '';
+                            loadedContent = textarea.value;
                             textarea.disabled = false;
                             textarea.placeholder = 'Edit your content here...';
                             saveBtn.disabled = false;
@@ -2422,6 +2498,15 @@ function mxchat_render_knowledge_page_scripts() {
                         saveBtn.disabled = false;
                         showNotice('Network error: ' + err.message, 'error');
                     });
+            }
+
+            function isDirty() {
+                return !textarea.disabled && textarea.value !== loadedContent;
+            }
+
+            function requestClose() {
+                if (isDirty() && !window.confirm(EDIT_I18N.discard)) return;
+                closeModal();
             }
 
             function closeModal() {
