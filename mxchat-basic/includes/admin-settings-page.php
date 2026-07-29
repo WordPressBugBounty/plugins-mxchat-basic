@@ -621,6 +621,21 @@ function mxchat_render_settings_page($admin_instance) {
                             <p class="mxch-field-description"><?php esc_html_e('Control when the chatbot script loads to improve page performance.', 'mxchat'); ?></p>
                         </div>
 
+                        <?php
+                        // Smart asset loading (plan-915355). Standalone option — never part
+                        // of mxchat_options, so mxchat_sanitize() can't strip it.
+                        $smart_asset_loading = get_option('mxchat_smart_asset_loading', 'off');
+                        ?>
+                        <div class="mxch-field" style="margin-top: 16px;">
+                            <label class="mxch-toggle">
+                                <input type="checkbox" class="mxch-toggle-input mxchat-autosave-field" id="mxchat_smart_asset_loading" name="mxchat_smart_asset_loading" value="on" <?php checked($smart_asset_loading, 'on'); ?>>
+                                <span class="mxch-toggle-switch"></span>
+                                <span class="mxch-toggle-label"><?php esc_html_e('Only load chatbot files on pages where the chatbot appears', 'mxchat'); ?></span>
+                            </label>
+                            <p class="mxch-field-description"><?php esc_html_e('Skips the chatbot\'s CSS and JavaScript on pages where the widget is hidden (per-page visibility, post type include/exclude, or auto-display disabled). Pages using the chatbot shortcode still load everything automatically. Helps with "reduce unused CSS/JS" audit findings.', 'mxchat'); ?></p>
+                            <p class="mxch-field-hint"><?php esc_html_e('If your theme or page builder inserts the chatbot in an unusual way and it stops appearing, turn this off — or force-load assets with the mxchat_should_load_assets filter.', 'mxchat'); ?></p>
+                        </div>
+
                         <div class="mxch-notice mxch-notice-info" style="margin-top: 16px;">
                             <svg class="mxch-notice-icon" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
                             <div>

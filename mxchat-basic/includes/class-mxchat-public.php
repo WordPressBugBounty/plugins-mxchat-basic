@@ -96,6 +96,20 @@ public function append_chatbot_to_body() {
  * UPDATED: Enhanced shortcode with context-aware hiding
  */
 public function render_chatbot_shortcode($atts) {
+    // Smart asset loading safety net (plan-915355): if the opt-in enqueue gate
+    // skipped assets on this request (shortcode invisible to has_shortcode —
+    // builder-stored content, template files, widget areas), force the FULL
+    // enqueue now, including the mxchatChat settings payload and the delayed
+    // loader wiring. The integrator method is idempotent, so this is a no-op
+    // when assets already went out at wp_enqueue_scripts time.
+    if (self::is_smart_asset_loading_enabled() && !wp_style_is('mxchat-chat-css', 'enqueued')) {
+        global $mxchat_integrator;
+        if (isset($mxchat_integrator) && is_object($mxchat_integrator)
+            && method_exists($mxchat_integrator, 'mxchat_enqueue_scripts_styles')) {
+            $mxchat_integrator->mxchat_enqueue_scripts_styles(true);
+        }
+    }
+
     // UPDATED: Add bot_id parameter support and improve logic
     $attributes = shortcode_atts(array(
         'floating' => 'yes',
@@ -551,12 +565,33 @@ public function render_chatbot_shortcode($atts) {
  * NEW: Determine if and which chatbot should be displayed
  */
 private function get_display_bot() {
-    // Get page-specific settings from meta box
-    $page_setting = $this->get_page_bot_setting();
+    // Delegates to the static so the enqueue-time gate (smart asset loading,
+    // plan-915355) and this render-time decision share ONE code path and can
+    // never disagree. The static reads mxchat_options fresh — same row this
+    // instance loaded at construct.
+    return self::compute_display_bot();
+}
 
-    // Get global settings - FIXED: Check for 'on' instead of 'on'
-    $global_autoshow = isset($this->options['append_to_body']) && $this->options['append_to_body'] === 'on';
-    $global_default_bot = isset($this->options['default_bot']) ? $this->options['default_bot'] : 'default';
+/**
+ * Static single source of truth for the display decision (plan-915355).
+ * Combines the per-page meta box, the append_to_body global toggle, and the
+ * post-type include/exclude mode. Returns a bot id ('default' or specific)
+ * when the auto-append widget will render on the current request, false when
+ * it won't. Static (not a second instance) deliberately: MxChat_Public's
+ * constructor registers a wp_footer action, so constructing a throwaway
+ * instance would double-append the widget.
+ */
+public static function compute_display_bot() {
+    $options = get_option('mxchat_options', array());
+    if (!is_array($options)) {
+        $options = array();
+    }
+
+    // Get page-specific settings from meta box
+    $page_setting = self::get_page_bot_setting();
+
+    $global_autoshow = isset($options['append_to_body']) && $options['append_to_body'] === 'on';
+    $global_default_bot = isset($options['default_bot']) ? $options['default_bot'] : 'default';
 
     // If page specifically hides chatbot, don't show anything
     if ($page_setting && $page_setting['action'] === 'hide') {
@@ -572,7 +607,7 @@ private function get_display_bot() {
     // Check global auto-show setting
     if ($global_autoshow) {
         // Check post type visibility settings
-        if (!$this->should_show_on_current_post_type()) {
+        if (!self::should_show_on_current_post_type()) {
             return false;
         }
 
@@ -586,12 +621,76 @@ private function get_display_bot() {
 }
 
 /**
+ * Smart asset loading opt-in (plan-915355). Standalone option — deliberately
+ * NOT a mxchat_options key, so it can never be stripped by mxchat_sanitize().
+ * Default off: enqueue behavior is byte-identical to before until an owner
+ * turns the toggle on.
+ */
+public static function is_smart_asset_loading_enabled() {
+    return get_option('mxchat_smart_asset_loading', 'off') === 'on';
+}
+
+/**
+ * Will the chat widget render on the current request? (plan-915355)
+ *
+ * True when the auto-append decision resolves to a bot, OR the singular
+ * post's content contains the [mxchat_chatbot] shortcode (first-chance
+ * detection so shortcode pages keep head-loaded CSS — no FOUC). Computed
+ * once per request and cached, so the wp_enqueue_scripts gate and any
+ * add-on consulting this later in the same request always get one answer.
+ *
+ * Filter `mxchat_should_load_assets` is the force-load escape hatch for
+ * headless/builder/custom-JS setups whose shortcode placement is invisible
+ * to has_shortcode (builder-stored content, template files, widget areas).
+ * Note the render-time safety net in render_chatbot_shortcode() still
+ * force-loads assets whenever the shortcode actually renders — the filter
+ * is only needed where even that net can't fire (e.g. markup assembled
+ * outside WP rendering).
+ */
+public static function should_load_assets() {
+    static $cached = null;
+    if ($cached !== null) {
+        return $cached;
+    }
+
+    // Never gate admin/ajax requests — this decision is for front-end enqueues only.
+    if (is_admin()) {
+        $cached = true;
+        return $cached;
+    }
+
+    $display_bot   = self::compute_display_bot();
+    $has_shortcode = false;
+
+    if ($display_bot === false && is_singular()) {
+        $post = get_post();
+        if ($post && has_shortcode((string) $post->post_content, 'mxchat_chatbot')) {
+            $has_shortcode = true;
+        }
+    }
+
+    $should = ($display_bot !== false) || $has_shortcode;
+
+    $cached = (bool) apply_filters('mxchat_should_load_assets', $should, array(
+        'display_bot'   => $display_bot,
+        'has_shortcode' => $has_shortcode,
+        'post_id'       => get_the_ID(),
+    ));
+
+    return $cached;
+}
+
+/**
  * Check if chatbot should be shown on the current post type
  */
-private function should_show_on_current_post_type() {
+private static function should_show_on_current_post_type() {
+    $options = get_option('mxchat_options', array());
+    if (!is_array($options)) {
+        $options = array();
+    }
     // Get visibility settings
-    $mode = isset($this->options['post_type_visibility_mode']) ? $this->options['post_type_visibility_mode'] : 'all';
-    $list = isset($this->options['post_type_visibility_list']) ? $this->options['post_type_visibility_list'] : array();
+    $mode = isset($options['post_type_visibility_mode']) ? $options['post_type_visibility_mode'] : 'all';
+    $list = isset($options['post_type_visibility_list']) ? $options['post_type_visibility_list'] : array();
 
     // Ensure list is an array
     if (!is_array($list)) {
@@ -604,7 +703,7 @@ private function should_show_on_current_post_type() {
     }
 
     // Get current post type
-    $current_post_type = $this->get_current_post_type();
+    $current_post_type = self::get_current_post_type();
 
     // If we can't determine post type, default to showing
     if (empty($current_post_type)) {
@@ -627,7 +726,7 @@ private function should_show_on_current_post_type() {
 /**
  * Get the current post type
  */
-private function get_current_post_type() {
+private static function get_current_post_type() {
     // Try to get from queried object first
     $queried_object = get_queried_object();
 
@@ -661,7 +760,7 @@ private function get_current_post_type() {
 /**
  * Get page-specific bot setting using new visibility field with backward compat
  */
-private function get_page_bot_setting($post_id = null) {
+private static function get_page_bot_setting($post_id = null) {
     if (!$post_id) {
         $post_id = get_the_ID();
     }
@@ -711,7 +810,7 @@ private function determine_bot_for_shortcode($shortcode_bot_id) {
     }
     
     // No bot_id in shortcode, check page setting
-    $page_setting = $this->get_page_bot_setting();
+    $page_setting = self::get_page_bot_setting();
     if ($page_setting && $page_setting['action'] === 'show') {
         return $page_setting['bot_id'];
     }

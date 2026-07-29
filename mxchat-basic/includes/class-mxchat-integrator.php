@@ -23,6 +23,13 @@ class MxChat_Integrator {
     private $fc_ui_html = '';
     private $fc_ui_images = array();
     private $fc_ui_captured = false;
+    // plan-mxchat-20260722-59bc1b — {context} placeholder support. When the
+    // owner's system instructions carry {context}, the assembled KB block is
+    // stashed here (instead of being appended to $context_content) and
+    // get_system_instructions() injects it at the token's position. Null until
+    // the per-turn KB assembly has run — the early URL-extraction call to
+    // get_system_instructions() must NOT consume the token.
+    private $context_kb_block = null;
     private $word_handler;
     private $last_similarity_analysis = null;
     private $current_valid_urls = [];
@@ -294,6 +301,13 @@ public function __construct() {
     
     // Rate limit action - notice we removed the old schedule setup
     add_action('mxchat_reset_rate_limits', array($this, 'mxchat_reset_rate_limits'));
+
+    // Self-heal: if the reset event is ever lost (cron row cleared, botched
+    // migration, deactivate/reactivate race), an admin-context request brings it
+    // back. Cheap by construction: 60s transient guard + early return when the
+    // event is already scheduled. Without this, a lost event with the fallback
+    // flag unset leaves visitors rate-limited forever.
+    add_action('admin_init', array($this, 'setup_rate_limit_cron_jobs'));
     
     // File upload and handling actions
     add_action('wp_ajax_mxchat_upload_pdf', [$this, 'handle_pdf_upload']);
@@ -1264,7 +1278,9 @@ public function mxchat_send_delayed_transcript($session_id) {
     
     // Add messages
     foreach ($messages as $msg) {
-        $role_label = ($msg->role === 'user') ? 'User' : 'Assistant';
+        // 'agent' rows are live-agent (human) replies — label them as such in
+        // the emailed transcript, same distinction the Transcripts viewer draws.
+        $role_label = ($msg->role === 'user') ? 'User' : (($msg->role === 'agent') ? 'Live Agent' : 'Assistant');
         $transcript_content .= "[{$msg->timestamp}] {$role_label}:\n";
         $transcript_content .= $msg->message . "\n\n";
     }
@@ -2197,10 +2213,20 @@ if ($testing_data !== null && !empty($this->current_valid_urls)) {
     //error_log("Added " . count($this->current_valid_urls) . " approved URLs to testing data");
 }
         
-        if (!empty($relevant_content)) {
-            $context_content .= "===== OFFICIAL KNOWLEDGE DATABASE CONTENT =====\n" . $relevant_content . "\n===== END OF OFFICIAL KNOWLEDGE DATABASE CONTENT =====\n\n";
+        $kb_block = !empty($relevant_content)
+            ? "===== OFFICIAL KNOWLEDGE DATABASE CONTENT =====\n" . $relevant_content . "\n===== END OF OFFICIAL KNOWLEDGE DATABASE CONTENT =====\n\n"
+            : "===== NO RELEVANT CONTENT FOUND IN KNOWLEDGE DATABASE =====\n";
+
+        // {context} placeholder (plan 59bc1b): when the resolved instructions
+        // carry the token, the KB block is injected at that spot by
+        // get_system_instructions() (every provider handler re-calls it) and is
+        // NOT appended here — otherwise the block would ride twice.
+        // $system_instructions above was resolved while context_kb_block was
+        // still null, so the literal token is still visible for this check.
+        if (!empty($system_instructions) && stripos($system_instructions, '{context}') !== false) {
+            $this->context_kb_block = $kb_block;
         } else {
-            $context_content .= "===== NO RELEVANT CONTENT FOUND IN KNOWLEDGE DATABASE =====\n";
+            $context_content .= $kb_block;
         }
         
         // NEW: Add approved URLs list to context for AI (only if citation links enabled)
@@ -3089,7 +3115,7 @@ private function mxchat_generate_custom_image($prompt, $timeout = 90) {
     if ($remote_url) {
         return ['imageUrl' => esc_url_raw($remote_url)];
     }
-    $err_msg = $resp['error']['message'] ?? esc_html__('Custom provider did not return an image.', 'mxchat');
+    $err_msg = $this->extract_provider_error($resp, esc_html__('Custom provider did not return an image.', 'mxchat'));
     return ['error' => esc_html($err_msg)];
 }
 
@@ -3574,7 +3600,7 @@ private function mxchat_claude_omits_temperature($model) {
     if (class_exists('MxChat_Model_Catalog') && method_exists('MxChat_Model_Catalog', 'supports_temperature')) {
         return !MxChat_Model_Catalog::supports_temperature($model);
     }
-    $no_temp = array('claude-opus-4-7', 'claude-opus-4-8', 'claude-fable-5', 'claude-sonnet-5');
+    $no_temp = array('claude-opus-5', 'claude-opus-4-7', 'claude-opus-4-8', 'claude-fable-5', 'claude-sonnet-5');
     return in_array($model, $no_temp, true);
 }
 
@@ -3789,7 +3815,7 @@ private function interpret_query_with_xai($user_query, $system_prompt, $api_key,
  */
 private function interpret_query_with_deepseek($user_query, $system_prompt, $api_key, $model) {
     $url = 'https://api.deepseek.com/v1/chat/completions';
-    
+
     $args = [
         'headers' => [
             'Content-Type' => 'application/json',
@@ -3803,6 +3829,10 @@ private function interpret_query_with_deepseek($user_query, $system_prompt, $api
             ],
             'temperature' => 0.2,
             'max_tokens' => 20,
+            // DeepSeek V4 defaults to thinking mode ON (temperature ignored,
+            // reasoning burns the 20-token budget); keep the legacy
+            // deepseek-chat semantics = non-thinking.
+            'thinking' => ['type' => 'disabled'],
         ]),
         'method' => 'POST',
         'timeout' => 15,
@@ -4343,88 +4373,26 @@ public function mxchat_live_agent_handover($message, $user_id, $session_id) {
     }
 
     $slack_bot_token = $this->options['live_agent_bot_token'] ?? '';
-    
+
     if (empty($slack_bot_token)) {
         return false;
     }
 
     // Check if channel already exists for this session
     $channel_id = get_option("mxchat_channel_{$session_id}", '');
-    
-    if (empty($channel_id)) {
-        // Create new channel with session ID as name
-            $channel_name = $this->generate_channel_name($session_id);
-        
-        //error_log("Attempting to create channel: $channel_name");
-        
-        $response = wp_remote_post('https://slack.com/api/conversations.create', [
-            'headers' => [
-                'Content-Type' => 'application/json',
-                'Authorization' => 'Bearer ' . $slack_bot_token
-            ],
-            'body' => json_encode([
-                'name' => $channel_name,
-                'is_private' => false // Public channel - anyone in workspace can join
-            ])
-        ]);
-        
-        if (!is_wp_error($response)) {
-            $response_body = wp_remote_retrieve_body($response);
-            $response_data = json_decode($response_body, true);
-            
-            //error_log("Channel creation response: " . $response_body);
-            
-            if (isset($response_data['ok']) && $response_data['ok']) {
-                $channel_id = $response_data['channel']['id'];
-                $actual_channel_name = $response_data['channel']['name'] ?? 'unknown';
-                //error_log("Channel created successfully: ID=$channel_id, Name=$actual_channel_name");
-                update_option("mxchat_channel_{$session_id}", $channel_id);
-                
-                // Auto-invite agents to the channel
-                $agent_user_ids = $this->options['live_agent_user_ids'] ?? '';
-                
-                if (!empty($agent_user_ids)) {
-                    // Parse user IDs (one per line)
-                    $user_ids = array_filter(array_map('trim', explode("\n", $agent_user_ids)));
-                    
-                    foreach ($user_ids as $user_id_to_invite) {
-                        //error_log("Inviting user to channel: $user_id_to_invite");
-                        
-                        $invite_response = wp_remote_post('https://slack.com/api/conversations.invite', [
-                            'headers' => [
-                                'Content-Type' => 'application/json',
-                                'Authorization' => 'Bearer ' . $slack_bot_token
-                            ],
-                            'body' => json_encode([
-                                'channel' => $channel_id,
-                                'users' => $user_id_to_invite
-                            ])
-                        ]);
-                        
-                        if (!is_wp_error($invite_response)) {
-                            $invite_body = wp_remote_retrieve_body($invite_response);
-                            $invite_data = json_decode($invite_body, true);
-                            //error_log("Invite response for $user_id_to_invite: " . $invite_body);
-                            
-                            if (isset($invite_data['ok']) && $invite_data['ok']) {
-                                //error_log("Successfully invited user $user_id_to_invite to channel");
-                            } else {
-                                //error_log("Failed to invite user $user_id_to_invite: " . ($invite_data['error'] ?? 'Unknown error'));
-                            }
-                        } else {
-                            //error_log("WP Error inviting user $user_id_to_invite: " . $invite_response->get_error_message());
-                        }
-                    }
-                } else {
-                    //error_log("No agent user IDs configured for auto-invite");
-                }
-            } else {
-                //error_log("Channel creation failed: " . ($response_data['error'] ?? 'Unknown error'));
-            }
-        } else {
-            //error_log("WP Error creating channel: " . $response->get_error_message());
-        }
-        
+
+    // Shared-channel mode (plan 9f7756): when a shared handoff channel is
+    // configured and this session doesn't already own a per-conversation
+    // channel, the handoff posts into the shared channel as a new thread
+    // (or into the session's existing thread on a re-handover). Any failure
+    // to reach the shared channel falls back to per-conversation creation
+    // below, so a misconfigured channel never drops a handoff.
+    $shared_channel_setting = trim($this->options['live_agent_shared_channel'] ?? '');
+    $shared_thread_ts = get_option("mxchat_thread_{$session_id}", '');
+    $use_shared_channel = ($shared_channel_setting !== '' && empty($channel_id));
+
+    if (empty($channel_id) && !$use_shared_channel) {
+        $channel_id = $this->mxchat_create_conversation_channel($session_id);
         if (empty($channel_id)) {
             return false; // Failed to create channel
         }
@@ -4469,19 +4437,71 @@ public function mxchat_live_agent_handover($message, $user_id, $session_id) {
     }
     
     $channel_message .= "*Current Message:*\n{$message}\n\n";
-    $channel_message .= "_Reply directly in this channel - all messages will go to the user_";
+    if ($use_shared_channel) {
+        $channel_message .= "_Reply in this thread - replies here go to the user. `!endchat` in this thread ends the chat._";
+    } else {
+        $channel_message .= "_Reply directly in this channel - all messages will go to the user_";
+    }
 
-    wp_remote_post('https://slack.com/api/chat.postMessage', [
-        'headers' => [
-            'Content-Type' => 'application/json',
-            'Authorization' => 'Bearer ' . $slack_bot_token
-        ],
-        'body' => json_encode([
-            'channel' => $channel_id,
-            'text' => $channel_message,
-            'mrkdwn' => true
-        ])
-    ]);
+    if ($use_shared_channel) {
+        $posted = $this->mxchat_post_shared_handoff($session_id, $channel_message, $shared_thread_ts);
+        if (!$posted) {
+            // Shared channel unreachable (wrong name/ID, bot not invited,
+            // archived...). Fall back to the per-conversation flow so the
+            // visitor still reaches an agent; the settings page surfaces the
+            // recorded error to the admin.
+            $use_shared_channel = false;
+            $channel_id = $this->mxchat_create_conversation_channel($session_id);
+            if (empty($channel_id)) {
+                return false;
+            }
+            $channel_message = str_replace(
+                "_Reply in this thread - replies here go to the user. `!endchat` in this thread ends the chat._",
+                "_Reply directly in this channel - all messages will go to the user_",
+                $channel_message
+            );
+        }
+    }
+
+    if (!$use_shared_channel) {
+        $handoff_post = wp_remote_post('https://slack.com/api/chat.postMessage', [
+            'headers' => [
+                'Content-Type' => 'application/json',
+                'Authorization' => 'Bearer ' . $slack_bot_token
+            ],
+            'body' => json_encode([
+                'channel' => $channel_id,
+                'text' => $channel_message,
+                'mrkdwn' => true
+            ])
+        ]);
+        // Re-handover edge (plan 7458a7): the stored mxchat_channel_ may point
+        // at a channel archived by the auto-archive toggle (or deleted by an
+        // admin). Slack answers is_archived / channel_not_found — clear the
+        // stale option, mint a fresh channel, and re-post ONCE so the handoff
+        // is never silently dropped.
+        if (!is_wp_error($handoff_post)) {
+            $handoff_data = json_decode(wp_remote_retrieve_body($handoff_post), true);
+            $handoff_err  = isset($handoff_data['error']) ? $handoff_data['error'] : '';
+            if (isset($handoff_data['ok']) && !$handoff_data['ok'] && in_array($handoff_err, array('is_archived', 'channel_not_found'), true)) {
+                delete_option("mxchat_channel_{$session_id}");
+                $channel_id = $this->mxchat_create_conversation_channel($session_id);
+                if (!empty($channel_id)) {
+                    wp_remote_post('https://slack.com/api/chat.postMessage', [
+                        'headers' => [
+                            'Content-Type' => 'application/json',
+                            'Authorization' => 'Bearer ' . $slack_bot_token
+                        ],
+                        'body' => json_encode([
+                            'channel' => $channel_id,
+                            'text' => $channel_message,
+                            'mrkdwn' => true
+                        ])
+                    ]);
+                }
+            }
+        }
+    }
 
     $success_message = $this->options['live_agent_notification_message'] ?? 'Live agent has been notified.';
     $this->mxchat_save_chat_message($session_id, 'bot', $success_message);
@@ -4504,10 +4524,195 @@ public function mxchat_live_agent_handover($message, $user_id, $session_id) {
     wp_die();
 }
 
+/**
+ * Archive a session's per-conversation chat- channel after !endchat / session
+ * cleanup (plan 7458a7). HARD GUARDS, in order: the toggle must be on
+ * (default off = zero change for existing installs); a session with
+ * mxchat_thread_ set is a 9f7756 SHARED-channel session and is never
+ * archived; only the channel this session owns via mxchat_channel_ is
+ * archived, and only when it matches the channel the caller is acting on.
+ * Best-effort by design — a failed archive is logged and never blocks the
+ * mode flip or cleanup.
+ *
+ * @param string $session_id
+ * @param string $event_channel_id Channel the caller is acting on.
+ */
+private function mxchat_maybe_archive_conversation_channel($session_id, $event_channel_id) {
+    $toggle = $this->options['live_agent_archive_on_end_toggle'] ?? 'off';
+    if ($toggle !== 'on') {
+        return;
+    }
+    if (get_option("mxchat_thread_{$session_id}", '') !== '') {
+        return; // shared-channel session — the shared channel is NEVER archived
+    }
+    $owned_channel = get_option("mxchat_channel_{$session_id}", '');
+    if ($owned_channel === '' || $owned_channel !== $event_channel_id) {
+        return;
+    }
+    $slack_bot_token = $this->options['live_agent_bot_token'] ?? '';
+    if (empty($slack_bot_token)) {
+        return;
+    }
+    $response = wp_remote_post('https://slack.com/api/conversations.archive', [
+        'headers' => [
+            'Content-Type' => 'application/json',
+            'Authorization' => 'Bearer ' . $slack_bot_token
+        ],
+        'body' => json_encode(['channel' => $owned_channel])
+    ]);
+    if (is_wp_error($response)) {
+        error_log('MxChat: conversations.archive request failed: ' . $response->get_error_message());
+        return;
+    }
+    $data = json_decode(wp_remote_retrieve_body($response), true);
+    if (empty($data['ok'])) {
+        error_log('MxChat: conversations.archive returned error: ' . (isset($data['error']) ? $data['error'] : 'unknown'));
+    }
+}
+
+/**
+ * Create a dedicated per-conversation Slack channel for a session and invite
+ * the configured agents. Extracted from mxchat_live_agent_handover so the
+ * shared-channel mode (plan 9f7756) can reuse it as its fallback path.
+ *
+ * @param string $session_id
+ * @return string Channel ID, or '' on failure.
+ */
+private function mxchat_create_conversation_channel($session_id) {
+    $slack_bot_token = $this->options['live_agent_bot_token'] ?? '';
+    if (empty($slack_bot_token)) {
+        return '';
+    }
+
+    $channel_id = '';
+    $channel_name = $this->generate_channel_name($session_id);
+
+    $response = wp_remote_post('https://slack.com/api/conversations.create', [
+        'headers' => [
+            'Content-Type' => 'application/json',
+            'Authorization' => 'Bearer ' . $slack_bot_token
+        ],
+        'body' => json_encode([
+            'name' => $channel_name,
+            'is_private' => false // Public channel - anyone in workspace can join
+        ])
+    ]);
+
+    if (!is_wp_error($response)) {
+        $response_data = json_decode(wp_remote_retrieve_body($response), true);
+
+        if (isset($response_data['ok']) && $response_data['ok']) {
+            $channel_id = $response_data['channel']['id'];
+            update_option("mxchat_channel_{$session_id}", $channel_id);
+
+            // Auto-invite agents to the channel
+            $agent_user_ids = $this->options['live_agent_user_ids'] ?? '';
+
+            if (!empty($agent_user_ids)) {
+                // Parse user IDs (one per line)
+                $user_ids = array_filter(array_map('trim', explode("\n", $agent_user_ids)));
+
+                foreach ($user_ids as $user_id_to_invite) {
+                    wp_remote_post('https://slack.com/api/conversations.invite', [
+                        'headers' => [
+                            'Content-Type' => 'application/json',
+                            'Authorization' => 'Bearer ' . $slack_bot_token
+                        ],
+                        'body' => json_encode([
+                            'channel' => $channel_id,
+                            'users' => $user_id_to_invite
+                        ])
+                    ]);
+                }
+            }
+        }
+    }
+
+    return $channel_id;
+}
+
+/**
+ * Post a handoff (or a re-handover) into the configured shared channel.
+ * First post per session becomes the conversation's thread root; its ts is
+ * stored in mxchat_thread_{session} and every later message rides that
+ * thread. Records the Slack error for the settings page on failure so the
+ * caller can fall back to per-conversation creation.
+ *
+ * @param string $session_id
+ * @param string $text       Fully-built handoff message.
+ * @param string $thread_ts  Existing thread root for this session, '' if none.
+ * @return bool  True when the message reached the shared channel.
+ */
+private function mxchat_post_shared_handoff($session_id, $text, $thread_ts = '') {
+    $slack_bot_token = $this->options['live_agent_bot_token'] ?? '';
+    $configured = trim($this->options['live_agent_shared_channel'] ?? '');
+    if (empty($slack_bot_token) || $configured === '') {
+        return false;
+    }
+
+    // Posting by #name works once the bot is a member; the response carries
+    // the real channel ID, cached so the inbound webhook and user-relay
+    // don't depend on how the admin wrote the setting.
+    $cache = get_option('mxchat_slack_shared_channel_id', array());
+    $target = (is_array($cache) && ($cache['configured'] ?? '') === $configured && !empty($cache['id']))
+        ? $cache['id']
+        : ltrim($configured, '#');
+
+    $body = [
+        'channel' => $target,
+        'text'    => $text,
+        'mrkdwn'  => true
+    ];
+    if ($thread_ts !== '') {
+        $body['thread_ts'] = $thread_ts;
+    }
+
+    $response = wp_remote_post('https://slack.com/api/chat.postMessage', [
+        'headers' => [
+            'Content-Type' => 'application/json',
+            'Authorization' => 'Bearer ' . $slack_bot_token
+        ],
+        'body' => json_encode($body)
+    ]);
+
+    if (is_wp_error($response)) {
+        update_option('mxchat_slack_shared_channel_error', array(
+            'error'      => $response->get_error_message(),
+            'configured' => $configured,
+            'time'       => time(),
+        ), false);
+        return false;
+    }
+
+    $data = json_decode(wp_remote_retrieve_body($response), true);
+    if (empty($data['ok'])) {
+        update_option('mxchat_slack_shared_channel_error', array(
+            'error'      => $data['error'] ?? 'unknown_error',
+            'configured' => $configured,
+            'time'       => time(),
+        ), false);
+        return false;
+    }
+
+    delete_option('mxchat_slack_shared_channel_error');
+
+    if (!empty($data['channel'])) {
+        update_option('mxchat_slack_shared_channel_id', array(
+            'configured' => $configured,
+            'id'         => $data['channel'],
+        ), false);
+    }
+    if ($thread_ts === '' && !empty($data['ts'])) {
+        update_option("mxchat_thread_{$session_id}", $data['ts'], 'no');
+    }
+
+    return true;
+}
+
 private function generate_channel_name($session_id) {
     $email = null;
     $name = null;
-    
+
     // 1. First priority: Check if user is logged in and get their info
     if (is_user_logged_in()) {
         $current_user = wp_get_current_user();
@@ -5008,7 +5213,16 @@ public function mxchat_send_user_message_to_agent($message, $user_id, $session_i
 
     // Otherwise, try Slack
     $slack_bot_token = $this->options['live_agent_bot_token'] ?? '';
-    $channel_id = get_option("mxchat_channel_{$session_id}", '');
+
+    // Shared-channel session: the conversation lives in a thread of the
+    // shared channel (plan 9f7756); relay user messages into that thread.
+    $thread_ts = get_option("mxchat_thread_{$session_id}", '');
+    if (!empty($thread_ts)) {
+        $cache = get_option('mxchat_slack_shared_channel_id', array());
+        $channel_id = is_array($cache) ? ($cache['id'] ?? '') : '';
+    } else {
+        $channel_id = get_option("mxchat_channel_{$session_id}", '');
+    }
 
     if (empty($slack_bot_token) || empty($channel_id)) {
         return false;
@@ -5016,16 +5230,21 @@ public function mxchat_send_user_message_to_agent($message, $user_id, $session_i
 
     $user_message = "ðŸ’¬ *User:* {$message}";
 
+    $body = [
+        'channel' => $channel_id,
+        'text' => $user_message,
+        'mrkdwn' => true
+    ];
+    if (!empty($thread_ts)) {
+        $body['thread_ts'] = $thread_ts;
+    }
+
     $response = wp_remote_post('https://slack.com/api/chat.postMessage', [
         'headers' => [
             'Content-Type' => 'application/json',
             'Authorization' => 'Bearer ' . $slack_bot_token
         ],
-        'body' => json_encode([
-            'channel' => $channel_id,
-            'text' => $user_message,
-            'mrkdwn' => true
-        ])
+        'body' => json_encode($body)
     ]);
 
     return !is_wp_error($response);
@@ -5308,9 +5527,13 @@ public function handle_slack_messages(WP_REST_Request $request) {
             return new WP_REST_Response(['ok' => true]);
         }
         
-        // Additional check: Skip if this is a threaded reply to our confirmation
+        // Threaded replies: in shared-channel mode every conversation lives in
+        // a thread rooted at its handoff message — route those to their session
+        // by thread root (plan 9f7756). Any other threaded reply (e.g. under a
+        // per-conversation channel's confirmation message) finds no session and
+        // is skipped, exactly as before.
         if (isset($event['thread_ts']) && $event['thread_ts'] !== $event['ts']) {
-            return new WP_REST_Response(['ok' => true]);
+            return $this->mxchat_route_shared_thread_reply($event);
         }
         
         $channel_id = $event['channel'];
@@ -5379,6 +5602,10 @@ public function handle_slack_messages(WP_REST_Request $request) {
                     ]);
                 }
 
+                // Auto-archive the ended conversation's channel (plan 7458a7).
+                // Toggle-gated, best-effort — never blocks the mode flip.
+                $this->mxchat_maybe_archive_conversation_channel($session_id, $channel_id);
+
                 return new WP_REST_Response(['ok' => true]);
             }
 
@@ -5408,6 +5635,112 @@ public function handle_slack_messages(WP_REST_Request $request) {
         }
     }
     
+    return new WP_REST_Response(['ok' => true]);
+}
+
+/**
+ * Route an agent's threaded Slack reply to the session whose shared-channel
+ * conversation is rooted at that thread (plan 9f7756). Sessions are keyed by
+ * the thread root ts stored in mxchat_thread_{session}, so two visitors in
+ * the same shared channel can never cross-wire. Unknown threads are ignored.
+ *
+ * @param array $event Slack message event (has thread_ts !== ts).
+ * @return WP_REST_Response
+ */
+private function mxchat_route_shared_thread_reply($event) {
+    $thread_root = $event['thread_ts'] ?? '';
+    $message_text = $event['text'] ?? '';
+    $message_ts = $event['ts'] ?? '';
+    $channel_id = $event['channel'] ?? '';
+
+    if ($thread_root === '') {
+        return new WP_REST_Response(['ok' => true]);
+    }
+
+    // Find the session owning this thread root (same reverse-lookup shape as
+    // the per-conversation channel mapping).
+    global $wpdb;
+    $session_option = $wpdb->get_var(
+        $wpdb->prepare(
+            "SELECT option_name FROM {$wpdb->options}
+             WHERE option_name LIKE 'mxchat_thread_%'
+             AND option_value = %s",
+            $thread_root
+        )
+    );
+
+    if (!$session_option) {
+        // Not a shared-channel conversation thread (e.g. a reply under a
+        // per-conversation confirmation) — ignore, as before.
+        return new WP_REST_Response(['ok' => true]);
+    }
+
+    $session_id = str_replace('mxchat_thread_', '', $session_option);
+
+    // Per-message dedupe — same transient pattern as the top-level handler.
+    $message_key = md5($session_id . $message_ts . $message_text);
+    $processed_messages = get_transient('mxchat_processed_messages_' . $session_id) ?: [];
+    if (in_array($message_key, $processed_messages)) {
+        return new WP_REST_Response(['ok' => true]);
+    }
+    $processed_messages[] = $message_key;
+    if (count($processed_messages) > 50) {
+        $processed_messages = array_slice($processed_messages, -50);
+    }
+    set_transient('mxchat_processed_messages_' . $session_id, $processed_messages, HOUR_IN_SECONDS);
+
+    $slack_bot_token = $this->options['live_agent_bot_token'] ?? '';
+
+    // Agent ending the chat from inside the thread — same command contract as
+    // per-conversation channels: "!endchat" or "!endchat <farewell>".
+    if (preg_match('/^!endchat\b/i', trim($message_text))) {
+        update_option("mxchat_mode_{$session_id}", 'ai');
+
+        $custom_message = trim(preg_replace('/^!endchat\s*/i', '', trim($message_text)));
+        if (!empty($custom_message)) {
+            $this->mxchat_save_chat_message($session_id, 'agent', $this->normalize_slack_text($custom_message));
+        }
+
+        if (!empty($slack_bot_token) && $channel_id !== '') {
+            wp_remote_post('https://slack.com/api/chat.postMessage', [
+                'headers' => [
+                    'Content-Type' => 'application/json',
+                    'Authorization' => 'Bearer ' . $slack_bot_token
+                ],
+                'body' => json_encode([
+                    'channel' => $channel_id,
+                    'text' => "✅ *Chat ended.* User has been transferred back to AI mode.",
+                    'thread_ts' => $thread_root,
+                    'mrkdwn' => true
+                ])
+            ]);
+        }
+
+        return new WP_REST_Response(['ok' => true]);
+    }
+
+    // Save the agent message for the widget (normalized like the channel path).
+    $this->mxchat_save_chat_message($session_id, 'agent', $this->normalize_slack_text($message_text));
+
+    // Confirmation stays inside the conversation's thread.
+    if (!empty($slack_bot_token) && $channel_id !== '') {
+        $confirm_key = 'mxchat_confirm_' . $message_key;
+        if (!get_transient($confirm_key)) {
+            wp_remote_post('https://slack.com/api/chat.postMessage', [
+                'headers' => [
+                    'Content-Type' => 'application/json',
+                    'Authorization' => 'Bearer ' . $slack_bot_token
+                ],
+                'body' => json_encode([
+                    'channel' => $channel_id,
+                    'text' => "✅ _Message sent to user_",
+                    'thread_ts' => $thread_root
+                ])
+            ]);
+            set_transient($confirm_key, true, 300);
+        }
+    }
+
     return new WP_REST_Response(['ok' => true]);
 }
 
@@ -5560,11 +5893,9 @@ private function mxchat_generate_embedding($text, $api_key) {
         if ($status_code !== 200) {
             $response_body = json_decode(wp_remote_retrieve_body($response), true);
             
-            $error_message = isset($response_body['error']['message']) 
-                ? $response_body['error']['message'] 
-                : 'HTTP Error ' . $status_code;
-                
-            $error_type = isset($response_body['error']['type']) 
+            $error_message = $this->extract_provider_error($response_body, 'HTTP Error ' . $status_code);
+
+            $error_type = isset($response_body['error']['type'])
                 ? $response_body['error']['type'] 
                 : 'unknown';
                 
@@ -5681,7 +6012,7 @@ private function mxchat_generate_embedding_custom($text) {
     $status = wp_remote_retrieve_response_code($response);
     $body   = json_decode(wp_remote_retrieve_body($response), true);
     if ($status !== 200) {
-        $msg = isset($body['error']['message']) ? $body['error']['message'] : 'HTTP ' . $status;
+        $msg = $this->extract_provider_error($body, 'HTTP ' . $status);
         return [
             'error' => esc_html__('Custom embedding endpoint error: ', 'mxchat') . esc_html($msg),
             'error_code' => 'embedding_custom_api_error',
@@ -6982,11 +7313,8 @@ private function find_relevant_content_openai_vectorstore($user_query, $bot_id =
 
     if ($response_code !== 200) {
         //error_log("MXCHAT VECTORSTORE ERROR: API error response: " . $response_body);
-        $api_error_detail = '';
         $decoded_error = json_decode($response_body, true);
-        if (isset($decoded_error['error']['message'])) {
-            $api_error_detail = $decoded_error['error']['message'];
-        }
+        $api_error_detail = $this->extract_provider_error($decoded_error, '');
         $this->last_vectorstore_error = 'Vector Store API returned HTTP ' . $response_code . ($api_error_detail ? ': ' . $api_error_detail : '');
         $this->current_valid_urls = [];
         return '';
@@ -7498,6 +7826,21 @@ private function get_system_instructions($bot_id = 'default', $session_id = '') 
         }
     }
 
+    // {context} placeholder (plan 59bc1b): inject the assembled knowledge-base
+    // block where the owner placed the token. Runs after the URL-strip and
+    // {visitor_name} handling and before the developer filter, so filtered
+    // instructions already show the final prompt. Only active once the KB
+    // assembly has stashed the block (context_kb_block non-null) — the early
+    // URL-extraction call happens before assembly and leaves the token alone.
+    if ($this->context_kb_block !== null && !empty($instructions) && stripos($instructions, '{context}') !== false) {
+        $pos = stripos($instructions, '{context}');
+        $instructions = substr($instructions, 0, $pos)
+            . rtrim($this->context_kb_block) . "\n"
+            . substr($instructions, $pos + strlen('{context}'));
+        // Additional occurrences are stripped — never duplicate the KB block.
+        $instructions = str_ireplace('{context}', '', $instructions);
+    }
+
     // Allow developers to filter system instructions and process shortcodes
     $instructions = apply_filters('mxchat_system_instructions', $instructions, $bot_id, $session_id);
     $instructions = do_shortcode($instructions);
@@ -7831,6 +8174,11 @@ private function mxchat_fc_loop_openai($prov, $system, $relevant_content, $conve
     for ($step = 0; $step <= $depth; $step++) {
         $offer_tools = ($step < $depth) && !empty($tool_schema);
         $body = array('model' => $prov['model'], 'messages' => $messages, 'temperature' => 1, 'stream' => false);
+        if (strpos($prov['url'], 'api.deepseek.com') !== false) {
+            // DeepSeek V4 defaults to thinking mode ON; tool loops want fast
+            // deterministic non-thinking turns (legacy deepseek-chat semantics).
+            $body['thinking'] = array('type' => 'disabled');
+        }
         if ($offer_tools) {
             $body['tools'] = $tool_schema;
             $body['tool_choice'] = 'auto';
@@ -9314,7 +9662,7 @@ private function mxchat_web_search_non_streaming_response($request_body, $api_ke
 
     if ($response_code !== 200) {
         $error_data = json_decode($response_body, true);
-        $error_message = $error_data['error']['message'] ?? 'Unknown API error';
+        $error_message = $this->extract_provider_error($error_data, 'Unknown API error');
         return [
             'error' => sprintf(esc_html__('OpenAI API error: %s', 'mxchat'), esc_html($error_message)),
             'error_code' => 'web_search_api_error'
@@ -9374,6 +9722,15 @@ private function mxchat_web_search_non_streaming_response($request_body, $api_ke
     // Transcript save is handled by the main handler (mxchat_handle_chat_request)
     // which includes rag_context for the "sources" link in transcripts.
 
+    // plan-4aa8e5: a 200 whose output carries no output_text (status
+    // "incomplete" with max_output_tokens exhausted, content-filter-emptied
+    // output, shape drift) previously fell through and returned '' — a
+    // silent empty bot bubble. This is the DEFAULT model path
+    // (gpt-5.1-chat-latest routes through /v1/responses).
+    if (trim($output_text) === '') {
+        return $this->mxchat_empty_completion_error($result, 'OpenAI');
+    }
+
     return $output_text;
 }
 
@@ -9408,8 +9765,9 @@ private function mxchat_web_search_streaming_response($request_body, $api_key, $
     $stream_started = false;
     $buffer = '';
     $citations = [];
+    $empty_error_emitted = false;
 
-    curl_setopt($ch, CURLOPT_WRITEFUNCTION, function($ch, $data) use (&$full_response, &$stream_started, &$buffer, &$citations, $testing_data) {
+    curl_setopt($ch, CURLOPT_WRITEFUNCTION, function($ch, $data) use (&$full_response, &$stream_started, &$buffer, &$citations, &$empty_error_emitted, $testing_data) {
         // Send testing data as first event if available
         if (!$stream_started && $testing_data !== null) {
             echo "data: " . json_encode(['testing_data' => $testing_data]) . "\n\n";
@@ -9442,6 +9800,12 @@ private function mxchat_web_search_streaming_response($request_body, $api_key, $
                     echo "data: " . json_encode(['content' => $citation_text]) . "\n\n";
                     $full_response .= $citation_text;
                     flush();
+                }
+                // plan-4aa8e5: zero deltas streamed → say so instead of
+                // closing a silent empty bubble (client renders text events).
+                if (trim($full_response) === '' && !$empty_error_emitted) {
+                    $empty_error_emitted = true;
+                    echo "data: " . json_encode(['content' => esc_html__('The AI provider returned an empty response. Please try again.', 'mxchat')]) . "\n\n";
                 }
                 echo "data: [DONE]\n\n";
                 flush();
@@ -9507,6 +9871,15 @@ private function mxchat_web_search_streaming_response($request_body, $api_key, $
     }
 
     curl_close($ch);
+
+    // plan-4aa8e5: the Responses API can end its stream via typed events
+    // without a [DONE] line — if nothing was streamed at all, close out with
+    // the empty-completion message instead of leaving a silent bubble.
+    if (trim($full_response) === '' && !$empty_error_emitted) {
+        echo "data: " . json_encode(['content' => esc_html__('The AI provider returned an empty response. Please try again.', 'mxchat')]) . "\n\n";
+        echo "data: [DONE]\n\n";
+        flush();
+    }
 
     // Save the complete response with RAG context so the "sources" link
     // appears in transcripts — mirrors the pattern used by Claude/OpenAI streaming.
@@ -9725,7 +10098,7 @@ private function mxchat_generate_response_claude_stream($selected_model, $claude
                                     break;
 
                                 case 'error':
-                                    echo "data: " . json_encode(['error' => $json['error']['message'] ?? 'Unknown error']) . "\n\n";
+                                    echo "data: " . json_encode(['error' => $this->extract_provider_error($json, 'Unknown error')]) . "\n\n";
                                     flush();
                                     break;
                             }
@@ -10114,7 +10487,7 @@ private function mxchat_generate_response_deepseek_stream($selected_model, $deep
                 $response_data['testing_data'] = $testing_data;
                 //error_log("MxChat Testing: Added testing data to DeepSeek fallback response");
             }
-            
+
             header('Content-Type: application/json');
             echo json_encode($response_data);
             return true;
@@ -10125,7 +10498,11 @@ private function mxchat_generate_response_deepseek_stream($selected_model, $deep
             'model' => $selected_model,
             'messages' => $formatted_conversation,
             'temperature' => 0.8,
-            'stream' => true
+            'stream' => true,
+            // DeepSeek V4 defaults to thinking mode ON (temperature ignored,
+            // long silent reasoning before the first delta); the widget wants
+            // the legacy deepseek-chat semantics = non-thinking.
+            'thinking' => ['type' => 'disabled']
         ]);
 
         // V2 retry-on-initial-connect: setup_streaming_headers is lazy-fired in WRITEFUNCTION.
@@ -10293,6 +10670,59 @@ private function mxchat_generate_response_deepseek_stream($selected_model, $deep
 }
 
 
+/**
+ * Extract a human-readable error message from a decoded provider response body.
+ * Providers disagree on shape: OpenAI/Anthropic/Google nest it (error.message),
+ * xAI returns a plain string under 'error'. Mirrors mxchat-vision's shipped
+ * extract_provider_error(); deliberately hint-free in core (vision's too-small
+ * image hint is an upload concern that doesn't apply here).
+ *
+ * @param mixed  $decoded_body Decoded JSON body (array), or whatever json_decode returned.
+ * @param string $fallback     Message to return when no provider text is found.
+ * @return string
+ */
+private function extract_provider_error($decoded_body, $fallback) {
+    $message = '';
+    if (isset($decoded_body['error']['message']) && is_string($decoded_body['error']['message']) && $decoded_body['error']['message'] !== '') {
+        $message = $decoded_body['error']['message'];
+    } elseif (isset($decoded_body['error']) && is_string($decoded_body['error']) && $decoded_body['error'] !== '') {
+        $message = $decoded_body['error'];
+    }
+
+    if ($message === '') {
+        return $fallback;
+    }
+
+    return $message;
+}
+
+/**
+ * plan-4aa8e5: a provider 200 whose body parses to no text must never reach
+ * the widget as a silent empty bot bubble. Standard error shape for that
+ * case, preferring the body's own explanation — error.message first (the
+ * 950731 passthrough pattern), then the Responses API's
+ * incomplete_details.reason (e.g. "max_output_tokens") — before the generic
+ * retry message.
+ */
+private function mxchat_empty_completion_error($decoded_body, $provider_label) {
+    $reason = '';
+    if (isset($decoded_body['error']['message']) && is_string($decoded_body['error']['message']) && $decoded_body['error']['message'] !== '') {
+        $reason = $decoded_body['error']['message'];
+    } elseif (isset($decoded_body['incomplete_details']['reason']) && is_string($decoded_body['incomplete_details']['reason']) && $decoded_body['incomplete_details']['reason'] !== '') {
+        $reason = sprintf(__('response incomplete: %s', 'mxchat'), $decoded_body['incomplete_details']['reason']);
+    }
+
+    $message = ($reason !== '')
+        ? sprintf(esc_html__('%1$s returned an empty response (%2$s). Please try again.', 'mxchat'), $provider_label, esc_html($reason))
+        : sprintf(esc_html__('%s returned an empty response. Please try again.', 'mxchat'), $provider_label);
+
+    return [
+        'error' => $message,
+        'error_code' => 'empty_completion',
+        'provider' => strtolower($provider_label),
+    ];
+}
+
 private function mxchat_generate_response_openrouter($selected_model, $openrouter_api_key, $conversation_history, $relevant_content, $session_id = '') {
     try {
         if (!is_array($conversation_history)) {
@@ -10364,10 +10794,8 @@ private function mxchat_generate_response_openrouter($selected_model, $openroute
             $response_body = wp_remote_retrieve_body($response);
             $decoded_response = json_decode($response_body, true);
             
-            $error_message = isset($decoded_response['error']['message']) 
-                ? $decoded_response['error']['message'] 
-                : 'HTTP Error ' . $status_code;
-            
+            $error_message = $this->extract_provider_error($decoded_response, 'HTTP Error ' . $status_code);
+
             return [
                 'error' => esc_html__('OpenRouter API error: ', 'mxchat') . esc_html($error_message),
                 'error_code' => 'openrouter_api_error',
@@ -10380,7 +10808,11 @@ private function mxchat_generate_response_openrouter($selected_model, $openroute
         $decoded_response = json_decode($response_body, true);
 
         if (isset($decoded_response['choices'][0]['message']['content'])) {
-            return trim($decoded_response['choices'][0]['message']['content']);
+            $text = trim($decoded_response['choices'][0]['message']['content']);
+            if ($text !== '') {
+                return $text;
+            }
+            return $this->mxchat_empty_completion_error($decoded_response, 'OpenRouter');
         } else {
             return [
                 'error' => esc_html__('Unexpected response format from OpenRouter.', 'mxchat'),
@@ -10562,10 +10994,13 @@ private function mxchat_generate_response_claude($selected_model, $claude_api_ke
     // TEXT block rather than content[0].
     if (isset($response_body['content']) && is_array($response_body['content'])) {
         foreach ($response_body['content'] as $block) {
-            if (isset($block['type'], $block['text']) && $block['type'] === 'text') {
+            // plan-4aa8e5: skip empty text blocks — a 200 whose only text
+            // block trims to '' must not render as a silent empty bubble.
+            if (isset($block['type'], $block['text']) && $block['type'] === 'text' && trim($block['text']) !== '') {
                 return trim($block['text']);
             }
         }
+        return $this->mxchat_empty_completion_error($response_body, 'Claude');
     }
 
     // Log unexpected response format
@@ -10719,7 +11154,11 @@ private function mxchat_generate_response_openai($selected_model, $api_key, $con
         $decoded_response = json_decode($response_body, true);
 
         if (isset($decoded_response['choices'][0]['message']['content'])) {
-            return trim($decoded_response['choices'][0]['message']['content']);
+            $text = trim($decoded_response['choices'][0]['message']['content']);
+            if ($text !== '') {
+                return $text;
+            }
+            return $this->mxchat_empty_completion_error($decoded_response, 'OpenAI');
         } else {
             return [
                 'error' => esc_html__('Unexpected response format from OpenAI.', 'mxchat'),
@@ -10849,19 +11288,21 @@ private function mxchat_generate_response_xai($selected_model, $xai_api_key, $co
         }
 
         // Authentication errors
-        if ($status_code === 401 || $status_code === 403 || 
+        if ($status_code === 401 || $status_code === 403 ||
             stripos($error_message, 'auth') !== false) {
             return [
-                'error' => esc_html__('Authentication failed with X.AI. Please check your API key.', 'mxchat'),
+                'error' => esc_html__('Authentication failed with X.AI. Please check your API key.', 'mxchat') . ' ' . esc_html($error_message),
                 'error_code' => 'xai_auth_error',
                 'provider' => 'xai'
             ];
         }
 
-        // Model errors
+        // Model errors — keep the canned category text as a prefix, but carry the
+        // provider's extracted reason (e.g. "Model not found: <id>") so the owner
+        // sees the specific model/reason instead of only the generic category.
         if (stripos($error_message, 'model') !== false) {
             return [
-                'error' => esc_html__('Invalid model specified for X.AI. Please check your model configuration.', 'mxchat'),
+                'error' => esc_html__('Invalid model specified for X.AI. Please check your model configuration.', 'mxchat') . ' ' . esc_html($error_message),
                 'error_code' => 'xai_invalid_model',
                 'provider' => 'xai'
             ];
@@ -10913,7 +11354,11 @@ private function mxchat_generate_response_xai($selected_model, $xai_api_key, $co
     $decoded_response = json_decode($response_body, true);
 
     if (isset($decoded_response['choices'][0]['message']['content'])) {
-        return trim($decoded_response['choices'][0]['message']['content']);
+        $text = trim($decoded_response['choices'][0]['message']['content']);
+        if ($text !== '') {
+            return $text;
+        }
+        return $this->mxchat_empty_completion_error($decoded_response, 'X.AI');
     } else {
         //error_log('X.AI API Response Format Error: ' . print_r($decoded_response, true));
         return [
@@ -10979,7 +11424,11 @@ private function mxchat_generate_response_deepseek($selected_model, $deepseek_ap
             'model' => $selected_model,
             'messages' => $formatted_conversation,
             'temperature' => 0.8,
-            'stream' => false
+            'stream' => false,
+            // DeepSeek V4 defaults to thinking mode ON (temperature ignored,
+            // slow reasoning-first responses); the widget wants the legacy
+            // deepseek-chat semantics = non-thinking.
+            'thinking' => ['type' => 'disabled']
         ]);
 
         $args = [
@@ -11080,7 +11529,11 @@ private function mxchat_generate_response_deepseek($selected_model, $deepseek_ap
         $decoded_response = json_decode($response_body, true);
 
         if (isset($decoded_response['choices'][0]['message']['content'])) {
-            return trim($decoded_response['choices'][0]['message']['content']);
+            $text = trim($decoded_response['choices'][0]['message']['content']);
+            if ($text !== '') {
+                return $text;
+            }
+            return $this->mxchat_empty_completion_error($decoded_response, 'DeepSeek');
         } else {
             //error_log('DeepSeek API Response Format Error: ' . print_r($decoded_response, true));
             return [
@@ -11281,7 +11734,11 @@ private function mxchat_generate_response_gemini($selected_model, $gemini_api_ke
     
     // Extract the response text
     if (isset($response_body['candidates'][0]['content']['parts'][0]['text'])) {
-        return trim($response_body['candidates'][0]['content']['parts'][0]['text']);
+        $text = trim($response_body['candidates'][0]['content']['parts'][0]['text']);
+        if ($text !== '') {
+            return $text;
+        }
+        return $this->mxchat_empty_completion_error($response_body, 'Gemini');
     } else {
         //error_log('Unexpected Gemini API response format: ' . json_encode($response_body));
         return "Sorry, I couldn't process that request. The response format was unexpected.";
@@ -11476,7 +11933,32 @@ private function mxchat_calculate_cosine_similarity($vectorA, $vectorB) {
     }
 
 
-public function mxchat_enqueue_scripts_styles() {
+public function mxchat_enqueue_scripts_styles($force = false) {
+    // Idempotency guard (plan-915355): the smart-asset-loading safety net in
+    // render_chatbot_shortcode() may invoke this method a second time (or on
+    // every shortcode render). Run the body at most once per request so the
+    // nonce, dynamic-settings merge, delayed transient write, and wp_footer
+    // loader action never happen twice.
+    static $did_run = false;
+    if ($did_run) {
+        return;
+    }
+
+    // Smart asset loading gate (plan-915355, opt-in, default OFF — toggle in
+    // MxChat → Settings → Optimization → Script Loading). When enabled and the
+    // shared display decision says the widget won't render on this request,
+    // skip all front-end assets. $force (the shortcode safety net) bypasses
+    // the gate because at that point the widget IS rendering. Note: bail
+    // WITHOUT setting $did_run, so a later forced call can still enqueue.
+    if (!$force
+        && class_exists('MxChat_Public')
+        && MxChat_Public::is_smart_asset_loading_enabled()
+        && !MxChat_Public::should_load_assets()) {
+        return;
+    }
+
+    $did_run = true;
+
     // Fetch options from the database first to check loading strategy
     $this->options = get_option('mxchat_options');
     $loading_strategy = isset($this->options['script_loading_strategy']) ? $this->options['script_loading_strategy'] : 'default';
@@ -11564,13 +12046,21 @@ public function mxchat_enqueue_scripts_styles() {
     // refresh endpoint can never drift (plan-32db95).
     $style_settings = array_merge($style_settings, $this->get_dynamic_widget_settings());
 
-    // For normal/defer loading, use wp_localize_script
-    // For delayed loading, we store settings in a transient to be output inline
+    // For normal/defer loading, use wp_localize_script.
+    // For delayed loading, nothing is localized or stored here: the delayed
+    // loader (mxchat_output_delayed_script_loader) rebuilds the full settings
+    // array inline from options and never reads any stored copy.
     if ($loading_strategy === 'default' || $loading_strategy === 'defer') {
         wp_localize_script('mxchat-chat-js', 'mxchatChat', $style_settings);
     } else {
-        // Store settings for the delayed loader to use
-        set_transient('mxchat_delayed_settings_' . get_current_user_id(), $style_settings, 60);
+        // Late-render fallback (plan-915355): when the shortcode safety net
+        // forces this method during/after wp_footer (footer widget areas, late
+        // builder regions), the wp_footer:99 loader action registered above may
+        // already be past its slot. Emit the loader inline right now; its
+        // emitted-once guard prevents double output if :99 still fires.
+        if ($force && did_action('wp_footer')) {
+            $this->mxchat_output_delayed_script_loader();
+        }
     }
 }
 
@@ -11578,6 +12068,15 @@ public function mxchat_enqueue_scripts_styles() {
  * Output the delayed script loader for performance optimization
  */
 public function mxchat_output_delayed_script_loader() {
+    // Emitted-once guard (plan-915355): this can now be reached both via the
+    // wp_footer:99 action and via the late-render inline fallback in
+    // mxchat_enqueue_scripts_styles(). The loader must print exactly once.
+    static $emitted = false;
+    if ($emitted) {
+        return;
+    }
+    $emitted = true;
+
     $this->options = get_option('mxchat_options');
     $loading_strategy = isset($this->options['script_loading_strategy']) ? $this->options['script_loading_strategy'] : 'default';
     $script_url = plugin_dir_url(__FILE__) . '../js/chat-script.js?ver=' . MXCHAT_VERSION;
@@ -11742,12 +12241,14 @@ public function setup_rate_limit_cron_jobs() {
         // Try to schedule the event
         $initial_time = time() + 300; // Start in 5 minutes
         $result = wp_schedule_event($initial_time, 'hourly', 'mxchat_reset_rate_limits');
-        
+
         if ($result === false) {
             //error_log('MxChat: Failed to schedule cron, using fallback system');
             $this->setup_fallback_rate_limit_system();
         } else {
-            //error_log('MxChat: Successfully scheduled rate limit reset cron');
+            if (defined('MXCHAT_DEV_MODE') && MXCHAT_DEV_MODE) {
+                error_log('MxChat: rate-limit reset cron event was missing and has been re-scheduled');
+            }
         }
         
     } catch (Exception $e) {
@@ -11795,20 +12296,32 @@ private function try_alternative_cron_scheduling($initial_time) {
  * Enhanced fallback rate limit system
  */
 private function setup_fallback_rate_limit_system() {
+    // Idempotence matters here: with setup_rate_limit_cron_jobs() hooked to
+    // admin_init, a DISABLE_WP_CRON site reaches this on every guard pass.
+    // Unconditionally rewriting mxchat_next_rate_limit_check to now+3600 would
+    // slide the deadline forward forever and the fallback reset would never
+    // fire. Only initialize the deadline on a genuine transition into fallback
+    // mode (or if it's somehow missing).
+    $already_active = get_option('mxchat_use_fallback_rate_limits', false);
+
     // Set a flag to use database-based rate limit cleanup
     update_option('mxchat_use_fallback_rate_limits', true);
-    
+
     // Schedule a one-time check to happen on the next plugin load
-    update_option('mxchat_next_rate_limit_check', time() + 3600);
-    
+    if (!$already_active || !get_option('mxchat_next_rate_limit_check', 0)) {
+        update_option('mxchat_next_rate_limit_check', time() + 3600);
+    }
+
     // Also set up a more frequent fallback check (every 4 hours)
     update_option('mxchat_fallback_check_interval', 4 * 3600);
-    
+
     //error_log('MxChat: Fallback rate limit system activated');
 }
 
 /**
  * Enhanced fallback check method
+ * NOTE: mxchat_check_fallback_rate_limits() in mxchat-basic.php is a second
+ * implementation of this same check — if either changes, change both.
  */
 public function check_fallback_rate_limits() {
     $use_fallback = get_option('mxchat_use_fallback_rate_limits', false);
@@ -12476,8 +12989,17 @@ private function clear_complete_session_data($session_id) {
         $this->clear_word_transients($session_id);
     }
     
+    // Archive the session's per-conversation Slack channel before its option
+    // is deleted (plan 7458a7 — covers transcript-retention cleanup paths).
+    // Toggle-gated + shared-channel-guarded inside the helper; best-effort.
+    $stale_channel = get_option("mxchat_channel_{$session_id}", '');
+    if ($stale_channel !== '') {
+        $this->mxchat_maybe_archive_conversation_channel($session_id, $stale_channel);
+    }
+
     // Clear agent-related data
     delete_option("mxchat_channel_{$session_id}");
+    delete_option("mxchat_thread_{$session_id}");
     delete_option("mxchat_agent_name_{$session_id}");
     delete_option("mxchat_email_{$session_id}");
     

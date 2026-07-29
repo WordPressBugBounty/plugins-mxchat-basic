@@ -397,6 +397,16 @@ public function mxchat_save_setting_callback() {
             wp_send_json_success(['message' => esc_html__('Setting saved', 'mxchat')]);
             return;
 
+        // Smart asset loading toggle (plan-915355). STANDALONE option, same
+        // reasoning as the Editor Assistant case above — saved directly and
+        // short-circuited so it never touches mxchat_options / mxchat_sanitize.
+        // Default OFF (opt-in performance optimization).
+        case 'mxchat_smart_asset_loading':
+            $sal_value = ($value === 'on' || $value === '1') ? 'on' : 'off';
+            update_option('mxchat_smart_asset_loading', $sal_value);
+            wp_send_json_success(['message' => esc_html__('Setting saved', 'mxchat')]);
+            return;
+
         // Live-agent availability schedules (plans 8ccaa2 + 99d7a4). STANDALONE
         // options, same reasoning as the Editor Assistant case above — nested
         // structures that mxchat_sanitize() would strip on the next autosave of any

@@ -3,7 +3,7 @@
  * Plugin Name: MxChat
  * Plugin URI: https://mxchat.ai/
  * Description: AI chatbot for WordPress with OpenAI, Claude, xAI, DeepSeek, live agent, PDF uploads, WooCommerce, and training on website data.
- * Version: 3.2.14
+ * Version: 3.2.15
  * Author: MxChat
  * Author URI: https://mxchat.ai
  * License: GPLv2 or later
@@ -24,6 +24,14 @@ if (!defined('MXCHAT_DEV_MODE')) {
 if (!defined('MXCHAT_VERSION')) {
     $plugin_data = get_file_data(__FILE__, array('Version' => 'Version'), 'plugin');
     $version = $plugin_data['Version'];
+    // MXCHAT_BASE_VERSION: the plain header version, stable across requests even in
+    // dev mode. Use it for anything PERSISTED or COMPARED (the stored
+    // mxchat_plugin_version option and the migration gate in
+    // mxchat_check_for_update). MXCHAT_VERSION keeps the time() suffix in dev for
+    // ASSET cache-busting only — persisting the suffixed value made the version
+    // comparison churn every request, re-running the full activation/migration
+    // suite per page load on dev installs.
+    define('MXCHAT_BASE_VERSION', $version);
     if (MXCHAT_DEV_MODE) {
         $version .= '.' . time();
     }
@@ -1009,6 +1017,19 @@ function mxchat_migrate_deprecated_models() {
         );
     }
 
+    // Migrate retired DeepSeek ids to DeepSeek V4 Flash — the vendor removed
+    // deepseek-chat and deepseek-reasoner on 2026-07-24 (hard cutoff, every
+    // request 400s). V4 Flash is DeepSeek's designated successor for the
+    // legacy deepseek-chat alias.
+    if (in_array($current_model, array('deepseek-chat', 'deepseek-reasoner'), true)) {
+        $options['model'] = 'deepseek-v4-flash';
+        $migrated = true;
+        $migration_message = sprintf(
+            'Your chatbot model has been automatically updated from %s to DeepSeek V4 Flash because DeepSeek retired its older API models on July 24, 2026.',
+            $current_model
+        );
+    }
+
     if ($migrated) {
         update_option('mxchat_options', $options);
         update_option('mxchat_model_migrated_notice', true);
@@ -1157,8 +1178,9 @@ function mxchat_activate() {
     // Setup cron jobs
     mxchat_setup_cron_jobs();
 
-    // Update version
-    update_option('mxchat_plugin_version', MXCHAT_VERSION);
+    // Update version (stable base version — never the dev time()-suffixed one,
+    // or the check_for_update comparison would churn every request)
+    update_option('mxchat_plugin_version', MXCHAT_BASE_VERSION);
 
     //error_log("MxChat: Activation function completed");
 }
@@ -1240,15 +1262,23 @@ function mxchat_check_fallback_rate_limits() {
     }
     
     $next_check = get_option('mxchat_next_rate_limit_check', 0);
-    
+
     if (time() >= $next_check) {
-        // Only run reset if the MxChat_Integrator class exists
-        if (class_exists('MxChat_Integrator')) {
-            $integrator = new MxChat_Integrator();
-            if (method_exists($integrator, 'mxchat_reset_rate_limits')) {
-                $integrator->mxchat_reset_rate_limits();
-                update_option('mxchat_next_rate_limit_check', time() + 3600);
-            }
+        // Reuse the bootstrap's integrator — mxchat_init() creates the global on
+        // plugins_loaded (before this init-priority-5 callback), so it's always set
+        // here. Constructing a second MxChat_Integrator just to call one method
+        // re-registers every hook the plugin has (ajax pairs, wp_footer loader,
+        // rest_api_init, admin_init guard) on a duplicate instance for the rest of
+        // the request. Defensive construction only if the global is somehow unset.
+        // NOTE: MxChat_Integrator::check_fallback_rate_limits() is a second
+        // implementation of this same check — if either changes, change both.
+        global $mxchat_integrator;
+        $integrator = ($mxchat_integrator instanceof MxChat_Integrator)
+            ? $mxchat_integrator
+            : (class_exists('MxChat_Integrator') ? new MxChat_Integrator() : null);
+        if ($integrator && method_exists($integrator, 'mxchat_reset_rate_limits')) {
+            $integrator->mxchat_reset_rate_limits();
+            update_option('mxchat_next_rate_limit_check', time() + 3600);
         }
     }
 }
@@ -1262,7 +1292,7 @@ function mxchat_check_for_update() {
     
     try {
         $current_version = get_option('mxchat_plugin_version', '0.0.0');
-        $plugin_version = MXCHAT_VERSION;
+        $plugin_version = MXCHAT_BASE_VERSION;
 
         // Always ensure critical tables exist (even if version matches)
         // This handles manual table deletion or fresh installs
@@ -1341,6 +1371,13 @@ function mxchat_check_for_update() {
             // (replaces the per-row column tracking from 3.2.3, which was reverted)
             if (version_compare($current_version, '3.2.4', '<')) {
                 mxchat_backfill_active_embedding_model();
+            }
+
+            // 3.2.15: Migrate retired DeepSeek ids (deepseek-chat / deepseek-reasoner
+            // were shut off at the vendor on 2026-07-24). The function is idempotent —
+            // it only rewrites models on its deprecation lists.
+            if (version_compare($current_version, '3.2.15', '<')) {
+                mxchat_migrate_deprecated_models();
             }
 
             // Run full activation to ensure everything is up to date

@@ -2284,6 +2284,13 @@ textarea.mxch-cg-meta-input {
     flex-shrink: 0;
 }
 
+.mxch-seod-header-position {
+    width: 44px;
+    text-align: center;
+    flex-shrink: 0;
+    cursor: default; /* not sortable in v1 */
+}
+
 .mxch-seod-sort-arrow {
     font-size: 9px;
     vertical-align: middle;
@@ -2306,6 +2313,14 @@ textarea.mxch-cg-meta-input {
 .mxch-seod-cell-clicks,
 .mxch-seod-cell-impressions {
     width: 52px;
+    flex-shrink: 0;
+    justify-content: center;
+    font-size: 12px;
+    color: var(--mxch-text-muted, #6b7280);
+}
+
+.mxch-seod-cell-position {
+    width: 44px;
     flex-shrink: 0;
     justify-content: center;
     font-size: 12px;
@@ -2920,6 +2935,37 @@ textarea.mxch-cg-meta-input {
     font-size: 13px;
 }
 
+/* Slim "connect Search Console" hint row — GSC add-on active but not linked.
+   Same amber state language as the add-on settings card's needs-GSC banner. */
+.mxch-seod-gsc-hint {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 14px;
+    background: #fffbeb;
+    border-bottom: 1px solid #fde68a;
+    color: var(--mxch-text-secondary, #64748b);
+    font-size: 12.5px;
+}
+
+.mxch-seod-gsc-hint-dot {
+    flex-shrink: 0;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--mxch-warning, #d97706);
+}
+
+.mxch-seod-gsc-hint a {
+    color: var(--mxch-primary, #7873f5);
+    text-decoration: none;
+    font-weight: 500;
+}
+
+.mxch-seod-gsc-hint a:hover {
+    text-decoration: underline;
+}
+
 /* ─── Settings Card Header ─────────────────────────────────────── */
 
 .mxch-card-header {
@@ -3170,12 +3216,14 @@ textarea.mxch-cg-meta-input {
     }
     .mxch-seod-cell-date,
     .mxch-seod-cell-clicks,
-    .mxch-seod-cell-impressions {
+    .mxch-seod-cell-impressions,
+    .mxch-seod-cell-position {
         display: none;
     }
     .mxch-seod-header-date,
     .mxch-seod-header-clicks,
-    .mxch-seod-header-impressions {
+    .mxch-seod-header-impressions,
+    .mxch-seod-header-position {
         display: none;
     }
     .mxch-seod-modal {

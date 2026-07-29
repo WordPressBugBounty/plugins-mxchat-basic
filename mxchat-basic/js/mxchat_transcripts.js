@@ -608,11 +608,17 @@ jQuery(document).ready(function($) {
                     </div>
                 `;
             } else {
-                const ragLink = msg.has_rag ? `<a href="#" class="mxch-rag-link" data-message-id="${msg.id}">Sources</a>` : '';
+                // Live-agent replies (role 'agent') get their own label and never
+                // carry a Sources link; bot/assistant rows render exactly as before.
+                const isAgent = !!msg.is_agent;
+                const ragLink = (!isAgent && msg.has_rag) ? `<a href="#" class="mxch-rag-link" data-message-id="${msg.id}">Sources</a>` : '';
+                const senderLabel = isAgent
+                    ? '<span class="mxch-agent-label">Live Agent</span>'
+                    : '<span class="mxch-bot-label">AI Assistant</span>';
                 messagesHtml += `
-                    <div class="mxch-message mxch-message-bot" data-message-id="${msg.id}">
+                    <div class="mxch-message mxch-message-bot${isAgent ? ' mxch-message-agent' : ''}" data-message-id="${msg.id}">
                         <div class="mxch-message-header">
-                            <span class="mxch-bot-label">AI Assistant</span>
+                            ${senderLabel}
                             ${ragLink}
                         </div>
                         <div class="mxch-message-row">

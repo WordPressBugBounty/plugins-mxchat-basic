@@ -2325,6 +2325,14 @@ article .entry-content,
             $body['reasoning_effort'] = $effort;
         }
 
+        // DeepSeek V4 defaults to thinking mode ON (temperature ignored and
+        // reasoning eats the token budget); generation wants the legacy
+        // deepseek-chat semantics = non-thinking. Endpoint-gated because this
+        // helper is shared with OpenAI and xAI.
+        if (strpos($endpoint, 'api.deepseek.com') !== false) {
+            $body['thinking'] = array('type' => 'disabled');
+        }
+
         // Scale timeout with token count — large generation calls need more time
         $timeout = ($max_tokens > 8000) ? 300 : 120;
 
@@ -2392,7 +2400,7 @@ article .entry-content,
         // sourced from the core model catalog (plan-dcb71c); frozen list fallback.
         $omit_temp = (class_exists('MxChat_Model_Catalog') && method_exists('MxChat_Model_Catalog', 'supports_temperature'))
             ? !MxChat_Model_Catalog::supports_temperature($model)
-            : in_array($model, array('claude-opus-4-7', 'claude-opus-4-8', 'claude-fable-5', 'claude-sonnet-5'), true);
+            : in_array($model, array('claude-opus-5', 'claude-opus-4-7', 'claude-opus-4-8', 'claude-fable-5', 'claude-sonnet-5'), true);
         if ($omit_temp) {
             unset($body['temperature']);
         }
@@ -3303,21 +3311,37 @@ article .entry-content,
             );
         }
 
-        // When sorting by a meta field, ensure meta_key is set for ordering.
-        // For 'all' filter, include posts without the meta key via OR clause.
+        // When sorting by a meta field, posts WITHOUT the key must stay in the
+        // list — GSC meta is no longer zero-filled for no-data posts (plan
+        // 282c80), and score meta never existed for unanalyzed posts. A single
+        // OR EXISTS/NOT-EXISTS meta_query cannot order this reliably (under an
+        // OR relation WP_Meta_Query leaves the orderby clause's join alias
+        // unconstrained by meta_key, so ORDER BY reads arbitrary meta rows).
+        // Instead: two id-only queries — posts WITH the key sorted by its
+        // value, then posts WITHOUT it appended (newest first). Missing-data
+        // rows deliberately sort last in BOTH directions.
         if ($sort_meta_key) {
-            $args['meta_key'] = $sort_meta_key;
-            if ($filter === 'all') {
-                $args['meta_query'] = array(
-                    'relation' => 'OR',
-                    array('key' => $sort_meta_key, 'compare' => 'EXISTS'),
-                    array('key' => $sort_meta_key, 'compare' => 'NOT EXISTS'),
-                );
-            }
-        }
+            $with_args = $args;
+            $with_args['meta_key'] = $sort_meta_key;
+            $with_args['orderby'] = 'meta_value_num';
+            $q_with = new \WP_Query($with_args);
 
-        $query    = new \WP_Query($args);
-        $all_ids  = $query->posts;
+            $without_args = $args;
+            $missing_clause = array('key' => $sort_meta_key, 'compare' => 'NOT EXISTS');
+            if (!empty($without_args['meta_query'])) {
+                $without_args['meta_query'] = array('relation' => 'AND', $without_args['meta_query'], $missing_clause);
+            } else {
+                $without_args['meta_query'] = array($missing_clause);
+            }
+            $without_args['orderby'] = 'date';
+            $without_args['order'] = 'DESC';
+            $q_without = new \WP_Query($without_args);
+
+            $all_ids = array_merge($q_with->posts, $q_without->posts);
+        } else {
+            $query   = new \WP_Query($args);
+            $all_ids = $query->posts;
+        }
         $total    = count($all_ids);
         $pages    = max(1, ceil($total / $per_page));
         $page     = min($page, $pages);

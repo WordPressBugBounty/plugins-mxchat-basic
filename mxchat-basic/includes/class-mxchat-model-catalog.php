@@ -93,7 +93,8 @@ class MxChat_Model_Catalog {
                 'requires_key_to_load_models' => false,
                 'models' => array(
                     'claude-fable-5'              => array('label' => 'Claude Fable 5',      'description' => __('Latest Flagship — newest and most capable Anthropic model', 'mxchat')),
-                    'claude-opus-4-8'             => array('label' => 'Claude Opus 4.8',     'description' => __('Previous flagship — most capable Opus-tier model', 'mxchat')),
+                    'claude-opus-5'               => array('label' => 'Claude Opus 5',       'description' => __('Latest Opus — best for complex agentic and coding work', 'mxchat')),
+                    'claude-opus-4-8'             => array('label' => 'Claude Opus 4.8',     'description' => __('Previous Opus generation', 'mxchat')),
                     'claude-opus-4-7'             => array('label' => 'Claude Opus 4.7',     'description' => __('Previous Anthropic flagship model', 'mxchat')),
                     'claude-opus-4-6'             => array('label' => 'Claude Opus 4.6',     'description' => __('Most capable Claude model - recommended', 'mxchat')),
                     'claude-sonnet-5'             => array('label' => 'Claude Sonnet 5',     'description' => __('Newest Sonnet - excellent balance of speed and capability', 'mxchat')),
@@ -123,7 +124,10 @@ class MxChat_Model_Catalog {
                 'key_option'                  => 'deepseek_api_key',
                 'requires_key_to_load_models' => false,
                 'models' => array(
-                    'deepseek-chat' => array('label' => 'DeepSeek-V3', 'description' => __('Advanced AI assistant', 'mxchat')),
+                    // DeepSeek retired deepseek-chat / deepseek-reasoner on 2026-07-24;
+                    // stored settings migrate via mxchat_migrate_deprecated_models().
+                    'deepseek-v4-flash' => array('label' => 'DeepSeek V4 Flash', 'description' => __('Fast and cost-effective', 'mxchat')),
+                    'deepseek-v4-pro'   => array('label' => 'DeepSeek V4 Pro',   'description' => __('Most capable DeepSeek model', 'mxchat')),
                 ),
             ),
             'custom' => array(
@@ -523,7 +527,11 @@ class MxChat_Model_Catalog {
         }
 
         // Anthropic flagships that reject the temperature param outright.
-        $claude_no_temp = array('claude-opus-4-7', 'claude-opus-4-8', 'claude-fable-5', 'claude-sonnet-5');
+        // TRAP: exact-match list — every NEW Anthropic flagship (4.7 and newer)
+        // must be added here or it 400s on every chat message while looking
+        // fine in the picker. A claude-opus-* prefix rule would wrongly catch
+        // claude-opus-4-6 and older, which still accept temperature.
+        $claude_no_temp = array('claude-opus-5', 'claude-opus-4-7', 'claude-opus-4-8', 'claude-fable-5', 'claude-sonnet-5');
         if (in_array($model, $claude_no_temp, true)) {
             return false;
         }

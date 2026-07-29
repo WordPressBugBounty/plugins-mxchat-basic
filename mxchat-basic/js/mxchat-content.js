@@ -1657,6 +1657,13 @@
             $(this).prop('disabled', true).find('span').text('Stopping...');
         });
 
+        // "Connect Search Console" hint row → jump to the Settings section,
+        // where the add-on's GSC card lives (eadc60).
+        $(document).on('click', '.mxch-seod-gsc-hint-link', function(e) {
+            e.preventDefault();
+            $('.mxch-nav-link[data-target="content-settings"]').trigger('click');
+        });
+
         // Sortable column headers (all columns sort server-side)
         $(document).on('click', '.mxch-seod-header-cell[data-sort]', function() {
             var col = $(this).data('sort');
@@ -1786,7 +1793,14 @@
         $table.empty();
         seodState.expandedId = null;
 
-        // Column headers
+        // Column headers.
+        // gscUnlinked: the add-on unlocked the GSC columns, but Search Console
+        // itself isn't linked yet — every cell is a dash, so sorting Clicks /
+        // Impr. is noise. Keep the unlocked look, drop data-sort, and show one
+        // slim hint row pointing at the Settings tab (eadc60). When linked,
+        // rendering below is byte-identical to before.
+        var gscUnlinked = mxchatContent.hasGSC && !mxchatContent.gscLinked;
+        var gscSortable = mxchatContent.hasGSC && !gscUnlinked;
         var activeClass = function(col) { return seodState.sortBy === col ? ' mxch-seod-header-active' : ''; };
         $table.append(
             '<div class="mxch-seod-header">' +
@@ -1794,10 +1808,21 @@
                 '<div class="mxch-seod-header-cell mxch-seod-header-title' + activeClass('title') + '" data-sort="title">Title' + seodSortArrow('title') + '</div>' +
                 '<div class="mxch-seod-header-cell mxch-seod-header-date' + activeClass('date') + '" data-sort="date">Date' + seodSortArrow('date') + '</div>' +
                 '<div class="mxch-seod-header-cell mxch-seod-header-score' + activeClass('score') + '" data-sort="score">Score' + seodSortArrow('score') + '</div>' +
-                '<div class="mxch-seod-header-cell mxch-seod-header-clicks' + (!mxchatContent.hasGSC ? ' mxch-seod-header-locked' : '') + '"' + (mxchatContent.hasGSC ? ' data-sort="clicks"' : '') + '>Clicks' + (mxchatContent.hasGSC ? seodSortArrow('clicks') : ' <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>') + '</div>' +
-                '<div class="mxch-seod-header-cell mxch-seod-header-impressions' + (!mxchatContent.hasGSC ? ' mxch-seod-header-locked' : '') + '"' + (mxchatContent.hasGSC ? ' data-sort="impressions"' : '') + '>Impr.' + (mxchatContent.hasGSC ? seodSortArrow('impressions') : ' <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>') + '</div>' +
+                '<div class="mxch-seod-header-cell mxch-seod-header-clicks' + (!mxchatContent.hasGSC ? ' mxch-seod-header-locked' : '') + '"' + (gscSortable ? ' data-sort="clicks"' : '') + '>Clicks' + (gscSortable ? seodSortArrow('clicks') : '') + (!mxchatContent.hasGSC ? ' <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>' : '') + '</div>' +
+                '<div class="mxch-seod-header-cell mxch-seod-header-impressions' + (!mxchatContent.hasGSC ? ' mxch-seod-header-locked' : '') + '"' + (gscSortable ? ' data-sort="impressions"' : '') + '>Impr.' + (gscSortable ? seodSortArrow('impressions') : '') + (!mxchatContent.hasGSC ? ' <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>' : '') + '</div>' +
+                '<div class="mxch-seod-header-cell mxch-seod-header-position' + (!mxchatContent.hasGSC ? ' mxch-seod-header-locked' : '') + '" title="Average search position, last 28 days">Pos.' + (!mxchatContent.hasGSC ? ' <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>' : '') + '</div>' +
             '</div>'
         );
+
+        if (gscUnlinked) {
+            $table.append(
+                '<div class="mxch-seod-gsc-hint">' +
+                    '<span class="mxch-seod-gsc-hint-dot"></span>' +
+                    '<span>Connect Google Search Console to fill the Clicks, Impressions and Position columns &mdash; ' +
+                    '<a href="#" class="mxch-seod-gsc-hint-link">open Settings</a></span>' +
+                '</div>'
+            );
+        }
 
         posts.forEach(function(p) {
             var scoreHtml;
@@ -1824,6 +1849,7 @@
                         '<div class="mxch-seod-cell mxch-seod-cell-score">' + scoreHtml + '</div>' +
                         '<div class="mxch-seod-cell mxch-seod-cell-clicks' + (!mxchatContent.hasGSC ? ' mxch-seod-cell-locked' : '') + '" data-clicks="' + (p.clicks !== null ? p.clicks : 0) + '">' + (!mxchatContent.hasGSC ? '—' : (p.clicks !== null ? p.clicks : '—')) + '</div>' +
                         '<div class="mxch-seod-cell mxch-seod-cell-impressions' + (!mxchatContent.hasGSC ? ' mxch-seod-cell-locked' : '') + '" data-impressions="' + (p.impressions !== null ? p.impressions : 0) + '">' + (!mxchatContent.hasGSC ? '—' : (p.impressions !== null ? seodFormatNum(p.impressions) : '—')) + '</div>' +
+                        '<div class="mxch-seod-cell mxch-seod-cell-position' + (!mxchatContent.hasGSC ? ' mxch-seod-cell-locked' : '') + '">&mdash;</div>' +
                     '</div>' +
                 '</div>'
             );

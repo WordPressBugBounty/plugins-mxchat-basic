@@ -1094,14 +1094,16 @@ function setupMxChatModelSelector() {
             ],
             claude: [
                 { value: 'claude-fable-5', label: 'Claude Fable 5', description: 'Latest Flagship — newest and most capable Anthropic model' },
-                { value: 'claude-opus-4-8', label: 'Claude Opus 4.8', description: 'Previous flagship — most capable Opus-tier model' },
+                { value: 'claude-opus-5', label: 'Claude Opus 5', description: 'Latest Opus — best for complex agentic and coding work' },
+                { value: 'claude-opus-4-8', label: 'Claude Opus 4.8', description: 'Previous Opus generation' },
                 { value: 'claude-opus-4-7', label: 'Claude Opus 4.7', description: 'Previous Anthropic flagship model' },
             ],
             xai: [
                 { value: 'grok-4-0709', label: 'Grok 4', description: 'Latest flagship model' },
             ],
             deepseek: [
-                { value: 'deepseek-chat', label: 'DeepSeek-V3', description: 'Advanced AI assistant' },
+                { value: 'deepseek-v4-flash', label: 'DeepSeek V4 Flash', description: 'Fast and cost-effective' },
+                { value: 'deepseek-v4-pro', label: 'DeepSeek V4 Pro', description: 'Most capable DeepSeek model' },
             ],
             custom: [
                 { value: 'custom-provider', label: 'Custom Provider', description: 'OpenAI-compatible local LLM — configure in API Keys tab' },

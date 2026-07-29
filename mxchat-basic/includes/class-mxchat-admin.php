@@ -686,6 +686,15 @@ private function perform_streaming_test($provider, $model, $api_key) {
                 'temperature' => 0.3,
                 'stream' => true
             ];
+            // Claude flagships from Opus 4.7 onward reject the temperature
+            // param outright (400). Reuse the catalog's decision — this path
+            // previously sent temperature unconditionally, so the streaming
+            // test was broken for Opus 4.7/4.8, Fable 5 and Sonnet 5.
+            if (class_exists('MxChat_Model_Catalog')
+                && method_exists('MxChat_Model_Catalog', 'supports_temperature')
+                && !MxChat_Model_Catalog::supports_temperature($model)) {
+                unset($body['temperature']);
+            }
             break;
 
         case 'grok':
@@ -714,7 +723,10 @@ private function perform_streaming_test($provider, $model, $api_key) {
                 'messages' => [['role' => 'user', 'content' => $test_message]],
                 'max_tokens' => 50,
                 'temperature' => 0.3,
-                'stream' => true
+                'stream' => true,
+                // DeepSeek V4 defaults to thinking mode ON — reasoning would
+                // consume the 50-token test budget and return no visible text.
+                'thinking' => ['type' => 'disabled']
             ];
             break;
 
@@ -3089,7 +3101,10 @@ private function translate_with_deepseek($api_key, $model, $system_prompt, $text
                 ['role' => 'system', 'content' => $system_prompt],
                 ['role' => 'user', 'content' => $text]
             ],
-            'temperature' => 0.3
+            'temperature' => 0.3,
+            // DeepSeek V4 defaults to thinking mode ON (temperature ignored,
+            // slow responses); translation wants non-thinking.
+            'thinking' => ['type' => 'disabled']
         ])
     ]);
 
@@ -3469,8 +3484,11 @@ public function mxchat_fetch_conversation() {
     // Format messages for output
     $formatted_messages = [];
     foreach ($messages as $msg) {
-        $is_user = ($msg->role === 'user');
-        $is_bot = ($msg->role === 'bot' || $msg->role === 'assistant');
+        $is_user  = ($msg->role === 'user');
+        // Live-agent replies (Slack/Telegram handoff) persist with role 'agent'.
+        // Kept OUT of $is_bot so the RAG Sources link below stays bot-only.
+        $is_agent = ($msg->role === 'agent');
+        $is_bot   = ($msg->role === 'bot' || $msg->role === 'assistant');
 
         $content = wp_kses(
             stripslashes($msg->message),
@@ -3497,6 +3515,7 @@ public function mxchat_fetch_conversation() {
             'id' => $msg->id,
             'role' => $msg->role,
             'is_user' => $is_user,
+            'is_agent' => $is_agent,
             'is_bot' => $is_bot,
             'content' => $formatted_content,
             'timestamp' => wp_date('g:i A', strtotime($msg->timestamp . ' UTC')),
@@ -6723,6 +6742,26 @@ public function mxchat_page_init() {
         'mxchat_live_agent_section'
     );
 
+    // Shared handoff channel (plan 9f7756): route every handoff into one
+    // pre-existing channel as threads instead of creating chat-* channels.
+    add_settings_field(
+        'live_agent_shared_channel',
+        __('Shared Handoff Channel', 'mxchat'),
+        array($this, 'mxchat_live_agent_shared_channel_callback'),
+        'mxchat-embed',
+        'mxchat_live_agent_section'
+    );
+
+    // Auto-archive per-conversation chat- channels on !endchat (plan 7458a7).
+    // Default OFF; never touches the shared handoff channel.
+    add_settings_field(
+        'live_agent_archive_on_end_toggle',
+        __('Archive Channel When Chat Ends', 'mxchat'),
+        array($this, 'mxchat_live_agent_archive_on_end_callback'),
+        'mxchat-embed',
+        'mxchat_live_agent_section'
+    );
+
     add_settings_field(
         'live_agent_webhook_url',
         __('Slack Webhook URL', 'mxchat'),
@@ -8907,6 +8946,37 @@ public function mxchat_live_agent_user_ids_callback() {
     echo '<p class="description">' . esc_html__('Enter Slack User IDs of agents who should be automatically invited to chat channels (one per line). Find user IDs in Slack profiles under "More" → "Copy member ID". Example: U1234567890', 'mxchat') . '</p>';
 }
 
+public function mxchat_live_agent_shared_channel_callback() {
+    $value = isset($this->options['live_agent_shared_channel']) ? $this->options['live_agent_shared_channel'] : '';
+    printf(
+        '<input type="text" id="live_agent_shared_channel" name="live_agent_shared_channel" value="%s" class="regular-text" placeholder="#support or C0123456789" />',
+        esc_attr($value)
+    );
+    echo '<p class="description">' . esc_html__('Optional. Route ALL live agent handoffs into this one existing Slack channel — each conversation becomes its own thread there. Enter a channel ID (starts with C) or a #channel-name, and invite your bot to the channel first (/invite @YourBot). Agents reply inside a conversation\'s thread; !endchat inside the thread ends that chat. Leave blank to keep creating a separate chat- channel per conversation.', 'mxchat') . '</p>';
+
+    // Surface the last failed handoff so a wrong name / missing invite is
+    // visible right where it gets fixed. A successful handoff clears this.
+    $shared_error = get_option('mxchat_slack_shared_channel_error');
+    if (!empty($shared_error['error']) && trim((string) $value) !== '' && ($shared_error['configured'] ?? '') === trim((string) $value)) {
+        echo '<p class="description"><strong>' . esc_html__('⚠ Last handoff could not reach this channel', 'mxchat') . '</strong> — '
+            . esc_html(sprintf(
+                /* translators: %s: Slack API error code */
+                __('Slack said "%s". Handoffs are falling back to per-conversation channels until this is fixed. Check the channel name or ID and make sure the bot has been invited to it.', 'mxchat'),
+                $shared_error['error']
+            )) . '</p>';
+    }
+}
+
+public function mxchat_live_agent_archive_on_end_callback() {
+    $value = isset($this->options['live_agent_archive_on_end_toggle']) ? $this->options['live_agent_archive_on_end_toggle'] : 'off';
+    printf(
+        '<input type="checkbox" id="live_agent_archive_on_end_toggle" name="live_agent_archive_on_end_toggle" value="on" %s />',
+        checked('on', $value, false)
+    );
+    echo '<label for="live_agent_archive_on_end_toggle" class="mxchat-status-label">' . esc_html__('Archive the conversation\'s chat- channel when an agent ends the chat with !endchat', 'mxchat') . '</label>';
+    echo '<p class="description">' . esc_html__('Keeps your Slack sidebar tidy on busy sites — each ended conversation\'s channel is archived instead of living forever. Archived channels stay searchable in Slack, so the record is never lost. Only applies to per-conversation chat- channels; a Shared Handoff Channel is never archived. If a returning visitor requests an agent again, a fresh channel is created automatically.', 'mxchat') . '</p>';
+}
+
 /**
  * Telegram Integration Callbacks
  */
@@ -9427,6 +9497,10 @@ private function localize_page_specific_scripts($current_page) {
                 'isActivated'  => $this->is_activated(),
                 'hasAdvancedContent' => apply_filters('mxchat_content_pro_feature', false, 'seo_readability'),
                 'hasGSC'             => apply_filters('mxchat_content_pro_feature', false, 'gsc_integration'),
+                // Whether Search Console is actually LINKED — distinct from hasGSC
+                // (add-on active). Reads the same option the add-on's settings
+                // card keys off; harmless false when the add-on is absent.
+                'gscLinked'          => (bool) get_option('mxchat_gsc_connected', false),
                 'seoOptimize'  => array(
                     'meta_description' => ($options['seo_optimize_meta_desc'] ?? 'on') === 'on',
                     'seo_title'        => ($options['seo_optimize_seo_title'] ?? 'on') === 'on',
@@ -10014,6 +10088,15 @@ if (isset($input['openrouter_selected_model_name'])) {
     // Live Agent Integration
     if (isset($input['live_agent_bot_token'])) {
         $new_input['live_agent_bot_token'] = sanitize_text_field($input['live_agent_bot_token']);
+    }
+
+    if (isset($input['live_agent_shared_channel'])) {
+        $new_input['live_agent_shared_channel'] = sanitize_text_field($input['live_agent_shared_channel']);
+    }
+
+    // Default-OFF toggle: absent key stays absent (unchecked box = off).
+    if (isset($input['live_agent_archive_on_end_toggle'])) {
+        $new_input['live_agent_archive_on_end_toggle'] = ($input['live_agent_archive_on_end_toggle'] === 'on') ? 'on' : 'off';
     }
 
     if (isset($input['live_agent_user_ids'])) {

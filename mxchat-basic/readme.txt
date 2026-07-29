@@ -5,11 +5,11 @@ Tags: ai chatbot, chatgpt, woocommerce, customer support, content generation
 Requires at least: 5.0
 Tested up to: 7.0.1
 Requires PHP: 7.2
-Stable tag: 3.2.14
+Stable tag: 3.2.15
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
-MxChat is the best free AI chatbot and content generation plugin for WordPress in 2026. Train ChatGPT, Claude, Gemini, or Grok on your website content. Generate full blog posts and landing pages with AI. WooCommerce ready with RAG knowledge base, live chat handoff, and 100+ AI models.
+Free AI chatbot and content generation for WordPress. Train ChatGPT, Claude, Gemini or Grok on your content. WooCommerce ready with RAG.
 
 == Description ==
 
@@ -131,21 +131,6 @@ Your WordPress site powers the AI, but your chatbot doesn't have to live there. 
 
 **Ideal for** SaaS products with a WordPress blog but a separate web app, e-commerce brands on Shopify, documentation sites, or any business that needs their chatbot beyond WordPress.
 
-## Powerful Add-On Ecosystem
-
-**Pro Add-Ons:**
-🟢 **MCP Server** – Expose your MxChat install as a Model Context Protocol server so Claude, ChatGPT, and Claude Code can list transcripts, push knowledge, and inspect bots through a JSON-RPC 2.0 endpoint with OAuth + bearer auth — no per-message fees, no middleman API. Includes a WooCommerce extension for product, order, and customer lookups.
-🟢 **Advanced Content Editor** – Google Search Console integration with per-page impressions, clicks, and search queries. Smart internal linking, AI readability optimization, image ALT text generation, and advanced SEO checks
-🟢 **Multi-Bot Manager** – Create and manage multiple specialized chatbots with dedicated knowledge databases for different purposes (support, sales, technical, etc.)
-🟢 **Video Generation** – Generate stunning AI videos using Google's Veo 2 and Veo 3 models with audio support and multiple aspect ratios
-🟢 **Admin Assistant** – ChatGPT-like interface in WordPress admin with thread management and image generation
-🟢 **Chat Themes** – Visual design editor with AI-powered chatbot theme generation from natural language
-🟢 **MxChat Forms** – Create chatbot-triggered forms for lead capture and support tickets
-🟢 **Chat Moderation** – Advanced security with email/IP banning and content filtering
-🟢 **MxChat Anywhere** – Deploy your chatbot on any website with one script tag — Shopify, Squarespace, Wix, static HTML, and custom web apps with Shadow DOM style isolation
-🟢 **Perplexity Integration** – Real-time web search with authoritative, well-sourced responses
-🟢 **MxChat Trigger** – Turn any element into a conversation starter — chat trigger buttons and links that open MxChat and send predefined messages, perfect for CTAs and guided experiences
-
 ## 📱 Mobile-Friendly & Fully Customizable
 
 MxChat’s chatbot widget adapts seamlessly to all devices — desktop, tablet, or mobile. Customize colors, greetings, and placement to match your brand and provide a smooth experience across your entire website.
@@ -175,41 +160,6 @@ MxChat offers a fully functional free plan that includes everything you need to 
 - RAG support & contextual awareness
 
 Whether you're running a small business or launching a new online store, MxChat’s free plan gives you the tools to offer intelligent customer support and grow your business — without paying a cent.
-
-== Developer Hooks & Filters ==
-
-MxChat provides WordPress filter hooks so developers can extend and customize chatbot behavior without modifying core plugin files. [View full documentation with code examples](https://mxchat.ai/mxchat-developer-hooks-filters/).
-
-= mxchat_before_process_post =
-
-Runs during knowledge base indexing and lets you modify a post's data before MxChat processes it. Use this to include custom field data (e.g. product specifications or ACF fields), strip internal content you don't want the chatbot to learn, or transform posts based on bot ID. Receives the WP_Post object and the bot ID.
-
-= mxchat_system_instructions =
-
-Dynamically modify the system prompt before every AI response. Use this to inject live data such as business hours, inventory status, or user-specific context into the prompt at runtime. Receives the instructions text, bot ID, and session ID. MxChat also supports WordPress shortcodes directly in the system prompt field — any registered shortcodes are automatically expanded before being sent to the AI.
-
-## ✅ Get Started with MxChat AI Chatbot Today
-
-Installing MxChat for WordPress takes just a few clicks. Get started with our free plan and upgrade anytime to access our complete add-on ecosystem and premium features.
-
-## 💰 Pricing
-
-Most powerful features are included in the free plan. Upgrade to Pro for the complete add-on ecosystem and advanced capabilities.  
-[View all pricing options](https://mxchat.ai/)
-
-== Use of Third-Party Services ==
-
-This plugin connects to AI service providers to generate responses:
-
-**Service Providers:**
-- [OpenRouter](https://openrouter.ai/) - [Terms](https://openrouter.ai/terms) | [Privacy](https://openrouter.ai/privacy)
-- [OpenAI](https://openai.com/) - [Terms](https://openai.com/policies/terms-of-use/) | [Privacy](https://openai.com/policies/privacy-policy/)
-- [Anthropic](https://anthropic.com/) - [Terms](https://www.anthropic.com/terms) | [Privacy](https://www.anthropic.com/privacy)
-- [Google](https://ai.google.dev/) - [Terms](https://ai.google.dev/terms) | [Privacy](https://policies.google.com/privacy)
-- [X.AI](https://x.ai/) - [Terms](https://x.ai/terms-of-service) | [Privacy](https://x.ai/privacy-policy)
-- [DeepSeek](https://deepseek.com/) - [Terms](https://deepseek.com/terms) | [Privacy](https://deepseek.com/privacy)
-
-Please ensure compliance with applicable terms and data privacy laws.
 
 == Installation ==
 
@@ -316,6 +266,41 @@ MxChat supports multiple embedding models for vector search including OpenAI tex
 
 Yes. MxChat is available for free on the WordPress plugin repository with full AI chatbot functionality. Premium add-ons are available for advanced features like the AI Theme Generator and priority support.
 
+== Developer Hooks & Filters ==
+
+MxChat provides WordPress filter hooks so developers can extend and customize chatbot behavior without modifying core plugin files. [View full documentation with code examples](https://mxchat.ai/mxchat-developer-hooks-filters/).
+
+= mxchat_before_process_post =
+
+Runs during knowledge base indexing and lets you modify a post's data before MxChat processes it. Use this to include custom field data (e.g. product specifications or ACF fields), strip internal content you don't want the chatbot to learn, or transform posts based on bot ID. Receives the WP_Post object and the bot ID.
+
+= mxchat_system_instructions =
+
+Dynamically modify the system prompt before every AI response. Use this to inject live data such as business hours, inventory status, or user-specific context into the prompt at runtime. Receives the instructions text, bot ID, and session ID. MxChat also supports WordPress shortcodes directly in the system prompt field — any registered shortcodes are automatically expanded before being sent to the AI.
+
+## ✅ Get Started with MxChat AI Chatbot Today
+
+Installing MxChat for WordPress takes just a few clicks. Get started with our free plan and upgrade anytime to access our complete add-on ecosystem and premium features.
+
+## 💰 Pricing
+
+Most powerful features are included in the free plan. Upgrade to Pro for the complete add-on ecosystem and advanced capabilities.  
+[View all pricing options](https://mxchat.ai/)
+
+== Use of Third-Party Services ==
+
+This plugin connects to AI service providers to generate responses:
+
+**Service Providers:**
+- [OpenRouter](https://openrouter.ai/) - [Terms](https://openrouter.ai/terms) | [Privacy](https://openrouter.ai/privacy)
+- [OpenAI](https://openai.com/) - [Terms](https://openai.com/policies/terms-of-use/) | [Privacy](https://openai.com/policies/privacy-policy/)
+- [Anthropic](https://anthropic.com/) - [Terms](https://www.anthropic.com/terms) | [Privacy](https://www.anthropic.com/privacy)
+- [Google](https://ai.google.dev/) - [Terms](https://ai.google.dev/terms) | [Privacy](https://policies.google.com/privacy)
+- [X.AI](https://x.ai/) - [Terms](https://x.ai/terms-of-service) | [Privacy](https://x.ai/privacy-policy)
+- [DeepSeek](https://deepseek.com/) - [Terms](https://deepseek.com/terms) | [Privacy](https://deepseek.com/privacy)
+
+Please ensure compliance with applicable terms and data privacy laws.
+
 == Screenshots ==
 
 1. **Chat Transcripts Insights** - Review and analyze conversations insights to see engagement rate, peak activity, and user distribution.
@@ -328,6 +313,27 @@ Yes. MxChat is available for free on the WordPress plugin repository with full A
 *(Note: Screenshots will be added in future updates)*
 
 == Changelog ==
+
+= 3.2.15 - July 28, 2026 =
+* Fixed: DeepSeek chat works again. DeepSeek retired its older API model names on July 24, 2026, which broke every DeepSeek-powered chat; the model picker now offers DeepSeek V4 Flash and V4 Pro, and sites still set to an older DeepSeek model switch to V4 Flash automatically on update.
+* New: Claude Opus 5 is available in the model picker — Anthropic's newest Opus model, the same price as Claude Opus 4.8, working across chat, streaming and the AI content tools.
+* New: Optional performance setting to load chatbot files only on pages where the chatbot actually appears. Off by default, and helpful for reduce-unused-CSS-and-JS findings in performance audits.
+* New: Slack live agent handoff can route every conversation into one shared channel your team already monitors, one thread per visitor, instead of creating a channel per visitor. Leave the new field blank and nothing changes.
+* New: Optional setting to archive a conversation's Slack channel when an agent ends the chat, so channels stop piling up. Off by default.
+* New: Place your knowledge base content anywhere in your AI instructions using the context placeholder. Leave it out and MxChat works exactly as before.
+* New: The SEO content table now shows an average search position column from the last 28 days, available with the Advanced Content add-on connected to Search Console.
+* Improved: When Search Console is not connected yet, the SEO content table now explains that connecting it fills the clicks, impressions and position columns, with a link to the Settings tab, instead of showing unexplained dashes.
+* Improved: SEO content table sorting now keeps every post in the list on every filter, with posts that have no data grouped at the end.
+* Improved: X.AI errors now include the provider's specific reason, such as the exact model name it could not find, alongside the general explanation.
+* Improved: Sites using a delayed or on-interaction script loading strategy no longer perform an unnecessary database write on every page view.
+* Fixed: The chat widget now defends itself against website themes whose styles bleed into it, including the header menu. Your own custom widget CSS keeps working unchanged.
+* Fixed: When an AI provider returns a successful but empty reply, the chatbot now shows a clear message asking the visitor to try again instead of an empty chat bubble. Streaming chats close out the same way.
+* Fixed: Provider errors now pass along the provider's actual explanation instead of a generic Unknown error, across image providers, embeddings, knowledge base search, web search, streamed replies and OpenRouter.
+* Fixed: Conversations handled by a human now show as Live Agent in the Transcripts viewer and in emailed transcripts, instead of everything being labeled AI Assistant.
+* Fixed: The streaming test button on the settings page now works with the newest Claude models, which previously returned an error even though chat itself worked.
+* Fixed: Turning on developer mode no longer re-runs the plugin's activation and database migration routine on every page load.
+* Fixed: The hourly rate-limit reset now re-creates itself if the scheduled task ever goes missing, so visitors are never left rate-limited longer than intended.
+* Fixed: On sites where WordPress scheduled tasks are disabled, the hourly fallback check no longer loads a duplicate copy of the plugin's internals mid-request.
 
 = 3.2.14 - July 18, 2026 =
 * New: Editor Assistant — optional AI writing actions right inside the WordPress block editor. Select a paragraph, heading, list, or quote block and rewrite it (concise, expanded, formal, or casual), summarize it, translate it to another language, continue writing, or fix grammar and spelling, then Accept or Discard. It is off by default and uses the AI model you already configured.
@@ -553,14 +559,11 @@ Older releases are archived in the plugin's full version history on WordPress.or
 
 == Upgrade Notice ==
 
+= 3.2.15 =
+Restores DeepSeek chat after DeepSeek retired its older API model names on July 24, 2026, automatically switching affected sites to DeepSeek V4 Flash. Adds Claude Opus 5, a shared-channel mode for Slack live agent handoff, a context placeholder for positioning knowledge base content in your AI instructions, and an optional setting to load chatbot files only on pages where the chatbot appears. Also hardens the chat widget against theme style bleed and fixes empty AI replies, provider error messages, live agent transcript labels and several scheduled-task issues.
+
 = 3.2.14 =
 Adds the Editor Assistant, YouTube videos in the knowledge base with consent-safe in-chat embeds, independent Slack and Telegram live agent availability schedules, and the latest GPT-5.6 models. Also fixes a Knowledge Base edit data-loss bug, GPT-5 product and image search, and self-healing automatic transcript deletion — existing sites are unaffected until you turn the new features on.
-
-== License & Warranty ==
-
-This plugin is free software; you can redistribute it and/or modify it under the terms of the GNU General Public License as published by the Free Software Foundation; either version 2 of the License, or (at your option) any later version.
-
-This plugin is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
 
 == Credits ==
 
