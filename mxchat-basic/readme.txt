@@ -5,7 +5,7 @@ Tags: ai chatbot, chatgpt, woocommerce, customer support, content generation
 Requires at least: 5.0
 Tested up to: 7.0.1
 Requires PHP: 7.2
-Stable tag: 3.2.15
+Stable tag: 3.2.16
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -314,6 +314,24 @@ Please ensure compliance with applicable terms and data privacy laws.
 
 == Changelog ==
 
+
+= 3.2.16 - August 2, 2026 =
+* New: Chat conversations are now covered by WordPress's built-in privacy tools — export requests return readable transcripts, and erasure requests delete conversations, captured emails, saved history and document traces, for both logged-in and anonymous visitors.
+* New: Optional hybrid keyword boost for the WordPress-database knowledge base, off by default. It combines keyword matching with the existing similarity search so exact tokens such as product codes, SKUs and error codes find the right document, and Transcripts labels each match Vector, Keyword or Both.
+* New: If your AI provider starts rejecting the configured model, MxChat now shows a persistent admin notice naming the model and linking to Settings. Previously only visitors saw the error.
+* Fixed: Security — hardened validation of chat session identifiers throughout the plugin. Sites using automatic transcript emails should update.
+* Fixed: Security — tightened the permission checks around MxChat's admin scripts and admin-only actions, so they load and run only for users who can manage plugin options.
+* Fixed: Security — removed an unused block of stored settings data that was no longer needed.
+* Fixed: OpenAI retires the GPT-5.1 Chat Latest and GPT-5.3 Chat models on August 10, 2026. Both are removed from the picker and affected sites switch to GPT-5.6 Sol automatically, with an admin notice explaining the change.
+* Fixed: Unpublishing, trashing or making a post private now always removes it from the knowledge base, including status changes made by scheduled-expiry plugins that bypass the save screen. A new command, wp mxchat prune-unpublished, clears entries left by earlier unpublishes.
+* Fixed: Streaming replies arrive word by word again on hosts behind a proxy such as nginx, instead of all at once after a pause. Four PHP warnings per affected chat are gone with it.
+* Fixed: Quick Question buttons render at their normal size again. In 3.2.15 the new theme-protection styles let the list compress its buttons to fit the box, so the scrollbar never appeared.
+* Fixed: The Loops email-capture messages no longer send you looking for a field that is not on that screen. Both now name the API Keys tab and link straight to it.
+* Fixed: Removed a duplicate save-action registration on the knowledge-bot selector that pointed at code which does not exist. It would have crashed the admin screen if load ordering ever changed.
+* Improved: Knowledge base import errors now carry the embedding provider's real reason, such as an invalid API key or exhausted credit, name the model, and say whether embedding or storage failed.
+* Improved: Models with an announced retirement date now show that date in the picker and disappear once it passes. A model you already have selected stays visible in Settings.
+* Improved: When the knowledge base has nothing relevant, the chatbot is now told so directly instead of receiving a no-information note dressed up as knowledge base content, so it simply says it does not know.
+
 = 3.2.15 - July 28, 2026 =
 * Fixed: DeepSeek chat works again. DeepSeek retired its older API model names on July 24, 2026, which broke every DeepSeek-powered chat; the model picker now offers DeepSeek V4 Flash and V4 Pro, and sites still set to an older DeepSeek model switch to V4 Flash automatically on update.
 * New: Claude Opus 5 is available in the model picker — Anthropic's newest Opus model, the same price as Claude Opus 4.8, working across chat, streaming and the AI content tools.
@@ -558,6 +576,10 @@ Please ensure compliance with applicable terms and data privacy laws.
 Older releases are archived in the plugin's full version history on WordPress.org.
 
 == Upgrade Notice ==
+
+
+= 3.2.16 =
+Security hardening, plus chat conversations now work with WordPress's built-in privacy tools. The GPT-5.1 Chat Latest and GPT-5.3 models that OpenAI retires on August 10, 2026 are removed, and affected sites switch over automatically. Also fixes knowledge base cleanup on unpublish, streaming behind proxies, and Quick Question sizing.
 
 = 3.2.15 =
 Restores DeepSeek chat after DeepSeek retired its older API model names on July 24, 2026, automatically switching affected sites to DeepSeek V4 Flash. Adds Claude Opus 5, a shared-channel mode for Slack live agent handoff, a context placeholder for positioning knowledge base content in your AI instructions, and an optional setting to load chatbot files only on pages where the chatbot appears. Also hardens the chat widget against theme style bleed and fixes empty AI replies, provider error messages, live agent transcript labels and several scheduled-task issues.

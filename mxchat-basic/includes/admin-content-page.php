@@ -513,7 +513,10 @@ function mxchat_render_content_page($admin_instance) {
                             <div class="mxch-field-control">
                                 <select id="mxch-content-model" data-field="content_model" class="mxch-cg-select">
                                     <?php
-                                    $content_model = $options['content_model'] ?? ($options['model'] ?? 'gpt-5.1-chat-latest');
+                                    $content_model = $options['content_model'] ?? ($options['model'] ?? 'gpt-5.6-sol');
+                                    // gpt-5.1-chat-latest removed 2026-08-02: OpenAI retires
+                                    // it 2026-08-10 (plan e46b8f); saved values migrate via
+                                    // mxchat_migrate_deprecated_models().
                                     $models = array(
                                         'OpenAI' => array(
                                             'gpt-5.6-sol'          => 'GPT-5.6 Sol',
@@ -522,7 +525,6 @@ function mxchat_render_content_page($admin_instance) {
                                             'gpt-5.5'              => 'GPT-5.5',
                                             'gpt-5.4'              => 'GPT-5.4',
                                             'gpt-5.2'              => 'GPT-5.2',
-                                            'gpt-5.1-chat-latest'  => 'GPT-5.1',
                                             'gpt-5'                => 'GPT-5',
                                         ),
                                         'Anthropic' => array(

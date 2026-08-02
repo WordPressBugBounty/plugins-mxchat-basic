@@ -304,6 +304,21 @@ function mxchat_render_settings_page($admin_instance) {
                             $admin_instance->mxchat_rag_chunks_limit_callback();
                         }, __('Maximum total content chunks sent to the AI across all sources. Higher values provide more context but increase token usage and cost.', 'mxchat'));
 
+                        // Hybrid keyword boost (plan-38ffa1). Standalone option — never part
+                        // of mxchat_options, so mxchat_sanitize() can't strip it. Default OFF.
+                        $hybrid_keyword = get_option('mxchat_hybrid_keyword_toggle', 'off');
+                        ?>
+                        <div class="mxch-field" style="margin-top: 16px;">
+                            <label class="mxch-toggle">
+                                <input type="checkbox" class="mxch-toggle-input mxchat-autosave-field" id="mxchat_hybrid_keyword_toggle" name="mxchat_hybrid_keyword_toggle" value="on" <?php checked($hybrid_keyword, 'on'); ?>>
+                                <span class="mxch-toggle-switch"></span>
+                                <span class="mxch-toggle-label"><?php esc_html_e('Hybrid keyword boost (WP-DB knowledge base)', 'mxchat'); ?></span>
+                            </label>
+                            <p class="mxch-field-description"><?php esc_html_e('Combines keyword matching with vector similarity when searching your WordPress-database knowledge base. Helps exact-token questions — product codes, SKUs, error codes, names — find the right document even when semantic similarity alone would miss it.', 'mxchat'); ?></p>
+                            <p class="mxch-field-hint"><?php esc_html_e('Only affects the WordPress-database knowledge base; Pinecone is unaffected. Changes which sources are retrieved on existing installs, so test after enabling. The Transcripts sources panel labels how each match was found while this is on.', 'mxchat'); ?></p>
+                        </div>
+                        <?php
+
                         // Contextual Awareness
                         mxchat_render_field_wrapper('contextual_awareness', __('Contextual Awareness', 'mxchat'), function() use ($admin_instance) {
                             $admin_instance->mxchat_contextual_awareness_callback();

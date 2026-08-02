@@ -6,6 +6,39 @@ if (!defined('ABSPATH')) {
 class MxChat_Utils {
 
 /**
+ * Validate a client-supplied session id (plan-mxchat-20260731-d42bec).
+ *
+ * sanitize_text_field() — which every session_id read site used before this —
+ * preserves '/' and '..'. Harmless where the value is only an option or
+ * transient key suffix, but mxchat_send_delayed_transcript() interpolates it
+ * into a filesystem path, so '../../../../path/x' wrote, emailed and deleted a
+ * file outside the uploads dir.
+ *
+ * REJECTS rather than rewrites: a silently-stripped id would orphan the
+ * conversation it belongs to, which is harder to diagnose than a clean refusal.
+ * Returns '' for anything malformed, so call sites fall into the empty-session
+ * error paths they already have.
+ *
+ * The generator only ever emits 'mxchat_chat_' + 32 hex chars
+ * (class-mxchat-integrator.php, js/chat-script.js), so this is not restrictive
+ * in practice. Length ceiling is deliberate — session ids are also used as
+ * option-name suffixes, and WP option names cap at 191 chars.
+ *
+ * @param mixed $raw Raw request value.
+ * @return string The id if well-formed, '' otherwise.
+ */
+public static function sanitize_session_id($raw) {
+    if (!is_scalar($raw)) {
+        return '';
+    }
+    $val = trim((string) $raw);
+    if ($val === '') {
+        return '';
+    }
+    return preg_match('/\A[A-Za-z0-9_-]{1,128}\z/', $val) ? $val : '';
+}
+
+/**
  * Centralized embedding model registry. Single source of truth for dimensions
  * and provider, so model-switch protection logic doesn't drift across files.
  */
@@ -122,8 +155,11 @@ public static function submit_content_to_db($content, $source_url, $api_key, $ve
     $embedding_vector = self::generate_embedding($content, $api_key, $bot_id);
 
     if (!is_array($embedding_vector)) {
-        //error_log('[MXCHAT-DB] Error: Embedding generation failed');
-        return new WP_Error('embedding_failed', 'Failed to generate embedding for content');
+        // Surface the provider's real reason instead of a fixed string (4a7c0a).
+        $reason = is_wp_error($embedding_vector)
+            ? $embedding_vector->get_error_message()
+            : 'Failed to generate embedding for content';
+        return new WP_Error('embedding_failed', $reason);
     }
 
     //error_log('[MXCHAT-DB] Embedding generated successfully');
@@ -526,7 +562,9 @@ private static function generate_embedding($text, $api_key, $bot_id = 'default')
     // below is untouched.
     if (isset($options['custom_provider_for_embeddings']) && $options['custom_provider_for_embeddings'] === 'on') {
         $custom = self::generate_embedding_custom($text, $options);
-        return is_array($custom) ? $custom : null;
+        // The custom path already returns a human-readable error string —
+        // carry it instead of collapsing to null (plan 4a7c0a).
+        return is_array($custom) ? $custom : new WP_Error('embedding_failed', (string) $custom);
     }
 
     $selected_model = $options['embedding_model'] ?? 'text-embedding-ada-002';
@@ -594,12 +632,15 @@ private static function generate_embedding($text, $api_key, $bot_id = 'default')
     $response = wp_remote_post($endpoint, $args);
     
     if (is_wp_error($response)) {
-        //error_log('Error generating embedding for bot ' . $bot_id . ': ' . $response->get_error_message());
-        return null;
+        $message = 'Embedding request failed (connection): ' . $response->get_error_message();
+        if (class_exists('MxChat_Admin')) {
+            MxChat_Admin::mxchat_log_debug('embedding_error', $message, array('model' => $selected_model, 'bot_id' => $bot_id));
+        }
+        return new WP_Error('embedding_failed', $message);
     }
-    
+
     $response_body = json_decode(wp_remote_retrieve_body($response), true);
-    
+
     // Handle different response formats based on provider
     if (strpos($selected_model, 'gemini-embedding') === 0) {
         // Gemini API response format
@@ -607,8 +648,7 @@ private static function generate_embedding($text, $api_key, $bot_id = 'default')
             self::stamp_active_embedding_model($selected_model);
             return $response_body['embedding']['values'];
         } else {
-            //error_log('Invalid response received from Gemini embedding API for bot ' . $bot_id . ': ' . wp_json_encode($response_body));
-            return null;
+            return self::embedding_failure_error($response, $selected_model, $api_key, $bot_id);
         }
     } else {
         // OpenAI/Voyage API response format
@@ -616,10 +656,54 @@ private static function generate_embedding($text, $api_key, $bot_id = 'default')
             self::stamp_active_embedding_model($selected_model);
             return $response_body['data'][0]['embedding'];
         } else {
-            //error_log('Invalid response received from embedding API for bot ' . $bot_id . ': ' . wp_json_encode($response_body));
-            return null;
+            return self::embedding_failure_error($response, $selected_model, $api_key, $bot_id);
         }
     }
+}
+
+/**
+ * Build a WP_Error carrying the embedding provider's REAL failure reason,
+ * and record it in the Debug Mode log. Previously every failure path
+ * returned bare null, so customers saw only "Failed to generate embedding
+ * for content" / "Failed to store any chunks" with no cause (plan 4a7c0a).
+ *
+ * The API key never appears in provider response bodies (it travels in the
+ * request headers), but the reason is scrubbed for it anyway before it can
+ * reach a notice or the debug log.
+ */
+private static function embedding_failure_error($response, $selected_model, $api_key, $bot_id) {
+    $status  = (int) wp_remote_retrieve_response_code($response);
+    $raw     = (string) wp_remote_retrieve_body($response);
+    $decoded = json_decode($raw, true);
+
+    // Provider error shapes: OpenAI + Gemini use {"error":{"message":…}};
+    // Voyage uses {"detail":…}.
+    $reason = '';
+    if (is_array($decoded)) {
+        if (isset($decoded['error']['message']) && is_string($decoded['error']['message'])) {
+            $reason = $decoded['error']['message'];
+        } elseif (isset($decoded['detail']) && is_string($decoded['detail'])) {
+            $reason = $decoded['detail'];
+        }
+    }
+    if ($reason === '') {
+        $reason = ($raw !== '') ? substr($raw, 0, 200) : 'empty or malformed response';
+    }
+    if (is_string($api_key) && $api_key !== '') {
+        $reason = str_replace($api_key, '[redacted]', $reason);
+    }
+    $reason  = substr($reason, 0, 300);
+    $message = sprintf('Embedding failed (%s, HTTP %d): %s', $selected_model, $status, $reason);
+
+    if (class_exists('MxChat_Admin')) {
+        MxChat_Admin::mxchat_log_debug('embedding_error', $message, array(
+            'model'  => $selected_model,
+            'status' => $status,
+            'bot_id' => $bot_id,
+        ));
+    }
+
+    return new WP_Error('embedding_failed', $message);
 }
 
 /**
@@ -739,6 +823,9 @@ private static function submit_chunked_content($content, $source_url, $api_key, 
     }
 
     $errors = array();
+    $embed_failures     = 0;
+    $first_embed_reason = '';
+    $first_store_reason = '';
     $is_pinecone = self::is_pinecone_enabled_for_bot($bot_id);
 
     foreach ($chunks as $index => $chunk_text) {
@@ -780,8 +867,15 @@ private static function submit_chunked_content($content, $source_url, $api_key, 
         $embedding_vector = self::generate_embedding($chunk_text, $api_key, $bot_id);
 
         if (!is_array($embedding_vector)) {
-            $errors[] = new WP_Error('embedding_failed', 'Failed to generate embedding for chunk ' . $index);
-            //error_log('[MXCHAT-CHUNK] Failed to generate embedding for chunk ' . $index);
+            // Track embedding failures separately from storage failures, and
+            // keep the first provider reason seen — the two failure classes
+            // have opposite remedies (API key vs Pinecone/DB) (plan 4a7c0a).
+            $embed_failures++;
+            $reason = is_wp_error($embedding_vector) ? $embedding_vector->get_error_message() : '';
+            if ($reason !== '' && $first_embed_reason === '') {
+                $first_embed_reason = $reason;
+            }
+            $errors[] = new WP_Error('embedding_failed', 'Failed to generate embedding for chunk ' . $index . ($reason !== '' ? ' — ' . $reason : ''));
             continue;
         }
 
@@ -813,18 +907,42 @@ private static function submit_chunked_content($content, $source_url, $api_key, 
 
         if (is_wp_error($result)) {
             $errors[] = $result;
-            //error_log('[MXCHAT-CHUNK] Failed to store chunk ' . $index . ': ' . $result->get_error_message());
+            if ($first_store_reason === '') {
+                $first_store_reason = $result->get_error_message();
+            }
         }
     }
 
     if (count($errors) === $total_chunks) {
-        return new WP_Error('chunking_failed', 'Failed to store any chunks');
+        // Say WHICH stage failed — "failed to store" used to cover pure
+        // embedding failures too, sending customers to debug Pinecone when
+        // the problem was their embedding API key (plan 4a7c0a).
+        if ($embed_failures === $total_chunks) {
+            return new WP_Error('chunking_failed',
+                'Failed to store any chunks — every chunk failed to embed'
+                . ($first_embed_reason !== '' ? ': ' . $first_embed_reason : '')
+                . ' Check the embedding provider API key and model under MxChat Settings.');
+        }
+        if ($embed_failures === 0) {
+            return new WP_Error('chunking_failed',
+                'Failed to store any chunks — embeddings generated but storage failed'
+                . ($first_store_reason !== '' ? ': ' . $first_store_reason : '')
+                . ' Check the knowledge base storage (Pinecone index or database).');
+        }
+        return new WP_Error('chunking_failed', sprintf(
+            'Failed to store any chunks — %d failed to embed%s and %d failed to store%s',
+            $embed_failures,
+            $first_embed_reason !== '' ? ' (' . $first_embed_reason . ')' : '',
+            $total_chunks - $embed_failures,
+            $first_store_reason !== '' ? ' (' . $first_store_reason . ')' : ''
+        ));
     }
 
     if (!empty($errors)) {
-        //error_log('[MXCHAT-CHUNK] Completed with ' . count($errors) . ' errors out of ' . $total_chunks . ' chunks');
+        $detail = $first_embed_reason !== '' ? $first_embed_reason : $first_store_reason;
         return new WP_Error('chunking_partial_failure',
-            sprintf('Failed to store %d of %d chunks', count($errors), $total_chunks));
+            sprintf('Failed to store %d of %d chunks', count($errors), $total_chunks)
+            . ($detail !== '' ? ' — first error: ' . $detail : ''));
     }
 
     //error_log('[MXCHAT-CHUNK] Successfully stored all ' . $total_chunks . ' chunks');
@@ -1094,5 +1212,41 @@ private static function delete_wordpress_chunks_by_url($source_url) {
 
     //error_log('[MXCHAT-CHUNK-DELETE] Deleted ' . $result . ' rows from WordPress DB');
     return true;
+}
+
+/**
+ * Hybrid keyword boost (plan-38ffa1): detect whether the WP-DB knowledge
+ * table can serve the keyword leg via a MySQL FULLTEXT index, creating the
+ * index if needed. Detection runs once and caches the answer in the
+ * mxchat_hybrid_keyword_capability option ('fulltext' | 'like'); pass
+ * $force to re-detect. LIKE is the graceful fallback for shared hosts
+ * whose ALTER fails — the feature works either way, FULLTEXT just ranks
+ * better and scales.
+ *
+ * @param  bool $force Re-run detection even if a cached answer exists.
+ * @return string 'fulltext' or 'like'
+ */
+public static function mxchat_hybrid_detect_capability($force = false) {
+    $cached = get_option('mxchat_hybrid_keyword_capability', '');
+    if (!$force && in_array($cached, array('fulltext', 'like'), true)) {
+        return $cached;
+    }
+
+    global $wpdb;
+    $table = $wpdb->prefix . 'mxchat_system_prompt_content';
+
+    $index_exists = $wpdb->get_var("SHOW INDEX FROM {$table} WHERE Key_name = 'mxchat_content_ft'");
+    if (!$index_exists) {
+        // Suppress the visible error on hosts where this is not permitted —
+        // failure is an expected, handled outcome (LIKE fallback).
+        $suppress = $wpdb->suppress_errors(true);
+        $wpdb->query("ALTER TABLE {$table} ADD FULLTEXT INDEX mxchat_content_ft (article_content)");
+        $wpdb->suppress_errors($suppress);
+        $index_exists = $wpdb->get_var("SHOW INDEX FROM {$table} WHERE Key_name = 'mxchat_content_ft'");
+    }
+
+    $capability = $index_exists ? 'fulltext' : 'like';
+    update_option('mxchat_hybrid_keyword_capability', $capability);
+    return $capability;
 }
 }

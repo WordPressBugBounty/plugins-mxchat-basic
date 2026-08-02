@@ -800,3 +800,26 @@
     font-size: 9px;
     color: #666;
 }
+/* Hybrid retrieval matched-via chips (38ffa1): Vector / Keyword / Both */
+.mxch-rag-via-chip {
+    font-size: 10px;
+    font-weight: 600;
+    padding: 1px 7px;
+    border-radius: 9px;
+    white-space: nowrap;
+}
+
+.mxch-rag-via-vector {
+    background: rgba(120, 115, 245, 0.18);
+    color: #a5a1ff;
+}
+
+.mxch-rag-via-keyword {
+    background: rgba(16, 185, 129, 0.18);
+    color: #34d399;
+}
+
+.mxch-rag-via-both {
+    background: rgba(245, 158, 11, 0.18);
+    color: #fbbf24;
+}

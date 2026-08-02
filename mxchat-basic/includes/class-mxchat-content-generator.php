@@ -2245,7 +2245,7 @@ article .entry-content,
      */
     private function call_content_model($system_prompt, $messages, $max_tokens = 4096) {
         $options = get_option('mxchat_options', array());
-        $model   = $options['content_model'] ?? $options['model'] ?? 'gpt-5.1-chat-latest';
+        $model   = $options['content_model'] ?? $options['model'] ?? 'gpt-5.6-sol';
 
         // Determine provider from model name
         if ($this->is_claude_model($model)) {

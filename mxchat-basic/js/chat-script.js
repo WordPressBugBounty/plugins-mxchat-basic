@@ -759,7 +759,7 @@ function sendMessage(botId) {
         appendThinkingMessage(botId);
         scrollToBottom(botId);
 
-        const currentModel = mxchatChat.model || 'gpt-5.1-chat-latest';
+        const currentModel = mxchatChat.model || 'gpt-5.6-sol';
 
         // Check if streaming is enabled AND supported for this model
         if (shouldUseStreaming(currentModel)) {
@@ -799,7 +799,7 @@ function sendMessageToChatbot(message, botId) {
     appendThinkingMessage(botId);
     scrollToBottom(botId);
 
-    const currentModel = mxchatChat.model || 'gpt-5.1-chat-latest';
+    const currentModel = mxchatChat.model || 'gpt-5.6-sol';
 
     // Check if streaming is enabled AND supported for this model
     if (shouldUseStreaming(currentModel)) {
@@ -976,7 +976,7 @@ function callMxChat(message, callback, botId) {
                     var originalMessage = getElement(botId, 'mxchat-chatbot-wrapper').find('.mxchat-input-holder textarea').data('pending-message');
                     if (originalMessage) {
                         getElement(botId, 'mxchat-chatbot-wrapper').find('.mxchat-input-holder textarea').data('pending-message', null);
-                        var currentModel = mxchatChat.model || 'gpt-5.1-chat-latest';
+                        var currentModel = mxchatChat.model || 'gpt-5.6-sol';
                         if (shouldUseStreaming(currentModel)) {
                             callMxChatStream(originalMessage, function(response) {
                                 getElement(botId, 'chat-box').find('.bot-message.temporary-message').removeClass('temporary-message');
@@ -1129,7 +1129,7 @@ function callMxChatStream(message, callback, botId) {
     // Store the message in case we need to retry after session reset
     getElement(botId, 'mxchat-chatbot-wrapper').find('.mxchat-input-holder textarea').data('pending-message', message);
 
-    const currentModel = mxchatChat.model || 'gpt-5.1-chat-latest';
+    const currentModel = mxchatChat.model || 'gpt-5.6-sol';
     if (!isStreamingSupported(currentModel)) {
         callMxChat(message, callback, botId);
         return;
@@ -1454,7 +1454,7 @@ function handleNonStreamResponse(data, callback, botId) {
             var originalMessage = getElement(botId, 'mxchat-chatbot-wrapper').find('.mxchat-input-holder textarea').data('pending-message');
             if (originalMessage) {
                 getElement(botId, 'mxchat-chatbot-wrapper').find('.mxchat-input-holder textarea').data('pending-message', null);
-                var currentModel = mxchatChat.model || 'gpt-5.1-chat-latest';
+                var currentModel = mxchatChat.model || 'gpt-5.6-sol';
                 if (shouldUseStreaming(currentModel)) {
                     callMxChatStream(originalMessage, callback, botId);
                 } else {

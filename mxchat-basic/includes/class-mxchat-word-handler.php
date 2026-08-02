@@ -38,7 +38,7 @@ class MXChat_Word_Handler {
         }
     
         $file = $_FILES['word_file'];
-        $session_id = sanitize_text_field($_POST['session_id']);
+        $session_id = MxChat_Utils::sanitize_session_id(wp_unslash($_POST['session_id']));
         $original_filename = sanitize_text_field($file['name']);
         
         // Update session owner if it changed (e.g. IP changed due to network switch)
@@ -217,7 +217,22 @@ public function mxchat_handle_word_remove() {
             return;
         }
 
-        $session_id = sanitize_text_field($_POST['session_id']);
+        $session_id = MxChat_Utils::sanitize_session_id(wp_unslash($_POST['session_id']));
+        if ($session_id === '') {
+            wp_send_json_error(esc_html__('Session ID missing.', 'mxchat'));
+            return;
+        }
+
+        // Session-ownership bookkeeping — same rule as handle_pdf_remove() and the
+        // history endpoint (plan-mxchat-20260731-d42bec). Possession of the session
+        // id is the credential, so this records/refreshes the owner rather than
+        // refusing a mismatch; see the fuller note in handle_pdf_remove().
+        $current_user_identifier = MxChat_User::mxchat_get_user_identifier();
+        $session_owner = get_option("mxchat_session_owner_{$session_id}");
+        if (!$session_owner || $session_owner !== $current_user_identifier) {
+            update_option("mxchat_session_owner_{$session_id}", $current_user_identifier, 'no');
+        }
+
         $word_path = get_transient('mxchat_word_url_' . $session_id);
 
         if ($word_path && file_exists($word_path)) {
@@ -362,7 +377,7 @@ public function mxchat_check_word_status() {
         return;
     }
 
-    $session_id = sanitize_text_field($_POST['session_id']);
+    $session_id = MxChat_Utils::sanitize_session_id(wp_unslash($_POST['session_id']));
     $word_path = get_transient('mxchat_word_url_' . $session_id);
     $filename = get_transient('mxchat_word_filename_' . $session_id);
 

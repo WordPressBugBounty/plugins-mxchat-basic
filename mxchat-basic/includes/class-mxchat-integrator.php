@@ -252,16 +252,30 @@ private function setup_streaming_headers() {
         return false;
     }
 
-    // Disable output buffering
-    while (ob_get_level()) {
-        ob_end_flush();
-    }
-
-    // Set headers for SSE
+    // Headers MUST be set BEFORE the buffers are torn down: flushing a
+    // buffer that holds any stray output commits the response and turns
+    // every later header() into a logged no-op — dropping all four SSE
+    // headers, including the X-Accel-Buffering that stops nginx-fronted
+    // hosts from de-streaming the reply (plan fe130d).
     header('Content-Type: text/event-stream');
     header('Cache-Control: no-cache');
     header('Connection: keep-alive');
     header('X-Accel-Buffering: no');
+
+    // Dev-mode diagnostic: with the reorder, stray buffered bytes become
+    // the first bytes of the SSE stream — record what they are so a future
+    // switch to ob_end_clean() can be decided on evidence (fe130d follow-up).
+    if (defined('MXCHAT_DEV_MODE') && MXCHAT_DEV_MODE && ob_get_level() > 0) {
+        $buffered = ob_get_contents();
+        if (is_string($buffered) && $buffered !== '') {
+            error_log('MxChat SSE teardown: output buffer held ' . strlen($buffered) . ' byte(s): ' . substr($buffered, 0, 200));
+        }
+    }
+
+    // Disable output buffering
+    while (ob_get_level()) {
+        ob_end_flush();
+    }
 
     ob_implicit_flush(true);
     flush();
@@ -400,7 +414,7 @@ public function get_dynamic_widget_settings($fresh = false) {
         $options = array();
     }
     return array(
-        'model' => isset($options['model']) ? $options['model'] : 'gpt-5.1-chat-latest',
+        'model' => isset($options['model']) ? $options['model'] : 'gpt-5.6-sol',
         'enable_streaming_toggle' => isset($options['enable_streaming_toggle']) ? $options['enable_streaming_toggle'] : 'on',
         'rate_limit_message' => $options['rate_limit_message'] ?? 'Rate limit exceeded. Please try again later.',
         'chat_toolbar_toggle' => $options['chat_toolbar_toggle'] ?? 'off',
@@ -458,7 +472,7 @@ function mxchat_fetch_conversation_history() {
         wp_die();
     }
 
-    $session_id = sanitize_text_field($_POST['session_id']);
+    $session_id = MxChat_Utils::sanitize_session_id(wp_unslash($_POST['session_id']));
     
     // SECURITY FIX: Verify session ownership before retrieving data
     // If IP/user changed, signal frontend to reset session instead of blocking
@@ -853,7 +867,7 @@ public function mxchat_stream_events(WP_REST_Request $request) {
     header('Cache-Control: no-cache');
     header('Connection: keep-alive');
 
-    $session_id = sanitize_text_field($request->get_param('session_id'));
+    $session_id = MxChat_Utils::sanitize_session_id($request->get_param('session_id'));
     $last_seen_id = sanitize_text_field($request->get_param('last_seen_id')) ?: '';
 
     if (empty($session_id)) {
@@ -1225,6 +1239,16 @@ private function chat_contains_contact_info($messages, $session_data = null) {
 public function mxchat_send_delayed_transcript($session_id) {
     global $wpdb;
 
+    // plan-mxchat-20260731-d42bec — this is the one place a session id becomes a
+    // filesystem path segment (see the $temp_file build below), so validate here
+    // too even though intake is now validated. This runs from a scheduled event,
+    // so its argument comes from whatever was stored at schedule time rather than
+    // straight from the current request.
+    $session_id = MxChat_Utils::sanitize_session_id($session_id);
+    if ($session_id === '') {
+        return false;
+    }
+
     $options = get_option('mxchat_transcripts_options');
 
     // Get notification email
@@ -1287,7 +1311,10 @@ public function mxchat_send_delayed_transcript($session_id) {
     
     // Create temporary file for attachment using WP_Filesystem
     $upload_dir = wp_upload_dir();
-    $temp_file = $upload_dir['basedir'] . '/mxchat-transcript-' . $session_id . '.txt';
+    // basename() is the SECOND independent control on this write
+    // (plan-mxchat-20260731-d42bec). The validator above already rejects any id
+    // containing a path separator; this survives someone loosening it later.
+    $temp_file = $upload_dir['basedir'] . '/' . basename('mxchat-transcript-' . $session_id . '.txt');
     global $wp_filesystem;
     if (empty($wp_filesystem)) {
         require_once ABSPATH . 'wp-admin/includes/file.php';
@@ -1335,7 +1362,7 @@ public function mxchat_handle_save_email_and_response() {
         wp_die();
     }
 
-    $session_id = isset($_POST['session_id']) ? sanitize_text_field($_POST['session_id']) : '';
+    $session_id = isset($_POST['session_id']) ? MxChat_Utils::sanitize_session_id(wp_unslash($_POST['session_id'])) : '';
     $email      = isset($_POST['email']) ? sanitize_email($_POST['email']) : '';
     $name       = isset($_POST['name']) ? sanitize_text_field($_POST['name']) : ''; 
 
@@ -1419,7 +1446,7 @@ public function mxchat_check_email_provided() {
         wp_send_json_error(['message' => esc_html__('Invalid nonce', 'mxchat')]);
     }
 
-    $session_id = isset($_POST['session_id']) ? sanitize_text_field($_POST['session_id']) : '';
+    $session_id = isset($_POST['session_id']) ? MxChat_Utils::sanitize_session_id(wp_unslash($_POST['session_id'])) : '';
     if (empty($session_id) || $session_id === 'null') {
         //error_log('[ERROR] No session ID provided in mxchat_check_email_provided');
         wp_send_json_error(['message' => esc_html__('No session ID provided', 'mxchat')]);
@@ -1599,7 +1626,7 @@ public function mxchat_handle_chat_request() {
     }
 
     // Rest of your existing code...
-    $session_id = isset($_POST['session_id']) ? sanitize_text_field($_POST['session_id']) : '';
+    $session_id = isset($_POST['session_id']) ? MxChat_Utils::sanitize_session_id(wp_unslash($_POST['session_id'])) : '';
 
     // Treat the literal strings 'null' / 'undefined' as missing too. Browser edge cases
     // (Safari ITP, private mode, cross-origin iframes with partitioned storage) can cause
@@ -2273,7 +2300,7 @@ if ($testing_data !== null && !empty($this->current_valid_urls)) {
         $context_content = apply_filters('mxchat_prepare_context', $context_content, $session_id);
 
         // Extract model from current options for bot-specific model support
-        $selected_model = isset($current_options['model']) ? $current_options['model'] : 'gpt-5.1-chat-latest';
+        $selected_model = isset($current_options['model']) ? $current_options['model'] : 'gpt-5.6-sol';
 
         // ===== Native function-calling fallback (plan-mxchat-20260617-a41dee) =====
         // Intents already missed (we're past the intent router). If function
@@ -3429,7 +3456,7 @@ public function mxchat_interpret_search_query($user_query) {
 
     // Get options and determine the selected model
     $options = $this->options ?? get_option('mxchat_options');
-    $selected_model = isset($options['model']) ? $options['model'] : 'gpt-5.1-chat-latest';
+    $selected_model = isset($options['model']) ? $options['model'] : 'gpt-5.6-sol';
 
     // Custom (OpenAI-compatible) provider routes by model id, not prefix.
     if ($selected_model === 'custom-provider') {
@@ -3542,9 +3569,9 @@ private function mxchat_custom_provider_assoc_headers($cfg) {
 /**
  * Interpret query using OpenAI models
  */
-private function interpret_query_with_openai($user_query, $system_prompt, $api_key, $model = 'gpt-5.1-chat-latest') {
+private function interpret_query_with_openai($user_query, $system_prompt, $api_key, $model = 'gpt-5.6-sol') {
     $url = 'https://api.openai.com/v1/chat/completions';
-    // plan-mxchat-20260715-7124f4: the default chat model is gpt-5.1-chat-latest
+    // plan-mxchat-20260715-7124f4: the default chat model is a gpt-5-family id
     // and every gpt-5* rejects both a non-default temperature and the legacy
     // max_tokens key (400). This call swallowed the 400 and silently degraded to
     // the raw query on every gpt-5 install, quietly disabling product/image
@@ -3668,6 +3695,9 @@ private function mxchat_reasoning_effort_fallback($model, $context) {
         return null;
     }
     // 'chat'
+    // gpt-5.1/5.3-chat-latest stay listed after their 2026-08-10 retirement:
+    // unmigrated bot-level / add-on-saved ids must keep routing correctly
+    // until every surface is swept (plan e46b8f).
     $no_reasoning_models = array('gpt-5.2', 'gpt-5.1-chat-latest', 'gpt-5.3-chat-latest', 'gpt-5.4-mini', 'gpt-5.4-nano');
     if (in_array($model, $no_reasoning_models, true)) return null;
     if ($model === 'gpt-5.1-2025-11-13') return 'low';
@@ -4187,7 +4217,7 @@ public function handle_pdf_upload() {
     }
 
     $file = $_FILES['pdf_file'];
-    $session_id = sanitize_text_field($_POST['session_id']);
+    $session_id = MxChat_Utils::sanitize_session_id(wp_unslash($_POST['session_id']));
     $original_filename = sanitize_text_field($file['name']);
 
     // Update session owner if it changed (e.g. IP changed due to network switch)
@@ -4273,7 +4303,32 @@ public function handle_pdf_remove() {
         wp_die();
     }
 
-    $session_id = sanitize_text_field($_POST['session_id']);
+    $session_id = MxChat_Utils::sanitize_session_id(wp_unslash($_POST['session_id']));
+    if ($session_id === '') {
+        wp_send_json_error(esc_html__('Session ID missing.', 'mxchat'));
+        wp_die();
+    }
+
+    // Session-ownership bookkeeping (plan-mxchat-20260731-d42bec).
+    //
+    // Be clear about what this does and does not do. It mirrors the history
+    // endpoint's rule exactly, as directed, INCLUDING its changed-IP tolerance:
+    // possession of the session id IS the credential, so a mismatched identifier
+    // re-owns the session instead of being refused. That means this does NOT
+    // refuse a caller who supplies someone else's session id — it keeps the two
+    // endpoints agreeing about who owns a session, and records the owner so a
+    // future stricter policy has trustworthy data to enforce against.
+    //
+    // What actually protects another visitor's upload here is that session ids
+    // are 128-bit CSPRNG values (plan-0c17b5) and therefore not guessable. If we
+    // ever want a real boundary on this endpoint, it has to be decided for the
+    // history endpoint at the same time.
+    $current_user_identifier = MxChat_User::mxchat_get_user_identifier();
+    $session_owner = get_option("mxchat_session_owner_{$session_id}");
+    if (!$session_owner || $session_owner !== $current_user_identifier) {
+        update_option("mxchat_session_owner_{$session_id}", $current_user_identifier, 'no');
+    }
+
     $pdf_path = get_transient('mxchat_pdf_url_' . $session_id);
 
     if ($pdf_path && file_exists($pdf_path)) {
@@ -4290,7 +4345,7 @@ public function handle_pdf_remove() {
 
 
 function mxchat_fetch_new_messages() {
-    $session_id = sanitize_text_field($_POST['session_id']);
+    $session_id = MxChat_Utils::sanitize_session_id(wp_unslash($_POST['session_id']));
     $last_seen_id = sanitize_text_field($_POST['last_seen_id']);
     $persistence_enabled = $_POST['persistence_enabled'] === 'true';
     $initial_timestamp = isset($_POST['initial_timestamp']) ? intval($_POST['initial_timestamp']) : 0;
@@ -6039,7 +6094,7 @@ private function mxchat_find_relevant_content($user_embedding, $bot_id = 'defaul
         $bot_options = $this->get_bot_options($bot_id);
         $mxchat_options = get_option('mxchat_options', array());
         $current_options = !empty($bot_options) ? $bot_options : $mxchat_options;
-        $selected_model = $current_options['model'] ?? 'gpt-5.1-chat-latest';
+        $selected_model = $current_options['model'] ?? 'gpt-5.6-sol';
 
         if ($this->is_openai_chat_model($selected_model)) {
             //error_log("MXCHAT DEBUG: Using OpenAI Vector Store for knowledge retrieval");
@@ -6067,11 +6122,11 @@ private function mxchat_find_relevant_content($user_embedding, $bot_id = 'defaul
     if ($use_pinecone) {
         return $this->find_relevant_content_pinecone($user_embedding, $bot_id, $bot_pinecone_config);
     } else {
-        return $this->find_relevant_content_wordpress($user_embedding, $bot_id);
+        return $this->find_relevant_content_wordpress($user_embedding, $bot_id, $user_query);
     }
 }
 
-private function find_relevant_content_wordpress($user_embedding, $bot_id = 'default') {
+private function find_relevant_content_wordpress($user_embedding, $bot_id = 'default', $user_query = '') {
     global $wpdb;
     $system_prompt_table = $wpdb->prefix . 'mxchat_system_prompt_content';
     // Initialize similarity analysis storage
@@ -6105,6 +6160,24 @@ private function find_relevant_content_wordpress($user_embedding, $bot_id = 'def
         $column_exists = $wpdb->get_var("SHOW COLUMNS FROM {$system_prompt_table} LIKE 'bot_metadata'");
         if ($column_exists) {
             $bot_filter = $wpdb->prepare(" AND (bot_metadata = %s OR bot_metadata IS NULL OR bot_metadata = '')", $bot_id);
+        }
+    }
+
+    // Hybrid keyword boost (plan-38ffa1, default OFF). Runs a ranked keyword
+    // query alongside the vector scan and fuses the two lists by reciprocal
+    // rank, so exact-token queries (SKUs, error codes, names) hit even when
+    // their embedding similarity is semantic mush. The keyword leg runs FIRST
+    // so the vector scan below can record true cosine similarity for its hits
+    // (the display keeps cosine % as the anchor).
+    $hybrid_enabled = get_option('mxchat_hybrid_keyword_toggle', 'off') === 'on'
+        && trim((string) $user_query) !== '';
+    $keyword_hits = array();          // ranked + access-filtered, max 20
+    $keyword_ids = array();           // id => keyword rank (1-based)
+    $keyword_similarities = array();  // id => cosine recorded during the scan
+    if ($hybrid_enabled) {
+        $keyword_hits = $this->mxchat_hybrid_keyword_search($user_query, $system_prompt_table, $bot_filter, $knowledge_manager);
+        foreach ($keyword_hits as $kw_i => $kw_hit) {
+            $keyword_ids[$kw_hit['id']] = $kw_i + 1;
         }
     }
 
@@ -6177,6 +6250,12 @@ private function find_relevant_content_wordpress($user_embedding, $bot_id = 'def
                 });
             }
 
+            // Record cosine for keyword-leg hits so fusion/display can anchor
+            // on the true similarity % even for below-threshold rescues.
+            if ($hybrid_enabled && isset($keyword_ids[$row->id])) {
+                $keyword_similarities[$row->id] = $similarity;
+            }
+
             // Track candidates for context assembly (above threshold + has access)
             if ($similarity >= $similarity_threshold && $has_access) {
                 $candidates[] = [
@@ -6212,6 +6291,80 @@ private function find_relevant_content_wordpress($user_embedding, $bot_id = 'def
         usort($candidates, function ($a, $b) {
             return $b['similarity'] <=> $a['similarity'];
         });
+    }
+
+    // ===== HYBRID FUSION (plan-38ffa1) =====
+    // Reciprocal-rank fusion over the top-20 of each leg (k=60 standard).
+    // Rank-based, so the incomparable score scales (cosine 0-1 vs FULLTEXT
+    // relevance) never need calibrating. A below-threshold vector row can
+    // enter via a strong keyword rank — that is the point of the feature.
+    // Every candidate gets a 'rank_score' the downstream source ordering
+    // uses: with hybrid OFF it is exactly the cosine similarity, so the
+    // legacy path is byte-identical.
+    $fused_rank_map = array();   // id => 1-based fused rank
+    $matched_via_map = array();  // id => 'vector' | 'keyword' | 'both'
+    if (!$hybrid_enabled) {
+        foreach ($candidates as &$cand_ref) {
+            $cand_ref['rank_score'] = $cand_ref['similarity'];
+        }
+        unset($cand_ref);
+    } else {
+        $rrf_k = 60;
+        $fused = array();
+        foreach (array_slice($candidates, 0, 20) as $leg_rank => $cand) {
+            $fused[$cand['id']] = array(
+                'id'         => $cand['id'],
+                'similarity' => $cand['similarity'],
+                'source_url' => $cand['source_url'],
+                'rrf'        => 1 / ($rrf_k + $leg_rank + 1),
+                'via'        => 'vector',
+            );
+        }
+        foreach ($keyword_hits as $leg_rank => $hit) {
+            $rrf = 1 / ($rrf_k + $leg_rank + 1);
+            if (isset($fused[$hit['id']])) {
+                $fused[$hit['id']]['rrf'] += $rrf;
+                $fused[$hit['id']]['via'] = 'both';
+            } else {
+                $fused[$hit['id']] = array(
+                    'id'         => $hit['id'],
+                    'similarity' => $keyword_similarities[$hit['id']] ?? 0.0,
+                    'source_url' => $hit['source_url'],
+                    'rrf'        => $rrf,
+                    'via'        => 'keyword',
+                );
+            }
+        }
+        uasort($fused, function ($a, $b) {
+            return $b['rrf'] <=> $a['rrf'];
+        });
+
+        // Vector candidates beyond the top-20 leg keep flowing to the prompt
+        // builders after the fused block, in their vector order — the result
+        // count/shape downstream stays unchanged.
+        $tail = array_slice($candidates, 20);
+        $candidates = array();
+        $rank = 0;
+        foreach ($fused as $f) {
+            $rank++;
+            $fused_rank_map[$f['id']] = $rank;
+            $matched_via_map[$f['id']] = $f['via'];
+            $candidates[] = array(
+                'id'         => $f['id'],
+                'similarity' => $f['similarity'],
+                'source_url' => $f['source_url'],
+                'rank_score' => $f['rrf'],
+            );
+        }
+        foreach ($tail as $cand) {
+            // Below any fused rrf (min possible fused rrf is 1/(60+40)=0.01;
+            // similarity * 1e-6 <= 1e-6), preserving relative vector order.
+            $cand['rank_score'] = $cand['similarity'] * 1e-6;
+            $candidates[] = $cand;
+        }
+        if (count($candidates) > $max_candidates) {
+            $candidates = array_slice($candidates, 0, $max_candidates);
+        }
     }
 
     // ===== PHASE 2: FETCH ARTICLE CONTENT ONLY FOR WINNERS =====
@@ -6298,8 +6451,11 @@ private function find_relevant_content_wordpress($user_embedding, $bot_id = 'def
             );
         }
 
-        if ($cand['similarity'] > $url_groups[$group_key]['best_score']) {
-            $url_groups[$group_key]['best_score'] = $cand['similarity'];
+        // rank_score == similarity with hybrid off (byte-identical ordering);
+        // with hybrid on it carries the fused rank so keyword rescues sort up.
+        $cand_rank_score = $cand['rank_score'] ?? $cand['similarity'];
+        if ($cand_rank_score > $url_groups[$group_key]['best_score']) {
+            $url_groups[$group_key]['best_score'] = $cand_rank_score;
         }
 
         if ($is_chunked) {
@@ -6316,10 +6472,74 @@ private function find_relevant_content_wordpress($user_embedding, $bot_id = 'def
         }
     }
 
-    // Sort ALL similarities for testing display (highest first)
-    usort($all_similarities, function ($a, $b) {
-        return $b['similarity'] <=> $a['similarity'];
-    });
+    // Hybrid display augmentation (plan-38ffa1, Maxwell's approval note):
+    // make sure every fused-top-10 row appears in the debug panel — a
+    // keyword-only rescue may sit below the vector top-10 buffer — and stamp
+    // matched_via + fused_rank on every row. Cosine % stays the anchor; no
+    // raw RRF numbers surface.
+    if ($hybrid_enabled) {
+        $displayed_ids = array();
+        foreach ($all_similarities as $disp_item) {
+            $displayed_ids[$disp_item['document_id']] = true;
+        }
+        $kw_info_by_id = array();
+        foreach ($keyword_hits as $hit) {
+            $kw_info_by_id[$hit['id']] = $hit;
+        }
+        foreach ($fused_rank_map as $fused_id => $fused_rank) {
+            if ($fused_rank > 10 || isset($displayed_ids[$fused_id])) {
+                continue;
+            }
+            $aug_content = $content_map[$fused_id] ?? '';
+            $aug_parsed = MxChat_Chunker::parse_stored_chunk($aug_content);
+            $aug_hit = $kw_info_by_id[$fused_id] ?? array();
+            $aug_similarity = $keyword_similarities[$fused_id] ?? 0.0;
+            $aug_source_url = $aug_hit['source_url'] ?? '';
+            if (!empty($aug_source_url) && $aug_source_url !== '#') {
+                $aug_source_display = $aug_source_url;
+            } else {
+                $aug_preview = preg_replace('/\s+/', ' ', strip_tags($aug_content));
+                $aug_source_display = substr(trim($aug_preview), 0, 50) . '...';
+            }
+            $all_similarities[] = [
+                'document_id' => $fused_id,
+                'similarity' => $aug_similarity,
+                'similarity_percentage' => round($aug_similarity * 100, 2),
+                'above_threshold' => $aug_similarity >= $similarity_threshold,
+                'source_display' => $aug_source_display,
+                'content_preview' => substr(strip_tags($aug_parsed['text'] ?? ''), 0, 100) . '...',
+                'used_for_context' => false,
+                'role_restriction' => $aug_hit['role_restriction'] ?? 'public',
+                'has_access' => $aug_hit['has_access'] ?? true,
+                'filtered_out' => false,
+                'is_chunk' => $aug_parsed['is_chunked'],
+                'chunk_index' => $aug_parsed['is_chunked'] ? ($aug_parsed['metadata']['chunk_index'] ?? 0) : null,
+                'total_chunks' => $aug_parsed['is_chunked'] ? ($aug_parsed['metadata']['total_chunks'] ?? 1) : null,
+            ];
+        }
+        foreach ($all_similarities as &$disp_ref) {
+            $disp_ref['matched_via'] = $matched_via_map[$disp_ref['document_id']] ?? null;
+            $disp_ref['fused_rank'] = $fused_rank_map[$disp_ref['document_id']] ?? null;
+        }
+        unset($disp_ref);
+    }
+
+    // Sort for the testing/debug display: fused rank when hybrid is on
+    // (nulls last, cosine as tie-break), raw similarity otherwise.
+    if ($hybrid_enabled) {
+        usort($all_similarities, function ($a, $b) {
+            $ar = $a['fused_rank'] ?? PHP_INT_MAX;
+            $br = $b['fused_rank'] ?? PHP_INT_MAX;
+            if ($ar !== $br) {
+                return $ar <=> $br;
+            }
+            return $b['similarity'] <=> $a['similarity'];
+        });
+    } else {
+        usort($all_similarities, function ($a, $b) {
+            return $b['similarity'] <=> $a['similarity'];
+        });
+    }
 
     // Sort URL groups by best score (highest first)
     uasort($url_groups, function($a, $b) {
@@ -6467,7 +6687,11 @@ private function find_relevant_content_wordpress($user_embedding, $bot_id = 'def
 
     // Add response guidelines
     if (empty($top_urls)) {
-        $content = "No reference information was found for this query.\n\n";
+        // No matched sources: return empty so the prompt assembler's
+        // "NO RELEVANT CONTENT FOUND IN KNOWLEDGE DATABASE" branch fires —
+        // a no-info sentence wrapped in OFFICIAL KNOWLEDGE markers reads to
+        // the model as authoritative content (plan d7daf8).
+        $content = '';
     } else {
         // Build response guidelines based on citation links setting
         $content .= "\n## Response Guidelines ##\n" .
@@ -7002,7 +7226,8 @@ private function find_relevant_content_pinecone($user_embedding, $bot_id = 'defa
 
     // Add response guidelines
     if ($matches_used === 0) {
-        $content = "No reference information was found for this query.\n\n";
+        // Empty return → assembler's NO RELEVANT CONTENT branch (plan d7daf8).
+        $content = '';
     } else {
         // Build response guidelines based on citation links setting
         $content .= "\n## Response Guidelines ##\n" .
@@ -7258,7 +7483,7 @@ private function find_relevant_content_openai_vectorstore($user_query, $bot_id =
     // Get the selected model
     $bot_options = $this->get_bot_options($bot_id);
     $current_options = !empty($bot_options) ? $bot_options : $mxchat_options;
-    $selected_model = $current_options['model'] ?? 'gpt-5.1-chat-latest';
+    $selected_model = $current_options['model'] ?? 'gpt-5.6-sol';
 
     // Verify it's an OpenAI model
     if (!$this->is_openai_chat_model($selected_model)) {
@@ -7503,7 +7728,8 @@ private function find_relevant_content_openai_vectorstore($user_query, $bot_id =
     // Add response guidelines
     if ($matches_used === 0) {
         //error_log("MXCHAT VECTORSTORE: No matches found - returning empty reference message");
-        $content = "No reference information was found for this query.\n\n";
+        // Empty return → assembler's NO RELEVANT CONTENT branch (plan d7daf8).
+        $content = '';
     } else {
         // Build response guidelines based on citation links setting
         $content .= "\n## Response Guidelines ##\n" .
@@ -8367,7 +8593,7 @@ private function mxchat_fc_giveup_text() {
     return esc_html__('I looked into that but could not put together a final answer. Please try rephrasing your request.', 'mxchat');
 }
 
-private function mxchat_generate_response($relevant_content, $api_key, $xai_api_key, $claude_api_key, $deepseek_api_key, $gemini_api_key, $openrouter_api_key, $conversation_history, $streaming = false, $session_id = '', $testing_data = null, $selected_model = 'gpt-5.1-chat-latest') {
+private function mxchat_generate_response($relevant_content, $api_key, $xai_api_key, $claude_api_key, $deepseek_api_key, $gemini_api_key, $openrouter_api_key, $conversation_history, $streaming = false, $session_id = '', $testing_data = null, $selected_model = 'gpt-5.6-sol') {
     try {
         if (!$relevant_content) {
             $error_response = [
@@ -8947,6 +9173,10 @@ private function mxchat_generate_response_openrouter_stream($selected_model, $op
     }
 }
 private function mxchat_generate_response_openai_stream($selected_model, $api_key, $conversation_history, $relevant_content, $session_id, $testing_data = null) {
+    // OpenAI retires gpt-5.1-chat-latest / gpt-5.3-chat-latest on 2026-08-10
+    // (replacement gpt-5.6-sol). Read-time rescue mirrors the non-streaming
+    // path (plan e46b8f).
+    if ($selected_model === 'gpt-5.1-chat-latest' || $selected_model === 'gpt-5.3-chat-latest') { $selected_model = 'gpt-5.6-sol'; }
     try {
         $bot_id = $this->get_current_bot_id($session_id);
         
@@ -9558,6 +9788,10 @@ private function mxchat_generate_response_custom($selected_model, $conversation_
  * This uses the newer Responses API which supports web search functionality
  */
 private function mxchat_generate_response_openai_web_search($selected_model, $api_key, $conversation_history, $relevant_content, $session_id, $testing_data = null, $streaming = false) {
+    // OpenAI retires gpt-5.1-chat-latest / gpt-5.3-chat-latest on 2026-08-10
+    // (replacement gpt-5.6-sol). Read-time rescue mirrors the chat paths
+    // (plan e46b8f).
+    if ($selected_model === 'gpt-5.1-chat-latest' || $selected_model === 'gpt-5.3-chat-latest') { $selected_model = 'gpt-5.6-sol'; }
     try {
         $bot_id = $this->get_current_bot_id($session_id);
         $system_prompt_instructions = $this->get_system_instructions($bot_id, $session_id);
@@ -9726,7 +9960,7 @@ private function mxchat_web_search_non_streaming_response($request_body, $api_ke
     // "incomplete" with max_output_tokens exhausted, content-filter-emptied
     // output, shape drift) previously fell through and returned '' — a
     // silent empty bot bubble. This is the DEFAULT model path
-    // (gpt-5.1-chat-latest routes through /v1/responses).
+    // (the default OpenAI chat model routes through /v1/responses).
     if (trim($output_text) === '') {
         return $this->mxchat_empty_completion_error($result, 'OpenAI');
     }
@@ -10783,7 +11017,7 @@ private function mxchat_generate_response_openrouter($selected_model, $openroute
         if (is_wp_error($response)) {
             $error_message = $response->get_error_message();
             return [
-                'error' => $this->mxchat_friendly_chat_error(0, $error_message, 'OpenRouter'),
+                'error' => $this->mxchat_friendly_chat_error(0, $error_message, 'OpenRouter', $selected_model),
                 'error_code' => 'openrouter_connection_error',
                 'provider' => 'openrouter'
             ];
@@ -10844,9 +11078,15 @@ private function mxchat_generate_response_openrouter($selected_model, $openroute
  * @param int    $http_code      HTTP status from the provider.
  * @param string $error_message  Raw provider error.message (may be empty).
  * @param string $provider_label Human provider name, e.g. 'Anthropic'.
+ * @param string $model          The model id the failing request used. When a
+ *                               model-access failure is detected and this is
+ *                               non-empty, a persistent admin notice is armed
+ *                               (mxchat_show_model_access_notice) so the OWNER
+ *                               learns about it even when only anonymous
+ *                               visitors hit the broken bot (plan e46b8f).
  * @return string Message safe to render as a chat bubble.
  */
-private function mxchat_friendly_chat_error($http_code, $error_message, $provider_label = '') {
+private function mxchat_friendly_chat_error($http_code, $error_message, $provider_label = '', $model = '') {
     $raw = trim((string) $error_message);
 
     // Detect a model-access / availability problem the site owner can fix by
@@ -10862,6 +11102,23 @@ private function mxchat_friendly_chat_error($http_code, $error_message, $provide
         || (strpos($low, 'not found') !== false)                // Gemini: "models/x is not found for API version ..."
         || (strpos($low, 'permission_denied') !== false)        // Gemini gated model
         || (strpos($low, 'permission denied') !== false);
+
+    // Arm the persistent admin notice (throttled: skip if the same model was
+    // flagged within the last hour — chat errors can fire per message).
+    if ($is_model_access && $model !== '') {
+        $existing = get_option('mxchat_model_access_notice');
+        $stale = !is_array($existing)
+            || !isset($existing['model'], $existing['time'])
+            || $existing['model'] !== $model
+            || (time() - (int) $existing['time']) > HOUR_IN_SECONDS;
+        if ($stale) {
+            update_option('mxchat_model_access_notice', array(
+                'model'    => (string) $model,
+                'provider' => (string) $provider_label,
+                'time'     => time(),
+            ), false);
+        }
+    }
 
     if (current_user_can('manage_options')) {
         if ($is_model_access) {
@@ -10977,7 +11234,7 @@ private function mxchat_generate_response_claude($selected_model, $claude_api_ke
         // model-access case) without leaking raw API internals to visitors. This
         // is the single chokepoint for BOTH the non-streaming and streaming Claude
         // paths (the stream's non-200 fallback re-enters this method). plan 1d3b0f.
-        return $this->mxchat_friendly_chat_error($http_code, $error_message, 'Anthropic');
+        return $this->mxchat_friendly_chat_error($http_code, $error_message, 'Anthropic', $selected_model);
     }
 
     // Parse response
@@ -11008,6 +11265,10 @@ private function mxchat_generate_response_claude($selected_model, $claude_api_ke
     return "Sorry, I received an unexpected response format from the API.";
 }
 private function mxchat_generate_response_openai($selected_model, $api_key, $conversation_history, $relevant_content, $session_id = '') {
+    // OpenAI retires gpt-5.1-chat-latest / gpt-5.3-chat-latest on 2026-08-10
+    // (replacement gpt-5.6-sol). Read-time rescue for saved / bot-level ids
+    // that missed mxchat_migrate_deprecated_models() (plan e46b8f).
+    if ($selected_model === 'gpt-5.1-chat-latest' || $selected_model === 'gpt-5.3-chat-latest') { $selected_model = 'gpt-5.6-sol'; }
     try {
         // Ensure conversation_history is an array
         if (!is_array($conversation_history)) {
@@ -11086,7 +11347,7 @@ private function mxchat_generate_response_openai($selected_model, $api_key, $con
         if (is_wp_error($response)) {
             $error_message = $response->get_error_message();
             return [
-                'error' => $this->mxchat_friendly_chat_error(0, $error_message, 'OpenAI'),
+                'error' => $this->mxchat_friendly_chat_error(0, $error_message, 'OpenAI', $selected_model),
                 'error_code' => 'openai_connection_error',
                 'provider' => 'openai'
             ];
@@ -11143,7 +11404,7 @@ private function mxchat_generate_response_openai($selected_model, $api_key, $con
             // clean messages. Route the raw-tail generic case through the leak-safe
             // helper so visitors never see provider internals. plan 5da59a.
             return [
-                'error' => $this->mxchat_friendly_chat_error($status_code, $error_message, 'OpenAI'),
+                'error' => $this->mxchat_friendly_chat_error($status_code, $error_message, 'OpenAI', $selected_model),
                 'error_code' => 'openai_api_error',
                 'provider' => 'openai',
                 'status_code' => $status_code
@@ -11240,7 +11501,7 @@ private function mxchat_generate_response_xai($selected_model, $xai_api_key, $co
         $error_message = $response->get_error_message();
         //error_log('X.AI API Error: ' . $error_message);
         return [
-            'error' => $this->mxchat_friendly_chat_error(0, $error_message, 'X.AI'),
+            'error' => $this->mxchat_friendly_chat_error(0, $error_message, 'X.AI', $selected_model),
             'error_code' => 'xai_connection_error',
             'provider' => 'xai'
         ];
@@ -11343,7 +11604,7 @@ private function mxchat_generate_response_xai($selected_model, $xai_api_key, $co
         // fallback) instead of echoing raw provider internals. Preserve the
         // structured contract (error_code/provider/status_code) for logging. plan 5da59a.
         return [
-            'error' => $this->mxchat_friendly_chat_error($status_code, $error_message, 'xAI'),
+            'error' => $this->mxchat_friendly_chat_error($status_code, $error_message, 'xAI', $selected_model),
             'error_code' => 'xai_api_error',
             'provider' => 'xai',
             'status_code' => $status_code
@@ -11450,7 +11711,7 @@ private function mxchat_generate_response_deepseek($selected_model, $deepseek_ap
             $error_message = $response->get_error_message();
             //error_log('DeepSeek API Error: ' . $error_message);
             return [
-                'error' => $this->mxchat_friendly_chat_error(0, $error_message, 'DeepSeek'),
+                'error' => $this->mxchat_friendly_chat_error(0, $error_message, 'DeepSeek', $selected_model),
                 'error_code' => 'deepseek_connection_error',
                 'provider' => 'deepseek'
             ];
@@ -11518,7 +11779,7 @@ private function mxchat_generate_response_deepseek($selected_model, $deepseek_ap
 
             // Generic error fallback — leak-safe helper (see plan 5da59a / 1d3b0f).
             return [
-                'error' => $this->mxchat_friendly_chat_error($status_code, $error_message, 'DeepSeek'),
+                'error' => $this->mxchat_friendly_chat_error($status_code, $error_message, 'DeepSeek', $selected_model),
                 'error_code' => 'deepseek_api_error',
                 'provider' => 'deepseek',
                 'status_code' => $status_code
@@ -11714,7 +11975,7 @@ private function mxchat_generate_response_gemini($selected_model, $gemini_api_ke
         // plan b13282: route the transport-error string through the leak-safe helper
         // (admin-actionable, generic for visitors) instead of echoing the raw WP HTTP
         // error. http_code 0 = no HTTP response, so the helper uses the generic branch.
-        return $this->mxchat_friendly_chat_error(0, $response->get_error_message(), 'Gemini');
+        return $this->mxchat_friendly_chat_error(0, $response->get_error_message(), 'Gemini', $selected_model);
     }
     
     $response_body = json_decode(wp_remote_retrieve_body($response), true);
@@ -11729,7 +11990,7 @@ private function mxchat_generate_response_gemini($selected_model, $gemini_api_ke
             ? $response_body['error']['message']
             : 'Unknown error';
         $gemini_http_code = wp_remote_retrieve_response_code($response);
-        return $this->mxchat_friendly_chat_error($gemini_http_code, $gemini_error_message, 'Gemini');
+        return $this->mxchat_friendly_chat_error($gemini_http_code, $gemini_error_message, 'Gemini', $selected_model);
     }
     
     // Extract the response text
@@ -11748,7 +12009,7 @@ private function mxchat_generate_response_gemini($selected_model, $gemini_api_ke
 
 public function test_streaming_request() {
     $options = get_option('mxchat_options', []);
-    $model = $options['model'] ?? 'gpt-5.1-chat-latest';
+    $model = $options['model'] ?? 'gpt-5.6-sol';
 
     // Detect provider from model prefix
     $provider = strtolower(explode('-', $model)[0]);
@@ -11908,6 +12169,94 @@ public function mxchat_check_pre_chat_message_status() {
     }
 
     wp_die();
+}
+
+/**
+ * Keyword leg for hybrid retrieval (plan-38ffa1): ranked keyword query over
+ * the WP-DB knowledge table. FULLTEXT when the index is available, LIKE on
+ * the top query terms otherwise (capability detected once and cached by
+ * MxChat_Utils::mxchat_hybrid_detect_capability). Respects the same bot
+ * scoping as the vector query ($bot_filter) and the same role-restriction
+ * access rules as vector candidates.
+ *
+ * @return array[] Ranked hits: [id, source_url, role_restriction, has_access]
+ */
+private function mxchat_hybrid_keyword_search($user_query, $system_prompt_table, $bot_filter, $knowledge_manager) {
+    global $wpdb;
+
+    $capability = get_option('mxchat_hybrid_keyword_capability', '');
+    if (!in_array($capability, array('fulltext', 'like'), true)) {
+        $capability = MxChat_Utils::mxchat_hybrid_detect_capability();
+    }
+
+    $limit = 20;
+    $rows = array();
+
+    if ($capability === 'fulltext') {
+        $rows = $wpdb->get_results($wpdb->prepare(
+            "SELECT id, source_url, role_restriction,
+                    MATCH(article_content) AGAINST (%s IN NATURAL LANGUAGE MODE) AS kw_score
+             FROM {$system_prompt_table}
+             WHERE MATCH(article_content) AGAINST (%s IN NATURAL LANGUAGE MODE) {$bot_filter}
+             ORDER BY kw_score DESC, id ASC
+             LIMIT %d",
+            $user_query,
+            $user_query,
+            $limit
+        ));
+    } else {
+        // LIKE fallback: length-weighted term scoring. Longer, rarer tokens
+        // (the SKU, the error code) must outrank ubiquitous short words — an
+        // equal-weight score lets "the" + one common word tie with the exact
+        // token and the tie-break pick the wrong row (caught by the 38ffa1
+        // verification harness). Stopwords are dropped outright.
+        $stopwords = array('the', 'and', 'for', 'you', 'your', 'with', 'this', 'that', 'are', 'was', 'can', 'how', 'what', 'does', 'have', 'has', 'about', 'from', 'not', 'but', 'all', 'any', 'our', 'their');
+        $terms = preg_split('/[^\p{L}\p{N}_-]+/u', (string) $user_query, -1, PREG_SPLIT_NO_EMPTY);
+        $terms = array_filter($terms, function ($t) use ($stopwords) {
+            return mb_strlen($t) >= 3 && !in_array(mb_strtolower($t), $stopwords, true);
+        });
+        $terms = array_values(array_unique(array_map('mb_strtolower', $terms)));
+        usort($terms, function ($a, $b) {
+            return mb_strlen($b) <=> mb_strlen($a);
+        });
+        $terms = array_slice($terms, 0, 5);
+        if (empty($terms)) {
+            return array();
+        }
+
+        $score_parts = array();
+        $where_parts = array();
+        $like_params = array();
+        foreach ($terms as $term) {
+            $score_parts[] = '((article_content LIKE %s) * ' . (int) mb_strlen($term) . ')';
+            $where_parts[] = 'article_content LIKE %s';
+            $like_params[] = '%' . $wpdb->esc_like($term) . '%';
+        }
+        $sql = "SELECT id, source_url, role_restriction, ("
+             . implode(' + ', $score_parts)
+             . ") AS kw_score FROM {$system_prompt_table} WHERE ("
+             . implode(' OR ', $where_parts)
+             . ") {$bot_filter} ORDER BY kw_score DESC, id ASC LIMIT %d";
+        $rows = $wpdb->get_results($wpdb->prepare(
+            $sql,
+            array_merge($like_params, $like_params, array($limit))
+        ));
+    }
+
+    $hits = array();
+    foreach ((array) $rows as $row) {
+        $role_restriction = $row->role_restriction ?? 'public';
+        if (!$knowledge_manager->mxchat_user_has_content_access($role_restriction)) {
+            continue;
+        }
+        $hits[] = array(
+            'id'               => (int) $row->id,
+            'source_url'       => $row->source_url ?? '',
+            'role_restriction' => $role_restriction,
+            'has_access'       => true,
+        );
+    }
+    return $hits;
 }
 
 private function mxchat_calculate_cosine_similarity($vectorA, $vectorB) {
@@ -12809,7 +13158,7 @@ public function mxchat_get_system_info() {
         : 'No system prompt configured';
     
     // Get selected model
-    $selected_model = isset($this->options['model']) ? $this->options['model'] : 'gpt-5.1-chat-latest';
+    $selected_model = isset($this->options['model']) ? $this->options['model'] : 'gpt-5.6-sol';
     
     // Check if OpenRouter is being used
     $is_openrouter = ($selected_model === 'openrouter');
@@ -12944,8 +13293,8 @@ public function mxchat_start_fresh_session() {
         return;
     }
     
-    $old_session_id = isset($_POST['old_session_id']) ? sanitize_text_field($_POST['old_session_id']) : '';
-    $new_session_id = isset($_POST['new_session_id']) ? sanitize_text_field($_POST['new_session_id']) : '';
+    $old_session_id = isset($_POST['old_session_id']) ? MxChat_Utils::sanitize_session_id(wp_unslash($_POST['old_session_id'])) : '';
+    $new_session_id = isset($_POST['new_session_id']) ? MxChat_Utils::sanitize_session_id(wp_unslash($_POST['new_session_id'])) : '';
     
     if (empty($old_session_id)) {
         wp_send_json_error(['message' => 'Old session ID required']);
@@ -13106,7 +13455,7 @@ public function mxchat_track_url_click() {
         wp_die();
     }
     
-    $session_id = isset($_POST['session_id']) ? sanitize_text_field($_POST['session_id']) : '';
+    $session_id = isset($_POST['session_id']) ? MxChat_Utils::sanitize_session_id(wp_unslash($_POST['session_id'])) : '';
     $clicked_url = isset($_POST['url']) ? esc_url_raw($_POST['url']) : '';
     $message_context = isset($_POST['message_context']) ? sanitize_textarea_field($_POST['message_context']) : '';
     
@@ -13159,7 +13508,7 @@ public function mxchat_track_originating_page() {
         wp_die();
     }
     
-    $session_id = isset($_POST['session_id']) ? sanitize_text_field($_POST['session_id']) : '';
+    $session_id = isset($_POST['session_id']) ? MxChat_Utils::sanitize_session_id(wp_unslash($_POST['session_id'])) : '';
     $page_url = isset($_POST['page_url']) ? esc_url_raw($_POST['page_url']) : '';
     $page_title = isset($_POST['page_title']) ? sanitize_text_field($_POST['page_title']) : '';
     
@@ -13393,7 +13742,7 @@ public function mxchat_get_current_chat_mode() {
         wp_die();
     }
     
-    $session_id = isset($_POST['session_id']) ? sanitize_text_field($_POST['session_id']) : '';
+    $session_id = isset($_POST['session_id']) ? MxChat_Utils::sanitize_session_id(wp_unslash($_POST['session_id'])) : '';
     
     if (empty($session_id)) {
         wp_send_json_error(['message' => 'Session ID missing']);

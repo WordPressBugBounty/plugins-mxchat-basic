@@ -1090,7 +1090,7 @@ function setupMxChatModelSelector() {
                 { value: 'gemini-3.5-flash', label: 'Gemini 3.5 Flash', description: 'Stable — newest Flash generation, recommended default' },
             ],
             openai: [
-                { value: 'gpt-5.1-chat-latest', label: 'GPT-5.1 Chat Latest', description: 'Recommended for most use cases' },
+                { value: 'gpt-5.6-sol', label: 'GPT-5.6 Sol', description: 'Recommended — newest OpenAI flagship for reasoning, coding and chat' },
             ],
             claude: [
                 { value: 'claude-fable-5', label: 'Claude Fable 5', description: 'Latest Flagship — newest and most capable Anthropic model' },

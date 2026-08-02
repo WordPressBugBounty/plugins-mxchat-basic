@@ -3,7 +3,7 @@
  * Plugin Name: MxChat
  * Plugin URI: https://mxchat.ai/
  * Description: AI chatbot for WordPress with OpenAI, Claude, xAI, DeepSeek, live agent, PDF uploads, WooCommerce, and training on website data.
- * Version: 3.2.15
+ * Version: 3.2.16
  * Author: MxChat
  * Author URI: https://mxchat.ai
  * License: GPLv2 or later
@@ -418,6 +418,7 @@ function mxchat_include_classes() {
         'includes/class-mxchat-public.php',
         'includes/class-mxchat-utils.php',
         'includes/class-mxchat-user.php',
+        'includes/class-mxchat-privacy.php',
         'includes/class-mxchat-meta-box.php',
         'includes/class-mxchat-chunker.php',
         'includes/class-mxchat-word-handler.php',
@@ -442,6 +443,11 @@ function mxchat_include_classes() {
     // Register the native function-calling admin-post save handler (a41dee).
     if (class_exists('MxChat_Tool_Registry')) {
         MxChat_Tool_Registry::init();
+    }
+
+    // GDPR: register with WP's personal-data export/erase tools (b81e42).
+    if (class_exists('MxChat_Privacy')) {
+        MxChat_Privacy::init();
     }
 
     // Editor Assistant — free, OFF-by-default block-editor AI actions (plan-8cb0cb).
@@ -997,14 +1003,39 @@ function mxchat_migrate_deprecated_models() {
         $migration_message = 'Your chatbot model has been automatically updated from Claude Haiku 3.5 to Claude Haiku 4.5 due to Anthropic deprecating the older model.';
     }
 
-    // Migrate deprecated GPT-4 series and GPT-3.5 Turbo to GPT-5.1 Chat Latest
+    // Migrate deprecated GPT-4 series and GPT-3.5 Turbo to GPT-5.6 Sol.
+    // (Previous target gpt-5.1-chat-latest itself retires 2026-08-10 — never
+    // migrate onto a model that is already on a deprecation list.)
     if (in_array($current_model, array('gpt-4o', 'gpt-4.1-2025-04-14', 'gpt-4-turbo', 'gpt-4', 'gpt-3.5-turbo'), true)) {
-        $options['model'] = 'gpt-5.1-chat-latest';
+        $options['model'] = 'gpt-5.6-sol';
         $migrated = true;
         $migration_message = sprintf(
-            'Your chatbot model has been automatically updated from %s to GPT-5.1 Chat Latest due to OpenAI deprecating older models.',
+            'Your chatbot model has been automatically updated from %s to GPT-5.6 Sol due to OpenAI deprecating older models.',
             $current_model
         );
+    }
+
+    // Migrate the gpt-5.x-chat-latest aliases OpenAI retires on August 10, 2026.
+    // Replacement per OpenAI's deprecations page: gpt-5.6-sol (plan e46b8f).
+    if (in_array($current_model, array('gpt-5.1-chat-latest', 'gpt-5.3-chat-latest'), true)) {
+        $options['model'] = 'gpt-5.6-sol';
+        $migrated = true;
+        $migration_message = sprintf(
+            'Your chatbot model has been automatically updated from %s to GPT-5.6 Sol because OpenAI retires the GPT-5.x Chat Latest models on August 10, 2026.',
+            $current_model
+        );
+    }
+
+    // The content generator has its own model option — same retirement applies.
+    if (isset($options['content_model'])
+        && in_array($options['content_model'], array('gpt-5.1-chat-latest', 'gpt-5.3-chat-latest'), true)) {
+        $old_content_model = $options['content_model'];
+        $options['content_model'] = 'gpt-5.6-sol';
+        $migrated = true;
+        $migration_message = trim($migration_message . ' ' . sprintf(
+            'Your content generation model has also been updated from %s to GPT-5.6 Sol for the same OpenAI retirement.',
+            $old_content_model
+        ));
     }
 
     // Migrate deprecated GPT-4o Mini and GPT-4.1 Mini to GPT-5 Mini
@@ -1054,6 +1085,44 @@ function mxchat_show_migration_notice() {
         delete_option('mxchat_model_migrated_notice');
         delete_option('mxchat_model_migration_message');
     }
+}
+
+/**
+ * Persistent admin notice when the provider rejected the configured model
+ * (model_not_found / no access). Set by mxchat_friendly_chat_error() in the
+ * integrator whenever a chat request fails on a model-access error — including
+ * requests from anonymous visitors, which is the case that otherwise stays
+ * invisible to the site owner for weeks (plan e46b8f).
+ *
+ * Deleted after render so it re-arms on the next failed chat: the notice keeps
+ * reappearing until the model is fixed, then stops on its own.
+ */
+function mxchat_show_model_access_notice() {
+    if (!current_user_can('manage_options')) {
+        return;
+    }
+    $notice = get_option('mxchat_model_access_notice');
+    if (!is_array($notice) || empty($notice['model'])) {
+        return;
+    }
+    $settings_url = admin_url('admin.php?page=mxchat-max');
+    ?>
+    <div class="notice notice-error is-dismissible">
+        <p>
+            <strong><?php esc_html_e('MxChat: your AI model is being rejected by the provider', 'mxchat'); ?></strong><br>
+            <?php
+            printf(
+                /* translators: 1: model id, 2: provider name */
+                esc_html__('Chat requests using the model "%1$s" are failing because %2$s reports it as unavailable on your API key (it may have been retired). Visitors may be seeing errors instead of replies.', 'mxchat'),
+                esc_html($notice['model']),
+                esc_html(!empty($notice['provider']) ? $notice['provider'] : __('the AI provider', 'mxchat'))
+            );
+            ?>
+            <a href="<?php echo esc_url($settings_url); ?>"><?php esc_html_e('Choose a different model in MxChat Settings', 'mxchat'); ?></a>
+        </p>
+    </div>
+    <?php
+    delete_option('mxchat_model_access_notice');
 }
 
 function mxchat_activate() {
@@ -1380,6 +1449,13 @@ function mxchat_check_for_update() {
                 mxchat_migrate_deprecated_models();
             }
 
+            // 3.2.16: Migrate OpenAI ids retiring 2026-08-10 (gpt-5.1-chat-latest /
+            // gpt-5.3-chat-latest → gpt-5.6-sol per OpenAI's deprecations page).
+            // Idempotent — only rewrites models on the deprecation lists (e46b8f).
+            if (version_compare($current_version, '3.2.16', '<')) {
+                mxchat_migrate_deprecated_models();
+            }
+
             // Run full activation to ensure everything is up to date
             mxchat_activate();
             
@@ -1580,6 +1656,7 @@ function mxchat_init() {
     
     // Add migration notice hook
     add_action('admin_notices', 'mxchat_show_migration_notice');
+    add_action('admin_notices', 'mxchat_show_model_access_notice');
     
     // Initialize classes with error handling
     try {
@@ -1739,7 +1816,7 @@ register_deactivation_hook(__FILE__, 'mxchat_deactivate');
 function mxchat_save_session_rating() {
     global $wpdb;
 
-    $session_id = isset($_POST['session_id']) ? sanitize_text_field(wp_unslash($_POST['session_id'])) : '';
+    $session_id = isset($_POST['session_id']) ? MxChat_Utils::sanitize_session_id(wp_unslash($_POST['session_id'])) : '';
     $bot_id     = isset($_POST['bot_id']) ? sanitize_text_field(wp_unslash($_POST['bot_id'])) : 'default';
     $rating_raw = isset($_POST['rating']) ? (int) $_POST['rating'] : 0;
     $feedback   = isset($_POST['feedback']) ? sanitize_textarea_field(wp_unslash($_POST['feedback'])) : '';

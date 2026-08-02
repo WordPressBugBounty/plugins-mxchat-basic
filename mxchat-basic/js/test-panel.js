@@ -400,6 +400,10 @@ updateActionMatches(actionMatches) {
             return;
         }
 
+        // Hybrid keyword boost (38ffa1): rows carry matched_via + fused_rank
+        // when hybrid retrieval was on for this message.
+        const hybridOn = topMatches.some(m => m.matched_via);
+
         // Group matches by source URL
         const groupedByUrl = {};
         topMatches.forEach((match) => {
@@ -412,7 +416,9 @@ updateActionMatches(actionMatches) {
                     usedForContext: false,
                     totalChunks: match.total_chunks || 1,
                     matchedChunks: [],
-                    isChunked: match.is_chunk || false
+                    isChunked: match.is_chunk || false,
+                    bestFusedRank: Infinity,
+                    viaSet: {}
                 };
             }
 
@@ -426,6 +432,13 @@ updateActionMatches(actionMatches) {
                 groupedByUrl[url].usedForContext = true;
             }
 
+            if (match.fused_rank && match.fused_rank < groupedByUrl[url].bestFusedRank) {
+                groupedByUrl[url].bestFusedRank = match.fused_rank;
+            }
+            if (match.matched_via) {
+                groupedByUrl[url].viaSet[match.matched_via] = true;
+            }
+
             // Add chunk info
             groupedByUrl[url].matchedChunks.push({
                 chunkIndex: match.chunk_index,
@@ -435,8 +448,13 @@ updateActionMatches(actionMatches) {
             });
         });
 
-        // Convert to array and sort by best score
-        const urlGroups = Object.values(groupedByUrl).sort((a, b) => b.bestScore - a.bestScore);
+        // Convert to array: fused-rank order when hybrid is on, best cosine otherwise
+        const urlGroups = Object.values(groupedByUrl).sort((a, b) => {
+            if (hybridOn && a.bestFusedRank !== b.bestFusedRank) {
+                return a.bestFusedRank - b.bestFusedRank;
+            }
+            return b.bestScore - a.bestScore;
+        });
 
         // Use backend counts if available, otherwise fall back to frontend calculation
         const usedUrlCount = sourcesUsed > 0 ? sourcesUsed : urlGroups.filter(g => g.usedForContext).length;
@@ -465,12 +483,23 @@ updateActionMatches(actionMatches) {
                 ? `<span class="chunk-expand-toggle" data-group="${groupIndex}">▶ Show chunks</span>`
                 : '';
 
+            let viaChip = '';
+            if (hybridOn) {
+                const vias = Object.keys(group.viaSet);
+                if (vias.length) {
+                    const viaLabel = (vias.length > 1 || vias[0] === 'both') ? 'Both'
+                        : (vias[0] === 'keyword' ? 'Keyword' : 'Vector');
+                    viaChip = `<span class="mxch-rag-via-chip mxch-rag-via-${viaLabel.toLowerCase()}">${viaLabel}</span>`;
+                }
+            }
+
             html += `
                 <div class="match-card ${cardClass}">
                     <div class="match-header">
                         <div class="match-title">
                             <span class="status-icon">${statusIcon}</span>
                             <span class="similarity-score">${group.bestScore}%</span>
+                            ${viaChip}
                             ${chunkSummary}
                         </div>
                         <span class="context-label">${contextLabel}</span>

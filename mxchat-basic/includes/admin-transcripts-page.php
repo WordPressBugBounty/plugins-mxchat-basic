@@ -949,6 +949,27 @@ function mxchat_render_transcripts_page($admin_instance, $page_data) {
                             </div>
                         </div>
                     </div>
+
+                    <!-- Privacy & Data Requests Card (plan b81e42) -->
+                    <div class="mxch-card">
+                        <div class="mxch-card-header">
+                            <h3 class="mxch-card-title">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+                                <?php esc_html_e('Privacy & Data Requests', 'mxchat'); ?>
+                            </h3>
+                        </div>
+                        <div class="mxch-card-body">
+                            <div class="mxch-field">
+                                <p class="mxch-field-description">
+                                    <?php esc_html_e('Chat conversations — including captured emails, names, and visitor identifiers — are registered with WordPress\'s built-in privacy tools. When you run a personal data export or erasure request from the Tools menu, MxChat data is included automatically, so honouring a GDPR or CCPA request covers the chatbot with no extra steps.', 'mxchat'); ?>
+                                </p>
+                                <p>
+                                    <a href="<?php echo esc_url(admin_url('export-personal-data.php')); ?>" class="mxch-btn mxch-btn-secondary mxch-btn-sm"><?php esc_html_e('Export Personal Data', 'mxchat'); ?></a>
+                                    <a href="<?php echo esc_url(admin_url('erase-personal-data.php')); ?>" class="mxch-btn mxch-btn-secondary mxch-btn-sm"><?php esc_html_e('Erase Personal Data', 'mxchat'); ?></a>
+                                </p>
+                            </div>
+                        </div>
+                    </div>
                 </div>
             </div>
         </main>

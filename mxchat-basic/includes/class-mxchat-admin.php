@@ -91,7 +91,10 @@ class MxChat_Admin {
         add_action('wp_ajax_mxchat_test_streaming', [$this, 'mxchat_handle_test_streaming']); // Keep existing as fallback
         add_action('wp_ajax_mxchat_test_vectorstore_connection', array($this, 'mxchat_test_vectorstore_connection'));
 
-    	add_action('wp_ajax_mxchat_save_selected_bot', array($this, 'mxchat_save_selected_bot'));
+        // wp_ajax_mxchat_save_selected_bot is registered (and handled) in
+        // admin/class-ajax-handler.php — a duplicate registration here pointed
+        // at a method this class never defined, a load-order-dependent fatal
+        // waiting to fire (plan 52bcad).
         add_action('wp_ajax_mxchat_fetch_openrouter_models', array($this, 'fetch_openrouter_models'));
         add_action('wp_ajax_mxchat_get_rag_context', array($this, 'mxchat_get_rag_context'));
 
@@ -349,7 +352,7 @@ private function initialize_default_options() {
         - NEVER invent or hallucinate URLs, links, product specs, procedures, dates, statistics, names, contacts, or company information
         - When knowledge base information is unclear or contradictory, acknowledge the limitation rather than guessing
         - Better to admit insufficient information than provide inaccurate answers',
-        'model' => esc_html__('gpt-5.1-chat-latest', 'mxchat'),
+        'model' => esc_html__('gpt-5.6-sol', 'mxchat'),
         'rate_limit_logged_out' => esc_html__('100', 'mxchat'),
         'role_rate_limits' => array(),
         'rate_limit_message' => esc_html__('Rate limit exceeded. Please try again later.', 'mxchat'),
@@ -579,6 +582,13 @@ public function mxchat_create_content_page() {
 public function mxchat_handle_test_streaming_actual() {
     check_ajax_referer('mxchat_test_streaming_nonce', 'nonce');
 
+    // A nonce is not authorization (plan-mxchat-20260731-c63fb6). This handler
+    // reads the site's provider keys and spends them on an outbound call, so it
+    // is billable abuse for any logged-in user who obtained the nonce.
+    if (!current_user_can('manage_options')) {
+        wp_send_json_error(['message' => esc_html__('Unauthorized', 'mxchat')], 403);
+    }
+
     // Check if headers have already been sent
     if (headers_sent()) {
         wp_send_json_error(['message' => 'Headers already sent - streaming not possible']);
@@ -593,7 +603,7 @@ public function mxchat_handle_test_streaming_actual() {
 
     // Get user's selected model and API key
     $options = get_option('mxchat_options', []);
-    $selected_model = $options['model'] ?? 'gpt-5.1-chat-latest';
+    $selected_model = $options['model'] ?? 'gpt-5.6-sol';
 
     // Get the provider from the model
     $model_parts = explode('-', $selected_model);
@@ -837,6 +847,12 @@ private function process_streaming_test_data($data, $provider) {
  */
 public function mxchat_handle_test_streaming() {
     check_ajax_referer('mxchat_test_streaming_nonce', 'nonce');
+
+    // plan-mxchat-20260731-c63fb6 — the delegate below checks this too, but
+    // fail here so the alias never becomes a bypass if that call is refactored.
+    if (!current_user_can('manage_options')) {
+        wp_send_json_error(['message' => esc_html__('Unauthorized', 'mxchat')], 403);
+    }
 
     // Use the actual streaming test instead
     $this->mxchat_handle_test_streaming_actual();
@@ -2734,7 +2750,7 @@ public function mxchat_translate_messages() {
         wp_die();
     }
 
-    $session_id = isset($_POST['session_id']) ? sanitize_text_field($_POST['session_id']) : '';
+    $session_id = isset($_POST['session_id']) ? MxChat_Utils::sanitize_session_id(wp_unslash($_POST['session_id'])) : '';
     $target_lang = isset($_POST['target_lang']) ? sanitize_text_field($_POST['target_lang']) : 'en';
     $messages_json = isset($_POST['messages']) ? wp_unslash($_POST['messages']) : '[]';
     $messages = json_decode($messages_json, true);
@@ -2796,7 +2812,7 @@ public function mxchat_translate_messages() {
 
     // Get user's selected model and determine provider
     $options = get_option('mxchat_options', []);
-    $selected_model = $options['model'] ?? 'gpt-5.1-chat-latest';
+    $selected_model = $options['model'] ?? 'gpt-5.6-sol';
 
     // Check if using OpenRouter
     if ($selected_model === 'openrouter') {
@@ -2911,7 +2927,7 @@ public function mxchat_get_transcript_translation() {
         wp_die();
     }
 
-    $session_id = isset($_POST['session_id']) ? sanitize_text_field($_POST['session_id']) : '';
+    $session_id = isset($_POST['session_id']) ? MxChat_Utils::sanitize_session_id(wp_unslash($_POST['session_id'])) : '';
 
     if (empty($session_id)) {
         wp_send_json_error(['error' => 'No session ID provided']);
@@ -3412,7 +3428,7 @@ public function mxchat_fetch_conversation() {
         wp_die();
     }
 
-    $session_id = isset($_POST['session_id']) ? sanitize_text_field($_POST['session_id']) : '';
+    $session_id = isset($_POST['session_id']) ? MxChat_Utils::sanitize_session_id(wp_unslash($_POST['session_id'])) : '';
     if (empty($session_id)) {
         wp_send_json_error(['message' => 'No session ID provided']);
         wp_die();
@@ -4031,7 +4047,7 @@ public function mxchat_delete_chat_history() {
     $emails_to_fully_wipe = [];
 
     foreach ((array) $_POST['delete_session_ids'] as $session_id) {
-        $session_id_sanitized = sanitize_text_field($session_id);
+        $session_id_sanitized = MxChat_Utils::sanitize_session_id($session_id);
         if ($session_id_sanitized === '') {
             continue;
         }
@@ -4372,7 +4388,7 @@ public function mxchat_actions_page_html() {
         require_once plugin_dir_path(__FILE__) . 'class-mxchat-model-catalog.php';
     }
     $fc_options       = get_option('mxchat_options', array());
-    $fc_current_model = isset($fc_options['model']) ? $fc_options['model'] : 'gpt-5.1-chat-latest';
+    $fc_current_model = isset($fc_options['model']) ? $fc_options['model'] : 'gpt-5.6-sol';
     $fc_model_capable = class_exists('MxChat_Model_Catalog')
         ? MxChat_Model_Catalog::supports_tools($fc_current_model) : true;
     $active_tab = (isset($_GET['tab']) && $_GET['tab'] === 'ai-tools') ? 'ai-tools' : 'dashboard';
@@ -7464,7 +7480,16 @@ public function mxchat_loops_api_key_callback() {
     );
     echo '<button type="button" id="toggleLoopsApiKeyVisibility">' . esc_html__('Show', 'mxchat') . '</button>';
     echo '</div>';
-    echo '<p class="description">' . esc_html__('Required for Loops email integration. Get your API key from Loops.so', 'mxchat') . '</p>';
+    // Cross-reference back to where the list is chosen, so the two screens point
+    // at each other (plan-mxchat-20260802-907a63).
+    echo '<p class="description">' . wp_kses(
+        sprintf(
+            /* translators: %s: link to the Loops integration tab. */
+            __('Required for Loops email integration. Get your API key from Loops.so, then choose your mailing list under %s.', 'mxchat'),
+            '<a href="#integrations-loops" data-target="integrations-loops">' . esc_html__('Integrations, Loops', 'mxchat') . '</a>'
+        ),
+        self::mxchat_loops_pointer_allowed_html()
+    ) . '</p>';
 }
 public function mxchat_loops_mailing_list_callback() {
     // Add error handling and type checking
@@ -7505,11 +7530,61 @@ public function mxchat_loops_mailing_list_callback() {
             echo '</div>';
             echo '<p class="description">' . esc_html__('Please select a mailing list to use with Loops.', 'mxchat') . '</p>';
         } else {
-            echo '<p class="description">' . esc_html__('No lists found. Please verify your API Key.', 'mxchat') . '</p>';
+            echo '<p class="description">' . wp_kses(
+                self::mxchat_loops_api_key_pointer(
+                    /* translators: %s: link to the API Keys tab. */
+                    __('No lists found. Please check your Loops API key under %s.', 'mxchat')
+                ),
+                self::mxchat_loops_pointer_allowed_html()
+            ) . '</p>';
         }
     } else {
-        echo '<p class="description">' . esc_html__('Enter a valid Loops API Key to load mailing lists.', 'mxchat') . '</p>';
+        echo '<p class="description">' . wp_kses(
+            self::mxchat_loops_api_key_pointer(
+                /* translators: %s: link to the API Keys tab. */
+                __('Enter your Loops API key under %s to load mailing lists.', 'mxchat')
+            ),
+            self::mxchat_loops_pointer_allowed_html()
+        ) . '</p>';
     }
+}
+
+/**
+ * Build the "API Keys" pointer used by the Loops mailing-list field.
+ *
+ * plan-mxchat-20260802-907a63. The Loops API key field was moved to the API
+ * Keys tab, but this field's copy still read as though the input were beside
+ * it, so users had nowhere to go. Both live on the SAME screen
+ * (admin.php?page=mxchat-settings) — the key is under the API Keys tab, this
+ * dropdown under Integrations > Loops — so the pointer is an in-page tab
+ * switch, not a cross-page link.
+ *
+ * The anchor carries data-target="api-keys", which the shared admin shell
+ * (js/admin-sidebar.js) already wires for EVERY [data-target] element inside
+ * .mxch-admin-wrapper — so this actually switches tabs with no new JS. A plain
+ * href="#api-keys" would NOT work: the shell has no hashchange handling, so the
+ * link would look right and land the user on the wrong tab.
+ *
+ * @param string $template Translatable string containing one %s placeholder.
+ * @return string
+ */
+private static function mxchat_loops_api_key_pointer($template) {
+    return sprintf(
+        $template,
+        '<a href="#api-keys" data-target="api-keys">' . esc_html__('API Keys', 'mxchat') . '</a>'
+    );
+}
+
+/**
+ * Allowed HTML for the Loops pointer — anchor plus the shell's tab-switch hook.
+ */
+private static function mxchat_loops_pointer_allowed_html() {
+    return array(
+        'a' => array(
+            'href'        => array(),
+            'data-target' => array(),
+        ),
+    );
 }
 public function mxchat_triggered_phrase_response_callback() {
     $default_response = __('Would you like to join our mailing list? Please provide your email below.', 'mxchat');
@@ -7656,10 +7731,12 @@ public function mxchat_model_callback() {
     if (!class_exists('MxChat_Model_Catalog')) {
         require_once plugin_dir_path(__FILE__) . 'class-mxchat-model-catalog.php';
     }
-    $models = MxChat_Model_Catalog::settings_dropdown_groups();
-
     // Retrieve the currently selected model from saved options
-    $selected_model = isset($this->options['model']) ? esc_attr($this->options['model']) : 'gpt-5.1-chat-latest';
+    $selected_model = isset($this->options['model']) ? esc_attr($this->options['model']) : 'gpt-5.6-sol';
+
+    // Pass the saved model so a provider-retired id keeps rendering as the
+    // current selection instead of a blank select (plan e46b8f).
+    $models = MxChat_Model_Catalog::settings_dropdown_groups($selected_model);
 
     // Begin the select dropdown
     echo '<select id="model" name="model">';
@@ -7784,7 +7861,7 @@ public function enable_web_search_toggle_callback() {
     $checked = ($enabled === 'on') ? 'checked' : '';
 
     // Get current model to determine if we should show/enable the toggle
-    $current_model = isset($this->options['model']) ? $this->options['model'] : 'gpt-5.1-chat-latest';
+    $current_model = isset($this->options['model']) ? $this->options['model'] : 'gpt-5.6-sol';
 
     // Models that DON'T support web search — OpenAI-docs-driven exception list.
     // Keep hardcoded; the catalog can't infer "supports web search" per-model, so any
@@ -7836,7 +7913,12 @@ public function enable_web_search_toggle_callback() {
 // AJAX handler to fetch OpenRouter models
 public function fetch_openrouter_models() {
     check_ajax_referer('mxchat_fetch_openrouter_models', 'nonce');
-    
+
+    // plan-mxchat-20260731-c63fb6 — nonce is not authorization.
+    if (!current_user_can('manage_options')) {
+        wp_send_json_error(array('message' => esc_html__('Unauthorized', 'mxchat')), 403);
+    }
+
     $api_key = isset($_POST['api_key']) ? sanitize_text_field($_POST['api_key']) : '';
     
     if (empty($api_key)) {
@@ -9172,7 +9254,20 @@ public function mxchat_add_onboarding_body_class($classes) {
     return $classes;
 }
 
-public function mxchat_enqueue_admin_assets() {
+public function mxchat_enqueue_admin_assets($hook_suffix = '') {
+    // Authorization gate (plan-mxchat-20260731-c63fb6). Previously the ONLY
+    // guard here was the strpos() on $_GET['page'] below — which is
+    // attacker-controlled — so ANY logged-in user (Subscriber included) could
+    // load a page they are legitimately allowed to see, e.g.
+    // /wp-admin/profile.php?page=mxchat, and receive every nonce this method
+    // localizes. Three of the handlers behind those nonces verified the nonce
+    // but checked no capability. Every MxChat menu page is registered
+    // 'manage_options' (see mxchat_add_admin_menu), so this is a no-op for
+    // legitimate users.
+    if (!current_user_can('manage_options')) {
+        return;
+    }
+
     // Get plugin version
     $version = MXCHAT_VERSION;
 
@@ -9181,11 +9276,18 @@ public function mxchat_enqueue_admin_assets() {
         $version = filemtime(plugin_dir_path(__FILE__) . '../mxchat-basic.php');
     }
 
-    $current_page = isset($_GET['page']) ? $_GET['page'] : '';
+    $current_page = isset($_GET['page']) ? sanitize_key(wp_unslash($_GET['page'])) : '';
     $plugin_url = plugin_dir_url(__FILE__) . '../';
 
-    // Only load on MxChat pages
-    if (strpos($current_page, 'mxchat') === false) {
+    // Only load on MxChat pages. Prefer the server-derived $hook_suffix that
+    // admin_enqueue_scripts passes us — unlike $_GET['page'] it cannot be
+    // forged onto a screen MxChat does not own. Falls back to the legacy
+    // $_GET check only when the hook is unavailable (direct/legacy callers).
+    if ($hook_suffix !== '') {
+        if (strpos($hook_suffix, 'mxchat') === false) {
+            return;
+        }
+    } elseif (strpos($current_page, 'mxchat') === false) {
         return;
     }
 
@@ -9346,7 +9448,7 @@ private function enqueue_page_specific_assets($current_page, $plugin_url, $versi
             wp_localize_script('mxchat-chat-js', 'mxchatChat', array(
                 'ajax_url' => admin_url('admin-ajax.php'),
                 'nonce' => wp_create_nonce('mxchat_chat_nonce'),
-                'model' => isset($options['model']) ? $options['model'] : 'gpt-5.1-chat-latest',
+                'model' => isset($options['model']) ? $options['model'] : 'gpt-5.6-sol',
                 'enable_streaming_toggle' => isset($options['enable_streaming_toggle']) ? $options['enable_streaming_toggle'] : 'on',
                 'contextual_awareness_toggle' => isset($options['contextual_awareness_toggle']) ? $options['contextual_awareness_toggle'] : 'off',
                 'link_target_toggle' => $options['link_target_toggle'] ?? 'off',
@@ -9546,42 +9648,26 @@ private function localize_page_specific_scripts($current_page) {
 
         case 'mxchat-settings':
         default:
-            // Color picker and settings localization
-            wp_localize_script('mxchat-color-picker', 'mxchatStyleSettings', array(
-                'ajax_url' => admin_url('admin-ajax.php'),
-                'link_target_toggle' => $this->options['link_target_toggle'] ?? 'off',
-                'user_message_bg_color' => $this->options['user_message_bg_color'] ?? '#fff',
-                'user_message_font_color' => $this->options['user_message_font_color'] ?? '#212121',
-                'bot_message_bg_color' => $this->options['bot_message_bg_color'] ?? '#212121',
-                'bot_message_font_color' => $this->options['bot_message_font_color'] ?? '#fff',
-                'top_bar_bg_color' => $this->options['top_bar_bg_color'] ?? '#212121',
-                'send_button_font_color' => $this->options['send_button_font_color'] ?? '#212121',
-                'close_button_color' => $this->options['close_button_color'] ?? '#fff',
-                'chatbot_background_color' => $this->options['chatbot_background_color'] ?? '#212121',
-                'icon_color' => $this->options['icon_color'] ?? '#fff',
-                'chat_input_font_color' => $this->options['chat_input_font_color'] ?? '#212121',
-                'pre_chat_message' => $this->options['pre_chat_message'] ?? esc_html__('Hey there! Ask me anything!', 'mxchat'),
-                'rate_limit_message' => $this->options['rate_limit_message'] ?? esc_html__('Rate limit exceeded. Please try again later.', 'mxchat'),
-                'loops_api_key' => $this->options['loops_api_key'] ?? '',
-                'loops_mailing_list' => $this->options['loops_mailing_list'] ?? '',
-                'triggered_phrase_response' => $this->options['triggered_phrase_response'] ?? esc_html__('Would you like to join our mailing list? Please provide your email below.', 'mxchat'),
-                'email_capture_response' => $this->options['email_capture_response'] ?? esc_html__('Thank you for providing your email! You\'ve been added to our list.', 'mxchat'),
-                'pdf_intent_trigger_text' => $this->options['pdf_intent_trigger_text'] ?? esc_html__("Please provide the URL to the PDF you'd like to discuss.", 'mxchat'),
-                'pdf_intent_success_text' => $this->options['pdf_intent_success_text'] ?? esc_html__("I've processed the PDF. What questions do you have about it?", 'mxchat'),
-                'pdf_intent_error_text' => $this->options['pdf_intent_error_text'] ?? esc_html__("Sorry, I couldn't process the PDF. Please ensure it's a valid file.", 'mxchat'),
-                'pdf_max_pages' => $this->options['pdf_max_pages'] ?? 69,
-                'live_agent_webhook_url' => $this->options['live_agent_webhook_url'] ?? '',
-                'live_agent_secret_key' => $this->options['live_agent_secret_key'] ?? '',
-                'live_agent_bot_token' => $this->options['live_agent_bot_token'] ?? '',
-                'live_agent_message_bg_color' => $this->options['live_agent_message_bg_color'] ?? '#ffffff',
-                'live_agent_message_font_color' => $this->options['live_agent_message_font_color'] ?? '#333333',
-                'chat_toolbar_toggle' => $this->options['chat_toolbar_toggle'] ?? 'off',
-                'show_pdf_upload_button' => $this->options['show_pdf_upload_button'] ?? 'on',
-                'show_word_upload_button' => $this->options['show_word_upload_button'] ?? 'on',
-                'mode_indicator_bg_color' => $this->options['mode_indicator_bg_color'] ?? '#767676',
-                'mode_indicator_font_color' => $this->options['mode_indicator_font_color'] ?? '#ffffff',
-                'toolbar_icon_color' => $this->options['toolbar_icon_color'] ?? '#212121',
-            ));
+            // The 'mxchatStyleSettings' localize that used to live here was
+            // REMOVED by plan-mxchat-20260731-c63fb6.
+            //
+            // It targeted the script handle 'mxchat-color-picker', which is
+            // registered/enqueued NOWHERE in the plugin — so wp_localize_script()
+            // returned false and printed nothing. That accident was the only
+            // thing keeping it from being a live secret disclosure: the payload
+            // carried loops_api_key, live_agent_secret_key and
+            // live_agent_bot_token in full, and this whole method ran for any
+            // logged-in user (see the capability gate added to
+            // mxchat_enqueue_admin_assets). One future
+            // wp_enqueue_script('mxchat-color-picker', ...) would have printed
+            // three secrets into page HTML for Subscribers.
+            //
+            // Nothing consumed the object: a tree-wide grep for
+            // 'mxchatStyleSettings' returns only this call site, and js/ names
+            // loops_api_key only at mxchat-admin.js:572, as a field-NAME string
+            // in an autosave allowlist — not a value read. Removed entirely
+            // rather than deleting just the three secret keys, so there is no
+            // dead payload left for someone to re-arm.
             break;
     }
 
@@ -9896,7 +9982,7 @@ if (isset($input['model'])) {
             $new_input['model'] = sanitize_text_field($input['model']);
         } else {
             // Fallback for any deprecated model
-            $new_input['model'] = 'gpt-5.1-chat-latest';
+            $new_input['model'] = 'gpt-5.6-sol';
         }
     }
 }

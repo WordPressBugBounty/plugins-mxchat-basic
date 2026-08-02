@@ -697,3 +697,27 @@
         max-height: 500px !important;
     }
 }
+
+/* Hybrid retrieval matched-via chips (38ffa1): Vector / Keyword / Both */
+.mxch-testing-results .mxch-rag-via-chip {
+    font-size: 11px;
+    font-weight: 500;
+    padding: 2px 8px;
+    border-radius: 10px;
+    white-space: nowrap;
+}
+
+.mxch-testing-results .mxch-rag-via-vector {
+    background: rgba(120, 115, 245, 0.1);
+    color: #7873f5;
+}
+
+.mxch-testing-results .mxch-rag-via-keyword {
+    background: rgba(16, 185, 129, 0.12);
+    color: #059669;
+}
+
+.mxch-testing-results .mxch-rag-via-both {
+    background: rgba(245, 158, 11, 0.12);
+    color: #b45309;
+}

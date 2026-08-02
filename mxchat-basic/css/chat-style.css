@@ -597,7 +597,6 @@
     display: none;
 }
 
-/* MISSING - These need to be inside the container context: */
 .mxchat-popular-questions .mxchat-popular-questions-container .questions-toggle-btn {
     background: none;
     border: none;
@@ -632,6 +631,7 @@
     outline: none;
     align-self: center; /* Center in flex container */
     order: -1; /* Make sure it appears first */
+    flex-shrink: 0; /* same flex auto-minimum caveat as .mxchat-popular-question */
 }
 
 .questions-toggle-btn:hover,
@@ -683,6 +683,11 @@
     transition: all 0.3s ease;
     margin-bottom: 0;
     box-shadow: none;
+    /* The defensive baseline's min-height:0 on :where(button) removes the
+       flex automatic minimum size, so without this the column-flex scroll
+       container compresses all questions to fit 200px and the scrollbox
+       never appears (plan d51560). */
+    flex-shrink: 0;
 }
 
 .mxchat-popular-question:hover {

@@ -71,20 +71,27 @@ class MxChat_Model_Catalog {
                 'key_option'                  => 'api_key',
                 'requires_key_to_load_models' => false,
                 'models' => array(
-                    'gpt-5.6-sol'          => array('label' => 'GPT-5.6 Sol',          'description' => __('Latest Flagship — newest OpenAI reasoning and coding model', 'mxchat')),
+                    // OpenAI retired gpt-5.1-chat-latest and gpt-5.3-chat-latest on
+                    // 2026-08-10 (replacement gpt-5.6-sol per the deprecations page);
+                    // stored settings migrate via mxchat_migrate_deprecated_models()
+                    // and the integrator carries a read-time rescue (plan e46b8f).
+                    //
+                    // 'deprecated_on' (Y-m-d) + 'replacement' are optional per-model
+                    // fields: pickers label a future date as "retires <date>" and hide
+                    // the entry once the date passes (a saved value keeps rendering via
+                    // settings_dropdown_groups($current_model)).
+                    'gpt-5.6-sol'          => array('label' => 'GPT-5.6 Sol',          'description' => __('Recommended — newest OpenAI flagship for reasoning, coding and chat', 'mxchat')),
                     'gpt-5.6-terra'        => array('label' => 'GPT-5.6 Terra',        'description' => __('Balanced GPT-5.6 — strong capability at lower cost', 'mxchat')),
                     'gpt-5.6-luna'         => array('label' => 'GPT-5.6 Luna',         'description' => __('Fastest and cheapest GPT-5.6 for lightweight tasks', 'mxchat')),
                     'gpt-5.5'              => array('label' => 'GPT-5.5',              'description' => __('Previous flagship — powerful reasoning and coding model', 'mxchat')),
                     'gpt-5.4'              => array('label' => 'GPT-5.4',              'description' => __('Flagship reasoning and coding model', 'mxchat')),
                     'gpt-5.4-mini'         => array('label' => 'GPT-5.4 Mini',         'description' => __('Fast and affordable with 400K context', 'mxchat')),
                     'gpt-5.4-nano'         => array('label' => 'GPT-5.4 Nano',         'description' => __('Fastest and cheapest for lightweight tasks', 'mxchat')),
-                    'gpt-5.3-chat-latest'  => array('label' => 'GPT-5.3 Chat',         'description' => __('Optimized for natural conversations with reduced hallucinations', 'mxchat')),
                     'gpt-5.2'              => array('label' => 'GPT-5.2',              'description' => __('Best general-purpose & agentic model with fast responses', 'mxchat')),
-                    'gpt-5.1-chat-latest'  => array('label' => 'GPT-5.1 Chat Latest',  'description' => __('Recommended for most use cases', 'mxchat')),
                     'gpt-5.1-2025-11-13'   => array('label' => 'GPT-5.1',              'description' => __('Flagship for coding & agentic tasks with low reasoning (400K context)', 'mxchat')),
-                    'gpt-5'                => array('label' => 'GPT-5',                'description' => __('Flagship for coding, reasoning, and agentic tasks across domains', 'mxchat')),
-                    'gpt-5-mini'           => array('label' => 'GPT-5 Mini',           'description' => __('Fast and lightweight', 'mxchat')),
-                    'gpt-5-nano'           => array('label' => 'GPT-5 Nano',           'description' => __('Fastest and cheapest; ideal for summarization and classification', 'mxchat')),
+                    'gpt-5'                => array('label' => 'GPT-5',                'description' => __('Flagship for coding, reasoning, and agentic tasks across domains', 'mxchat'), 'deprecated_on' => '2026-12-11', 'replacement' => 'gpt-5.6-sol'),
+                    'gpt-5-mini'           => array('label' => 'GPT-5 Mini',           'description' => __('Fast and lightweight', 'mxchat'), 'deprecated_on' => '2026-12-11', 'replacement' => 'gpt-5.6-terra'),
+                    'gpt-5-nano'           => array('label' => 'GPT-5 Nano',           'description' => __('Fastest and cheapest; ideal for summarization and classification', 'mxchat'), 'deprecated_on' => '2026-12-11', 'replacement' => 'gpt-5.6-luna'),
                 ),
             ),
             'claude' => array(
@@ -232,16 +239,55 @@ class MxChat_Model_Catalog {
     }
 
     /**
+     * Deprecation-aware picker label for a catalog entry (plan e46b8f).
+     *
+     * @param array $entry Model entry from chat_models().
+     * @return string|null Label to show (with a "retires <date>" suffix when a
+     *                     future 'deprecated_on' is set), or null when the
+     *                     retirement date has passed and the entry must be
+     *                     hidden from NEW selections.
+     */
+    private static function picker_label($entry) {
+        if (empty($entry['deprecated_on'])) {
+            return $entry['label'];
+        }
+        $ts = strtotime($entry['deprecated_on'] . ' 00:00:00 UTC');
+        if ($ts !== false && time() >= $ts) {
+            return null; // retired — hide from new selections
+        }
+        return sprintf(
+            /* translators: 1: model label, 2: retirement date */
+            __('%1$s — retires %2$s', 'mxchat'),
+            $entry['label'],
+            date_i18n(get_option('date_format', 'F j, Y'), $ts)
+        );
+    }
+
+    /**
      * Settings-dropdown-shaped chat model map keyed by group label, which is
      * what mxchat_model_callback() in class-mxchat-admin.php renders as
      * <optgroup>. Each model maps to its label-with-description string.
+     *
+     * Retired models (past 'deprecated_on') are hidden — EXCEPT the install's
+     * currently saved model, which is re-injected with a "retired" marker so
+     * the settings screen never renders a blank select (plan e46b8f).
+     *
+     * @param string $current_model Optionally, the install's saved model id.
      */
-    public static function settings_dropdown_groups() {
+    public static function settings_dropdown_groups($current_model = '') {
         $out = array();
         foreach (self::chat_models() as $provider_slug => $provider) {
             $out[$provider['label']] = array();
             foreach ($provider['models'] as $id => $entry) {
-                $out[$provider['label']][$id] = $entry['label'];
+                $label = self::picker_label($entry);
+                if ($label === null && $id !== $current_model) {
+                    continue;
+                }
+                if ($label === null) {
+                    /* translators: %s: model label */
+                    $label = sprintf(__('%s — retired by provider, choose a replacement', 'mxchat'), $entry['label']);
+                }
+                $out[$provider['label']][$id] = $label;
             }
         }
         return $out;
@@ -258,9 +304,13 @@ class MxChat_Model_Catalog {
         foreach (self::chat_models() as $provider_slug => $provider) {
             $out[$provider_slug] = array();
             foreach ($provider['models'] as $id => $entry) {
+                $label = self::picker_label($entry);
+                if ($label === null) {
+                    continue; // retired — never offered as a new selection
+                }
                 $out[$provider_slug][] = array(
                     'value'       => $id,
-                    'label'       => $entry['label'],
+                    'label'       => $label,
                     'description' => $entry['description'],
                 );
             }
@@ -283,7 +333,11 @@ class MxChat_Model_Catalog {
             $chat_models = array();
             if (isset($chat[$slug])) {
                 foreach ($chat[$slug]['models'] as $id => $entry) {
-                    $chat_models[$id] = $entry['label'];
+                    $label = self::picker_label($entry);
+                    if ($label === null) {
+                        continue; // retired — not offered during onboarding
+                    }
+                    $chat_models[$id] = $label;
                 }
             }
             $embed_models = array();
@@ -374,9 +428,9 @@ class MxChat_Model_Catalog {
      * demoted to a fallback for when mxchat-basic is absent or too old.
      *
      * Choices are deliberate:
-     *   - openai: gpt-5.1-chat-latest — vision-capable and chat-tuned; it takes
-     *     no reasoning_effort, so a bounded completion budget is spent on the
-     *     ANSWER rather than hidden reasoning (the 4287cc truncation class).
+     *   - openai: gpt-5.6-sol — the current flagship, vision-capable; OpenAI's
+     *     stated replacement for the gpt-5.x-chat-latest aliases retired
+     *     2026-08-10 (which this map previously pinned; plan e46b8f).
      *   - claude: the current Haiku — image analysis wants fast + cheap; Haiku
      *     is vision-capable and the catalog's newest Haiku generation.
      *   - xai: the catalog's dated id for what the bare 'grok-4' alias resolves
@@ -395,7 +449,7 @@ class MxChat_Model_Catalog {
      */
     public static function default_vision_model($provider) {
         $map = array(
-            'openai' => 'gpt-5.1-chat-latest',
+            'openai' => 'gpt-5.6-sol',
             'claude' => 'claude-haiku-4-5-20251001',
             'xai'    => 'grok-4-0709',
             'gemini' => 'gemini-3.5-flash',
@@ -481,6 +535,10 @@ class MxChat_Model_Catalog {
             case 'chat':
             default:
                 // integrator streaming + non-streaming main chat.
+                // gpt-5.1/5.3-chat-latest stay listed here (and in 'content')
+                // even though the catalog no longer offers them: bot-level /
+                // add-on-saved ids that miss the e46b8f migration must keep
+                // routing correctly until every surface is swept.
                 $no_reasoning = array('gpt-5.2', 'gpt-5.1-chat-latest', 'gpt-5.3-chat-latest', 'gpt-5.4-mini', 'gpt-5.4-nano');
                 if (in_array($model, $no_reasoning, true)) {
                     return null;

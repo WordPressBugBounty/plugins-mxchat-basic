@@ -407,6 +407,19 @@ public function mxchat_save_setting_callback() {
             wp_send_json_success(['message' => esc_html__('Setting saved', 'mxchat')]);
             return;
 
+        // Hybrid keyword boost toggle (plan-38ffa1). STANDALONE option, same
+        // pattern. Enabling runs capability detection HERE, at admin-save time —
+        // building the FULLTEXT index during a visitor's chat request is not
+        // acceptable, and detection is a one-time cost the admin can wait on.
+        case 'mxchat_hybrid_keyword_toggle':
+            $hkb_value = ($value === 'on' || $value === '1') ? 'on' : 'off';
+            update_option('mxchat_hybrid_keyword_toggle', $hkb_value);
+            if ($hkb_value === 'on') {
+                MxChat_Utils::mxchat_hybrid_detect_capability(true);
+            }
+            wp_send_json_success(['message' => esc_html__('Setting saved', 'mxchat')]);
+            return;
+
         // Live-agent availability schedules (plans 8ccaa2 + 99d7a4). STANDALONE
         // options, same reasoning as the Editor Assistant case above — nested
         // structures that mxchat_sanitize() would strip on the next autosave of any
@@ -1357,7 +1370,15 @@ function mxchat_deactivate_license() {
         wp_send_json_error('Security check failed.');
         return;
     }
-    
+
+    // plan-mxchat-20260731-c63fb6 — nonce is not authorization. Without this,
+    // any authenticated user holding the nonce could revoke the site's PRO
+    // licence. Every sibling handler in this file already checks.
+    if (!current_user_can('manage_options')) {
+        wp_send_json_error(esc_html__('Unauthorized', 'mxchat'), 403);
+        return;
+    }
+
     //error_log('MxChat deactivate: Nonce check passed');
     
     $license_key = get_option('mxchat_activation_key');

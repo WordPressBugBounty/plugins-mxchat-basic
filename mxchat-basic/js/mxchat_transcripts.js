@@ -989,10 +989,18 @@ jQuery(document).ready(function($) {
             return;
         }
 
+        // Hybrid keyword boost (38ffa1): rows carry matched_via + fused_rank
+        // when hybrid retrieval was on for this response. Cosine % stays the
+        // anchor; the chip explains WHY a low-% row ranked high.
+        const hybridOn = data.top_matches.some(function(m) { return m.matched_via; });
+
         html += '<div class="mxch-rag-summary">';
         html += '<div class="mxch-rag-summary-item"><span class="mxch-rag-label">Knowledge Base:</span> <span class="mxch-rag-value">' + escapeHtml(data.knowledge_base_type || 'WordPress Database') + '</span></div>';
         html += '<div class="mxch-rag-summary-item"><span class="mxch-rag-label">Similarity Threshold:</span> <span class="mxch-rag-value">' + Math.round((data.similarity_threshold || 0.35) * 100) + '%</span></div>';
         html += '<div class="mxch-rag-summary-item"><span class="mxch-rag-label">Documents Checked:</span> <span class="mxch-rag-value">' + (data.total_documents_checked || 0) + '</span></div>';
+        if (hybridOn) {
+            html += '<div class="mxch-rag-summary-item"><span class="mxch-rag-label">Retrieval:</span> <span class="mxch-rag-value">Hybrid</span></div>';
+        }
         html += '</div>';
 
         const groupedByUrl = {};
@@ -1005,7 +1013,9 @@ jQuery(document).ready(function($) {
                     isUrl: url.startsWith('http'),
                     bestScore: 0,
                     usedForContext: false,
-                    matchedChunks: []
+                    matchedChunks: [],
+                    bestFusedRank: Infinity,
+                    viaSet: {}
                 };
             }
 
@@ -1017,6 +1027,13 @@ jQuery(document).ready(function($) {
                 groupedByUrl[url].usedForContext = true;
             }
 
+            if (match.fused_rank && match.fused_rank < groupedByUrl[url].bestFusedRank) {
+                groupedByUrl[url].bestFusedRank = match.fused_rank;
+            }
+            if (match.matched_via) {
+                groupedByUrl[url].viaSet[match.matched_via] = true;
+            }
+
             groupedByUrl[url].matchedChunks.push({
                 chunkIndex: match.chunk_index,
                 score: match.similarity_percentage,
@@ -1024,7 +1041,14 @@ jQuery(document).ready(function($) {
             });
         });
 
-        const urlGroups = Object.values(groupedByUrl).sort((a, b) => b.bestScore - a.bestScore);
+        // Hybrid on: order by fused rank (rows without one sort last);
+        // otherwise by cosine, exactly as before.
+        const urlGroups = Object.values(groupedByUrl).sort(function(a, b) {
+            if (hybridOn && a.bestFusedRank !== b.bestFusedRank) {
+                return a.bestFusedRank - b.bestFusedRank;
+            }
+            return b.bestScore - a.bestScore;
+        });
         const usedUrlCount = data.sources_used > 0 ? data.sources_used : urlGroups.filter(g => g.usedForContext).length;
         const chunksInfo = data.total_chunks_used > 0 ? data.total_chunks_used + ' chunks sent to AI' : '';
 
@@ -1040,6 +1064,15 @@ jQuery(document).ready(function($) {
             html += '<div class="mxch-rag-match-card ' + cardClass + '">';
             html += '<div class="mxch-rag-match-header">';
             html += '<span class="mxch-rag-match-score">' + group.bestScore + '%</span>';
+
+            if (hybridOn) {
+                const vias = Object.keys(group.viaSet);
+                if (vias.length) {
+                    const viaLabel = (vias.length > 1 || vias[0] === 'both') ? 'Both'
+                        : (vias[0] === 'keyword' ? 'Keyword' : 'Vector');
+                    html += '<span class="mxch-rag-via-chip mxch-rag-via-' + viaLabel.toLowerCase() + '">' + viaLabel + '</span>';
+                }
+            }
 
             if (group.matchedChunks.length > 1) {
                 html += '<span class="mxch-rag-chunk-badge">' + group.matchedChunks.length + ' chunks</span>';

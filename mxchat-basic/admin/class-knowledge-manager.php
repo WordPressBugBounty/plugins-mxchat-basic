@@ -10,9 +10,14 @@ if (!defined('ABSPATH')) {
 }
 
 class MxChat_Knowledge_Manager {
-    
+
     private $options;
-    
+
+    // Post IDs whose vectors were already deleted by mxchat_handle_status_transition this
+    // request, so the transient-based branch in mxchat_handle_post_update can skip the
+    // redundant (idempotent but network-visible) second deletion.
+    private $transition_deleted_posts = array();
+
     /**
      * Constructor - Register hooks for content processing
      */
@@ -67,10 +72,21 @@ private function mxchat_init_hooks() {
     add_action('post_updated', array($this, 'mxchat_handle_post_update'), 10, 3);
     add_action('before_delete_post', array($this, 'mxchat_handle_post_delete'));
     add_action('wp_trash_post', array($this, 'mxchat_handle_post_delete'));
+    // Authoritative unpublish detection: core hands this hook the REAL previous status, so
+    // removal no longer depends on the mxchat_prev_status_* transients (evictable by persistent
+    // object caches, never written by paths that bypass wp_update_post, e.g. plugins flipping
+    // post_status directly and calling wp_transition_post_status themselves).
+    add_action('transition_post_status', array($this, 'mxchat_handle_status_transition'), 10, 3);
 
     // ACF hook - fires AFTER ACF fields are saved, ensuring ACF data is available
     // Priority 20 to run after ACF's own save (which runs at priority 10)
     add_action('acf/save_post', array($this, 'mxchat_handle_acf_save'), 20);
+
+    // One-time cleanup for vectors orphaned by unpublishes that predate the
+    // transition_post_status handler (plan 816fb1): wp mxchat prune-unpublished
+    if (defined('WP_CLI') && WP_CLI) {
+        WP_CLI::add_command('mxchat prune-unpublished', array($this, 'cli_prune_unpublished'));
+    }
 
     add_action('wp_ajax_mxchat_mark_queue_complete', array($this, 'ajax_mxchat_mark_queue_complete'));
 
@@ -5903,7 +5919,9 @@ public function mxchat_handle_post_update($post_id, $post, $update) {
         // Use the stored URL from when it was published, or fall back to current permalink
         $source_url = $previous_url ?: get_permalink($post_id);
 
-        if ($source_url) {
+        // mxchat_handle_status_transition already deleted for this post earlier in this
+        // request (it fires first inside wp_insert_post); skip the redundant round-trip.
+        if ($source_url && empty($this->transition_deleted_posts[$post_id])) {
             // Chunk-aware deletion (routes to Pinecone or WP DB and removes base + all chunks)
             MxChat_Utils::delete_chunks_for_url($source_url, 'default');
         }
@@ -6157,6 +6175,170 @@ public function mxchat_store_pre_update_status($post_id, $data) {
             set_transient($url_key, $current_url, HOUR_IN_SECONDS);
         }
     }
+}
+
+/**
+ * Whether auto-sync is enabled for a post type (mirrors the checks used by the
+ * update/delete handlers; kept as one helper so new call sites cannot drift).
+ */
+private function mxchat_is_auto_sync_enabled($post_type) {
+    if ($post_type === 'post') {
+        return get_option('mxchat_auto_sync_posts') === '1';
+    }
+    if ($post_type === 'page') {
+        return get_option('mxchat_auto_sync_pages') === '1';
+    }
+    return get_option('mxchat_auto_sync_' . $post_type) === '1';
+}
+
+/**
+ * Remove a post's vectors the moment it leaves 'publish', using the authoritative
+ * old status core passes to transition_post_status — no transient involved (plan 816fb1).
+ *
+ * Covers status changes that never route through wp_update_post (scheduled-expiry
+ * plugins and others that flip post_status directly and call wp_transition_post_status),
+ * where neither pre_post_update nor post_updated fires and the old detection missed.
+ */
+public function mxchat_handle_status_transition($new_status, $old_status, $post) {
+    if (!($post instanceof WP_Post) || wp_is_post_revision($post->ID)) {
+        return;
+    }
+    // Only the publish -> not-publish edge matters here.
+    if ($old_status !== 'publish' || $new_status === 'publish') {
+        return;
+    }
+    // Trash is handled by mxchat_handle_post_delete (wp_trash_post) with pre-trash URL
+    // resolution; skip to avoid a second network round-trip per trash.
+    if ($new_status === 'trash') {
+        return;
+    }
+    if (!$this->mxchat_is_auto_sync_enabled($post->post_type)) {
+        return;
+    }
+
+    $urls = array();
+
+    // The DB may already hold the new status when this fires, so get_permalink() on the
+    // live post could build a draft-style URL whose md5 misses the stored vector IDs.
+    // Reconstruct the published permalink from a clone instead.
+    $published_clone = clone $post;
+    $published_clone->post_status = 'publish';
+    $published_url = get_permalink($published_clone);
+    if ($published_url) {
+        $urls[] = $published_url;
+    }
+
+    // Honour the pre-update capture when present (covers a slug change in the same save).
+    $previous_url = get_transient('mxchat_prev_url_' . $post->ID);
+    if (!empty($previous_url)) {
+        $urls[] = $previous_url;
+    }
+
+    foreach (array_unique($urls) as $url) {
+        MxChat_Utils::delete_chunks_for_url($url, 'default');
+    }
+
+    if (!empty($urls)) {
+        $this->transition_deleted_posts[$post->ID] = true;
+    }
+}
+
+/**
+ * WP-CLI: remove knowledge-base entries left behind by posts that were unpublished,
+ * trashed, or made private before the transition_post_status handler existed.
+ *
+ * Walks every auto-synced post type's non-published posts, reconstructs each one's
+ * published-era permalink, and deletes its vectors (routes to Pinecone or the WP table).
+ * Deletion is idempotent, so never-indexed posts are a cheap no-op.
+ *
+ * ## OPTIONS
+ *
+ * [--dry-run]
+ * : Report what would be removed without deleting anything.
+ *
+ * ## EXAMPLES
+ *
+ *     wp mxchat prune-unpublished --dry-run
+ *     wp mxchat prune-unpublished
+ */
+public function cli_prune_unpublished($args, $assoc_args) {
+    global $wpdb;
+    $dry_run = !empty($assoc_args['dry-run']);
+    $table   = $wpdb->prefix . 'mxchat_system_prompt_content';
+
+    $candidate_types = array_merge(array('post', 'page'), array_values(get_post_types(array('_builtin' => false), 'names')));
+    $synced_types = array();
+    foreach ($candidate_types as $type) {
+        if ($this->mxchat_is_auto_sync_enabled($type)) {
+            $synced_types[] = $type;
+        }
+    }
+    if (empty($synced_types)) {
+        WP_CLI::success('No post types have auto-sync enabled; nothing to prune.');
+        return;
+    }
+
+    $scanned = 0;
+    $pruned  = 0;
+    $paged   = 1;
+    do {
+        $query = new WP_Query(array(
+            'post_type'      => $synced_types,
+            'post_status'    => array('draft', 'pending', 'private', 'future', 'trash'),
+            'posts_per_page' => 100,
+            'paged'          => $paged,
+            'fields'         => 'ids',
+        ));
+        foreach ($query->posts as $post_id) {
+            $post = get_post($post_id);
+            if (!$post) {
+                continue;
+            }
+            $scanned++;
+
+            // Rebuild the permalink the post had while published: publish-status clone,
+            // with wp_trash_post's __trashed slug suffix stripped for trashed posts.
+            $clone = clone $post;
+            $clone->post_status = 'publish';
+            if (substr($clone->post_name, -9) === '__trashed') {
+                $clone->post_name = substr($clone->post_name, 0, -9);
+            }
+            $url = get_permalink($clone);
+            if (!$url) {
+                continue;
+            }
+
+            // Local-table row count is exact in WordPress-DB mode; in Pinecone mode it
+            // reads 0 but the delete below still routes to Pinecone and is idempotent.
+            $local_rows = (int) $wpdb->get_var($wpdb->prepare(
+                "SELECT COUNT(*) FROM {$table} WHERE source_url = %s", $url
+            ));
+
+            if ($dry_run) {
+                if ($local_rows > 0) {
+                    WP_CLI::log(sprintf('Would remove %d row(s): %s (post %d, %s)', $local_rows, $url, $post_id, $post->post_status));
+                    $pruned += $local_rows;
+                }
+                continue;
+            }
+
+            MxChat_Utils::delete_chunks_for_url($url, 'default');
+            if ($local_rows > 0) {
+                WP_CLI::log(sprintf('Removed %d row(s): %s (post %d, %s)', $local_rows, $url, $post_id, $post->post_status));
+                $pruned += $local_rows;
+            }
+        }
+        $more = $paged < $query->max_num_pages;
+        $paged++;
+    } while ($more);
+
+    WP_CLI::success(sprintf(
+        '%s %d local knowledge row(s) across %d non-published post(s) scanned.%s',
+        $dry_run ? 'Would remove' : 'Removed',
+        $pruned,
+        $scanned,
+        ' (Pinecone-mode deletions are not counted locally.)'
+    ));
 }
 
 public function mxchat_handle_post_delete($post_id) {

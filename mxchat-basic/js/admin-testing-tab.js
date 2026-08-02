@@ -319,6 +319,10 @@
                 return;
             }
 
+            // Hybrid keyword boost (38ffa1): rows carry matched_via + fused_rank
+            // when hybrid retrieval was on for this test message.
+            var hybridOn = topMatches.some(function(m) { return m.matched_via; });
+
             // Group matches by source URL
             var groupedByUrl = {};
             topMatches.forEach(function(match) {
@@ -331,7 +335,9 @@
                         usedForContext: false,
                         totalChunks: match.total_chunks || 1,
                         matchedChunks: [],
-                        isChunked: match.is_chunk || false
+                        isChunked: match.is_chunk || false,
+                        bestFusedRank: Infinity,
+                        viaSet: {}
                     };
                 }
 
@@ -343,6 +349,13 @@
                     groupedByUrl[url].usedForContext = true;
                 }
 
+                if (match.fused_rank && match.fused_rank < groupedByUrl[url].bestFusedRank) {
+                    groupedByUrl[url].bestFusedRank = match.fused_rank;
+                }
+                if (match.matched_via) {
+                    groupedByUrl[url].viaSet[match.matched_via] = true;
+                }
+
                 groupedByUrl[url].matchedChunks.push({
                     chunkIndex: match.chunk_index,
                     score: match.similarity_percentage,
@@ -351,7 +364,12 @@
                 });
             });
 
-            var urlGroups = Object.values(groupedByUrl).sort(function(a, b) { return b.bestScore - a.bestScore; });
+            var urlGroups = Object.values(groupedByUrl).sort(function(a, b) {
+                if (hybridOn && a.bestFusedRank !== b.bestFusedRank) {
+                    return a.bestFusedRank - b.bestFusedRank;
+                }
+                return b.bestScore - a.bestScore;
+            });
             var usedUrlCount = sourcesUsed > 0 ? sourcesUsed : urlGroups.filter(function(g) { return g.usedForContext; }).length;
             var chunksInfo = totalChunksUsed > 0 ? totalChunksUsed + ' chunks sent to AI' : topMatches.length + ' chunk matches';
 
@@ -378,11 +396,22 @@
                     ? '<span class="chunk-expand-toggle" data-group="' + groupIndex + '">&#9654; Show chunks</span>'
                     : '';
 
+                var viaChip = '';
+                if (hybridOn) {
+                    var vias = Object.keys(group.viaSet);
+                    if (vias.length) {
+                        var viaLabel = (vias.length > 1 || vias[0] === 'both') ? 'Both'
+                            : (vias[0] === 'keyword' ? 'Keyword' : 'Vector');
+                        viaChip = '<span class="mxch-rag-via-chip mxch-rag-via-' + viaLabel.toLowerCase() + '">' + viaLabel + '</span>';
+                    }
+                }
+
                 html += '<div class="match-card ' + cardClass + '">' +
                     '<div class="match-header">' +
                         '<div class="match-title">' +
                             '<span class="status-icon">' + statusIcon + '</span>' +
                             '<span class="similarity-score">' + group.bestScore + '%</span>' +
+                            viaChip +
                             chunkSummary +
                         '</div>' +
                         '<span class="context-label">' + contextLabel + '</span>' +
