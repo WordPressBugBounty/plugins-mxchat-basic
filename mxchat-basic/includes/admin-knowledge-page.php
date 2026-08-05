@@ -74,7 +74,7 @@ function mxchat_render_knowledge_page($admin_instance, $knowledge_manager, $page
                     </button>
                     <button class="mxch-mobile-nav-link" data-target="chunking">
                         <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
-                        <span><?php esc_html_e('Content Chunking', 'mxchat'); ?></span>
+                        <span><?php esc_html_e('Chunking & Retrieval', 'mxchat'); ?></span>
                     </button>
                     <button class="mxch-mobile-nav-link" data-target="role-restrictions">
                         <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
@@ -173,7 +173,7 @@ function mxchat_render_knowledge_page($admin_instance, $knowledge_manager, $page
                             <span class="mxch-nav-link-icon">
                                 <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
                             </span>
-                            <span class="mxch-nav-link-text"><?php esc_html_e('Content Chunking', 'mxchat'); ?></span>
+                            <span class="mxch-nav-link-text"><?php esc_html_e('Chunking & Retrieval', 'mxchat'); ?></span>
                         </button>
                     </div>
 
@@ -1385,11 +1385,14 @@ function mxchat_render_chunking_section() {
     ?>
     <div id="chunking" class="mxch-section">
         <div class="mxch-content-header">
-            <h1 class="mxch-content-title"><?php esc_html_e('Content Chunking', 'mxchat'); ?></h1>
-            <p class="mxch-content-subtitle"><?php esc_html_e('Split large content into smaller segments for more accurate semantic search.', 'mxchat'); ?></p>
+            <h1 class="mxch-content-title"><?php esc_html_e('Chunking & Retrieval', 'mxchat'); ?></h1>
+            <p class="mxch-content-subtitle"><?php esc_html_e('Control how content is split for indexing and how the knowledge base is searched.', 'mxchat'); ?></p>
         </div>
 
         <div class="mxch-card">
+            <div class="mxch-card-header">
+                <h2 class="mxch-card-title"><?php esc_html_e('Chunking', 'mxchat'); ?></h2>
+            </div>
             <div class="mxch-card-body mxchat-autosave-section">
                 <div class="mxch-notice mxch-notice-info" style="margin-bottom: 20px;">
                     <svg class="mxch-notice-icon" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
@@ -1410,6 +1413,32 @@ function mxchat_render_chunking_section() {
                     <label class="mxch-field-label" for="mxchat_chunk_size"><?php esc_html_e('Chunk Size (characters)', 'mxchat'); ?></label>
                     <input type="number" name="mxchat_chunk_size" id="mxchat_chunk_size" class="mxch-input mxchat-autosave-field" value="<?php echo esc_attr($chunk_size); ?>" min="1000" max="10000" step="500" data-option-name="mxchat_chunk_size" data-nonce="<?php echo wp_create_nonce('mxchat_prompts_setting_nonce'); ?>" style="max-width: 200px;">
                     <p class="mxch-field-description"><?php esc_html_e('Recommended: 4000 characters (~1000 tokens). Range: 1000-10000. Larger chunks preserve more context.', 'mxchat'); ?></p>
+                </div>
+            </div>
+        </div>
+
+        <?php
+        // Retrieval tuning (plan 11720c) — the hybrid keyword boost moved here
+        // from Settings → Behavior: it is KB retrieval tuning, so it lives with
+        // its natural siblings. SAME option key and save transport as before —
+        // the name routes to the mxchat_save_setting handler, whose
+        // mxchat_hybrid_keyword_toggle case still runs capability detection.
+        ?>
+        <div class="mxch-card">
+            <div class="mxch-card-header">
+                <h2 class="mxch-card-title"><?php esc_html_e('Retrieval', 'mxchat'); ?></h2>
+            </div>
+            <div class="mxch-card-body mxchat-autosave-section">
+                <div class="mxch-field">
+                    <div style="display: flex; align-items: center; gap: 12px;">
+                        <label class="mxchat-toggle-switch">
+                            <input type="checkbox" name="mxchat_hybrid_keyword_toggle" id="mxchat_hybrid_keyword_toggle" class="mxchat-autosave-field" value="on" <?php checked(get_option('mxchat_hybrid_keyword_toggle', 'off'), 'on'); ?>>
+                            <span class="mxchat-toggle-slider"></span>
+                        </label>
+                        <span style="font-weight: 500;"><?php esc_html_e('Hybrid keyword boost (WP-DB knowledge base)', 'mxchat'); ?></span>
+                    </div>
+                    <p class="mxch-field-description" style="margin-top: 8px;"><?php esc_html_e('Combines keyword matching with vector similarity when searching your WordPress-database knowledge base. Helps exact-token questions — product codes, SKUs, error codes, names — find the right document even when semantic similarity alone would miss it.', 'mxchat'); ?></p>
+                    <p class="mxch-field-hint"><?php esc_html_e('Only affects the WordPress-database knowledge base; Pinecone is unaffected. Changes which sources are retrieved on existing installs, so test after enabling. The Transcripts sources panel labels how each match was found while this is on.', 'mxchat'); ?></p>
                 </div>
             </div>
         </div>
@@ -1514,6 +1543,21 @@ function mxchat_render_acf_fields_section($knowledge_manager) {
 
         <div class="mxch-card">
             <div class="mxch-card-body mxchat-autosave-section">
+                <?php
+                // Install-level ACF→PDF import extraction (plan 11720c) — moved
+                // here from a per-import checkbox in the content-selector modal.
+                // Default OFF, matching its own "recommended only if…" guidance.
+                ?>
+                <div class="mxch-field" style="margin-bottom: 20px; padding-bottom: 20px; border-bottom: 1px solid var(--mxch-card-border);">
+                    <div style="display: flex; align-items: center; gap: 12px;">
+                        <label class="mxchat-toggle-switch">
+                            <input type="checkbox" name="mxchat_acf_pdf_extraction" id="mxchat_acf_pdf_extraction" class="mxchat-autosave-field" value="on" <?php checked(get_option('mxchat_acf_pdf_extraction', '0'), '1'); ?>>
+                            <span class="mxchat-toggle-slider"></span>
+                        </label>
+                        <span style="font-weight: 500;"><?php esc_html_e('Extract text from PDFs linked in ACF File/Image fields during imports', 'mxchat'); ?></span>
+                    </div>
+                    <p class="mxch-field-description" style="margin-top: 8px;"><?php esc_html_e('Applies to WordPress Content imports. Adds 200-500ms per post and ~30 KB to each knowledge base entry. Recommended only if your ACF setup uses PDF attachments for primary content. Editor-save extraction has its own toggle under Auto-Sync.', 'mxchat'); ?></p>
+                </div>
                 <?php if (!function_exists('acf_get_field_groups')): ?>
                     <div class="mxch-notice mxch-notice-info">
                         <svg class="mxch-notice-icon" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
@@ -1878,13 +1922,6 @@ function mxchat_render_content_selector_modal() {
             </div>
             <div class="mxchat-kb-modal-footer">
                 <div class="mxchat-kb-pagination"></div>
-                <div class="mxchat-kb-acf-pdf-option" style="display:flex; align-items:flex-start; gap:8px; padding:8px 0; font-size:12px; color: var(--mxch-text-secondary, #64748b);">
-                    <input type="checkbox" id="mxchat-kb-acf-pdf-extract" style="margin-top:2px;">
-                    <label for="mxchat-kb-acf-pdf-extract" style="cursor:pointer; line-height:1.4;">
-                        <strong style="color: var(--mxch-text-primary, #1a1a2e);"><?php esc_html_e('Also extract text from PDFs linked in ACF File/Image fields', 'mxchat'); ?></strong><br>
-                        <span><?php esc_html_e('Adds 200-500ms per post and ~30 KB to each KB entry. Recommended only if your ACF setup uses PDF attachments for primary content.', 'mxchat'); ?></span>
-                    </label>
-                </div>
                 <div class="mxchat-kb-footer-actions">
                     <button type="button" id="mxchat-kb-process-selected" class="mxchat-kb-button-primary" disabled>
                         <?php esc_html_e('Process Selected Content', 'mxchat'); ?>

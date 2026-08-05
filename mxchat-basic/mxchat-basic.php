@@ -3,7 +3,7 @@
  * Plugin Name: MxChat
  * Plugin URI: https://mxchat.ai/
  * Description: AI chatbot for WordPress with OpenAI, Claude, xAI, DeepSeek, live agent, PDF uploads, WooCommerce, and training on website data.
- * Version: 3.2.16
+ * Version: 3.2.17
  * Author: MxChat
  * Author URI: https://mxchat.ai
  * License: GPLv2 or later
@@ -1456,6 +1456,16 @@ function mxchat_check_for_update() {
                 mxchat_migrate_deprecated_models();
             }
 
+            // 3.2.17: Credential options must not autoload (af2400) — the two
+            // Pinecone-secret-holding rows were in alloptions, i.e. read into
+            // memory on every request including anonymous page views. Idempotent.
+            // Also carry the import modal's remembered ACF→PDF checkbox state
+            // into the new install-level option (11720c).
+            if (version_compare($current_version, '3.2.17', '<')) {
+                mxchat_fix_credential_option_autoload();
+                mxchat_migrate_acf_pdf_extraction_option();
+            }
+
             // Run full activation to ensure everything is up to date
             mxchat_activate();
             
@@ -1476,6 +1486,65 @@ function mxchat_check_for_update() {
     } catch (Exception $e) {
         //error_log('MxChat update error: ' . $e->getMessage());
         // Don't update version if there was an error
+    }
+}
+
+/**
+ * Credential options must never enter the autoloaded alloptions set.
+ * mxchat_prompts_options and mxchat_pinecone_addon_options can hold the
+ * Pinecone API secret; mxchat_options already stores its keys with autoload
+ * off and these two must match it. The filter covers every future
+ * add_option()/update_option() that creates the row — Settings API saves
+ * through options.php and WP-CLI included — on WP 6.6+; older cores are
+ * covered by the explicit autoload arguments at the plugin's own write
+ * sites plus the one-time migration below.
+ */
+add_filter('wp_default_autoload_value', 'mxchat_credential_option_autoload_value', 10, 2);
+function mxchat_credential_option_autoload_value($autoload, $option) {
+    if (in_array($option, array('mxchat_prompts_options', 'mxchat_pinecone_addon_options'), true)) {
+        return false;
+    }
+    return $autoload;
+}
+
+/**
+ * One-time upgrade migration: flip the autoload flag on credential option
+ * rows that existing installs are already carrying autoloaded. Includes
+ * mxchat_adv_api_token (Advanced Content bearer token) — harmless no-op
+ * when that add-on is not installed, since missing rows simply don't match.
+ */
+function mxchat_fix_credential_option_autoload() {
+    $keys = array('mxchat_prompts_options', 'mxchat_pinecone_addon_options', 'mxchat_adv_api_token');
+    if (function_exists('wp_set_option_autoload_values')) {
+        wp_set_option_autoload_values(array_fill_keys($keys, false));
+        return;
+    }
+    // Pre-WP-6.4 fallback: direct flip + cache invalidation.
+    global $wpdb;
+    $placeholders = implode(',', array_fill(0, count($keys), '%s'));
+    $wpdb->query($wpdb->prepare("UPDATE {$wpdb->options} SET autoload = 'no' WHERE option_name IN ($placeholders)", $keys));
+    wp_cache_delete('alloptions', 'options');
+    foreach ($keys as $key) {
+        wp_cache_delete($key, 'options');
+    }
+}
+
+/**
+ * One-time carry of the import modal's remembered ACF→PDF checkbox state
+ * (mxchat_options['acf_pdf_extract_default'], written per-import until 3.2.16)
+ * into the new install-level option mxchat_acf_pdf_extraction (plan 11720c).
+ * Fresh installs and installs that never touched the checkbox default OFF,
+ * matching the setting's own "recommended only if…" guidance.
+ */
+function mxchat_migrate_acf_pdf_extraction_option() {
+    if (get_option('mxchat_acf_pdf_extraction', null) !== null) {
+        return; // already set — never overwrite an owner's choice
+    }
+    $mxchat_options = get_option('mxchat_options', array());
+    if (is_array($mxchat_options) && array_key_exists('acf_pdf_extract_default', $mxchat_options)) {
+        update_option('mxchat_acf_pdf_extraction', !empty($mxchat_options['acf_pdf_extract_default']) ? '1' : '0', false);
+        unset($mxchat_options['acf_pdf_extract_default']);
+        update_option('mxchat_options', $mxchat_options);
     }
 }
 

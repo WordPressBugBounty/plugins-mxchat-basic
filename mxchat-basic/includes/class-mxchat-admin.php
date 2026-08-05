@@ -199,6 +199,12 @@ class MxChat_Admin {
         }
 
         $new_model = isset($_POST['new_model']) ? sanitize_text_field(wp_unslash($_POST['new_model'])) : '';
+        $options = get_option('mxchat_options', array());
+        if (isset($options['custom_provider_for_embeddings']) && $options['custom_provider_for_embeddings'] === 'on') {
+            // The standard dropdown is inert while custom embeddings are on —
+            // whatever value it posts, the next embed uses the custom identity.
+            $new_model = MxChat_Utils::get_selected_embedding_model($options);
+        }
         $active_model = MxChat_Utils::get_active_embedding_model();
 
         $is_mismatch = !empty($active_model) && !empty($new_model) && $active_model !== $new_model;
@@ -229,7 +235,7 @@ class MxChat_Admin {
         }
 
         $options = get_option('mxchat_options', array());
-        $selected = $options['embedding_model'] ?? '';
+        $selected = MxChat_Utils::get_selected_embedding_model($options);
         $active = MxChat_Utils::get_active_embedding_model();
         update_option('mxchat_dismissed_embedding_mismatch', $active . '|' . $selected, false);
         wp_send_json_success();
@@ -248,7 +254,7 @@ class MxChat_Admin {
         }
 
         $options = get_option('mxchat_options', array());
-        $selected = $options['embedding_model'] ?? '';
+        $selected = MxChat_Utils::get_selected_embedding_model($options);
         $active = MxChat_Utils::get_active_embedding_model();
 
         if (empty($active) || empty($selected) || $active === $selected) {
@@ -573,6 +579,10 @@ public function mxchat_create_addons_page() {
  */
 public function mxchat_create_content_page() {
     require_once plugin_dir_path(__FILE__) . 'admin-content-page.php';
+    // The Editor Assistant toggle on the Settings tab renders through
+    // mxchat_render_field_wrapper(), which lives in admin-settings-page.php
+    // (plan-f7df40 relocation) — load it the same way the settings page does.
+    require_once plugin_dir_path(__FILE__) . 'admin-settings-page.php';
     mxchat_render_content_page($this);
 }
 
@@ -7486,7 +7496,7 @@ public function mxchat_loops_api_key_callback() {
         sprintf(
             /* translators: %s: link to the Loops integration tab. */
             __('Required for Loops email integration. Get your API key from Loops.so, then choose your mailing list under %s.', 'mxchat'),
-            '<a href="#integrations-loops" data-target="integrations-loops">' . esc_html__('Integrations, Loops', 'mxchat') . '</a>'
+            '<a href="#integrations-loops">' . esc_html__('Integrations, Loops', 'mxchat') . '</a>'
         ),
         self::mxchat_loops_pointer_allowed_html()
     ) . '</p>';
@@ -7559,11 +7569,10 @@ public function mxchat_loops_mailing_list_callback() {
  * dropdown under Integrations > Loops — so the pointer is an in-page tab
  * switch, not a cross-page link.
  *
- * The anchor carries data-target="api-keys", which the shared admin shell
- * (js/admin-sidebar.js) already wires for EVERY [data-target] element inside
- * .mxch-admin-wrapper — so this actually switches tabs with no new JS. A plain
- * href="#api-keys" would NOT work: the shell has no hashchange handling, so the
- * link would look right and land the user on the wrong tab.
+ * A plain href="#api-keys" is all it takes: the shared admin shell
+ * (js/admin-sidebar.js) honours section-naming hashes on load AND on
+ * hashchange (plan 4ede16), so ordinary anchors switch tabs — the old
+ * data-target workaround on these pointer anchors is gone.
  *
  * @param string $template Translatable string containing one %s placeholder.
  * @return string
@@ -7571,7 +7580,7 @@ public function mxchat_loops_mailing_list_callback() {
 private static function mxchat_loops_api_key_pointer($template) {
     return sprintf(
         $template,
-        '<a href="#api-keys" data-target="api-keys">' . esc_html__('API Keys', 'mxchat') . '</a>'
+        '<a href="#api-keys">' . esc_html__('API Keys', 'mxchat') . '</a>'
     );
 }
 
@@ -7977,7 +7986,12 @@ public function embedding_model_callback() {
         )
     );
     $selected_model = isset($this->options['embedding_model']) ? esc_attr($this->options['embedding_model']) : 'text-embedding-ada-002';
-    echo '<select id="embedding_model" name="embedding_model">';
+    // With custom-provider embeddings on, this picker is inert — the effective
+    // model comes from the Custom Embedding Model field (plan ae02cb). Autosave
+    // fires only on user change events, so the disabled attribute cannot cause
+    // a missing-key save; JS keeps the state in sync with the toggle live.
+    $custom_embeddings_on = !empty($this->options['custom_provider_for_embeddings']) && $this->options['custom_provider_for_embeddings'] === 'on';
+    echo '<select id="embedding_model" name="embedding_model"' . ($custom_embeddings_on ? ' disabled' : '') . '>';
     foreach ($models as $group_label => $group_models) {
         echo '<optgroup label="' . esc_attr($group_label) . '">';
         foreach ($group_models as $model_value => $model_label) {
@@ -7986,6 +8000,9 @@ public function embedding_model_callback() {
         echo '</optgroup>';
     }
     echo '</select>';
+    echo '<p class="mxch-field-description mxchat-embedding-custom-note" id="mxchat_embedding_custom_note"' . ($custom_embeddings_on ? '' : ' style="display:none;"') . '>';
+    echo esc_html__('Custom provider embeddings are in use — the model is set in the Custom Embedding Model field under Custom Provider.', 'mxchat');
+    echo '</p>';
 
     // API Key Status Messages for Embedding Models
     $has_openai_key = !empty($this->options['api_key']);
@@ -8479,6 +8496,7 @@ public function mxchat_print_button_toggle_callback() {
  * Editor Assistant toggle (plan-8cb0cb). Standalone option, NOT in mxchat_options
  * (bypasses the mxchat_sanitize strip-trap + autosave normalization). Default OFF.
  * Saved by the mxchat_editor_assistant_enabled case in class-ajax-handler.php.
+ * Renders on Content → Settings (moved there from Settings → Behavior, plan-f7df40).
  */
 public function mxchat_editor_assistant_toggle_callback() {
     $enabled = get_option('mxchat_editor_assistant_enabled', 'off');
@@ -8487,6 +8505,46 @@ public function mxchat_editor_assistant_toggle_callback() {
     echo '<label class="toggle-switch">';
     echo sprintf(
         '<input type="checkbox" id="mxchat_editor_assistant_enabled" name="mxchat_editor_assistant_enabled" value="on" %s />',
+        esc_attr($checked)
+    );
+    echo '<span class="slider"></span>';
+    echo '</label>';
+}
+
+/**
+ * Hybrid keyword boost toggle (plan-38ffa1; rebuilt on the house toggle pattern
+ * in plan-64d34f — the hand-rolled .mxch-toggle markup matched neither selector
+ * the autosave JS uses to place its save confirmation, so the control looked
+ * dead). Standalone option, NOT in mxchat_options. Default OFF. Saved by the
+ * mxchat_hybrid_keyword_toggle case in class-ajax-handler.php, which also runs
+ * capability detection on enable.
+ */
+public function mxchat_hybrid_keyword_toggle_callback() {
+    $enabled = get_option('mxchat_hybrid_keyword_toggle', 'off');
+    $checked = ($enabled === 'on') ? 'checked' : '';
+
+    echo '<label class="toggle-switch">';
+    echo sprintf(
+        '<input type="checkbox" id="mxchat_hybrid_keyword_toggle" name="mxchat_hybrid_keyword_toggle" value="on" %s />',
+        esc_attr($checked)
+    );
+    echo '<span class="slider"></span>';
+    echo '</label>';
+}
+
+/**
+ * Smart asset loading toggle (plan-915355; rebuilt on the house toggle pattern
+ * in plan-64d34f, same dead-save-feedback defect as the hybrid keyword toggle).
+ * Standalone option, NOT in mxchat_options. Default OFF. Saved by the
+ * mxchat_smart_asset_loading case in class-ajax-handler.php.
+ */
+public function mxchat_smart_asset_loading_toggle_callback() {
+    $enabled = get_option('mxchat_smart_asset_loading', 'off');
+    $checked = ($enabled === 'on') ? 'checked' : '';
+
+    echo '<label class="toggle-switch">';
+    echo sprintf(
+        '<input type="checkbox" id="mxchat_smart_asset_loading" name="mxchat_smart_asset_loading" value="on" %s />',
         esc_attr($checked)
     );
     echo '<span class="slider"></span>';
@@ -9413,6 +9471,20 @@ private function enqueue_page_specific_assets($current_page, $plugin_url, $versi
             wp_enqueue_script('mxchat-admin-onboarding-wizard-js', $plugin_url . 'js/admin-onboarding-wizard.js', array(), $version, true);
             break;
        default:
+            // Settings page: load the shared shell JS for #hash deep-linking
+            // to tabs (plan 4ede16). The page's own inline nav script owns
+            // clicks/accordion behaviour; the shell script adds load +
+            // hashchange activation and replaceState so plain href="#tab"
+            // anchors and shared URLs land on the right tab. Kept inside the
+            // default case because the settings page also needs everything
+            // below (Testing tab chatbot + streaming assets).
+            if ($current_page === 'mxchat-settings') {
+                wp_enqueue_script('mxchat-admin-sidebar-js', $plugin_url . 'js/admin-sidebar.js', array(), $version, true);
+                wp_localize_script('mxchat-admin-sidebar-js', 'MxChatAdminSidebarI18n', array(
+                    'copied' => __('Copied', 'mxchat'),
+                ));
+            }
+
             wp_enqueue_script(
                 'mxchat-test-streaming-js',
                 $plugin_url . 'js/mxchat-test-streaming.js',
@@ -9551,12 +9623,9 @@ private function localize_page_specific_scripts($current_page) {
             ));
 
             // Content selector localization
-            $mxchat_options_for_selector = get_option('mxchat_options', array());
-            $acf_pdf_extract_default = !empty($mxchat_options_for_selector['acf_pdf_extract_default']);
             wp_localize_script('mxchat-content-selector-js', 'mxchatSelector', array(
                 'ajaxurl' => admin_url('admin-ajax.php'),
                 'nonce' => wp_create_nonce('mxchat_content_selector_nonce'),
-                'acfPdfExtractDefault' => $acf_pdf_extract_default ? 1 : 0,
                 'i18n' => array(
                     'searchPlaceholder' => __('Search posts and pages...', 'mxchat'),
                     'selectAll' => __('Select All', 'mxchat'),

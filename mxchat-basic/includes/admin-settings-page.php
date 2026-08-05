@@ -304,20 +304,18 @@ function mxchat_render_settings_page($admin_instance) {
                             $admin_instance->mxchat_rag_chunks_limit_callback();
                         }, __('Maximum total content chunks sent to the AI across all sources. Higher values provide more context but increase token usage and cost.', 'mxchat'));
 
-                        // Hybrid keyword boost (plan-38ffa1). Standalone option — never part
-                        // of mxchat_options, so mxchat_sanitize() can't strip it. Default OFF.
-                        $hybrid_keyword = get_option('mxchat_hybrid_keyword_toggle', 'off');
-                        ?>
-                        <div class="mxch-field" style="margin-top: 16px;">
-                            <label class="mxch-toggle">
-                                <input type="checkbox" class="mxch-toggle-input mxchat-autosave-field" id="mxchat_hybrid_keyword_toggle" name="mxchat_hybrid_keyword_toggle" value="on" <?php checked($hybrid_keyword, 'on'); ?>>
-                                <span class="mxch-toggle-switch"></span>
-                                <span class="mxch-toggle-label"><?php esc_html_e('Hybrid keyword boost (WP-DB knowledge base)', 'mxchat'); ?></span>
-                            </label>
-                            <p class="mxch-field-description"><?php esc_html_e('Combines keyword matching with vector similarity when searching your WordPress-database knowledge base. Helps exact-token questions — product codes, SKUs, error codes, names — find the right document even when semantic similarity alone would miss it.', 'mxchat'); ?></p>
-                            <p class="mxch-field-hint"><?php esc_html_e('Only affects the WordPress-database knowledge base; Pinecone is unaffected. Changes which sources are retrieved on existing installs, so test after enabling. The Transcripts sources panel labels how each match was found while this is on.', 'mxchat'); ?></p>
-                        </div>
-                        <?php
+                        // Hybrid keyword boost MOVED to Knowledge → Chunking &
+                        // Retrieval (plan 11720c) — it is KB retrieval tuning, not
+                        // conversation behavior. Same option key over there. The
+                        // breadcrumb below is a one-release courtesy: drop it in
+                        // the release after 3.2.17.
+                        echo '<p class="mxch-field-description">';
+                        printf(
+                            /* translators: %s: link to the Chunking & Retrieval settings tab. */
+                            esc_html__('Hybrid keyword boost has moved to %s.', 'mxchat'),
+                            '<a href="' . esc_url(admin_url('admin.php?page=mxchat-prompts#chunking')) . '">' . esc_html__('Knowledge, Chunking & Retrieval', 'mxchat') . '</a>'
+                        );
+                        echo '</p>';
 
                         // Contextual Awareness
                         mxchat_render_field_wrapper('contextual_awareness', __('Contextual Awareness', 'mxchat'), function() use ($admin_instance) {
@@ -338,10 +336,9 @@ function mxchat_render_settings_page($admin_instance) {
                             $admin_instance->mxchat_satisfaction_rating_toggle_callback();
                         }, __('Show a 👍 / 👎 prompt after a conversation has had a couple of bot replies and the visitor has been idle for a moment. Disable to hide the prompt site-wide.', 'mxchat'));
 
-                        // Editor Assistant — free, off-by-default block-editor AI actions (plan-8cb0cb).
-                        mxchat_render_field_wrapper('mxchat_editor_assistant_enabled', __('Editor Assistant', 'mxchat'), function() use ($admin_instance) {
-                            $admin_instance->mxchat_editor_assistant_toggle_callback();
-                        }, __('Add magic-wand AI writing actions (rewrite, summarize, translate, continue, fix grammar) to the WordPress block editor. Opens a sidebar in the post editor. Uses the AI model configured above. Off by default.', 'mxchat'));
+                        // Editor Assistant toggle moved to Content → Settings (plan-f7df40):
+                        // it's a content feature, so it lives on the screen that owns it.
+                        // Rendering is in admin-content-page.php; option + save path unchanged.
                         ?>
                     </div>
                 </div>
@@ -637,19 +634,14 @@ function mxchat_render_settings_page($admin_instance) {
                         </div>
 
                         <?php
-                        // Smart asset loading (plan-915355). Standalone option — never part
-                        // of mxchat_options, so mxchat_sanitize() can't strip it.
-                        $smart_asset_loading = get_option('mxchat_smart_asset_loading', 'off');
+                        // Smart asset loading (plan-915355; rebuilt on the house toggle
+                        // pattern in plan-64d34f). Standalone option — never part of
+                        // mxchat_options, so mxchat_sanitize() can't strip it.
+                        mxchat_render_field_wrapper('mxchat_smart_asset_loading', __('Only load chatbot files on pages where the chatbot appears', 'mxchat'), function() use ($admin_instance) {
+                            $admin_instance->mxchat_smart_asset_loading_toggle_callback();
+                        }, __('Skips the chatbot\'s CSS and JavaScript on pages where the widget is hidden (per-page visibility, post type include/exclude, or auto-display disabled). Pages using the chatbot shortcode still load everything automatically. Helps with "reduce unused CSS/JS" audit findings.', 'mxchat'),
+                           __('If your theme or page builder inserts the chatbot in an unusual way and it stops appearing, turn this off — or force-load assets with the mxchat_should_load_assets filter.', 'mxchat'));
                         ?>
-                        <div class="mxch-field" style="margin-top: 16px;">
-                            <label class="mxch-toggle">
-                                <input type="checkbox" class="mxch-toggle-input mxchat-autosave-field" id="mxchat_smart_asset_loading" name="mxchat_smart_asset_loading" value="on" <?php checked($smart_asset_loading, 'on'); ?>>
-                                <span class="mxch-toggle-switch"></span>
-                                <span class="mxch-toggle-label"><?php esc_html_e('Only load chatbot files on pages where the chatbot appears', 'mxchat'); ?></span>
-                            </label>
-                            <p class="mxch-field-description"><?php esc_html_e('Skips the chatbot\'s CSS and JavaScript on pages where the widget is hidden (per-page visibility, post type include/exclude, or auto-display disabled). Pages using the chatbot shortcode still load everything automatically. Helps with "reduce unused CSS/JS" audit findings.', 'mxchat'); ?></p>
-                            <p class="mxch-field-hint"><?php esc_html_e('If your theme or page builder inserts the chatbot in an unusual way and it stops appearing, turn this off — or force-load assets with the mxchat_should_load_assets filter.', 'mxchat'); ?></p>
-                        </div>
 
                         <div class="mxch-notice mxch-notice-info" style="margin-top: 16px;">
                             <svg class="mxch-notice-icon" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
@@ -770,6 +762,13 @@ function mxchat_render_settings_page($admin_instance) {
                         </h3>
                     </div>
                     <div class="mxch-card-body">
+                        <?php // Deliberate exception to the house .toggle-switch pattern
+                              // (audited in plan-64d34f): this card-body is NOT an
+                              // autosave section — the toggle saves through its own
+                              // dedicated handler (mxchat_toggle_debug_mode, wired at
+                              // mxchat-admin.js #mxchat_debug_mode) which appends its own
+                              // save indicator inside this label. Converting the markup
+                              // would orphan that indicator without touching the JS. ?>
                         <div class="mxch-field">
                             <label class="mxch-toggle">
                                 <input type="checkbox" class="mxch-toggle-input" id="mxchat_debug_mode" name="mxchat_options[debug_mode]" value="on" <?php checked($debug_active); ?>>
@@ -1613,8 +1612,12 @@ function mxchat_render_settings_page($admin_instance) {
 
 /**
  * Helper function to render a field with consistent wrapper
+ *
+ * $hint renders as a .mxch-field-hint line under the description — the
+ * softer "caveats / fine print" slot (added for plan-64d34f so hint-bearing
+ * fields don't have to hand-roll the wrapper markup).
  */
-function mxchat_render_field_wrapper($id, $label, $callback, $description = '') {
+function mxchat_render_field_wrapper($id, $label, $callback, $description = '', $hint = '') {
     ?>
     <div class="mxch-field">
         <label class="mxch-field-label"><?php echo esc_html($label); ?></label>
@@ -1623,6 +1626,9 @@ function mxchat_render_field_wrapper($id, $label, $callback, $description = '') 
         </div>
         <?php if ($description): ?>
         <p class="mxch-field-description"><?php echo esc_html($description); ?></p>
+        <?php endif; ?>
+        <?php if ($hint): ?>
+        <p class="mxch-field-hint"><?php echo esc_html($hint); ?></p>
         <?php endif; ?>
     </div>
     <?php

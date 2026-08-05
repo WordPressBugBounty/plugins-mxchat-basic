@@ -58,6 +58,10 @@ public static function embedding_model_dimensions($model) {
 }
 
 public static function embedding_model_label($model) {
+    if (is_string($model) && strpos($model, 'custom:') === 0) {
+        /* translators: %s: the embedding model name configured on the custom provider */
+        return sprintf(__('%s (custom provider)', 'mxchat'), substr($model, 7));
+    }
     $registry = self::embedding_model_registry();
     return isset($registry[$model]) ? $registry[$model]['label'] : $model;
 }
@@ -79,6 +83,41 @@ public static function stamp_active_embedding_model($model) {
     if (!empty($model) && $model !== self::get_active_embedding_model()) {
         update_option('mxchat_active_embedding_model', $model, false);
     }
+}
+
+/**
+ * The model name the custom-provider embedding path will send, mirroring the
+ * fallback chain the request itself uses: dedicated custom embedding model,
+ * else the custom chat model, else 'default'. Single source shared by
+ * generate_embedding_custom() and the mismatch-warning "selected" side so the
+ * two can never drift (plan ae02cb).
+ */
+public static function resolve_custom_embedding_model($options) {
+    if (isset($options['custom_provider_embedding_model']) && trim((string) $options['custom_provider_embedding_model']) !== '') {
+        return trim((string) $options['custom_provider_embedding_model']);
+    }
+    if (isset($options['custom_provider_model']) && trim((string) $options['custom_provider_model']) !== '') {
+        return trim((string) $options['custom_provider_model']);
+    }
+    return 'default';
+}
+
+/**
+ * The EFFECTIVE selected embedding model — what the next embed will actually
+ * use. With custom-provider embeddings on this is the custom identity in the
+ * same 'custom:<model>' form stamp_active_embedding_model() records, not the
+ * inert standard dropdown value. Mismatch-warning comparisons must read this,
+ * never $options['embedding_model'] directly — the dropdown cannot be
+ * deselected, so reading it raw flags every correctly-configured custom setup.
+ */
+public static function get_selected_embedding_model($options = null) {
+    if (!is_array($options)) {
+        $options = get_option('mxchat_options', array());
+    }
+    if (isset($options['custom_provider_for_embeddings']) && $options['custom_provider_for_embeddings'] === 'on') {
+        return 'custom:' . self::resolve_custom_embedding_model($options);
+    }
+    return $options['embedding_model'] ?? '';
 }
 
 /**
@@ -540,6 +579,85 @@ private static function store_in_pinecone_main($embedding_vector, $content, $url
 }
 
 /**
+ * Caller-side pre-flight for KB ingestion: can an embedding request be made
+ * with these options, and which API key should travel downstream?
+ *
+ * Custom-provider-aware — generate_embedding() below routes to the custom
+ * endpoint FIRST and ignores the passed cloud key entirely when
+ * custom_provider_for_embeddings is on, so on that branch the only real
+ * requirement is a Base URL. Ingestion callers that gated on a cloud API key
+ * were killing keyless custom-embeddings sites (local Ollama / LM Studio
+ * class) before the embed layer could route (plan cbd5fd).
+ *
+ * NOTE: reads $options['embedding_model'] raw on purpose — this mirrors
+ * generate_embedding()'s own routing read, NOT the mismatch-banner's
+ * "selected" chain (get_selected_embedding_model). The helper must predict
+ * what the very next embed call will do, byte-for-byte.
+ *
+ * Decision only — callers keep their own error-surfacing shape (admin-notice
+ * transient + redirect, wp_send_json_error, WP_Error, silent return).
+ *
+ * @param array|null $options Resolved options (bot-specific where the caller
+ *                            has them); null loads the default bot's options.
+ * @return array {
+ *     @type bool   $ok       Whether ingestion can proceed.
+ *     @type string $api_key  Key to pass downstream ('' on the custom branch —
+ *                            generate_embedding() ignores it there).
+ *     @type string $reason   Human-readable blocker; '' when $ok.
+ *     @type string $provider Short provider label ('OpenAI', 'Voyage AI',
+ *                            'Google Gemini', 'Custom Provider').
+ * }
+ */
+public static function embedding_preflight($options = null) {
+    if (!is_array($options)) {
+        $options = get_option('mxchat_options');
+        $options = is_array($options) ? $options : array();
+    }
+
+    // Custom branch mirrors generate_embedding()'s routing order (custom first).
+    if (isset($options['custom_provider_for_embeddings']) && $options['custom_provider_for_embeddings'] === 'on') {
+        $base_url = isset($options['custom_provider_base_url']) ? rtrim(trim((string) $options['custom_provider_base_url']), '/') : '';
+        if ($base_url === '') {
+            return array(
+                'ok'       => false,
+                'api_key'  => '',
+                // Same string generate_embedding_custom() returns for this state.
+                'reason'   => __('Custom provider Base URL is not configured.', 'mxchat'),
+                'provider' => 'Custom Provider',
+            );
+        }
+        return array('ok' => true, 'api_key' => '', 'reason' => '', 'provider' => 'Custom Provider');
+    }
+
+    $selected_model = $options['embedding_model'] ?? 'text-embedding-ada-002';
+    if (strpos($selected_model, 'voyage') === 0) {
+        $api_key  = $options['voyage_api_key'] ?? '';
+        $provider = 'Voyage AI';
+    } elseif (strpos($selected_model, 'gemini-embedding') === 0) {
+        $api_key  = $options['gemini_api_key'] ?? '';
+        $provider = 'Google Gemini';
+    } else {
+        $api_key  = $options['api_key'] ?? '';
+        $provider = 'OpenAI';
+    }
+
+    if (empty($api_key)) {
+        return array(
+            'ok'       => false,
+            'api_key'  => '',
+            'reason'   => sprintf(
+                /* translators: %s: embedding provider name */
+                __('%s API key is not configured. Please add your API key in the settings before submitting content.', 'mxchat'),
+                $provider
+            ),
+            'provider' => $provider,
+        );
+    }
+
+    return array('ok' => true, 'api_key' => $api_key, 'reason' => '', 'provider' => $provider);
+}
+
+/**
  * UPDATED: Generate an embedding for the given text using bot-specific configuration.
  *
  * @param string $text    The text to be embedded.
@@ -736,10 +854,9 @@ public static function generate_embedding_custom($text, $options) {
     $auth_scheme = isset($options['custom_provider_auth_scheme']) ? $options['custom_provider_auth_scheme'] : 'bearer';
     $api_version = isset($options['custom_provider_api_version']) ? trim((string) $options['custom_provider_api_version']) : '';
 
-    // Embedding model: prefer the dedicated custom_provider_embedding_model, fall back to the chat model.
-    $model = (isset($options['custom_provider_embedding_model']) && trim((string) $options['custom_provider_embedding_model']) !== '')
-        ? trim((string) $options['custom_provider_embedding_model'])
-        : ((isset($options['custom_provider_model']) && trim((string) $options['custom_provider_model']) !== '') ? trim((string) $options['custom_provider_model']) : 'default');
+    // Embedding model: shared resolver (dedicated embedding model -> chat model
+    // -> 'default') — the mismatch warning's "selected" side reads the same chain.
+    $model = self::resolve_custom_embedding_model($options);
 
     $embed_url = $base_url . '/embeddings';
     if (!empty($api_version)) {

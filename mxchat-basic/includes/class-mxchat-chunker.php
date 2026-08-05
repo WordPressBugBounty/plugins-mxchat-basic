@@ -68,8 +68,9 @@ class MxChat_Chunker {
             return false;
         }
 
-        // Only chunk if content exceeds chunk size
-        return strlen($text) > $this->chunk_size;
+        // Only chunk if content exceeds chunk size (characters, not bytes —
+        // multibyte scripts would otherwise hit the limit 3x early)
+        return mb_strlen($text) > $this->chunk_size;
     }
 
     /**
@@ -90,7 +91,7 @@ class MxChat_Chunker {
         }
 
         // Handle content smaller than chunk size - return as single chunk
-        if (strlen($text) <= $this->chunk_size) {
+        if (mb_strlen($text) <= $this->chunk_size) {
             return array(trim($text));
         }
 
@@ -108,7 +109,7 @@ class MxChat_Chunker {
 
             // Calculate size if we add this paragraph
             $separator = empty($current_chunk) ? '' : "\n\n";
-            $potential_size = strlen($current_chunk) + strlen($separator) + strlen($paragraph);
+            $potential_size = mb_strlen($current_chunk) + mb_strlen($separator) + mb_strlen($paragraph);
 
             // If adding this paragraph exceeds chunk size
             if ($potential_size > $this->chunk_size && !empty($current_chunk)) {
@@ -121,7 +122,7 @@ class MxChat_Chunker {
             }
 
             // Handle very long paragraphs that exceed chunk size on their own
-            if (strlen($current_chunk) > $this->chunk_size) {
+            if (mb_strlen($current_chunk) > $this->chunk_size) {
                 $split_chunks = $this->split_long_paragraph($current_chunk);
 
                 // Add all but the last split chunk
@@ -165,7 +166,7 @@ class MxChat_Chunker {
             }
 
             // If single sentence is too long, split by words
-            if (strlen($sentence) > $this->chunk_size) {
+            if (mb_strlen($sentence) > $this->chunk_size) {
                 if (!empty($current_chunk)) {
                     $chunks[] = trim($current_chunk);
                     $current_chunk = '';
@@ -180,7 +181,7 @@ class MxChat_Chunker {
             }
 
             $separator = empty($current_chunk) ? '' : ' ';
-            $potential_size = strlen($current_chunk) + strlen($separator) + strlen($sentence);
+            $potential_size = mb_strlen($current_chunk) + mb_strlen($separator) + mb_strlen($sentence);
 
             if ($potential_size > $this->chunk_size && !empty($current_chunk)) {
                 $chunks[] = trim($current_chunk);
@@ -211,8 +212,25 @@ class MxChat_Chunker {
         $current_chunk = '';
 
         foreach ($words as $word) {
+            // Last-resort hard split: a single "word" larger than the chunk size
+            // (space-free scripts like Japanese/Chinese/Thai are one token to \s+)
+            // must be split by characters or it is emitted whole at any size.
+            if (mb_strlen($word) > $this->chunk_size) {
+                if (!empty(trim($current_chunk))) {
+                    $chunks[] = trim($current_chunk);
+                    $current_chunk = '';
+                }
+                $pieces = $this->mb_hard_split($word, $this->chunk_size);
+                // Emit all full pieces; the last may still accumulate following words
+                $current_chunk = array_pop($pieces);
+                foreach ($pieces as $piece) {
+                    $chunks[] = $piece;
+                }
+                continue;
+            }
+
             $separator = empty($current_chunk) ? '' : ' ';
-            $potential_size = strlen($current_chunk) + strlen($separator) + strlen($word);
+            $potential_size = mb_strlen($current_chunk) + mb_strlen($separator) + mb_strlen($word);
 
             if ($potential_size > $this->chunk_size && !empty($current_chunk)) {
                 $chunks[] = trim($current_chunk);
@@ -227,6 +245,25 @@ class MxChat_Chunker {
         }
 
         return $chunks;
+    }
+
+    /**
+     * Split a string into fixed-size character pieces (multibyte-safe)
+     *
+     * @param string $text Text to split
+     * @param int $size Characters per piece
+     * @return array Array of string pieces
+     */
+    private function mb_hard_split($text, $size) {
+        if (function_exists('mb_str_split')) {
+            return mb_str_split($text, $size);
+        }
+        $pieces = array();
+        $len = mb_strlen($text);
+        for ($i = 0; $i < $len; $i += $size) {
+            $pieces[] = mb_substr($text, $i, $size);
+        }
+        return $pieces;
     }
 
     /**

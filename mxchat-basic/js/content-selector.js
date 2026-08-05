@@ -9,15 +9,11 @@ jQuery(document).ready(function($) {
     const $processButton = $('#mxchat-kb-process-selected');
     const $selectAll = $('#mxchat-kb-select-all');
     const $selectionCount = $('.mxchat-kb-selection-count');
-    const $acfPdfExtractCheckbox = $('#mxchat-kb-acf-pdf-extract');
+    // ACF→PDF extraction is an install-level setting (Knowledge → ACF Fields);
+    // the server reads the stored option — nothing to collect in this modal.
 
-    // Restore last-used ACF→PDF extract preference from the server-localized default.
-    if (typeof mxchatSelector !== 'undefined' && mxchatSelector.acfPdfExtractDefault) {
-        $acfPdfExtractCheckbox.prop('checked', true);
-    }
-    
     // Filter elements
-    const $searchInput = $('#mxchat-kb-content-search');1
+    const $searchInput = $('#mxchat-kb-content-search');
     const $typeFilter = $('#mxchat-kb-content-type-filter');
     const $statusFilter = $('#mxchat-kb-content-status-filter');
     const $processedFilter = $('#mxchat-kb-processed-filter');
@@ -531,13 +527,11 @@ $processButton.on('click', function() {
         $progressModal.find('.mxchat-kb-progress-fill').css('width', percent + '%');
 
         // UPDATED: Prepare AJAX data with bot_id
-        const extractAcfPdfs = $acfPdfExtractCheckbox.prop('checked') ? 1 : 0;
         const ajaxData = {
             action: 'mxchat_process_selected_content',
             nonce: mxchatSelector.nonce,
             post_ids: [postId],
-            is_update: isUpdate,
-            extract_acf_pdfs: extractAcfPdfs
+            is_update: isUpdate
         };
 
         // Add bot_id if multi-bot is active and not default

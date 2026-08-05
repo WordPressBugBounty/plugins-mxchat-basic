@@ -1281,16 +1281,32 @@ input:checked + .mxchat-toggle-slider:before {
 .mxchat-kb-modal-content {
     position: relative;
     background-color: #fff;
-    margin: 50px auto;
+    margin: 24px auto;
     padding: 0;
     border-radius: 8px;
     box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
     width: 90%;
     max-width: 1000px;
+    /* The box is the ONLY place height is constrained; children flex within it.
+       dvh tracks the real visible viewport on mobile (vh line = older-browser fallback). */
     max-height: 85vh;
+    max-height: min(85vh, calc(100dvh - 48px));
     display: flex;
     flex-direction: column;
     animation: mxchat-kb-modal-appear 0.3s ease-out;
+}
+
+/* Fixed chrome rows never grow or shrink — the results list is the only scroller. */
+.mxchat-kb-modal-header,
+.mxchat-kb-modal-filters,
+.mxchat-kb-selection-header,
+.mxchat-kb-modal-footer {
+    flex: 0 0 auto;
+}
+
+/* The footer holds the primary actions — it can never be squeezed out of the box. */
+.mxchat-kb-modal-footer {
+    flex-shrink: 0;
 }
 
 @keyframes mxchat-kb-modal-appear {
@@ -1408,10 +1424,13 @@ input:checked + .mxchat-toggle-slider:before {
 }
 
 .mxchat-kb-content-selection {
-    overflow-y: auto;
-    flex: 1;
-    min-height: 300px;
-    max-height: calc(85vh - 200px);
+    /* Flexible middle region: header row stays put, the list below scrolls.
+       min-height: 0 is load-bearing — without it flex refuses to shrink this
+       column and the footer gets pushed out of the box (the mobile bug). */
+    flex: 1 1 auto;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
 }
 
 .mxchat-kb-selection-header {
@@ -1441,6 +1460,10 @@ input:checked + .mxchat-toggle-slider:before {
 
 .mxchat-kb-content-list {
     padding: 0;
+    /* The one and only scroller inside the modal. */
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
 }
 
 .mxchat-kb-content-item {
@@ -1855,36 +1878,68 @@ input:checked + .mxchat-toggle-slider:before {
     /* Modal responsive adjustments */
     .mxchat-kb-modal-content {
         width: 95%;
-        max-height: 90vh;
-        margin: 20px auto;
+        /* dvh = real visible viewport (mobile vh includes the URL-bar region);
+           vh line is the older-browser fallback. */
+        max-height: calc(100vh - 24px);
+        max-height: calc(100dvh - 24px);
+        margin: 12px auto;
+        /* Last-resort scroll: on extreme-short viewports (landscape phones)
+           the compacted chrome + the list's floor can still exceed the box —
+           scroll inside the box rather than clipping the footer. */
+        overflow-y: auto;
     }
-    
+
+    /* Compact the fixed chrome on mobile — stacked filters + a stacked footer
+       are tall, and every saved pixel goes to the content list. */
+    .mxchat-kb-modal-header {
+        padding: 12px 16px;
+    }
+
+    .mxchat-kb-modal-header h3 {
+        font-size: 16px;
+    }
+
     .mxchat-kb-modal-filters {
         flex-direction: column;
         align-items: stretch;
+        padding: 10px 16px;
+        gap: 8px;
     }
-    
+
     .mxchat-kb-search-group {
         max-width: none;
     }
-    
+
     .mxchat-kb-filter-group {
         flex-direction: column;
+        gap: 8px;
     }
-    
-    .mxchat-kb-content-selection {
-        max-height: calc(90vh - 250px);
+
+    .mxchat-kb-filter-group select {
+        padding: 6px 30px 6px 10px;
     }
-    
+
     .mxchat-kb-selection-header {
         flex-direction: column;
         align-items: flex-start;
-        gap: 10px;
+        gap: 6px;
+        padding: 10px 16px;
     }
-    
+
+    /* Guarantee a usable slice of visible rows — reachable buttons are no
+       help if there is nothing to select above them. */
+    .mxchat-kb-content-list {
+        min-height: 96px;
+    }
+
+    .mxchat-kb-content-item {
+        padding: 10px 16px;
+    }
+
     .mxchat-kb-modal-footer {
         flex-direction: column;
-        gap: 10px;
+        gap: 8px;
+        padding: 10px 16px;
     }
 
     .mxchat-kb-modal-footer .mxchat-kb-pagination {
@@ -3756,11 +3811,16 @@ tr.mxchat-row-error td:first-child::before {
 
 .mxchat-kb-edit-modal-content {
     max-width: 760px;
+    /* Same viewport-safe cap as the content-selector modal (vh = fallback). */
     max-height: 90vh;
+    max-height: min(90vh, calc(100dvh - 24px));
 }
 
 .mxchat-kb-edit-body {
-    flex: 1;
+    flex: 1 1 auto;
+    /* min-height: 0 lets the body shrink inside the capped modal box so the
+       footer (Save/Cancel) can never be pushed below the viewport. */
+    min-height: 0;
     display: flex;
     flex-direction: column;
     padding: 20px;
@@ -3815,6 +3875,8 @@ tr.mxchat-row-error td:first-child::before {
     padding: 14px 20px;
     border-top: 1px solid #e5e5e5;
     gap: 12px;
+    /* Action row can never be squeezed out of the box. */
+    flex-shrink: 0;
 }
 
 .mxchat-kb-edit-notice {
@@ -3836,7 +3898,9 @@ tr.mxchat-row-error td:first-child::before {
    .mxch-testing-results) so it looks native; this block only adds the modal
    body scroll + the chunk-text container the Testing tab doesn't have. */
 .mxchat-kb-inspect-body {
-    flex: 1;
+    flex: 1 1 auto;
+    /* Same footer-pushout guard as the edit modal. */
+    min-height: 0;
     display: flex;
     flex-direction: column;
     padding: 20px;
@@ -3876,7 +3940,8 @@ tr.mxchat-row-error td:first-child::before {
         width: 96%;
         max-width: 96%;
         margin: 10px auto;
-        max-height: 95vh;
+        max-height: calc(100vh - 20px);
+        max-height: calc(100dvh - 20px);
     }
     .mxchat-kb-edit-body {
         padding: 14px;

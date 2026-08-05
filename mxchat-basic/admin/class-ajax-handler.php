@@ -420,6 +420,16 @@ public function mxchat_save_setting_callback() {
             wp_send_json_success(['message' => esc_html__('Setting saved', 'mxchat')]);
             return;
 
+        // ACF→PDF import-time extraction (plan 11720c). STANDALONE option, same
+        // pattern. Moved from a per-import modal checkbox to an install-level
+        // setting on Knowledge → ACF Fields. Stored '1'/'0' to match the
+        // knowledge page's sibling toggles. Default OFF.
+        case 'mxchat_acf_pdf_extraction':
+            $apx_value = ($value === 'on' || $value === '1') ? '1' : '0';
+            update_option('mxchat_acf_pdf_extraction', $apx_value);
+            wp_send_json_success(['message' => esc_html__('Setting saved', 'mxchat')]);
+            return;
+
         // Live-agent availability schedules (plans 8ccaa2 + 99d7a4). STANDALONE
         // options, same reasoning as the Editor Assistant case above — nested
         // structures that mxchat_sanitize() would strip on the next autosave of any
@@ -985,12 +995,14 @@ if (strpos($name, 'mxchat_pinecone_addon_options') !== false) {
             //error_log('[MXCHAT-PROMPTS] Updated existing option, result: ' . ($save_result !== false ? 'SUCCESS' : 'FAILED'));
         } else {
             // Insert new option
+            // Credential option — must NOT autoload (holds the Pinecone secret;
+            // autoloaded rows are read into memory on every request).
             $save_result = $wpdb->insert(
                 $wpdb->options,
                 array(
                     'option_name' => 'mxchat_pinecone_addon_options',
                     'option_value' => $serialized_options,
-                    'autoload' => 'yes'
+                    'autoload' => 'off'
                 ),
                 array('%s', '%s', '%s')
             );
@@ -1158,10 +1170,10 @@ if (strpos($name, 'mxchat_pinecone_addon_options') !== false) {
              return;
          }
 
-         // Handle other prompts options
+         // Handle other prompts options (autoload false — can hold the Pinecone secret)
          $options = get_option('mxchat_prompts_options', []);
          $options[$name] = $value;
-         $updated = update_option('mxchat_prompts_options', $options);
+         $updated = update_option('mxchat_prompts_options', $options, false);
 
          if ($updated) {
              wp_send_json_success(['message' => esc_html__('Setting saved', 'mxchat')]);
@@ -1209,7 +1221,7 @@ if (strpos($name, 'mxchat_pinecone_addon_options') !== false) {
                  'mxchat_pinecone_environment' => sanitize_text_field($old_options['mxchat_pinecone_environment'] ?? '')
              );
 
-             update_option('mxchat_pinecone_addon_options', $migrated_options);
+             update_option('mxchat_pinecone_addon_options', $migrated_options, false);
 
              wp_send_json_success(array(
                  'migrated' => true,

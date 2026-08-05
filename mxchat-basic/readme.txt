@@ -5,7 +5,7 @@ Tags: ai chatbot, chatgpt, woocommerce, customer support, content generation
 Requires at least: 5.0
 Tested up to: 7.0.1
 Requires PHP: 7.2
-Stable tag: 3.2.16
+Stable tag: 3.2.17
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -260,7 +260,11 @@ Yes. MxChat fully supports Advanced Custom Fields. ACF field data is automatical
 
 = What embedding models does MxChat support? =
 
-MxChat supports multiple embedding models for vector search including OpenAI text-embedding-ada-002, text-embedding-3-small, text-embedding-3-large, Google Gemini embedding, and Voyage AI embeddings. Choose the model that best fits your accuracy and cost requirements.
+Built in: OpenAI (text-embedding-ada-002, text-embedding-3-small, text-embedding-3-large), Google Gemini embedding, and Voyage AI. You can also use any OpenAI-compatible embeddings endpoint — Ollama, LM Studio, vLLM, LocalAI, or Azure OpenAI — by configuring the Custom Provider under Settings, then enabling "Use custom provider for embeddings" and naming your embedding model (for example nomic-embed-text) in the Custom Embedding Model field. Both knowledge base indexing and live queries then use that endpoint. Re-index your knowledge base after changing embedding models so stored vectors match query vectors.
+
+= Can I use a local model such as Ollama or LM Studio? =
+
+Yes. MxChat's Custom Provider setting accepts any OpenAI-compatible API endpoint, including locally hosted ones like Ollama, LM Studio, vLLM, and LocalAI. Point the Custom Provider base URL at your server, choose your chat model, and optionally enable "Use custom provider for embeddings" with a local embedding model such as nomic-embed-text or mxbai-embed-large to keep the entire pipeline — chat and vector search — on your own hardware with no per-token costs.
 
 = Is there a free version of MxChat? =
 
@@ -314,6 +318,19 @@ Please ensure compliance with applicable terms and data privacy laws.
 
 == Changelog ==
 
+
+
+= 3.2.17 - August 5, 2026 =
+* Fixed: Japanese, Chinese and Thai content is no longer erased, split into oversized chunks, or stripped of rare characters during knowledge base imports.
+* Fixed: Custom embedding providers such as Ollama, LM Studio and Azure now work end to end — the permanent mismatch banner is gone, and no cloud API key is needed for imports or automatic post syncing.
+* Fixed: Scheduled posts now enter the knowledge base the moment they go live, and the developer hook for customizing indexed content also runs during automatic post syncing.
+* Fixed: The WordPress content import window now fits phone screens, so its buttons are always reachable.
+* Fixed: The hybrid keyword boost and smart asset loading toggles now show the saved confirmation like every other setting.
+* New: Every settings tab has its own shareable link that opens directly on that tab, including nested and add-on tabs.
+* Improved: Knowledge settings are centralized under Knowledge — ACF PDF extraction is now a persistent setting on the ACF Fields tab, and the hybrid keyword boost lives on the new Chunking and Retrieval tab. Saved choices carry over.
+* Improved: The Editor Assistant toggle moved to the Content page's Settings tab, next to the other content tools.
+* Improved: The FAQ now documents custom and local embedding providers such as Ollama and LM Studio.
+* Improved: Settings holding a Pinecone API key are no longer loaded into memory on every page view.
 
 = 3.2.16 - August 2, 2026 =
 * New: Chat conversations are now covered by WordPress's built-in privacy tools — export requests return readable transcripts, and erasure requests delete conversations, captured emails, saved history and document traces, for both logged-in and anonymous visitors.
@@ -577,6 +594,10 @@ Older releases are archived in the plugin's full version history on WordPress.or
 
 == Upgrade Notice ==
 
+
+
+= 3.2.17 =
+Big knowledge base update: Japanese, Chinese and Thai imports are no longer damaged, scheduled posts sync the moment they go live, and custom embedding providers such as Ollama work end to end without a cloud API key. Settings gain shareable per-tab links and centralized knowledge options, and the import window now fits phone screens. Recommended for all sites.
 
 = 3.2.16 =
 Security hardening, plus chat conversations now work with WordPress's built-in privacy tools. The GPT-5.1 Chat Latest and GPT-5.3 models that OpenAI retires on August 10, 2026 are removed, and affected sites switch over automatically. Also fixes knowledge base cleanup on unpublish, streaming behind proxies, and Quick Question sizing.

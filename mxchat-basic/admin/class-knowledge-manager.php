@@ -18,6 +18,11 @@ class MxChat_Knowledge_Manager {
     // redundant (idempotent but network-visible) second deletion.
     private $transition_deleted_posts = array();
 
+    // Post IDs already INDEXED by mxchat_handle_status_transition's arrival edge this
+    // request. Normal editor publishes fire transition_post_status first, then
+    // post_updated — without this guard every editor publish would embed twice.
+    private $transition_indexed_posts = array();
+
     /**
      * Constructor - Register hooks for content processing
      */
@@ -137,24 +142,15 @@ public function mxchat_handle_content_submission() {
     //  Get bot-specific options and API key
     $bot_options = $this->get_bot_options($bot_id);
     $options = !empty($bot_options) ? $bot_options : get_option('mxchat_options');
-    $selected_model = $options['embedding_model'] ?? 'text-embedding-ada-002';
-    
-    if (strpos($selected_model, 'voyage') === 0) {
-        $api_key = $options['voyage_api_key'] ?? '';
-    } elseif (strpos($selected_model, 'gemini-embedding') === 0) {
-        $api_key = $options['gemini_api_key'] ?? '';
-    } else {
-        $api_key = $options['api_key'] ?? '';
-    }
-    
-    if (empty($api_key)) {
-        set_transient('mxchat_admin_notice_error',
-            esc_html__('API key is not configured. Please add your API key in the settings before submitting content.', 'mxchat'),
-            30
-        );
+
+    // Custom-provider-aware decision; keyless custom sites must pass (plan cbd5fd).
+    $preflight = MxChat_Utils::embedding_preflight($options);
+    if (!$preflight['ok']) {
+        set_transient('mxchat_admin_notice_error', esc_html($preflight['reason']), 30);
         wp_safe_redirect(esc_url(admin_url('admin.php?page=mxchat-prompts')));
         exit;
     }
+    $api_key = $preflight['api_key'];
     
     //  Use centralized utility function with bot_id
     $result = MxChat_Utils::submit_content_to_db($article_content, $article_url, $api_key, null, $bot_id);
@@ -217,33 +213,18 @@ public function mxchat_handle_youtube_submission() {
 
     $bot_id = isset($_POST['bot_id']) ? sanitize_key($_POST['bot_id']) : 'default';
 
-    // Resolve the embedding API key exactly like the sibling handlers.
+    // Resolve the embedding decision exactly like the sibling handlers —
+    // custom-provider-aware (plan cbd5fd).
     $bot_options = $this->get_bot_options($bot_id);
     $options = !empty($bot_options) ? $bot_options : get_option('mxchat_options');
-    $selected_model = $options['embedding_model'] ?? 'text-embedding-ada-002';
 
-    if (strpos($selected_model, 'voyage') === 0) {
-        $api_key = $options['voyage_api_key'] ?? '';
-        $provider_name = 'Voyage AI';
-    } elseif (strpos($selected_model, 'gemini-embedding') === 0) {
-        $api_key = $options['gemini_api_key'] ?? '';
-        $provider_name = 'Google Gemini';
-    } else {
-        $api_key = $options['api_key'] ?? '';
-        $provider_name = 'OpenAI';
-    }
-
-    if (empty($api_key)) {
-        set_transient('mxchat_admin_notice_error',
-            sprintf(
-                esc_html__('%s API key is not configured. Please add your API key in the settings before submitting content.', 'mxchat'),
-                $provider_name
-            ),
-            30
-        );
+    $preflight = MxChat_Utils::embedding_preflight($options);
+    if (!$preflight['ok']) {
+        set_transient('mxchat_admin_notice_error', esc_html($preflight['reason']), 30);
         wp_safe_redirect(esc_url($redirect_url));
         exit;
     }
+    $api_key = $preflight['api_key'];
 
     // Metadata is fetched in BOTH modes — it is the reliable half of auto, and in
     // manual mode it enriches the indexed text with the real title/channel.
@@ -1450,31 +1431,18 @@ public function mxchat_handle_sitemap_submission() {
     // Get bot_id from form submission
     $bot_id = isset($_POST['bot_id']) ? sanitize_key($_POST['bot_id']) : 'default';
 
-    // Get bot-specific options and validate API key
+    // Get bot-specific options and validate the embedding decision —
+    // custom-provider-aware (plan cbd5fd).
     $bot_options = $this->get_bot_options($bot_id);
     $options = !empty($bot_options) ? $bot_options : get_option('mxchat_options');
-    $selected_model = $options['embedding_model'] ?? 'text-embedding-ada-002';
-    
-    if (strpos($selected_model, 'voyage') === 0) {
-        $api_key = $options['voyage_api_key'] ?? '';
-        $provider_name = 'Voyage AI';
-    } elseif (strpos($selected_model, 'gemini-embedding') === 0) {
-        $api_key = $options['gemini_api_key'] ?? '';
-        $provider_name = 'Google Gemini';
-    } else {
-        $api_key = $options['api_key'] ?? '';
-        $provider_name = 'OpenAI';
-    }
-    
-    if (empty($api_key)) {
-        $error_message = sprintf(
-            esc_html__('%s API key is not configured. Please add your API key in the settings before submitting content.', 'mxchat'),
-            $provider_name
-        );
-        set_transient('mxchat_admin_notice_error', $error_message, 30);
+
+    $preflight = MxChat_Utils::embedding_preflight($options);
+    if (!$preflight['ok']) {
+        set_transient('mxchat_admin_notice_error', esc_html($preflight['reason']), 30);
         wp_safe_redirect(esc_url(admin_url('admin.php?page=mxchat-prompts')));
         exit;
     }
+    $api_key = $preflight['api_key'];
 
     // Fetch URL — send an honest, versioned MXChat crawler UA (not a spoofed
     // browser). Stale browser UAs are exactly what WAFs like SiteGround's
@@ -1754,11 +1722,17 @@ public function mxchat_sanitize_content_for_api($content) {
     // Ensure valid UTF-8 encoding
     $content = wp_check_invalid_utf8($content);
     
-    // Remove any extremely long strings without spaces (often garbage)
-    $content = preg_replace('/\S{300,}/', ' ', $content);
-    
-    // Replace problematic characters that often cause database issues
-    $content = preg_replace('/[\x{10000}-\x{10FFFF}]/u', '', $content); // Remove emoji and other high Unicode characters
+    // Remove extremely long runs with no whitespace (base64 blobs, minified JS).
+    // Counts CHARACTERS (/u), and never strips a run containing characters from a
+    // script written without spaces — Japanese, Chinese, Thai, Khmer, Lao, Myanmar —
+    // where a normal paragraph is legitimately one unbroken run.
+    $content = preg_replace_callback('/\S{300,}/u', function ($m) {
+        return preg_match('/[\p{Han}\p{Hiragana}\p{Katakana}\p{Thai}\p{Khmer}\p{Lao}\p{Myanmar}]/u', $m[0]) ? $m[0] : ' ';
+    }, $content);
+
+    // Remove emoji/symbol blocks only — not the whole supplementary plane, which
+    // also holds CJK Extension B ideographs used in real Chinese/Japanese names
+    $content = preg_replace('/[\x{1F000}-\x{1F0FF}\x{1F300}-\x{1FAFF}]/u', '', $content);
     
     // Replace any remaining potentially problematic characters with spaces
     // BUT preserve newlines by temporarily replacing them
@@ -1766,10 +1740,11 @@ public function mxchat_sanitize_content_for_api($content) {
     $content = preg_replace('/[^\p{L}\p{N}\p{P}\p{Z}\p{Sm}]/u', ' ', $content);
     $content = str_replace("NEWLINE_PLACEHOLDER", "\n", $content);
     
-    // Limit to reasonable length if needed
+    // Limit to reasonable length if needed (byte limit — MySQL TEXT is byte-sized,
+    // but cut on a character boundary so a multibyte char is never split mid-sequence)
     $max_length = 65000; // Just under MySQL TEXT field limit
     if (strlen($content) > $max_length) {
-        $content = substr($content, 0, $max_length);
+        $content = mb_strcut($content, 0, $max_length, 'UTF-8');
     }
     
     //error_log('[MXCHAT-SANITIZE] Sanitized content preview: ' . substr($content, 0, 500) . '...');
@@ -3972,18 +3947,10 @@ public function ajax_mxchat_process_selected_content() {
     //  Get bot_id from request
     $bot_id = isset($_POST['bot_id']) ? sanitize_key($_POST['bot_id']) : 'default';
 
-    // ACF→PDF extraction is opt-in per import batch. Persist the last-used value so users
-    // don't re-check on every batch; the default is OFF for installs that haven't set it.
-    $extract_acf_pdfs = !empty($_POST['extract_acf_pdfs']) && $_POST['extract_acf_pdfs'] !== 'false';
-    $mxchat_options = get_option('mxchat_options', array());
-    if (!is_array($mxchat_options)) {
-        $mxchat_options = array();
-    }
-    $prior_default = !empty($mxchat_options['acf_pdf_extract_default']);
-    if ($prior_default !== $extract_acf_pdfs) {
-        $mxchat_options['acf_pdf_extract_default'] = $extract_acf_pdfs ? 1 : 0;
-        update_option('mxchat_options', $mxchat_options);
-    }
+    // ACF→PDF extraction is an install-level setting (Knowledge → ACF Fields,
+    // plan 11720c). The import modal shows a passive status line pointing
+    // there; the old per-batch checkbox and its remembered default are gone.
+    $extract_acf_pdfs = get_option('mxchat_acf_pdf_extraction', '0') === '1';
 
     // Process only ONE post at a time to avoid request size issues
     $post_id = reset($post_ids);
@@ -3994,8 +3961,20 @@ public function ajax_mxchat_process_selected_content() {
         exit;
     }
 
-    // Allow developers to modify post data before processing into knowledge base
+    /**
+     * Allow developers to modify post data before processing into the knowledge base.
+     * Applied on BOTH content-preparation paths (this manual bulk import and the
+     * auto-sync path in mxchat_handle_post_update) with the same signature, so a
+     * callback registered once covers every indexing route. Purely additive —
+     * zero behaviour change when unhooked.
+     *
+     * @param WP_Post $post   The post about to be indexed.
+     * @param string  $bot_id Bot context for this import.
+     */
     $post = apply_filters('mxchat_before_process_post', $post, $bot_id);
+    if (!($post instanceof WP_Post)) {
+        $post = get_post($post_id); // defend against a bad callback return
+    }
 
     // Get content including title, short description (for WooCommerce), and main content
     $content = $post->post_title . "\n\n";
@@ -4167,27 +4146,17 @@ public function ajax_mxchat_process_selected_content() {
 
     // Note: Removed 10,000 char limit - chunking now handles large content properly
 
-    //  Get bot-specific API key
+    //  Get bot-specific embedding decision — custom-provider-aware (plan cbd5fd)
     $bot_options = $this->get_bot_options($bot_id);
     $options = !empty($bot_options) ? $bot_options : get_option('mxchat_options');
-    $selected_model = $options['embedding_model'] ?? 'text-embedding-ada-002';
-    
-    if (strpos($selected_model, 'voyage') === 0) {
-        $api_key = $options['voyage_api_key'] ?? '';
-        $provider_name = 'Voyage AI';
-    } elseif (strpos($selected_model, 'gemini-embedding') === 0) {
-        $api_key = $options['gemini_api_key'] ?? '';
-        $provider_name = 'Google Gemini';
-    } else {
-        $api_key = $options['api_key'] ?? '';
-        $provider_name = 'OpenAI';
-    }
-    
-    if (empty($api_key)) {
-        MxChat_Admin::mxchat_log_debug('api_error', $provider_name . ' API key not configured for knowledge processing');
-        wp_send_json_error($provider_name . ' API key not configured');
+
+    $preflight = MxChat_Utils::embedding_preflight($options);
+    if (!$preflight['ok']) {
+        MxChat_Admin::mxchat_log_debug('api_error', $preflight['reason'] . ' (knowledge processing)');
+        wp_send_json_error($preflight['reason']);
         exit;
     }
+    $api_key = $preflight['api_key'];
     
     $source_url = get_permalink($post_id);
     $vector_id = md5($source_url); // Vector ID for Pinecone
@@ -5952,15 +5921,66 @@ public function mxchat_handle_post_update($post_id, $post, $update) {
         }
     }
     
-    // Only process currently published content for adding/updating
+    // Only process currently published content for adding/updating.
+    // transition_indexed_posts: mxchat_handle_status_transition's arrival edge may have
+    // already indexed this post earlier in this request (editor publishes fire
+    // transition_post_status first, then post_updated) — skip the duplicate embed.
+    // Consume-once: the flag is cleared when honoured, so a LATER save of the same
+    // post in one long-running process (WP-CLI scripts, importers) re-indexes normally.
     if ($post->post_status === 'publish') {
+        if (!empty($this->transition_indexed_posts[$post_id])) {
+            unset($this->transition_indexed_posts[$post_id]);
+        } else {
+            $this->mxchat_index_published_post($post_id, $post);
+        }
+    }
+
+    // Clean up the stored previous status if not used above
+    if ($previous_status !== 'publish' || $post->post_status === 'publish') {
+        delete_transient($previous_status_key);
+        delete_transient($previous_url_key);
+    }
+}
+
+/**
+ * Index a published post into the knowledge base: preprocessing filter, content
+ * assembly (title/excerpt/body), WooCommerce product enrichment, job_listing meta,
+ * ACF fields (+ optional PDF extraction), whitelisted custom meta, embedding and
+ * upsert, then tag-based role restriction.
+ *
+ * Shared by the post_updated auto-sync path (mxchat_handle_post_update) and the
+ * transition_post_status arrival edge (mxchat_handle_status_transition), so
+ * scheduled publishes (wp_publish_post) and direct status=publish inserts index
+ * identically to editor saves (plan 3055e1). Pure extraction of the former
+ * publish branch — body indentation retained to keep the diff reviewable.
+ */
+private function mxchat_index_published_post($post_id, $post) {
+        $post_type = $post->post_type;
+
         // Get the source URL
         $source_url = get_permalink($post_id);
-        
-        // Get content with proper formatting (matching ajax_mxchat_process_selected_content)
-        $title = get_the_title($post_id);
-        $content = get_post_field('post_content', $post_id);
-        $excerpt = get_post_field('post_excerpt', $post_id);
+
+        /**
+         * Allow developers to modify post data before processing into the knowledge base.
+         * Same filter and signature as the manual bulk-import path
+         * (ajax_mxchat_process_selected_content), so a callback registered once covers
+         * every indexing route. Purely additive — zero behaviour change when unhooked.
+         * Auto-sync runs under the 'default' bot context, matching the rest of this
+         * function.
+         *
+         * @param WP_Post $post   The post about to be indexed.
+         * @param string  $bot_id Bot context ('default' on auto-sync).
+         */
+        $post = apply_filters('mxchat_before_process_post', $post, 'default');
+        if (!($post instanceof WP_Post)) {
+            $post = get_post($post_id); // defend against a bad callback return
+        }
+
+        // Get content with proper formatting (matching ajax_mxchat_process_selected_content),
+        // reading from the FILTERED post object — not re-fetched by ID, which would discard it
+        $title = get_the_title($post);
+        $content = get_post_field('post_content', $post);
+        $excerpt = get_post_field('post_excerpt', $post);
 
         // Remove shortcode tags but preserve content inside them
         $content = $this->strip_shortcode_tags_preserve_content($content);
@@ -6118,26 +6138,20 @@ public function mxchat_handle_post_update($post_id, $post, $update) {
             }
         }
 
-        // Get API key with proper model detection
-        $options = get_option('mxchat_options');
-        $selected_model = $options['embedding_model'] ?? 'text-embedding-ada-002';
-        
-        if (strpos($selected_model, 'voyage') === 0) {
-            $api_key = $options['voyage_api_key'] ?? '';
-        } elseif (strpos($selected_model, 'gemini-embedding') === 0) {
-            $api_key = $options['gemini_api_key'] ?? '';
-        } else {
-            $api_key = $options['api_key'] ?? '';
-        }
-        
-        if (empty($api_key)) {
+        // Embedding decision — custom-provider-aware. Gating on a cloud API key
+        // here silently killed auto-sync on keyless custom-embeddings sites,
+        // because generate_embedding() routes custom FIRST and never needs the
+        // key (plan cbd5fd). Silent-return shape preserved.
+        $preflight = MxChat_Utils::embedding_preflight(get_option('mxchat_options'));
+        if (!$preflight['ok']) {
             return;
         }
-        
+        $api_key = $preflight['api_key'];
+
         // Use the centralized utility function for storage
         $result = MxChat_Utils::submit_content_to_db(
-            $final_content, 
-            $source_url, 
+            $final_content,
+            $source_url,
             $api_key,
             md5($source_url) // Vector ID for Pinecone
         );
@@ -6146,13 +6160,6 @@ public function mxchat_handle_post_update($post_id, $post, $update) {
         if (!is_wp_error($result)) {
             $this->apply_role_restriction_to_post($post_id, $source_url);
         }
-    }
-    
-    // Clean up the stored previous status if not used above
-    if ($previous_status !== 'publish' || $post->post_status === 'publish') {
-        delete_transient($previous_status_key);
-        delete_transient($previous_url_key);
-    }
 }
 
 /**
@@ -6203,6 +6210,21 @@ public function mxchat_handle_status_transition($new_status, $old_status, $post)
     if (!($post instanceof WP_Post) || wp_is_post_revision($post->ID)) {
         return;
     }
+
+    // Arrival edge (plan 3055e1): a post BECOMING published is indexed here, because
+    // wp_publish_post() — the path scheduled posts take via check_and_publish_future_post —
+    // and direct wp_insert_post(status=publish) creates never fire post_updated, so the
+    // auto-sync ADD path alone misses them. Editor publishes also pass through here;
+    // the transition_indexed_posts guard keeps mxchat_handle_post_update from embedding
+    // a second time in the same request.
+    if ($new_status === 'publish' && $old_status !== 'publish') {
+        if ($this->mxchat_is_auto_sync_enabled($post->post_type)) {
+            $this->mxchat_index_published_post($post->ID, $post);
+            $this->transition_indexed_posts[$post->ID] = true;
+        }
+        return;
+    }
+
     // Only the publish -> not-publish edge matters here.
     if ($old_status !== 'publish' || $new_status === 'publish') {
         return;
@@ -6528,22 +6550,14 @@ private function mxchat_store_product_embedding($product) {
         }
     }
 
-    // Get API key with proper model detection
-    $options = get_option('mxchat_options');
-    $selected_model = $options['embedding_model'] ?? 'text-embedding-ada-002';
-
-    if (strpos($selected_model, 'voyage') === 0) {
-        $api_key = $options['voyage_api_key'] ?? '';
-    } elseif (strpos($selected_model, 'gemini-embedding') === 0) {
-        $api_key = $options['gemini_api_key'] ?? '';
-    } else {
-        $api_key = $options['api_key'] ?? '';
-    }
-
-    if (empty($api_key)) {
-        //error_log('MxChat Auto-sync: No API key configured for embedding model');
+    // Embedding decision — custom-provider-aware (plan cbd5fd); silent-return
+    // shape preserved.
+    $preflight = MxChat_Utils::embedding_preflight(get_option('mxchat_options'));
+    if (!$preflight['ok']) {
+        //error_log('MxChat Auto-sync: embedding pre-flight failed: ' . $preflight['reason']);
         return;
     }
+    $api_key = $preflight['api_key'];
 
     // Use the centralized utility function for storage
     $result = MxChat_Utils::submit_content_to_db(
@@ -8142,22 +8156,16 @@ private function mxchat_process_queue_url($item_data, $bot_id = 'default', $queu
         return new WP_Error('invalid_url', 'URL is empty');
     }
 
-    // Get bot-specific API key early (needed for both paths)
+    // Get bot-specific embedding decision early (needed for both paths) —
+    // custom-provider-aware (plan cbd5fd). Error code preserved.
     $bot_options = $this->get_bot_options($bot_id);
     $options = !empty($bot_options) ? $bot_options : get_option('mxchat_options');
-    $selected_model = $options['embedding_model'] ?? 'text-embedding-ada-002';
 
-    if (strpos($selected_model, 'voyage') === 0) {
-        $api_key = $options['voyage_api_key'] ?? '';
-    } elseif (strpos($selected_model, 'gemini-embedding') === 0) {
-        $api_key = $options['gemini_api_key'] ?? '';
-    } else {
-        $api_key = $options['api_key'] ?? '';
+    $preflight = MxChat_Utils::embedding_preflight($options);
+    if (!$preflight['ok']) {
+        return new WP_Error('no_api_key', $preflight['reason'] . ' (bot: ' . $bot_id . ')');
     }
-
-    if (empty($api_key)) {
-        return new WP_Error('no_api_key', 'API key not configured for bot: ' . $bot_id);
-    }
+    $api_key = $preflight['api_key'];
 
     // Check if this is a WooCommerce product URL and WooCommerce is active
     $is_product_url = (strpos($url, '/product/') !== false || strpos($url, '/shop/') !== false);
@@ -8582,22 +8590,16 @@ private function mxchat_process_queue_pdf_page($item_data, $bot_id = 'default') 
         $content_with_metadata = wp_json_encode($metadata) . "\n---\n" . $sanitized;
         $page_url = esc_url($pdf_url . "#page=" . $page_number);
         
-        // Get bot-specific API key
+        // Get bot-specific embedding decision — custom-provider-aware
+        // (plan cbd5fd). Error code preserved.
         $bot_options = $this->get_bot_options($bot_id);
         $options = !empty($bot_options) ? $bot_options : get_option('mxchat_options');
-        $selected_model = $options['embedding_model'] ?? 'text-embedding-ada-002';
-        
-        if (strpos($selected_model, 'voyage') === 0) {
-            $api_key = $options['voyage_api_key'] ?? '';
-        } elseif (strpos($selected_model, 'gemini-embedding') === 0) {
-            $api_key = $options['gemini_api_key'] ?? '';
-        } else {
-            $api_key = $options['api_key'] ?? '';
+
+        $preflight = MxChat_Utils::embedding_preflight($options);
+        if (!$preflight['ok']) {
+            return new WP_Error('no_api_key', $preflight['reason'] . ' (bot: ' . $bot_id . ')');
         }
-        
-        if (empty($api_key)) {
-            return new WP_Error('no_api_key', 'API key not configured for bot: ' . $bot_id);
-        }
+        $api_key = $preflight['api_key'];
 
         // Submit to database - UPDATED 2.5.6: Added content_type 'pdf'
         $result = MxChat_Utils::submit_content_to_db(

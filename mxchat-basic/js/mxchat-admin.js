@@ -1746,7 +1746,31 @@ function setupMxChatEmbeddingModelSelector() {
     
     // Replace the select dropdown with a button
     $embeddingModelSelect.hide().after($embeddingModelSelectorButton);
-    
+
+    // Custom-provider embeddings lock (plan ae02cb): while "Use custom provider
+    // for embeddings" is on, the standard picker is inert — the effective model
+    // is the Custom Embedding Model field. Lock the button (which also makes the
+    // switch-warning preflight unreachable), show the explanatory note, and keep
+    // both in sync with the toggle without a reload.
+    const $customEmbedToggle = $('#custom_provider_for_embeddings');
+    function syncCustomEmbeddingLock() {
+        const locked = $customEmbedToggle.length
+            ? $customEmbedToggle.is(':checked')
+            : $embeddingModelSelect.prop('disabled');
+        $embeddingModelSelect.prop('disabled', locked);
+        $embeddingModelSelectorButton.prop('disabled', locked);
+        $('#mxchat_embedding_custom_note').toggle(locked);
+        if (locked) {
+            $('#' + embeddingModalId).hide();
+            $('.mxchat-embedding-api-status').hide();
+        } else if (typeof window.mxchatRefreshAPIKeyStatus === 'function') {
+            window.mxchatRefreshAPIKeyStatus();
+        }
+    }
+    // NOTE: invoked further down, after embeddingModalId exists — calling it
+    // here would hit the const's temporal dead zone whenever the page loads
+    // with the lock already on.
+
     // Update button text to show currently selected model
     function updateButtonText() {
         const selectedModel = $embeddingModelSelect.val();
@@ -1789,6 +1813,11 @@ function setupMxChatEmbeddingModelSelector() {
     
     // Use jQuery's append to ensure it doesn't clash with existing modals
     $('body').append(embeddingModelSelectorModal);
+
+    // Apply the custom-embeddings lock now that the modal id is live, and keep
+    // it in sync with the toggle.
+    syncCustomEmbeddingLock();
+    $customEmbedToggle.on('change.embeddingModelSelector', syncCustomEmbeddingLock);
     
     // Populate models grid
     function populateEmbeddingModelsGrid(filter = '', category = 'all') {
@@ -3061,6 +3090,12 @@ jQuery(document).ready(function($) {
 
         // Hide all status messages
         $('.mxchat-embedding-api-status').hide();
+
+        // Custom-provider embeddings in use: the standard picker is inert, so
+        // its provider key statuses are noise (plan ae02cb).
+        if ($('#embedding_model').prop('disabled')) {
+            return;
+        }
 
         // Return early if no model is selected
         if (!selectedModel) {
