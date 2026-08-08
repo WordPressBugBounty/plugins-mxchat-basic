@@ -3,9 +3,9 @@ Contributors: mxchat
 Author: [MxChat](https://mxchat.ai)
 Tags: ai chatbot, chatgpt, woocommerce, customer support, content generation
 Requires at least: 5.0
-Tested up to: 7.0.1
+Tested up to: 7.0
 Requires PHP: 7.2
-Stable tag: 3.2.17
+Stable tag: 3.2.18
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -320,6 +320,24 @@ Please ensure compliance with applicable terms and data privacy laws.
 
 
 
+
+= 3.2.18 - August 8, 2026 =
+* Fixed: OpenAI Vector Store knowledge base search works again — an outdated request parameter caused every search to fail silently, so the chatbot answered without your knowledge base content.
+* Fixed: The knowledge base status readout now correctly shows how many vector stores are configured instead of always reporting none.
+* Fixed: Content updates made outside the editor are no longer skipped. When a post was published by an import tool, a scheduled post going live, or a script, the first edit after it was silently left out of the knowledge base, so the chatbot kept answering from the original version.
+* Fixed: PDFs shared in chat no longer store unreadable pages when an embedding request fails part-way through. Failed pages are skipped and recorded in the Debug Mode log, and if no page can be read the chatbot now gives the real reason instead of calling the file empty or unsupported.
+* Fixed: Clearing a conversation, deleting a transcript, or erasing a visitor's data through WordPress's privacy tools now removes every trace of that session's stored state. Some of it was previously left behind forever.
+* Fixed: Job listings imported from the content selector now include their location, job type and company name, matching listings saved in the editor. Listings imported earlier keep their old text until you import them again.
+* Fixed: Post titles are now added to the knowledge base exactly as written. Curly quotes, apostrophes and long dashes were stored as raw character codes, and protected or private posts gained a Protected prefix — all of which could surface in answers. Entries indexed earlier keep their old titles until you import them again.
+* Fixed: A short description made up only of page-builder shortcodes or spaces no longer adds an empty Short Description heading to the indexed text.
+* Improved: Custom field names containing hyphens now read as words in the indexed text on both import routes, instead of only one of them.
+* Improved: Chat sessions no longer bloat your site's options table. Per-session details were saved as settings rows that were never cleaned up, so busy sites accumulated thousands, some loading on every page view. Sessions now live in their own table, and existing rows are moved across automatically in the background after you update.
+* New: Old chat sessions are tidied up on their own. Sessions untouched for 30 days are removed automatically — the window is adjustable with a developer filter — and the cleanup runs even on sites with WordPress scheduled tasks disabled.
+* Fixed: Sitemap imports now tell you why they failed instead of pointing at an empty status area — for example, an API key missing the required permission is now named as the reason.
+* Improved: Knowledge base import errors from OpenAI, Gemini and Voyage now pass along the provider's own explanation instead of a generic invalid key message.
+* Improved: Chat-side embedding failures are now recorded in the Debug Mode log with the provider's real reason, matching knowledge base imports.
+* Fixed: In the content selector, a selected item's tick mark was white on a white box and effectively invisible. Selected items now show a clearly filled checkbox.
+
 = 3.2.17 - August 5, 2026 =
 * Fixed: Japanese, Chinese and Thai content is no longer erased, split into oversized chunks, or stripped of rare characters during knowledge base imports.
 * Fixed: Custom embedding providers such as Ollama, LM Studio and Azure now work end to end — the permanent mismatch banner is gone, and no cloud API key is needed for imports or automatic post syncing.
@@ -595,6 +613,10 @@ Older releases are archived in the plugin's full version history on WordPress.or
 == Upgrade Notice ==
 
 
+
+
+= 3.2.18 =
+Critical for OpenAI Vector Store users: knowledge base search was failing silently, leaving the chatbot to answer without your content. Per-conversation data also moves out of the options table into its own table, migrated automatically in the background after you update. Plus clearer import errors and several knowledge base indexing fixes.
 
 = 3.2.17 =
 Big knowledge base update: Japanese, Chinese and Thai imports are no longer damaged, scheduled posts sync the moment they go live, and custom embedding providers such as Ollama work end to end without a cloud API key. Settings gain shareable per-tab links and centralized knowledge options, and the import window now fits phone screens. Recommended for all sites.

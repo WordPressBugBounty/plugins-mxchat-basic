@@ -1494,17 +1494,21 @@ input:checked + .mxchat-toggle-slider:before {
     padding-top: 3px;
 }
 
+/* Native control, brand-tinted — identical to the "select all" checkbox above the
+   list, which carries no custom styling at all and renders correctly.
+   Do NOT re-add width / height / border / border-radius / background here. WP admin
+   draws the tick as a 21px dashicon positioned with negative margins for its OWN
+   default box, so forcing a custom box makes the tick overflow it. That mismatch
+   shipped for a long time but was invisible while the tick was white-on-white. */
 .mxchat-kb-content-checkbox input[type="checkbox"] {
-    width: 18px;
-    height: 18px;
-    border: 1px solid #8c8f94;
-    border-radius: 3px;
-    background: #fff;
     margin: 0;
+    cursor: pointer;
+    accent-color: var(--mxch-primary, #7873f5);
 }
 
-.mxchat-kb-content-checkbox input[type="checkbox"]:checked {
-    border-color: #7873f5;
+.mxchat-kb-content-checkbox input[type="checkbox"]:focus-visible {
+    outline: 2px solid var(--mxch-primary, #7873f5);
+    outline-offset: 2px;
 }
 
 .mxchat-kb-content-details {

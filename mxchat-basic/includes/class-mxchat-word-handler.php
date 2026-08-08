@@ -43,10 +43,10 @@ class MXChat_Word_Handler {
         
         // Update session owner if it changed (e.g. IP changed due to network switch)
         $current_user_identifier = MxChat_User::mxchat_get_user_identifier();
-        $session_owner = get_option("mxchat_session_owner_{$session_id}");
+        $session_owner = MxChat_Session_Store::get($session_id, 'owner');
 
         if (!$session_owner || $session_owner !== $current_user_identifier) {
-            update_option("mxchat_session_owner_{$session_id}", $current_user_identifier, 'no');
+            MxChat_Session_Store::set($session_id, 'owner', $current_user_identifier);
         }
         
         // Check file type
@@ -228,9 +228,9 @@ public function mxchat_handle_word_remove() {
         // id is the credential, so this records/refreshes the owner rather than
         // refusing a mismatch; see the fuller note in handle_pdf_remove().
         $current_user_identifier = MxChat_User::mxchat_get_user_identifier();
-        $session_owner = get_option("mxchat_session_owner_{$session_id}");
+        $session_owner = MxChat_Session_Store::get($session_id, 'owner');
         if (!$session_owner || $session_owner !== $current_user_identifier) {
-            update_option("mxchat_session_owner_{$session_id}", $current_user_identifier, 'no');
+            MxChat_Session_Store::set($session_id, 'owner', $current_user_identifier);
         }
 
         $word_path = get_transient('mxchat_word_url_' . $session_id);

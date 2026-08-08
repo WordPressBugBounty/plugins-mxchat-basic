@@ -23,6 +23,12 @@ class MxChat_Knowledge_Manager {
     // post_updated — without this guard every editor publish would embed twice.
     private $transition_indexed_posts = array();
 
+    // Post IDs core has announced an in-flight UPDATE for. pre_post_update fires only
+    // inside wp_insert_post's update branch and always before wp_transition_post_status,
+    // so this is an exact "a post_updated is coming later this request" signal — which is
+    // what makes it safe to arm transition_indexed_posts (plan a664f3).
+    private $pending_post_update = array();
+
     /**
      * Constructor - Register hooks for content processing
      */
@@ -1529,10 +1535,20 @@ public function mxchat_handle_sitemap_submission() {
                 30
             );
         } else {
-            set_transient('mxchat_admin_notice_error',
-                esc_html__('Failed to queue sitemap processing. Please check the status below for details.', 'mxchat'),
-                30
-            );
+            // Surface the reason the handler already computed (embedding pre-flight,
+            // empty sitemap, queue failure). The old message pointed at the status
+            // area, which is empty on this path — nothing was ever queued.
+            if (is_string($result) && $result !== '') {
+                set_transient('mxchat_admin_notice_error',
+                    esc_html__('Failed to queue sitemap processing: ', 'mxchat') . esc_html($result),
+                    30
+                );
+            } else {
+                set_transient('mxchat_admin_notice_error',
+                    esc_html__('Failed to queue sitemap processing.', 'mxchat'),
+                    30
+                );
+            }
         }
 
         wp_safe_redirect(esc_url(admin_url('admin.php?page=mxchat-prompts')));
@@ -3980,9 +3996,14 @@ public function ajax_mxchat_process_selected_content() {
     $content = $post->post_title . "\n\n";
 
     // Add short description if it exists (WooCommerce products use post_excerpt for short description)
-    if (!empty($post->post_excerpt)) {
-        // Remove shortcode tags but preserve content inside them
-        $clean_excerpt = $this->strip_shortcode_tags_preserve_content($post->post_excerpt);
+    // Strip FIRST, then test: an excerpt that is nothing but shortcodes strips to
+    // empty, and testing the raw value emitted a bare "Short Description: " label
+    // with no value after it. Matches mxchat_index_published_post.
+    // trim() only in the TEST — the emitted value is untouched, so a populated
+    // excerpt is byte-identical to before. A whitespace-only excerpt is an empty
+    // excerpt and must not produce a labelled line with nothing after it.
+    $clean_excerpt = $this->strip_shortcode_tags_preserve_content($post->post_excerpt);
+    if (trim($clean_excerpt) !== '') {
         $content .= "Short Description: " . wp_strip_all_tags($clean_excerpt) . "\n\n";
     }
 
@@ -4069,6 +4090,33 @@ public function ajax_mxchat_process_selected_content() {
         }
     }
 
+    // For custom post types like job_listing, include additional fields
+    // (verbatim parity with mxchat_index_published_post — a bulk import used to
+    // index the body alone, losing location/type/company that auto-sync captured)
+    if (get_post_type($post_id) === 'job_listing') {
+        // Add job-specific meta if available
+        $job_location = get_post_meta($post_id, '_job_location', true);
+        if (!empty($job_location)) {
+            $content .= "\n\nLocation: " . $job_location;
+        }
+
+        // Get job type terms
+        $job_types = get_the_terms($post_id, 'job_listing_type');
+        if (!empty($job_types) && !is_wp_error($job_types)) {
+            $types = array();
+            foreach ($job_types as $type) {
+                $types[] = $type->name;
+            }
+            $content .= "\n\nJob Type: " . implode(', ', $types);
+        }
+
+        // Get company name if available
+        $company_name = get_post_meta($post_id, '_company_name', true);
+        if (!empty($company_name)) {
+            $content .= "\n\nCompany: " . $company_name;
+        }
+    }
+
     // ADD ACF FIELDS SUPPORT
     $acf_fields = $this->mxchat_get_acf_fields_for_post($post_id);
     $pdf_extracted_count = 0;
@@ -4080,7 +4128,9 @@ public function ajax_mxchat_process_selected_content() {
             $formatted_value = $this->mxchat_format_acf_field_value($field_value, $field_name, $post_id);
 
             if (!empty($formatted_value)) {
-                $field_label = ucwords(str_replace('_', ' ', $field_name));
+                // Both separators: a hyphenated ACF name should read as words, and
+                // this is what mxchat_index_published_post already does.
+                $field_label = ucwords(str_replace(['_', '-'], ' ', $field_name));
                 $acf_content_parts[] = $field_label . ": " . $formatted_value;
             }
 
@@ -4783,11 +4833,21 @@ private function mxchat_generate_embedding($text, $bot_id = 'default') {
             //error_log('[MXCHAT-EMBED] API Error Type: ' . $error_type);
             //error_log('[MXCHAT-EMBED] API Error Message: ' . $error_message);
 
-            // Customize error message for common API errors
-            if ($error_type === 'invalid_request_error' && strpos($error_message, 'API key') !== false) {
-                $error_message = sprintf('Invalid %s API key for bot %s. Please check your API key in the bot settings.', $provider_name, $bot_id);
-            } elseif ($error_type === 'authentication_error') {
-                $error_message = sprintf('%s authentication failed for bot %s. Please verify your API key in the bot settings.', $provider_name, $bot_id);
+            // Keep the provider's own diagnostic — a restricted-key 401 names the
+            // exact missing scope, and replacing it with "check your API key" sent
+            // a customer to regenerate two keys (plan 46b596). Same shape as
+            // MxChat_Utils::embedding_failure_error() so both ingestion paths read
+            // identically. Key never appears in provider messages, but scrub anyway.
+            if ($error_type === 'invalid_request_error' || $error_type === 'authentication_error') {
+                if (is_string($api_key) && $api_key !== '') {
+                    $error_message = str_replace($api_key, '[redacted]', $error_message);
+                }
+                $error_message = sprintf(
+                    'Embedding failed (%s, HTTP %d): %s',
+                    $selected_model,
+                    $http_code,
+                    substr($error_message, 0, 300)
+                );
             }
 
             //error_log('[MXCHAT-EMBED] Returning error: ' . $error_message);
@@ -5849,6 +5909,11 @@ public function mxchat_handle_acf_save($post_id) {
 }
 
 public function mxchat_handle_post_update($post_id, $post, $update) {
+    // The in-flight-update marker has done its job the moment post_updated runs; drop it
+    // before any early return so it can never outlive its own save (a failed $wpdb->update
+    // inside wp_insert_post returns after pre_post_update but before the transition).
+    unset($this->pending_post_update[$post_id]);
+
     // Basic validation checks
     if (defined('DOING_AUTOSAVE') && DOING_AUTOSAVE || wp_is_post_revision($post_id)) {
         return;
@@ -5978,7 +6043,13 @@ private function mxchat_index_published_post($post_id, $post) {
 
         // Get content with proper formatting (matching ajax_mxchat_process_selected_content),
         // reading from the FILTERED post object — not re-fetched by ID, which would discard it
-        $title = get_the_title($post);
+        // Raw post_title, NOT get_the_title(): the_title applies wptexturize +
+        // convert_chars (curly quotes and em-dashes become HTML entities in the
+        // embedded string) and prepends the "Protected:" / "Private:" display
+        // chrome. The knowledge base stores facts, not display strings — and the
+        // bulk-import path has always read the raw title, so this is also what
+        // makes the two paths agree.
+        $title = $post->post_title;
         $content = get_post_field('post_content', $post);
         $excerpt = get_post_field('post_excerpt', $post);
 
@@ -5993,7 +6064,8 @@ private function mxchat_index_published_post($post_id, $post) {
         $final_content = $title . "\n\n";
 
         // Add short description if it exists (WooCommerce products use post_excerpt for short description)
-        if (!empty($excerpt)) {
+        // trim() only in the TEST — see the matching note on the bulk-import path.
+        if (trim($excerpt) !== '') {
             $final_content .= "Short Description: " . wp_strip_all_tags($excerpt) . "\n\n";
         }
 
@@ -6167,6 +6239,10 @@ private function mxchat_index_published_post($post_id, $post) {
  * This runs before the post is actually updated in the database
  */
 public function mxchat_store_pre_update_status($post_id, $data) {
+    // Core is inside wp_insert_post's update branch, so a post_updated WILL fire later
+    // this request and can consume the arrival-edge guard (plan a664f3).
+    $this->pending_post_update[$post_id] = true;
+
     // Get the current post from database (before update)
     $current_post = get_post($post_id);
     
@@ -6220,7 +6296,19 @@ public function mxchat_handle_status_transition($new_status, $old_status, $post)
     if ($new_status === 'publish' && $old_status !== 'publish') {
         if ($this->mxchat_is_auto_sync_enabled($post->post_type)) {
             $this->mxchat_index_published_post($post->ID, $post);
-            $this->transition_indexed_posts[$post->ID] = true;
+
+            // Arm the double-fire guard ONLY when a post_updated is actually coming to
+            // consume it (plan a664f3). Two publish paths never fire post_updated at all:
+            // a direct wp_insert_post(status=publish) create, and wp_publish_post() — the
+            // call check_and_publish_future_post() makes for scheduled posts. Arming the
+            // guard unconditionally left it set with nothing to consume it, so the NEXT
+            // update of that post was swallowed entirely: zero embed calls, no knowledge
+            // -base row, silently. Consume-once on this side too, so a guard can never
+            // outlive the single save it was armed for.
+            if (!empty($this->pending_post_update[$post->ID])) {
+                unset($this->pending_post_update[$post->ID]);
+                $this->transition_indexed_posts[$post->ID] = true;
+            }
         }
         return;
     }

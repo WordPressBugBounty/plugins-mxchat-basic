@@ -34,6 +34,7 @@ class MxChat_Integrator {
     private $last_similarity_analysis = null;
     private $current_valid_urls = [];
     private $last_vectorstore_error = null;
+    private $last_pdf_embedding_error = null; // First embedding failure reason from the most recent PDF split (104a75)
     private $is_streaming = false; // ADDED: Track if current request is streaming
     private $streaming_headers_sent = false; // Track if streaming headers have been sent
     private $pending_originating_page = null; // Originating page captured at session start, consumed on row insert
@@ -479,16 +480,16 @@ function mxchat_fetch_conversation_history() {
     $current_user_identifier = MxChat_User::mxchat_get_user_identifier();
 
     // Check if this session has an owner recorded
-    $session_owner = get_option("mxchat_session_owner_{$session_id}");
+    $session_owner = MxChat_Session_Store::get($session_id, 'owner');
 
     // Update session owner if it changed (e.g. IP changed due to network switch)
     // The session ID itself is the authentication — if the client has it, they own it
     if (!$session_owner || $session_owner !== $current_user_identifier) {
-        update_option("mxchat_session_owner_{$session_id}", $current_user_identifier, 'no');
+        MxChat_Session_Store::set($session_id, 'owner', $current_user_identifier);
     }
     
     $history = get_option("mxchat_history_{$session_id}", []); // Retrieve stored history
-    $chat_mode = get_option("mxchat_mode_{$session_id}", 'ai'); // Get current chat mode
+    $chat_mode = MxChat_Session_Store::get($session_id, 'mode', 'ai'); // Get current chat mode
 
     if (empty($history)) {
         // Even if history is empty, return the chat mode
@@ -736,7 +737,7 @@ public function verify_chat_session($request) {
         return false;
     }
 
-    $chat_mode = get_option("mxchat_mode_{$session_id}", 'ai');
+    $chat_mode = MxChat_Session_Store::get($session_id, 'mode', 'ai');
     return $chat_mode === 'agent';
 }
 
@@ -920,11 +921,10 @@ private function mxchat_save_chat_message($session_id, $role, $message, $origina
     // SECURITY FIX: Set session ownership for new sessions
     if ($is_new_session && $role === 'user') {
         $current_user_identifier = MxChat_User::mxchat_get_user_identifier();
-        $session_owner_key = "mxchat_session_owner_{$session_id}";
-        
+
         // Only set ownership if not already set
-        if (!get_option($session_owner_key)) {
-            update_option($session_owner_key, $current_user_identifier, 'no');
+        if (!MxChat_Session_Store::get($session_id, 'owner')) {
+            MxChat_Session_Store::set($session_id, 'owner', $current_user_identifier);
             //error_log("[DEBUG] Set session ownership for {$session_id} to {$current_user_identifier}");
         }
     }
@@ -1060,14 +1060,14 @@ private function mxchat_save_chat_message($session_id, $role, $message, $origina
             
             // Store for this session so all messages have the same originating page
             if (!empty($insert_data['originating_page_url'])) {
-                update_option("mxchat_originating_page_{$session_id}", [
+                MxChat_Session_Store::set($session_id, 'originating_page', [
                     'url' => $insert_data['originating_page_url'],
                     'title' => $insert_data['originating_page_title']
-                ], 'no');
+                ]);
             }
         } else {
             // For subsequent messages in the session, use the stored originating page
-            $stored_originating = get_option("mxchat_originating_page_{$session_id}");
+            $stored_originating = MxChat_Session_Store::get($session_id, 'originating_page');
             if ($stored_originating && !empty($stored_originating['url'])) {
                 $insert_data['originating_page_url'] = $stored_originating['url'];
                 $insert_data['originating_page_title'] = $stored_originating['title'] ?? '';
@@ -1645,10 +1645,10 @@ public function mxchat_handle_chat_request() {
     // Update session owner if it changed (e.g. IP changed due to network switch)
     // The session ID itself is the authentication — if the client has it, they own it
     $current_user_identifier = MxChat_User::mxchat_get_user_identifier();
-    $session_owner = get_option("mxchat_session_owner_{$session_id}");
+    $session_owner = MxChat_Session_Store::get($session_id, 'owner');
 
     if (!$session_owner || $session_owner !== $current_user_identifier) {
-        update_option("mxchat_session_owner_{$session_id}", $current_user_identifier, 'no');
+        MxChat_Session_Store::set($session_id, 'owner', $current_user_identifier);
     }
 
     // Validate and sanitize the incoming message
@@ -1895,7 +1895,7 @@ public function mxchat_handle_chat_request() {
         $intent_info = '';
 
         // Check chat mode
-        $chat_mode = get_option("mxchat_mode_{$session_id}", 'ai');
+        $chat_mode = MxChat_Session_Store::get($session_id, 'mode', 'ai');
 
         // Handle agent mode
     // Handle agent mode
@@ -1911,7 +1911,7 @@ public function mxchat_handle_chat_request() {
             // Around line 506, in the agent mode handling section:
             if ($intent_matched && !empty($this->fallbackResponse['text'])) {
                 // Update chat mode first
-                update_option("mxchat_mode_{$session_id}", 'ai');
+                MxChat_Session_Store::set($session_id, 'mode', 'ai');
             
                 // Clear any existing PDF context to start fresh
                 $this->clear_pdf_transients($session_id);
@@ -2028,7 +2028,9 @@ public function mxchat_handle_chat_request() {
                     } else {
                         $error_text = $current_options['pdf_intent_error_text'] ??
                             esc_html__("Sorry, I couldn't process the PDF. Please ensure it's a valid file.", 'mxchat');
-                        $this->fallbackResponse['text'] = $error_text;
+                        // Surface the embedding provider's reason when that is why zero
+                        // pages came back, rather than blaming the file (104a75).
+                        $this->fallbackResponse['text'] = $this->mxchat_pdf_error_text_with_reason($error_text);
                     }
 
                     $pdf_error_response = [
@@ -2620,7 +2622,7 @@ private function get_bot_pinecone_config($bot_id = 'default') {
 // Updated function to check intents and invoke the callback function
 private function mxchat_check_intent_and_invoke_callback($message, $user_id, $session_id) {
     global $wpdb;
-    $chat_mode = get_option("mxchat_mode_{$session_id}", 'ai');
+    $chat_mode = MxChat_Session_Store::get($session_id, 'mode', 'ai');
     
     //  Get the current bot_id
     $current_bot_id = $this->get_current_bot_id($session_id);
@@ -3972,6 +3974,10 @@ public function mxchat_handle_pdf_discussion($message, $user_id, $session_id) {
  * Enhanced fetch_and_split_pdf_pages with SSRF protection
  */
 private function fetch_and_split_pdf_pages($pdf_source, $max_pages) {
+    // Reset the per-call embedding-failure reason (104a75) — callers read it via
+    // get_last_pdf_embedding_error() when zero pages come back.
+    $this->last_pdf_embedding_error = null;
+
     // CLEAR DEBUG LOGGING
     //error_log("=== MXCHAT PDF PROCESSING START ===");
     //error_log("PDF Source: " . $pdf_source);
@@ -4082,23 +4088,28 @@ private function fetch_and_split_pdf_pages($pdf_source, $max_pages) {
         
         $embeddings = [];
         $processed_pages = 0;
-        
+        $skipped_pages = 0;
+
         foreach ($pages as $page_number => $page) {
             $text = $page->getText();
-            
+
             if (empty(trim($text))) {
                 //error_log("Skipping empty page: " . ($page_number + 1));
                 continue;
             }
-            
+
             $text = $this->mxchat_clean_text($text);
-            
+
             $embedding = $this->mxchat_generate_embedding(
                 __("Page ", 'mxchat') . ($page_number + 1) . ": " . $text,
                 $this->options['api_key']
             );
-            
-            if ($embedding) {
+
+            // The embedding failure contract is an ARRAY ['error','error_code'] — which is
+            // TRUTHY. A bare `if ($embedding)` therefore stored error arrays AS the page's
+            // vector, poisoning cosine similarity for the rest of the session (104a75).
+            // Accept only a real vector: an array with no 'error' key.
+            if (is_array($embedding) && !isset($embedding['error'])) {
                 $embeddings[] = [
                     'page_number' => $page_number + 1,
                     'embedding' => $embedding,
@@ -4107,9 +4118,33 @@ private function fetch_and_split_pdf_pages($pdf_source, $max_pages) {
                     'processing_method' => 'basic_pdf_parser'
                 ];
                 $processed_pages++;
+            } else {
+                $skipped_pages++;
+                // Keep the FIRST failure reason so the callers can surface it instead of
+                // the generic "couldn't process the PDF" text.
+                if ($this->last_pdf_embedding_error === null && is_array($embedding) && isset($embedding['error'])) {
+                    $this->last_pdf_embedding_error = (string) $embedding['error'];
+                }
             }
         }
-        
+
+        if ($skipped_pages > 0 && class_exists('MxChat_Admin')) {
+            MxChat_Admin::mxchat_log_debug(
+                'embedding_error',
+                sprintf(
+                    /* translators: 1: skipped page count, 2: successfully embedded page count */
+                    __('PDF chat: %1$d page(s) skipped because embedding failed; %2$d page(s) stored.', 'mxchat'),
+                    $skipped_pages,
+                    $processed_pages
+                ),
+                array(
+                    'first_error' => $this->last_pdf_embedding_error,
+                    'skipped'     => $skipped_pages,
+                    'stored'      => $processed_pages,
+                )
+            );
+        }
+
         //error_log("✅ BASIC PROCESSING COMPLETE: " . $processed_pages . " pages processed");
         
         // Cleanup
@@ -4128,6 +4163,25 @@ private function fetch_and_split_pdf_pages($pdf_source, $max_pages) {
         //error_log("=== MXCHAT PDF PROCESSING END (ERROR) ===");
         return false;
     }
+}
+
+/**
+ * Append the embedding provider's own failure reason to a generic PDF error string,
+ * when the most recent split captured one (104a75). Mirrors the 46b596/4a7c0a rule:
+ * never discard a diagnosis the layer below already produced. Returns $base_text
+ * unchanged when no reason was captured, so the healthy/unsupported-file wording
+ * is byte-identical to before.
+ */
+private function mxchat_pdf_error_text_with_reason($base_text) {
+    if (empty($this->last_pdf_embedding_error)) {
+        return $base_text;
+    }
+
+    return $base_text . ' ' . sprintf(
+        /* translators: %s: error reason reported by the embedding provider */
+        __('(%s)', 'mxchat'),
+        $this->last_pdf_embedding_error
+    );
 }
 
 
@@ -4222,10 +4276,10 @@ public function handle_pdf_upload() {
 
     // Update session owner if it changed (e.g. IP changed due to network switch)
     $current_user_identifier = MxChat_User::mxchat_get_user_identifier();
-    $session_owner = get_option("mxchat_session_owner_{$session_id}");
+    $session_owner = MxChat_Session_Store::get($session_id, 'owner');
 
     if (!$session_owner || $session_owner !== $current_user_identifier) {
-        update_option("mxchat_session_owner_{$session_id}", $current_user_identifier, 'no');
+        MxChat_Session_Store::set($session_id, 'owner', $current_user_identifier);
     }
 
     $file_type = wp_check_filetype($file['name'], ['pdf' => 'application/pdf']);
@@ -4266,7 +4320,9 @@ public function handle_pdf_upload() {
         unlink($pdf_path);
         $error_message = $this->options['pdf_intent_error_text'] ??
             esc_html__('The uploaded PDF appears to be empty or contains unsupported content.', 'mxchat');
-        wp_send_json_error($error_message);
+        // Zero pages can also mean every embedding call failed — say so instead of
+        // blaming the file (104a75).
+        wp_send_json_error($this->mxchat_pdf_error_text_with_reason($error_message));
         return;
     }
 
@@ -4324,9 +4380,9 @@ public function handle_pdf_remove() {
     // ever want a real boundary on this endpoint, it has to be decided for the
     // history endpoint at the same time.
     $current_user_identifier = MxChat_User::mxchat_get_user_identifier();
-    $session_owner = get_option("mxchat_session_owner_{$session_id}");
+    $session_owner = MxChat_Session_Store::get($session_id, 'owner');
     if (!$session_owner || $session_owner !== $current_user_identifier) {
-        update_option("mxchat_session_owner_{$session_id}", $current_user_identifier, 'no');
+        MxChat_Session_Store::set($session_id, 'owner', $current_user_identifier);
     }
 
     $pdf_path = get_transient('mxchat_pdf_url_' . $session_id);
@@ -4392,7 +4448,7 @@ function mxchat_fetch_new_messages() {
     //error_log("MxChat WhatsApp DEBUG: Filtered messages count = " . count($new_messages));
 
     // Include current chat mode so frontend can detect agent→AI transitions
-    $chat_mode = get_option("mxchat_mode_{$session_id}", 'ai');
+    $chat_mode = MxChat_Session_Store::get($session_id, 'mode', 'ai');
 
     wp_send_json_success([
         'new_messages' => array_values($new_messages),
@@ -4434,7 +4490,7 @@ public function mxchat_live_agent_handover($message, $user_id, $session_id) {
     }
 
     // Check if channel already exists for this session
-    $channel_id = get_option("mxchat_channel_{$session_id}", '');
+    $channel_id = MxChat_Session_Store::get($session_id, 'channel', '');
 
     // Shared-channel mode (plan 9f7756): when a shared handoff channel is
     // configured and this session doesn't already own a per-conversation
@@ -4468,7 +4524,7 @@ public function mxchat_live_agent_handover($message, $user_id, $session_id) {
         $conversation_context .= "\n";
     }
 
-    update_option("mxchat_mode_{$session_id}", 'agent');
+    MxChat_Session_Store::set($session_id, 'mode', 'agent');
 
     // Send message to channel
     $channel_message = "ðŸ”” *New Live Agent Request*\n\n";
@@ -4539,7 +4595,7 @@ public function mxchat_live_agent_handover($message, $user_id, $session_id) {
             $handoff_data = json_decode(wp_remote_retrieve_body($handoff_post), true);
             $handoff_err  = isset($handoff_data['error']) ? $handoff_data['error'] : '';
             if (isset($handoff_data['ok']) && !$handoff_data['ok'] && in_array($handoff_err, array('is_archived', 'channel_not_found'), true)) {
-                delete_option("mxchat_channel_{$session_id}");
+                MxChat_Session_Store::delete($session_id, 'channel');
                 $channel_id = $this->mxchat_create_conversation_channel($session_id);
                 if (!empty($channel_id)) {
                     wp_remote_post('https://slack.com/api/chat.postMessage', [
@@ -4600,7 +4656,7 @@ private function mxchat_maybe_archive_conversation_channel($session_id, $event_c
     if (get_option("mxchat_thread_{$session_id}", '') !== '') {
         return; // shared-channel session — the shared channel is NEVER archived
     }
-    $owned_channel = get_option("mxchat_channel_{$session_id}", '');
+    $owned_channel = MxChat_Session_Store::get($session_id, 'channel', '');
     if ($owned_channel === '' || $owned_channel !== $event_channel_id) {
         return;
     }
@@ -4658,7 +4714,7 @@ private function mxchat_create_conversation_channel($session_id) {
 
         if (isset($response_data['ok']) && $response_data['ok']) {
             $channel_id = $response_data['channel']['id'];
-            update_option("mxchat_channel_{$session_id}", $channel_id);
+            MxChat_Session_Store::set($session_id, 'channel', $channel_id);
 
             // Auto-invite agents to the channel
             $agent_user_ids = $this->options['live_agent_user_ids'] ?? '';
@@ -4972,7 +5028,7 @@ public function mxchat_telegram_live_agent_handover($message, $user_id, $session
     $user_name = get_option("mxchat_name_{$session_id}", 'Anonymous');
 
     // Update session mode
-    update_option("mxchat_mode_{$session_id}", 'agent');
+    MxChat_Session_Store::set($session_id, 'mode', 'agent');
 
     // Send initial message to topic
     $escaped_message = htmlspecialchars($message, ENT_QUOTES, 'UTF-8');
@@ -5173,7 +5229,7 @@ public function handle_telegram_webhook(WP_REST_Request $request) {
             if (in_array($lower_text, ['#close', '#end', '#disconnect', '#done'])) {
                 //error_log("[MxChat Telegram DEBUG] Closure command received: {$lower_text}");
                 // End the live agent session
-                update_option("mxchat_mode_{$session_id}", 'ai');
+                MxChat_Session_Store::set($session_id, 'mode', 'ai');
 
                 // Save disconnect message
                 $disconnect_message = "Live agent session ended. You're now chatting with the AI assistant.";
@@ -5276,7 +5332,7 @@ public function mxchat_send_user_message_to_agent($message, $user_id, $session_i
         $cache = get_option('mxchat_slack_shared_channel_id', array());
         $channel_id = is_array($cache) ? ($cache['id'] ?? '') : '';
     } else {
-        $channel_id = get_option("mxchat_channel_{$session_id}", '');
+        $channel_id = MxChat_Session_Store::get($session_id, 'channel', '');
     }
 
     if (empty($slack_bot_token) || empty($channel_id)) {
@@ -5440,7 +5496,7 @@ public function mxchat_handle_agent_response(WP_REST_Request $request) {
 }
 public function mxchat_handle_switch_to_chatbot_intent($message, $user_id, $session_id) {
     // Update mode to AI
-    update_option("mxchat_mode_{$session_id}", 'ai');
+    MxChat_Session_Store::set($session_id, 'mode', 'ai');
     
     // Clear any existing PDF context to start fresh
     $this->clear_pdf_transients($session_id);
@@ -5595,19 +5651,31 @@ public function handle_slack_messages(WP_REST_Request $request) {
         $message_text = $event['text'] ?? '';
         $message_ts = $event['ts'] ?? '';
 
-        // Find session ID by looking for matching channel
-        global $wpdb;
-        $session_option = $wpdb->get_var(
-            $wpdb->prepare(
-                "SELECT option_name FROM {$wpdb->options}
-                 WHERE option_name LIKE 'mxchat_channel_%'
-                 AND option_value = %s",
-                $channel_id
-            )
-        );
+        // Find the session that owns this channel. Channel state lives in the
+        // sessions table since b64b77 — the migration moves the legacy
+        // mxchat_channel_ option rows there and DELETES them, so the old
+        // wp_options lookup found nothing and every per-conversation agent
+        // reply (including !endchat) was silently dropped (plan 71e4b6). The
+        // legacy query remains only as a fallback for installs mid-migration
+        // whose channel row has not moved yet.
+        $session_id = MxChat_Session_Store::find_by_channel($channel_id);
 
-        if ($session_option) {
-            $session_id = str_replace('mxchat_channel_', '', $session_option);
+        if ($session_id === '') {
+            global $wpdb;
+            $session_option = $wpdb->get_var(
+                $wpdb->prepare(
+                    "SELECT option_name FROM {$wpdb->options}
+                     WHERE option_name LIKE 'mxchat_channel_%'
+                     AND option_value = %s",
+                    $channel_id
+                )
+            );
+            if ($session_option) {
+                $session_id = str_replace('mxchat_channel_', '', $session_option);
+            }
+        }
+
+        if ($session_id !== '') {
 
             // Create a unique key for this specific message
             $message_key = md5($session_id . $message_ts . $message_text);
@@ -5632,7 +5700,7 @@ public function handle_slack_messages(WP_REST_Request $request) {
             // Handle agent ending the chat — transfer back to AI
             // Format: "!endchat" or "!endchat <custom message to user>"
             if (preg_match('/^!endchat\b/i', trim($message_text))) {
-                update_option("mxchat_mode_{$session_id}", 'ai');
+                MxChat_Session_Store::set($session_id, 'mode', 'ai');
 
                 // Extract custom message after !endchat, or use empty string
                 $custom_message = trim(preg_replace('/^!endchat\s*/i', '', trim($message_text)));
@@ -5749,7 +5817,7 @@ private function mxchat_route_shared_thread_reply($event) {
     // Agent ending the chat from inside the thread — same command contract as
     // per-conversation channels: "!endchat" or "!endchat <farewell>".
     if (preg_match('/^!endchat\b/i', trim($message_text))) {
-        update_option("mxchat_mode_{$session_id}", 'ai');
+        MxChat_Session_Store::set($session_id, 'mode', 'ai');
 
         $custom_message = trim(preg_replace('/^!endchat\s*/i', '', trim($message_text)));
         if (!empty($custom_message)) {
@@ -5828,198 +5896,54 @@ private function mxchat_generate_embedding($text, $api_key) {
         $options = get_option('mxchat_options');
         $selected_model = $options['embedding_model'] ?? 'text-embedding-ada-002';
 
-        // Opt-in: route embeddings through the Custom (OpenAI-compatible) provider.
-        // Off by default so existing sites see byte-identical behavior.
-        if (!empty($options['custom_provider_for_embeddings']) && $options['custom_provider_for_embeddings'] === 'on') {
-            return $this->mxchat_generate_embedding_custom($text);
+        // Contract checks live HERE — the widget surfaces these exact strings
+        // and codes. Transport lives in MxChat_Utils::generate_query_embedding()
+        // (single provider-routing implementation for query + index, 876edb).
+        // The custom-provider branch skips them: Utils routes custom-first and
+        // its own checks map back through mxchat_map_embedding_error().
+        if (empty($options['custom_provider_for_embeddings']) || $options['custom_provider_for_embeddings'] !== 'on') {
+            if (strpos($selected_model, 'voyage') === 0) {
+                // Check if Voyage API key is missing
+                if (empty($options['voyage_api_key'] ?? '')) {
+                    return [
+                        'error' => esc_html__('Voyage AI API key is not configured', 'mxchat'),
+                        'error_code' => 'missing_voyage_api_key'
+                    ];
+                }
+            } elseif (strpos($selected_model, 'gemini-embedding') === 0) {
+                // Check if Gemini API key is missing
+                if (empty($options['gemini_api_key'] ?? '')) {
+                    return [
+                        'error' => esc_html__('Google Gemini API key is not configured', 'mxchat'),
+                        'error_code' => 'missing_gemini_api_key'
+                    ];
+                }
+            } else {
+                // OpenAI uses the caller-passed (per-bot) key
+                if (empty($api_key)) {
+                    return [
+                        'error' => esc_html__('OpenAI API key is not configured', 'mxchat'),
+                        'error_code' => 'missing_openai_api_key'
+                    ];
+                }
+            }
+
+            // Check if text is empty
+            if (empty($text)) {
+                return [
+                    'error' => esc_html__('No text provided for embedding generation', 'mxchat'),
+                    'error_code' => 'empty_embedding_text'
+                ];
+            }
         }
 
-        // Determine endpoint and API key based on model
-        if (strpos($selected_model, 'voyage') === 0) {
-            $endpoint = 'https://api.voyageai.com/v1/embeddings';
-            $api_key = $options['voyage_api_key'] ?? '';
-            
-            // Check if Voyage API key is missing
-            if (empty($api_key)) {
-                //error_log('Voyage API key is missing');
-                return [
-                    'error' => esc_html__('Voyage AI API key is not configured', 'mxchat'),
-                    'error_code' => 'missing_voyage_api_key'
-                ];
-            }
-        } elseif (strpos($selected_model, 'gemini-embedding') === 0) {
-            $endpoint = 'https://generativelanguage.googleapis.com/v1beta/models/' . $selected_model . ':embedContent';
-            $api_key = $options['gemini_api_key'] ?? '';
-            
-            // Check if Gemini API key is missing
-            if (empty($api_key)) {
-                //error_log('Gemini API key is missing');
-                return [
-                    'error' => esc_html__('Google Gemini API key is not configured', 'mxchat'),
-                    'error_code' => 'missing_gemini_api_key'
-                ];
-            }
-        } else {
-            $endpoint = 'https://api.openai.com/v1/embeddings';
-            // Use the passed API key for OpenAI
-            
-            // Check if OpenAI API key is missing
-            if (empty($api_key)) {
-                //error_log('OpenAI API key is missing');
-                return [
-                    'error' => esc_html__('OpenAI API key is not configured', 'mxchat'),
-                    'error_code' => 'missing_openai_api_key'
-                ];
-            }
-        }
-        
-        // Check if text is empty
-        if (empty($text)) {
-            //error_log('Empty text provided for embedding generation');
-            return [
-                'error' => esc_html__('No text provided for embedding generation', 'mxchat'),
-                'error_code' => 'empty_embedding_text'
-            ];
-        }
-        
-        // Prepare request body based on provider
-        if (strpos($selected_model, 'gemini-embedding') === 0) {
-            // Gemini API format
-            $request_body = [
-                'model' => 'models/' . $selected_model,
-                'content' => [
-                    'parts' => [
-                        ['text' => $text]
-                    ]
-                ],
-                'outputDimensionality' => 1536
-            ];
-            
-            // Prepare headers for Gemini (API key as query parameter)
-            $endpoint .= '?key=' . $api_key;
-            $headers = [
-                'Content-Type' => 'application/json'
-            ];
-        } else {
-            // OpenAI/Voyage API format
-            $request_body = [
-                'input' => $text,
-                'model' => $selected_model
-            ];
-            
-            // Add output_dimension for voyage-3-large
-            if ($selected_model === 'voyage-3-large') {
-                $request_body['output_dimension'] = 2048;
-            }
-            
-            // Prepare headers for OpenAI/Voyage
-            $headers = [
-                'Content-Type' => 'application/json',
-                'Authorization' => 'Bearer ' . $api_key
-            ];
-        }
-        
-        // Prepare request arguments
-        $args = [
-            'body' => wp_json_encode($request_body),
-            'headers' => $headers,
-            'timeout' => 60,
-            'redirection' => 5,
-            'blocking' => true,
-            'httpversion' => '1.0',
-            'sslverify' => true,
-        ];
-        
-        // Make the request
-        $response = wp_remote_post($endpoint, $args);
-        
-        // Handle WordPress errors
-        if (is_wp_error($response)) {
-            $error_message = $response->get_error_message();
-            //error_log('Embedding Generation Error: ' . $error_message);
-            return [
-                'error' => esc_html__('Connection error when generating embeddings: ', 'mxchat') . esc_html($error_message),
-                'error_code' => 'embedding_connection_error'
-            ];
-        }
-        
-        // Check HTTP status code
-        $status_code = wp_remote_retrieve_response_code($response);
-        if ($status_code !== 200) {
-            $response_body = json_decode(wp_remote_retrieve_body($response), true);
-            
-            $error_message = $this->extract_provider_error($response_body, 'HTTP Error ' . $status_code);
+        $result = MxChat_Utils::generate_query_embedding($text, $api_key);
 
-            $error_type = isset($response_body['error']['type'])
-                ? $response_body['error']['type'] 
-                : 'unknown';
-                
-            //error_log('Embedding API HTTP Error: ' . $status_code . ' - ' . $error_message);
-            
-            // Handle specific error types
-            switch ($error_type) {
-                case 'invalid_request_error':
-                    if (strpos($error_message, 'API key') !== false) {
-                        return [
-                            'error' => esc_html__('Invalid API key for embedding generation. Please check your API key configuration.', 'mxchat'),
-                            'error_code' => 'embedding_invalid_api_key'
-                        ];
-                    }
-                    break;
-                    
-                case 'authentication_error':
-                    return [
-                        'error' => esc_html__('Authentication failed for embedding generation. Please check your API key.', 'mxchat'),
-                        'error_code' => 'embedding_auth_error'
-                    ];
-                    
-                case 'rate_limit_exceeded':
-                    return [
-                        'error' => esc_html__('Rate limit exceeded for embedding generation. Please try again later.', 'mxchat'),
-                        'error_code' => 'embedding_rate_limit'
-                    ];
-                    
-                case 'quota_exceeded':
-                    return [
-                        'error' => esc_html__('API quota exceeded for embedding generation. Please check your billing details.', 'mxchat'),
-                        'error_code' => 'embedding_quota_exceeded'
-                    ];
-            }
-            
-            // Generic error fallback
-            return [
-                'error' => esc_html__('Embedding API error - check embedding API key.: ', 'mxchat') . esc_html($error_message),
-                'error_code' => 'embedding_api_error',
-                'status_code' => $status_code
-            ];
+        if (is_wp_error($result)) {
+            return $this->mxchat_map_embedding_error($result);
         }
-        
-        $response_body = json_decode(wp_remote_retrieve_body($response), true);
-        
-        // Handle different response formats based on provider
-        if (strpos($selected_model, 'gemini-embedding') === 0) {
-            // Gemini API response format
-            if (isset($response_body['embedding']['values']) && is_array($response_body['embedding']['values'])) {
-                return $response_body['embedding']['values'];
-            } else {
-                //error_log('Invalid Gemini embedding response: ' . wp_json_encode($response_body));
-                return [
-                    'error' => esc_html__('Received invalid embedding data from the Gemini API.', 'mxchat'),
-                    'error_code' => 'invalid_gemini_embedding_response'
-                ];
-            }
-        } else {
-            // OpenAI/Voyage API response format
-            if (isset($response_body['data'][0]['embedding']) && is_array($response_body['data'][0]['embedding'])) {
-                return $response_body['data'][0]['embedding'];
-            } else {
-                //error_log('Invalid embedding response: ' . wp_json_encode($response_body));
-                return [
-                    'error' => esc_html__('Received invalid embedding data from the API.', 'mxchat'),
-                    'error_code' => 'invalid_embedding_response'
-                ];
-            }
-        }
+
+        return $result;
     } catch (Exception $e) {
         //error_log('Embedding Exception: ' . $e->getMessage());
         return [
@@ -6029,57 +5953,92 @@ private function mxchat_generate_embedding($text, $api_key) {
     }
 }
 
-
 /**
- * Generate embedding via a Custom (OpenAI-compatible) provider's /embeddings route.
- * Only called when the opt-in 'custom_provider_for_embeddings' setting is on.
- * Returns a numeric array (the embedding vector) on success, or ['error','error_code'] on failure.
+ * Translate a WP_Error from MxChat_Utils::generate_query_embedding() into this
+ * class's long-standing ['error','error_code'] contract. Every code string and
+ * user-facing message below predates 876edb — the chat pipeline and widget
+ * consume them; preserve verbatim. The structured data (branch/status/
+ * error_type/reason/model) is attached by Utils on every failure path.
  */
-private function mxchat_generate_embedding_custom($text) {
-    if (empty($text)) {
-        return ['error' => esc_html__('No text provided for embedding generation', 'mxchat'), 'error_code' => 'empty_embedding_text'];
-    }
-    $cfg = $this->mxchat_resolve_custom_provider();
-    if (empty($cfg['base_url'])) {
-        return ['error' => esc_html__('Custom provider Base URL is not configured.', 'mxchat'), 'error_code' => 'missing_custom_provider_base_url'];
+private function mxchat_map_embedding_error($err) {
+    $data = $err->get_error_data();
+    $data = is_array($data) ? $data : [];
+    $message = $err->get_error_message();
+
+    // Custom-provider branch: Utils carries the human-readable string verbatim;
+    // its prefixes are stable — map them back onto the existing codes.
+    if (($data['branch'] ?? '') === 'custom') {
+        if ($message === 'No text provided for embedding generation') {
+            return ['error' => esc_html__('No text provided for embedding generation', 'mxchat'), 'error_code' => 'empty_embedding_text'];
+        }
+        if ($message === 'Custom provider Base URL is not configured.') {
+            return ['error' => esc_html__('Custom provider Base URL is not configured.', 'mxchat'), 'error_code' => 'missing_custom_provider_base_url'];
+        }
+        if (strpos($message, 'Connection error when generating embeddings (custom provider): ') === 0) {
+            return ['error' => esc_html($message), 'error_code' => 'embedding_custom_connection_error'];
+        }
+        if (strpos($message, 'Custom embedding endpoint error: ') === 0) {
+            return ['error' => esc_html($message), 'error_code' => 'embedding_custom_api_error'];
+        }
+        return ['error' => esc_html__('Invalid embedding response from custom provider.', 'mxchat'), 'error_code' => 'embedding_custom_invalid_response'];
     }
 
-    $options    = get_option('mxchat_options');
-    $embed_url  = $cfg['base_url'] . '/embeddings';
-    if (!empty($cfg['api_version'])) {
-        $embed_url .= (strpos($embed_url, '?') === false ? '?' : '&') . 'api-version=' . rawurlencode($cfg['api_version']);
+    // Cloud connection failure (wp_remote_post WP_Error)
+    if (($data['kind'] ?? '') === 'connection') {
+        return [
+            'error' => esc_html__('Connection error when generating embeddings: ', 'mxchat') . esc_html($data['reason'] ?? ''),
+            'error_code' => 'embedding_connection_error'
+        ];
     }
-    $model = isset($options['custom_provider_embedding_model']) && trim((string) $options['custom_provider_embedding_model']) !== ''
-        ? trim((string) $options['custom_provider_embedding_model'])
-        : $cfg['model'];
 
-    $response = wp_remote_post($embed_url, [
-        'headers' => $this->mxchat_custom_provider_assoc_headers($cfg),
-        'body'    => wp_json_encode(['input' => $text, 'model' => $model]),
-        'timeout' => 60,
-    ]);
-    if (is_wp_error($response)) {
-        return [
-            'error' => esc_html__('Connection error when generating embeddings (custom provider): ', 'mxchat') . esc_html($response->get_error_message()),
-            'error_code' => 'embedding_custom_connection_error',
-        ];
+    $status     = isset($data['status']) ? (int) $data['status'] : 0;
+    $error_type = isset($data['error_type']) ? (string) $data['error_type'] : '';
+    $reason     = isset($data['reason']) ? (string) $data['reason'] : $message;
+    $model      = isset($data['model']) ? (string) $data['model'] : '';
+
+    // HTTP 200 with an unusable body — the invalid-response shapes.
+    if ($status === 200) {
+        if (strpos($model, 'gemini-embedding') === 0) {
+            return ['error' => esc_html__('Received invalid embedding data from the Gemini API.', 'mxchat'), 'error_code' => 'invalid_gemini_embedding_response'];
+        }
+        return ['error' => esc_html__('Received invalid embedding data from the API.', 'mxchat'), 'error_code' => 'invalid_embedding_response'];
     }
-    $status = wp_remote_retrieve_response_code($response);
-    $body   = json_decode(wp_remote_retrieve_body($response), true);
-    if ($status !== 200) {
-        $msg = $this->extract_provider_error($body, 'HTTP ' . $status);
-        return [
-            'error' => esc_html__('Custom embedding endpoint error: ', 'mxchat') . esc_html($msg),
-            'error_code' => 'embedding_custom_api_error',
-            'status_code' => $status,
-        ];
+
+    // Handle specific error types
+    switch ($error_type) {
+        case 'invalid_request_error':
+            if (strpos($reason, 'API key') !== false) {
+                return [
+                    'error' => esc_html__('Invalid API key for embedding generation. Please check your API key configuration.', 'mxchat'),
+                    'error_code' => 'embedding_invalid_api_key'
+                ];
+            }
+            break;
+
+        case 'authentication_error':
+            return [
+                'error' => esc_html__('Authentication failed for embedding generation. Please check your API key.', 'mxchat'),
+                'error_code' => 'embedding_auth_error'
+            ];
+
+        case 'rate_limit_exceeded':
+            return [
+                'error' => esc_html__('Rate limit exceeded for embedding generation. Please try again later.', 'mxchat'),
+                'error_code' => 'embedding_rate_limit'
+            ];
+
+        case 'quota_exceeded':
+            return [
+                'error' => esc_html__('API quota exceeded for embedding generation. Please check your billing details.', 'mxchat'),
+                'error_code' => 'embedding_quota_exceeded'
+            ];
     }
-    if (isset($body['data'][0]['embedding']) && is_array($body['data'][0]['embedding'])) {
-        return $body['data'][0]['embedding'];
-    }
+
+    // Generic error fallback
     return [
-        'error' => esc_html__('Invalid embedding response from custom provider.', 'mxchat'),
-        'error_code' => 'embedding_custom_invalid_response',
+        'error' => esc_html__('Embedding API error - check embedding API key.: ', 'mxchat') . esc_html($reason),
+        'error_code' => 'embedding_api_error',
+        'status_code' => $status
     ];
 }
 
@@ -7504,7 +7463,7 @@ private function find_relevant_content_openai_vectorstore($user_query, $bot_id =
                 'max_num_results' => intval($max_results)
             )
         ),
-        'include' => array('output[*].file_search_call.search_results')
+        'include' => array('file_search_call.results')
     );
 
     //error_log("MXCHAT VECTORSTORE: ========== REQUEST START ==========");
@@ -13240,7 +13199,7 @@ public function mxchat_get_kb_status() {
     $use_vectorstore = (isset($vectorstore_options['mxchat_use_openai_vectorstore']) && $vectorstore_options['mxchat_use_openai_vectorstore'] === '1');
 
     if ($use_vectorstore) {
-        $vectorstore_ids = $vectorstore_options['mxchat_openai_vectorstore_ids'] ?? '';
+        $vectorstore_ids = $vectorstore_options['mxchat_vectorstore_ids'] ?? '';
         $id_count = !empty($vectorstore_ids) ? count(array_filter(array_map('trim', explode(',', $vectorstore_ids)))) : 0;
 
         $kb_info = [
@@ -13328,10 +13287,7 @@ public function mxchat_start_fresh_session() {
 private function clear_complete_session_data($session_id) {
     // Clear chat history
     delete_option("mxchat_history_{$session_id}");
-    
-    // Clear chat mode
-    delete_option("mxchat_mode_{$session_id}");
-    
+
     // Clear any PDF/Word transients
     $this->clear_pdf_transients($session_id);
     if (method_exists($this, 'clear_word_transients')) {
@@ -13341,13 +13297,17 @@ private function clear_complete_session_data($session_id) {
     // Archive the session's per-conversation Slack channel before its option
     // is deleted (plan 7458a7 — covers transcript-retention cleanup paths).
     // Toggle-gated + shared-channel-guarded inside the helper; best-effort.
-    $stale_channel = get_option("mxchat_channel_{$session_id}", '');
+    $stale_channel = MxChat_Session_Store::get($session_id, 'channel', '');
     if ($stale_channel !== '') {
         $this->mxchat_maybe_archive_conversation_channel($session_id, $stale_channel);
     }
 
-    // Clear agent-related data
-    delete_option("mxchat_channel_{$session_id}");
+    // Clear agent-related data. delete_session() drops the whole session row —
+    // mode, channel, owner and originating_page in one statement. The old code
+    // deleted mode and channel by hand and never touched owner or
+    // originating_page, which is why those two prefixes accumulated one row per
+    // session forever (b64b77).
+    MxChat_Session_Store::delete_session($session_id);
     delete_option("mxchat_thread_{$session_id}");
     delete_option("mxchat_agent_name_{$session_id}");
     delete_option("mxchat_email_{$session_id}");
@@ -13382,7 +13342,7 @@ private function clear_complete_session_data($session_id) {
  */
 private function initialize_fresh_session($session_id) {
     // Set default chat mode
-    update_option("mxchat_mode_{$session_id}", 'ai');
+    MxChat_Session_Store::set($session_id, 'mode', 'ai');
     
     //error_log("MxChat: Initialized fresh session: {$session_id}");
 }
@@ -13750,7 +13710,7 @@ public function mxchat_get_current_chat_mode() {
     }
     
     // Get the current chat mode for this session
-    $chat_mode = get_option("mxchat_mode_{$session_id}", 'ai');
+    $chat_mode = MxChat_Session_Store::get($session_id, 'mode', 'ai');
     
     wp_send_json_success([
         'chat_mode' => $chat_mode

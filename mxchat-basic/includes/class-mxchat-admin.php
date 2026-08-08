@@ -2285,6 +2285,9 @@ private static function mxchat_wipe_leads_by_email(array $emails) {
             delete_option('mxchat_lead_del_email_' . $sid);
             delete_option('mxchat_lead_del_name_' . $sid);
             delete_option('mxchat_lead_del_ts_' . $sid);
+            if (class_exists('MxChat_Session_Store')) {
+                MxChat_Session_Store::delete_session($sid); // b64b77
+            }
             if ($has_translations) {
                 $wpdb->delete($translations_table, ['session_id' => $sid], ['%s']);
             }
@@ -4081,6 +4084,9 @@ public function mxchat_delete_chat_history() {
 
         delete_option('mxchat_history_' . $session_id_sanitized);
         delete_option('mxchat_agent_name_' . $session_id_sanitized);
+        if (class_exists('MxChat_Session_Store')) {
+            MxChat_Session_Store::delete_session($session_id_sanitized); // b64b77
+        }
 
         if ($lead_row && !empty($lead_row->user_email)) {
             if ($also_delete_lead) {

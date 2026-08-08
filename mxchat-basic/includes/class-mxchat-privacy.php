@@ -38,7 +38,10 @@ class MxChat_Privacy {
         'mxchat_lead_del_email_',
         'mxchat_lead_del_name_',
         'mxchat_lead_del_ts_',
-        'mxchat_session_owner_',
+        // NOTE: mxchat_session_owner_ moved out of wp_options into the
+        // mxchat_sessions table (b64b77). The eraser now calls
+        // MxChat_Session_Store::delete_session(), which drops the row AND the
+        // legacy option keys, so it is no longer listed here.
     );
 
     /**
@@ -326,6 +329,12 @@ class MxChat_Privacy {
 
         foreach (self::$session_option_prefixes as $prefix) {
             delete_option($prefix . $sid);
+        }
+
+        // Per-session state (owner, originating page, mode, channel) — one row,
+        // plus the legacy option keys on installs still mid-migration (b64b77).
+        if (class_exists('MxChat_Session_Store')) {
+            MxChat_Session_Store::delete_session($sid);
         }
 
         wp_cache_delete('chat_session_' . $sid, 'mxchat_chat_sessions');

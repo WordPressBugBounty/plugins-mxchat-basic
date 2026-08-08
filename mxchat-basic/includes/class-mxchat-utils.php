@@ -658,6 +658,23 @@ public static function embedding_preflight($options = null) {
 }
 
 /**
+ * Public QUERY-side entry point (plan 876edb). The chat pipeline's
+ * MxChat_Integrator::mxchat_generate_embedding() adapter routes through here
+ * so the query and index sides share ONE provider-routing implementation —
+ * the same endpoints, request bodies, and stamping semantics. The Integrator
+ * keeps its own error vocabulary by translating the WP_Error this returns
+ * (see the structured error data on every failure path below).
+ *
+ * @param string $text    The text to be embedded.
+ * @param string $api_key Caller-resolved API key (per-bot on the query side).
+ * @param string $bot_id  The bot ID for multi-bot support.
+ * @return array|WP_Error The embedding vector, or WP_Error carrying the reason.
+ */
+public static function generate_query_embedding($text, $api_key, $bot_id = 'default') {
+    return self::generate_embedding($text, $api_key, $bot_id);
+}
+
+/**
  * UPDATED: Generate an embedding for the given text using bot-specific configuration.
  *
  * @param string $text    The text to be embedded.
@@ -681,8 +698,10 @@ private static function generate_embedding($text, $api_key, $bot_id = 'default')
     if (isset($options['custom_provider_for_embeddings']) && $options['custom_provider_for_embeddings'] === 'on') {
         $custom = self::generate_embedding_custom($text, $options);
         // The custom path already returns a human-readable error string —
-        // carry it instead of collapsing to null (plan 4a7c0a).
-        return is_array($custom) ? $custom : new WP_Error('embedding_failed', (string) $custom);
+        // carry it instead of collapsing to null (plan 4a7c0a). The 'custom'
+        // branch marker lets the Integrator adapter map the string back onto
+        // its own error codes (876edb).
+        return is_array($custom) ? $custom : new WP_Error('embedding_failed', (string) $custom, array('branch' => 'custom'));
     }
 
     $selected_model = $options['embedding_model'] ?? 'text-embedding-ada-002';
@@ -696,8 +715,11 @@ private static function generate_embedding($text, $api_key, $bot_id = 'default')
         $api_key = $options['gemini_api_key'] ?? '';
     } else {
         $endpoint = 'https://api.openai.com/v1/embeddings';
-        // Use the bot-specific API key or fallback to passed API key
-        $api_key = $options['api_key'] ?? $api_key;
+        // Prefer the caller-resolved key when one was passed — the query side
+        // resolves per-bot keys at its call sites (integrator adapter, 876edb).
+        // Index callers pass the preflight key, which equals this options read,
+        // so nothing changes for them.
+        $api_key = !empty($api_key) ? $api_key : ($options['api_key'] ?? '');
     }
     
     // Prepare request body based on provider
@@ -754,7 +776,12 @@ private static function generate_embedding($text, $api_key, $bot_id = 'default')
         if (class_exists('MxChat_Admin')) {
             MxChat_Admin::mxchat_log_debug('embedding_error', $message, array('model' => $selected_model, 'bot_id' => $bot_id));
         }
-        return new WP_Error('embedding_failed', $message);
+        return new WP_Error('embedding_failed', $message, array(
+            'branch' => 'cloud',
+            'kind'   => 'connection',
+            'reason' => $response->get_error_message(),
+            'model'  => $selected_model,
+        ));
     }
 
     $response_body = json_decode(wp_remote_retrieve_body($response), true);
@@ -821,7 +848,16 @@ private static function embedding_failure_error($response, $selected_model, $api
         ));
     }
 
-    return new WP_Error('embedding_failed', $message);
+    // Structured data so the Integrator's query-side adapter can rebuild its
+    // typed error contract (auth/rate-limit/quota/invalid-response) without a
+    // second transport implementation (876edb). Additive — message unchanged.
+    return new WP_Error('embedding_failed', $message, array(
+        'branch'     => 'cloud',
+        'status'     => $status,
+        'error_type' => (is_array($decoded) && isset($decoded['error']['type']) && is_string($decoded['error']['type'])) ? $decoded['error']['type'] : '',
+        'reason'     => $reason,
+        'model'      => $selected_model,
+    ));
 }
 
 /**
@@ -878,14 +914,23 @@ public static function generate_embedding_custom($text, $options) {
         'timeout' => 60,
     ]);
     if (is_wp_error($response)) {
-        return 'Connection error when generating embeddings (custom provider): ' . $response->get_error_message();
+        return self::log_custom_embedding_failure(
+            'Connection error when generating embeddings (custom provider): ' . $response->get_error_message(),
+            $model,
+            $api_key
+        );
     }
 
     $status = wp_remote_retrieve_response_code($response);
     $body   = json_decode(wp_remote_retrieve_body($response), true);
     if ($status !== 200) {
         $msg = isset($body['error']['message']) ? $body['error']['message'] : 'HTTP ' . $status;
-        return 'Custom embedding endpoint error: ' . $msg;
+        return self::log_custom_embedding_failure(
+            'Custom embedding endpoint error: ' . $msg,
+            $model,
+            $api_key,
+            (int) $status
+        );
     }
     if (isset($body['data'][0]['embedding']) && is_array($body['data'][0]['embedding'])) {
         // Stamp the custom model identity so the active-embedding-model mismatch
@@ -893,7 +938,37 @@ public static function generate_embedding_custom($text, $options) {
         self::stamp_active_embedding_model('custom:' . $model);
         return $body['data'][0]['embedding'];
     }
-    return 'Invalid embedding response from custom provider.';
+    return self::log_custom_embedding_failure('Invalid embedding response from custom provider.', $model, $api_key);
+}
+
+/**
+ * Record a custom-provider embedding failure in the Debug Mode log, then
+ * return the message unchanged so callers keep their string-error contract.
+ * The cloud branch has logged its failures since 4a7c0a; the custom branch
+ * never did, so chat-side failures on Custom-provider installs were
+ * invisible to Debug Mode despite the 3.2.18 readme saying otherwise
+ * (plan 71e4b6). Same scrub-then-log shape as embedding_failure_error().
+ *
+ * @param string $message Human-readable failure (the caller's return value).
+ * @param string $model   Resolved custom embedding model.
+ * @param string $api_key Scrubbed out of the logged message if it ever appears.
+ * @param int    $status  HTTP status when one was received, 0 otherwise.
+ * @return string The (scrubbed) message.
+ */
+private static function log_custom_embedding_failure($message, $model, $api_key, $status = 0) {
+    if (is_string($api_key) && $api_key !== '') {
+        $message = str_replace($api_key, '[redacted]', $message);
+    }
+
+    if (class_exists('MxChat_Admin')) {
+        $context = array('model' => 'custom:' . $model);
+        if ($status > 0) {
+            $context['status'] = $status;
+        }
+        MxChat_Admin::mxchat_log_debug('embedding_error', $message, $context);
+    }
+
+    return $message;
 }
 
 /**

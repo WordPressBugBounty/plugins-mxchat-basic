@@ -2,14 +2,14 @@
 # This file is distributed under the GPLv2 or later.
 msgid ""
 msgstr ""
-"Project-Id-Version: MxChat 3.2.17\n"
-"Report-Msgid-Bugs-To: https://wordpress.org/support/plugin/mxchat-basic/\n"
-"Last-Translator: MxChat <support@mxchat.ai>\n"
-"Language-Team: MxChat <support@mxchat.ai>\n"
+"Project-Id-Version: MxChat 3.2.18\n"
+"Report-Msgid-Bugs-To: https://wordpress.org/support/plugin/mxchat-basic\n"
+"Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
+"Language-Team: LANGUAGE <LL@li.org>\n"
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
-"POT-Creation-Date: 2026-08-05T12:50:27+00:00\n"
+"POT-Creation-Date: 2026-08-08T14:16:11+00:00\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "X-Generator: WP-CLI 2.12.0\n"
 "X-Domain: mxchat\n"
@@ -20,7 +20,7 @@ msgstr ""
 #: includes/class-mxchat-admin.php:370
 #: includes/class-mxchat-admin.php:472
 #: includes/class-mxchat-admin.php:473
-#: includes/class-mxchat-privacy.php:383
+#: includes/class-mxchat-privacy.php:392
 msgid "MxChat"
 msgstr ""
 
@@ -55,17 +55,17 @@ msgstr ""
 #: includes/class-mxchat-admin.php:234
 #: includes/class-mxchat-admin.php:599
 #: includes/class-mxchat-admin.php:864
-#: includes/class-mxchat-admin.php:5230
-#: includes/class-mxchat-admin.php:5340
-#: includes/class-mxchat-admin.php:5375
-#: includes/class-mxchat-admin.php:5411
-#: includes/class-mxchat-admin.php:5539
-#: includes/class-mxchat-admin.php:5628
-#: includes/class-mxchat-admin.php:5662
-#: includes/class-mxchat-admin.php:5710
-#: includes/class-mxchat-admin.php:5736
-#: includes/class-mxchat-admin.php:5765
-#: includes/class-mxchat-admin.php:7928
+#: includes/class-mxchat-admin.php:5236
+#: includes/class-mxchat-admin.php:5346
+#: includes/class-mxchat-admin.php:5381
+#: includes/class-mxchat-admin.php:5417
+#: includes/class-mxchat-admin.php:5545
+#: includes/class-mxchat-admin.php:5634
+#: includes/class-mxchat-admin.php:5668
+#: includes/class-mxchat-admin.php:5716
+#: includes/class-mxchat-admin.php:5742
+#: includes/class-mxchat-admin.php:5771
+#: includes/class-mxchat-admin.php:7934
 #: includes/class-mxchat-content-generator.php:284
 #: includes/class-mxchat-content-generator.php:570
 #: includes/class-mxchat-content-generator.php:1511
@@ -126,7 +126,7 @@ msgid "No API key entered or saved for this provider."
 msgstr ""
 
 #: admin/class-ajax-handler.php:318
-#: includes/class-mxchat-admin.php:7308
+#: includes/class-mxchat-admin.php:7314
 msgid "Key is valid."
 msgstr ""
 
@@ -242,11 +242,11 @@ msgid "Invalid security token"
 msgstr ""
 
 #: admin/class-ajax-handler.php:1255
-#: admin/class-knowledge-manager.php:190
-#: admin/class-knowledge-manager.php:502
-#: admin/class-knowledge-manager.php:1400
-#: admin/class-knowledge-manager.php:3485
-#: admin/class-knowledge-manager.php:3552
+#: admin/class-knowledge-manager.php:196
+#: admin/class-knowledge-manager.php:508
+#: admin/class-knowledge-manager.php:1406
+#: admin/class-knowledge-manager.php:3501
+#: admin/class-knowledge-manager.php:3568
 msgid "Unauthorized access"
 msgstr ""
 
@@ -271,9 +271,9 @@ msgid "Activation failed"
 msgstr ""
 
 #: admin/class-ajax-handler.php:1518
-#: includes/class-mxchat-admin.php:4975
-#: includes/class-mxchat-admin.php:4994
-#: includes/class-mxchat-admin.php:5096
+#: includes/class-mxchat-admin.php:4981
+#: includes/class-mxchat-admin.php:5000
+#: includes/class-mxchat-admin.php:5102
 msgid "Unauthorized user"
 msgstr ""
 
@@ -317,562 +317,566 @@ msgstr ""
 msgid "Usage counter reset."
 msgstr ""
 
-#: admin/class-knowledge-manager.php:131
-#: includes/class-mxchat-admin.php:10558
-#: includes/class-mxchat-admin.php:10644
+#: admin/class-knowledge-manager.php:137
+#: includes/class-mxchat-admin.php:10564
+#: includes/class-mxchat-admin.php:10650
 msgid "Nonce verification failed."
 msgstr ""
 
-#: admin/class-knowledge-manager.php:160
+#: admin/class-knowledge-manager.php:166
 msgid "Error storing content: "
 msgstr ""
 
-#: admin/class-knowledge-manager.php:165
+#: admin/class-knowledge-manager.php:171
 msgid "Content successfully submitted!"
 msgstr ""
 
-#: admin/class-knowledge-manager.php:202
+#: admin/class-knowledge-manager.php:208
 msgid "That does not look like a link to a single YouTube video. Please paste a watch, youtu.be, or Shorts URL."
 msgstr ""
 
-#: admin/class-knowledge-manager.php:246
+#: admin/class-knowledge-manager.php:252
 msgid "Please write a description for the video, or switch to auto-fetch."
 msgstr ""
 
-#: admin/class-knowledge-manager.php:266
+#: admin/class-knowledge-manager.php:272
 msgid "Could not retrieve any information for that video (no metadata and no captions). Please check the URL, or use the manual description option."
 msgstr ""
 
 #. translators: 1: video title, 2: channel name
-#: admin/class-knowledge-manager.php:275
+#: admin/class-knowledge-manager.php:281
 #, php-format
 msgid "A YouTube video titled \"%1$s\" from the channel %2$s."
 msgstr ""
 
-#: admin/class-knowledge-manager.php:286
+#: admin/class-knowledge-manager.php:292
 msgid "Error storing video in the knowledge base: "
 msgstr ""
 
-#: admin/class-knowledge-manager.php:295
+#: admin/class-knowledge-manager.php:301
 msgid "Video indexed from its title and channel — no captions were available for a transcript. The form below is pre-filled: write your own description and import again to improve matching (it updates the same entry)."
 msgstr ""
 
-#: admin/class-knowledge-manager.php:307
+#: admin/class-knowledge-manager.php:313
 msgid "YouTube video successfully added to the knowledge base!"
 msgstr ""
 
-#: admin/class-knowledge-manager.php:444
+#: admin/class-knowledge-manager.php:450
 msgid "Failed to save PDF file"
 msgstr ""
 
-#: admin/class-knowledge-manager.php:450
-#: admin/class-knowledge-manager.php:592
+#: admin/class-knowledge-manager.php:456
+#: admin/class-knowledge-manager.php:598
 msgid "Invalid PDF: Unable to parse or no pages found"
 msgstr ""
 
-#: admin/class-knowledge-manager.php:472
-#: admin/class-knowledge-manager.php:614
+#: admin/class-knowledge-manager.php:478
+#: admin/class-knowledge-manager.php:620
 msgid "Failed to add PDF pages to processing queue"
 msgstr ""
 
-#: admin/class-knowledge-manager.php:513
+#: admin/class-knowledge-manager.php:519
 msgid "The uploaded file exceeds the server upload_max_filesize limit."
 msgstr ""
 
-#: admin/class-knowledge-manager.php:514
+#: admin/class-knowledge-manager.php:520
 msgid "The uploaded file exceeds the form MAX_FILE_SIZE limit."
 msgstr ""
 
-#: admin/class-knowledge-manager.php:515
+#: admin/class-knowledge-manager.php:521
 msgid "The file was only partially uploaded."
 msgstr ""
 
-#: admin/class-knowledge-manager.php:516
+#: admin/class-knowledge-manager.php:522
 msgid "No file was uploaded. Please select a PDF file."
 msgstr ""
 
-#: admin/class-knowledge-manager.php:517
+#: admin/class-knowledge-manager.php:523
 msgid "Server missing temporary folder."
 msgstr ""
 
-#: admin/class-knowledge-manager.php:518
+#: admin/class-knowledge-manager.php:524
 msgid "Server failed to write file to disk."
 msgstr ""
 
-#: admin/class-knowledge-manager.php:520
+#: admin/class-knowledge-manager.php:526
 msgid "Unknown upload error."
 msgstr ""
 
-#: admin/class-knowledge-manager.php:535
+#: admin/class-knowledge-manager.php:541
 msgid "Invalid file type. Only PDF files are accepted."
 msgstr ""
 
-#: admin/class-knowledge-manager.php:546
+#: admin/class-knowledge-manager.php:552
 msgid "Invalid file extension. Only .pdf files are accepted."
 msgstr ""
 
-#: admin/class-knowledge-manager.php:559
+#: admin/class-knowledge-manager.php:565
 msgid "WordPress upload directory is not writable."
 msgstr ""
 
-#: admin/class-knowledge-manager.php:571
+#: admin/class-knowledge-manager.php:577
 msgid "Failed to create upload directory."
 msgstr ""
 
-#: admin/class-knowledge-manager.php:581
+#: admin/class-knowledge-manager.php:587
 msgid "Failed to save uploaded PDF file."
 msgstr ""
 
-#: admin/class-knowledge-manager.php:629
+#: admin/class-knowledge-manager.php:635
 #, php-format
 msgid "PDF \"%s\" (%d pages) queued for processing. Processing will start automatically."
 msgstr ""
 
-#: admin/class-knowledge-manager.php:641
+#: admin/class-knowledge-manager.php:647
 msgid "Failed to process uploaded PDF: "
 msgstr ""
 
-#: admin/class-knowledge-manager.php:825
-#: admin/class-knowledge-manager.php:1070
+#: admin/class-knowledge-manager.php:831
+#: admin/class-knowledge-manager.php:1076
 #: includes/class-mxchat-admin.php:946
 #: includes/class-mxchat-admin.php:1017
 msgid "Permission denied."
 msgstr ""
 
-#: admin/class-knowledge-manager.php:859
+#: admin/class-knowledge-manager.php:865
 msgid "Database update failed."
 msgstr ""
 
-#: admin/class-knowledge-manager.php:863
+#: admin/class-knowledge-manager.php:869
 msgid "Embedding generation failed."
 msgstr ""
 
-#: admin/class-knowledge-manager.php:866
+#: admin/class-knowledge-manager.php:872
 msgid "Invalid data."
 msgstr ""
 
-#: admin/class-knowledge-manager.php:1126
+#: admin/class-knowledge-manager.php:1132
 msgid "Entry not found in the local knowledge database."
 msgstr ""
 
-#: admin/class-knowledge-manager.php:1160
+#: admin/class-knowledge-manager.php:1166
 msgid "Stored in the local WordPress database. Only the assembled text shown here is embedded — there are no separate vector metadata fields (e.g. taxonomy terms are not stored unless they were injected into the text itself)."
 msgstr ""
 
-#: admin/class-knowledge-manager.php:1172
+#: admin/class-knowledge-manager.php:1178
 msgid "Pinecone manager not available."
 msgstr ""
 
-#: admin/class-knowledge-manager.php:1188
+#: admin/class-knowledge-manager.php:1194
 msgid "Pinecone not configured."
 msgstr ""
 
-#: admin/class-knowledge-manager.php:1228
+#: admin/class-knowledge-manager.php:1234
 msgid "Failed to fetch from Pinecone."
 msgstr ""
 
-#: admin/class-knowledge-manager.php:1235
+#: admin/class-knowledge-manager.php:1241
 msgid "Entry not found in Pinecone."
 msgstr ""
 
-#: admin/class-knowledge-manager.php:1279
+#: admin/class-knowledge-manager.php:1285
 msgid "Stored in Pinecone. Each chunk above lists the vector metadata fields actually present — if a field you expect (such as taxonomy terms) is missing here, it was not stored as metadata and is only searchable if it appears in the embedded text."
 msgstr ""
 
-#: admin/class-knowledge-manager.php:1365
+#: admin/class-knowledge-manager.php:1371
 msgid "PDF processing appears to be stalled. No updates for over 5 minutes."
 msgstr ""
 
-#: admin/class-knowledge-manager.php:1383
-#: admin/class-knowledge-manager.php:1592
-#: admin/class-knowledge-manager.php:2068
-#: admin/class-knowledge-manager.php:2211
-#: admin/class-knowledge-manager.php:5213
-#: admin/class-knowledge-manager.php:5268
+#: admin/class-knowledge-manager.php:1389
+#: admin/class-knowledge-manager.php:1608
+#: admin/class-knowledge-manager.php:2084
+#: admin/class-knowledge-manager.php:2227
+#: admin/class-knowledge-manager.php:5273
+#: admin/class-knowledge-manager.php:5328
 msgid "ago"
 msgstr ""
 
-#: admin/class-knowledge-manager.php:1409
+#: admin/class-knowledge-manager.php:1415
 msgid "Please provide a valid URL."
 msgstr ""
 
-#: admin/class-knowledge-manager.php:1467
+#: admin/class-knowledge-manager.php:1473
 #, php-format
 msgid "Failed to fetch the URL: %s"
 msgstr ""
 
-#: admin/class-knowledge-manager.php:1481
+#: admin/class-knowledge-manager.php:1487
 msgid "Empty response received from URL."
 msgstr ""
 
-#: admin/class-knowledge-manager.php:1494
+#: admin/class-knowledge-manager.php:1500
 msgid "PDF queued for processing. Processing will start automatically."
 msgstr ""
 
-#: admin/class-knowledge-manager.php:1499
+#: admin/class-knowledge-manager.php:1505
 msgid "Failed to queue PDF processing: "
 msgstr ""
 
-#: admin/class-knowledge-manager.php:1517
+#: admin/class-knowledge-manager.php:1523
 msgid "Invalid sitemap XML. Please provide a valid sitemap."
 msgstr ""
 
-#: admin/class-knowledge-manager.php:1528
+#: admin/class-knowledge-manager.php:1534
 msgid "Sitemap queued for processing. Processing will start automatically."
 msgstr ""
 
-#: admin/class-knowledge-manager.php:1533
-msgid "Failed to queue sitemap processing. Please check the status below for details."
+#: admin/class-knowledge-manager.php:1543
+msgid "Failed to queue sitemap processing: "
 msgstr ""
 
-#: admin/class-knowledge-manager.php:1553
+#: admin/class-knowledge-manager.php:1548
+msgid "Failed to queue sitemap processing."
+msgstr ""
+
+#: admin/class-knowledge-manager.php:1569
 msgid "No valid content found on the provided URL."
 msgstr ""
 
-#: admin/class-knowledge-manager.php:1572
+#: admin/class-knowledge-manager.php:1588
 msgid "Failed to store content in database: "
 msgstr ""
 
-#: admin/class-knowledge-manager.php:1575
+#: admin/class-knowledge-manager.php:1591
 msgid "URL content successfully submitted!"
 msgstr ""
 
-#: admin/class-knowledge-manager.php:1607
+#: admin/class-knowledge-manager.php:1623
 msgid "Invalid XML object provided"
 msgstr ""
 
-#: admin/class-knowledge-manager.php:1619
+#: admin/class-knowledge-manager.php:1635
 msgid "Embedding API validation failed: "
 msgstr ""
 
-#: admin/class-knowledge-manager.php:1623
+#: admin/class-knowledge-manager.php:1639
 msgid "Embedding API returned unexpected result type. Please check your configuration."
 msgstr ""
 
-#: admin/class-knowledge-manager.php:1638
+#: admin/class-knowledge-manager.php:1654
 msgid "No valid URLs found in sitemap"
 msgstr ""
 
-#: admin/class-knowledge-manager.php:1648
+#: admin/class-knowledge-manager.php:1664
 msgid "Failed to add URLs to processing queue"
 msgstr ""
 
-#: admin/class-knowledge-manager.php:2211
+#: admin/class-knowledge-manager.php:2227
 msgid "Just now"
 msgstr ""
 
-#: admin/class-knowledge-manager.php:2532
+#: admin/class-knowledge-manager.php:2548
 msgid "No knowledge entries found in Pinecone."
 msgstr ""
 
-#: admin/class-knowledge-manager.php:2566
-#: admin/class-knowledge-manager.php:3034
+#: admin/class-knowledge-manager.php:2582
+#: admin/class-knowledge-manager.php:3050
 #: includes/admin-knowledge-page.php:1032
 msgid "chunks"
 msgstr ""
 
-#: admin/class-knowledge-manager.php:2580
-#: admin/class-knowledge-manager.php:3048
+#: admin/class-knowledge-manager.php:2596
+#: admin/class-knowledge-manager.php:3064
 #: includes/admin-knowledge-page.php:1046
 msgid "View Source"
 msgstr ""
 
-#: admin/class-knowledge-manager.php:2583
-#: admin/class-knowledge-manager.php:3051
+#: admin/class-knowledge-manager.php:2599
+#: admin/class-knowledge-manager.php:3067
 #: includes/admin-knowledge-page.php:1049
 #: includes/admin-knowledge-page.php:2026
 msgid "Manual Content"
 msgstr ""
 
-#: admin/class-knowledge-manager.php:2595
-#: admin/class-knowledge-manager.php:3063
-#: admin/class-knowledge-manager.php:3207
+#: admin/class-knowledge-manager.php:2611
+#: admin/class-knowledge-manager.php:3079
+#: admin/class-knowledge-manager.php:3223
 #: includes/admin-knowledge-page.php:1071
 #: includes/admin-knowledge-page.php:1231
 msgid "Edit content"
 msgstr ""
 
-#: admin/class-knowledge-manager.php:2607
-#: admin/class-knowledge-manager.php:3075
+#: admin/class-knowledge-manager.php:2623
+#: admin/class-knowledge-manager.php:3091
 #: includes/admin-knowledge-page.php:1083
 msgid "Delete all chunks"
 msgstr ""
 
-#: admin/class-knowledge-manager.php:2636
-#: admin/class-knowledge-manager.php:3104
+#: admin/class-knowledge-manager.php:2652
+#: admin/class-knowledge-manager.php:3120
 #: includes/admin-knowledge-page.php:1113
 #, php-format
 msgid "Chunk %d of %d"
 msgstr ""
 
-#: admin/class-knowledge-manager.php:2661
-#: admin/class-knowledge-manager.php:3129
+#: admin/class-knowledge-manager.php:2677
+#: admin/class-knowledge-manager.php:3145
 #: includes/admin-knowledge-page.php:1138
 msgid "Same as parent"
 msgstr ""
 
-#: admin/class-knowledge-manager.php:2664
-#: admin/class-knowledge-manager.php:3132
+#: admin/class-knowledge-manager.php:2680
+#: admin/class-knowledge-manager.php:3148
 #: includes/admin-knowledge-page.php:1141
 msgid "Managed by group"
 msgstr ""
 
-#: admin/class-knowledge-manager.php:2726
-#: admin/class-knowledge-manager.php:3193
+#: admin/class-knowledge-manager.php:2742
+#: admin/class-knowledge-manager.php:3209
 #: includes/admin-content-page.php:212
 #: includes/admin-knowledge-page.php:1206
 msgid "View"
 msgstr ""
 
-#: admin/class-knowledge-manager.php:2729
-#: admin/class-knowledge-manager.php:3196
+#: admin/class-knowledge-manager.php:2745
+#: admin/class-knowledge-manager.php:3212
 #: includes/admin-knowledge-page.php:1209
 #: includes/admin-settings-page.php:687
 msgid "Manual"
 msgstr ""
 
-#: admin/class-knowledge-manager.php:2752
-#: admin/class-knowledge-manager.php:3228
+#: admin/class-knowledge-manager.php:2768
+#: admin/class-knowledge-manager.php:3244
 #: includes/admin-knowledge-page.php:1258
-#: includes/class-mxchat-admin.php:3940
-#: includes/class-mxchat-admin.php:4688
+#: includes/class-mxchat-admin.php:3943
+#: includes/class-mxchat-admin.php:4694
 msgid "&laquo; Previous"
 msgstr ""
 
-#: admin/class-knowledge-manager.php:2783
-#: admin/class-knowledge-manager.php:3259
+#: admin/class-knowledge-manager.php:2799
+#: admin/class-knowledge-manager.php:3275
 #: includes/admin-knowledge-page.php:1289
-#: includes/class-mxchat-admin.php:3941
-#: includes/class-mxchat-admin.php:4689
+#: includes/class-mxchat-admin.php:3944
+#: includes/class-mxchat-admin.php:4695
 msgid "Next &raquo;"
 msgstr ""
 
-#: admin/class-knowledge-manager.php:3000
+#: admin/class-knowledge-manager.php:3016
 #: includes/admin-knowledge-page.php:991
 msgid "No knowledge entries found. Use the Import Options to add content."
 msgstr ""
 
-#: admin/class-knowledge-manager.php:3537
+#: admin/class-knowledge-manager.php:3553
 msgid "Processing has been stopped successfully."
 msgstr ""
 
-#: admin/class-knowledge-manager.php:5005
+#: admin/class-knowledge-manager.php:5065
 #: includes/admin-knowledge-page.php:341
 #: includes/admin-knowledge-page.php:737
 msgid "PDF Processing Status"
 msgstr ""
 
-#: admin/class-knowledge-manager.php:5009
-#: admin/class-knowledge-manager.php:5095
-#: includes/class-mxchat-integrator.php:442
+#: admin/class-knowledge-manager.php:5069
+#: admin/class-knowledge-manager.php:5155
+#: includes/class-mxchat-integrator.php:443
 msgid "Dismiss"
 msgstr ""
 
-#: admin/class-knowledge-manager.php:5017
-#: admin/class-knowledge-manager.php:5103
+#: admin/class-knowledge-manager.php:5077
+#: admin/class-knowledge-manager.php:5163
 #: includes/admin-knowledge-page.php:746
 #: includes/admin-knowledge-page.php:776
 msgid "Process Batch"
 msgstr ""
 
-#: admin/class-knowledge-manager.php:5022
-#: admin/class-knowledge-manager.php:5108
-#: admin/class-knowledge-manager.php:5196
-#: admin/class-knowledge-manager.php:5247
+#: admin/class-knowledge-manager.php:5082
+#: admin/class-knowledge-manager.php:5168
+#: admin/class-knowledge-manager.php:5256
+#: admin/class-knowledge-manager.php:5307
 msgid "Error"
 msgstr ""
 
-#: admin/class-knowledge-manager.php:5026
-#: admin/class-knowledge-manager.php:5112
+#: admin/class-knowledge-manager.php:5086
+#: admin/class-knowledge-manager.php:5172
 #, php-format
 msgid "Completed with %d failures"
 msgstr ""
 
-#: admin/class-knowledge-manager.php:5028
-#: admin/class-knowledge-manager.php:5114
+#: admin/class-knowledge-manager.php:5088
+#: admin/class-knowledge-manager.php:5174
 msgid "Complete"
 msgstr ""
 
-#: admin/class-knowledge-manager.php:5042
+#: admin/class-knowledge-manager.php:5102
 #, php-format
 msgid "Progress: %d of %d pages (%d%%)"
 msgstr ""
 
-#: admin/class-knowledge-manager.php:5050
+#: admin/class-knowledge-manager.php:5110
 #: includes/admin-knowledge-page.php:359
 #: includes/admin-knowledge-page.php:756
 msgid "Failed pages:"
 msgstr ""
 
-#: admin/class-knowledge-manager.php:5053
-#: admin/class-knowledge-manager.php:5139
+#: admin/class-knowledge-manager.php:5113
+#: admin/class-knowledge-manager.php:5199
 #: includes/admin-knowledge-page.php:361
 #: includes/admin-knowledge-page.php:392
 msgid "Status:"
 msgstr ""
 
-#: admin/class-knowledge-manager.php:5054
-#: admin/class-knowledge-manager.php:5140
+#: admin/class-knowledge-manager.php:5114
+#: admin/class-knowledge-manager.php:5200
 #: includes/admin-knowledge-page.php:758
 #: includes/admin-knowledge-page.php:788
 msgid "Last update:"
 msgstr ""
 
-#: admin/class-knowledge-manager.php:5060
-#: admin/class-knowledge-manager.php:5146
+#: admin/class-knowledge-manager.php:5120
+#: admin/class-knowledge-manager.php:5206
 msgid "Processing Summary"
 msgstr ""
 
-#: admin/class-knowledge-manager.php:5061
+#: admin/class-knowledge-manager.php:5121
 msgid "Total Pages:"
 msgstr ""
 
-#: admin/class-knowledge-manager.php:5062
-#: admin/class-knowledge-manager.php:5148
+#: admin/class-knowledge-manager.php:5122
+#: admin/class-knowledge-manager.php:5208
 msgid "Successful:"
 msgstr ""
 
-#: admin/class-knowledge-manager.php:5063
-#: admin/class-knowledge-manager.php:5149
+#: admin/class-knowledge-manager.php:5123
+#: admin/class-knowledge-manager.php:5209
 msgid "Failed:"
 msgstr ""
 
-#: admin/class-knowledge-manager.php:5064
-#: admin/class-knowledge-manager.php:5150
+#: admin/class-knowledge-manager.php:5124
+#: admin/class-knowledge-manager.php:5210
 msgid "Completed:"
 msgstr ""
 
-#: admin/class-knowledge-manager.php:5091
+#: admin/class-knowledge-manager.php:5151
 #: includes/admin-knowledge-page.php:372
 #: includes/admin-knowledge-page.php:767
 msgid "Sitemap Processing Status"
 msgstr ""
 
-#: admin/class-knowledge-manager.php:5128
+#: admin/class-knowledge-manager.php:5188
 #, php-format
 msgid "Progress: %d of %d URLs (%d%%)"
 msgstr ""
 
-#: admin/class-knowledge-manager.php:5136
+#: admin/class-knowledge-manager.php:5196
 #: includes/admin-knowledge-page.php:390
 #: includes/admin-knowledge-page.php:786
 msgid "Failed URLs:"
 msgstr ""
 
-#: admin/class-knowledge-manager.php:5147
+#: admin/class-knowledge-manager.php:5207
 msgid "Total URLs:"
 msgstr ""
 
-#: admin/class-knowledge-manager.php:5163
+#: admin/class-knowledge-manager.php:5223
 msgid "Last error:"
 msgstr ""
 
-#: admin/class-knowledge-manager.php:5187
+#: admin/class-knowledge-manager.php:5247
 #, php-format
 msgid "Failed Pages (%d)"
 msgstr ""
 
-#: admin/class-knowledge-manager.php:5189
+#: admin/class-knowledge-manager.php:5249
 msgid "Show Failed Pages"
 msgstr ""
 
-#: admin/class-knowledge-manager.php:5195
-#: admin/class-knowledge-manager.php:5215
+#: admin/class-knowledge-manager.php:5255
+#: admin/class-knowledge-manager.php:5275
 #: includes/admin-transcripts-page.php:523
 msgid "Page"
 msgstr ""
 
-#: admin/class-knowledge-manager.php:5197
-#: admin/class-knowledge-manager.php:5248
+#: admin/class-knowledge-manager.php:5257
+#: admin/class-knowledge-manager.php:5308
 msgid "Retries"
 msgstr ""
 
-#: admin/class-knowledge-manager.php:5198
-#: admin/class-knowledge-manager.php:5249
+#: admin/class-knowledge-manager.php:5258
+#: admin/class-knowledge-manager.php:5309
 msgid "Time"
 msgstr ""
 
-#: admin/class-knowledge-manager.php:5238
+#: admin/class-knowledge-manager.php:5298
 #, php-format
 msgid "Failed URLs (%d)"
 msgstr ""
 
-#: admin/class-knowledge-manager.php:5240
+#: admin/class-knowledge-manager.php:5300
 msgid "Show Failed URLs"
 msgstr ""
 
-#: admin/class-knowledge-manager.php:5246
+#: admin/class-knowledge-manager.php:5306
 #: includes/admin-api-page.php:328
 msgid "URL"
 msgstr ""
 
-#: admin/class-knowledge-manager.php:5278
+#: admin/class-knowledge-manager.php:5338
 msgid "Unknown URL"
 msgstr ""
 
-#: admin/class-knowledge-manager.php:5292
+#: admin/class-knowledge-manager.php:5352
 msgid "more failed URLs not shown"
 msgstr ""
 
-#: admin/class-knowledge-manager.php:6603
-#: admin/class-knowledge-manager.php:7709
-#: includes/class-mxchat-admin.php:4035
-#: includes/class-mxchat-admin.php:4247
+#: admin/class-knowledge-manager.php:6691
+#: admin/class-knowledge-manager.php:7797
+#: includes/class-mxchat-admin.php:4038
+#: includes/class-mxchat-admin.php:4253
 msgid "You do not have sufficient permissions."
 msgstr ""
 
-#: admin/class-knowledge-manager.php:6608
-#: admin/class-knowledge-manager.php:7718
+#: admin/class-knowledge-manager.php:6696
+#: admin/class-knowledge-manager.php:7806
 msgid "Security check failed."
 msgstr ""
 
-#: admin/class-knowledge-manager.php:6615
+#: admin/class-knowledge-manager.php:6703
 msgid "Invalid vector ID."
 msgstr ""
 
-#: admin/class-knowledge-manager.php:6628
+#: admin/class-knowledge-manager.php:6716
 msgid "Pinecone is not properly configured."
 msgstr ""
 
-#: admin/class-knowledge-manager.php:6646
+#: admin/class-knowledge-manager.php:6734
 msgid "Entry deleted successfully from Pinecone."
 msgstr ""
 
-#: admin/class-knowledge-manager.php:6651
+#: admin/class-knowledge-manager.php:6739
 msgid "Failed to delete entry: "
 msgstr ""
 
-#: admin/class-knowledge-manager.php:7127
+#: admin/class-knowledge-manager.php:7215
 #: includes/admin-knowledge-page.php:1454
 msgid "Public (Everyone)"
 msgstr ""
 
-#: admin/class-knowledge-manager.php:7128
+#: admin/class-knowledge-manager.php:7216
 #: includes/admin-knowledge-page.php:1455
 msgid "Logged In Users"
 msgstr ""
 
-#: admin/class-knowledge-manager.php:7129
+#: admin/class-knowledge-manager.php:7217
 #: includes/admin-knowledge-page.php:1456
 msgid "Subscribers & Above"
 msgstr ""
 
-#: admin/class-knowledge-manager.php:7130
+#: admin/class-knowledge-manager.php:7218
 #: includes/admin-knowledge-page.php:1457
 msgid "Contributors & Above"
 msgstr ""
 
-#: admin/class-knowledge-manager.php:7131
+#: admin/class-knowledge-manager.php:7219
 #: includes/admin-knowledge-page.php:1458
 msgid "Authors & Above"
 msgstr ""
 
-#: admin/class-knowledge-manager.php:7132
+#: admin/class-knowledge-manager.php:7220
 #: includes/admin-knowledge-page.php:1459
 msgid "Editors & Above"
 msgstr ""
 
-#: admin/class-knowledge-manager.php:7133
+#: admin/class-knowledge-manager.php:7221
 #: includes/admin-knowledge-page.php:1460
 msgid "Administrators Only"
 msgstr ""
@@ -997,7 +1001,7 @@ msgstr ""
 #: includes/admin-content-page.php:842
 #: includes/admin-transcripts-page.php:443
 #: includes/admin-transcripts-page.php:697
-#: includes/class-mxchat-admin.php:4731
+#: includes/class-mxchat-admin.php:4737
 msgid "All"
 msgstr ""
 
@@ -1068,7 +1072,7 @@ msgid "Pro"
 msgstr ""
 
 #: includes/admin-actions-page.php:316
-#: includes/class-mxchat-admin.php:4802
+#: includes/class-mxchat-admin.php:4808
 #, php-format
 msgid "Requires %s"
 msgstr ""
@@ -1110,8 +1114,8 @@ msgstr ""
 #: includes/admin-actions-page.php:460
 #: includes/admin-settings-page.php:293
 #: includes/admin-settings-page.php:1272
-#: includes/class-mxchat-admin.php:4865
-#: includes/class-mxchat-admin.php:6293
+#: includes/class-mxchat-admin.php:4871
+#: includes/class-mxchat-admin.php:6299
 msgid "Similarity Threshold"
 msgstr ""
 
@@ -1124,8 +1128,8 @@ msgid "Enabled Bots"
 msgstr ""
 
 #: includes/admin-actions-page.php:388
-#: includes/class-mxchat-admin.php:4597
-#: includes/class-mxchat-admin.php:4897
+#: includes/class-mxchat-admin.php:4603
+#: includes/class-mxchat-admin.php:4903
 #: includes/class-mxchat-meta-box.php:90
 #: includes/class-mxchat-public.php:837
 msgid "Default Bot"
@@ -1140,10 +1144,10 @@ msgstr ""
 #: includes/admin-settings-page.php:877
 #: includes/admin-transcripts-page.php:620
 #: includes/admin-transcripts-page.php:785
-#: includes/class-mxchat-admin.php:4817
-#: includes/class-mxchat-admin.php:4926
-#: includes/class-mxchat-admin.php:9633
-#: includes/class-mxchat-integrator.php:5345
+#: includes/class-mxchat-admin.php:4823
+#: includes/class-mxchat-admin.php:4932
+#: includes/class-mxchat-admin.php:9639
+#: includes/class-mxchat-integrator.php:5401
 msgid "Cancel"
 msgstr ""
 
@@ -1160,7 +1164,7 @@ msgid "Toggle Enabled"
 msgstr ""
 
 #: includes/admin-actions-page.php:429
-#: includes/class-mxchat-admin.php:4648
+#: includes/class-mxchat-admin.php:4654
 msgid "Edit"
 msgstr ""
 
@@ -1168,7 +1172,7 @@ msgstr ""
 #: includes/admin-actions-page.php:704
 #: includes/admin-transcripts-page.php:621
 #: includes/admin-transcripts-page.php:702
-#: includes/class-mxchat-admin.php:4659
+#: includes/class-mxchat-admin.php:4665
 msgid "Delete"
 msgstr ""
 
@@ -1717,20 +1721,20 @@ msgid "Post Title"
 msgstr ""
 
 #: includes/admin-content-page.php:272
-#: includes/class-mxchat-admin.php:7207
-#: includes/class-mxchat-admin.php:7220
-#: includes/class-mxchat-admin.php:7232
-#: includes/class-mxchat-admin.php:7245
-#: includes/class-mxchat-admin.php:7258
-#: includes/class-mxchat-admin.php:7272
-#: includes/class-mxchat-admin.php:7476
-#: includes/class-mxchat-admin.php:7491
-#: includes/class-mxchat-admin.php:8688
-#: includes/class-mxchat-admin.php:9055
-#: includes/class-mxchat-admin.php:9064
-#: includes/class-mxchat-admin.php:9073
-#: includes/class-mxchat-admin.php:9172
-#: includes/class-mxchat-admin.php:9200
+#: includes/class-mxchat-admin.php:7213
+#: includes/class-mxchat-admin.php:7226
+#: includes/class-mxchat-admin.php:7238
+#: includes/class-mxchat-admin.php:7251
+#: includes/class-mxchat-admin.php:7264
+#: includes/class-mxchat-admin.php:7278
+#: includes/class-mxchat-admin.php:7482
+#: includes/class-mxchat-admin.php:7497
+#: includes/class-mxchat-admin.php:8694
+#: includes/class-mxchat-admin.php:9061
+#: includes/class-mxchat-admin.php:9070
+#: includes/class-mxchat-admin.php:9079
+#: includes/class-mxchat-admin.php:9178
+#: includes/class-mxchat-admin.php:9206
 msgid "Show"
 msgstr ""
 
@@ -1743,7 +1747,7 @@ msgid "Template Mode"
 msgstr ""
 
 #: includes/admin-content-page.php:279
-#: includes/class-mxchat-admin.php:8726
+#: includes/class-mxchat-admin.php:8732
 msgid "Off"
 msgstr ""
 
@@ -1872,7 +1876,7 @@ msgstr ""
 
 #: includes/admin-content-page.php:447
 #: includes/admin-knowledge-page.php:2004
-#: includes/class-mxchat-admin.php:7729
+#: includes/class-mxchat-admin.php:7735
 #: includes/class-mxchat-public.php:262
 #: includes/class-mxchat-public.php:267
 #: includes/class-mxchat-public.php:476
@@ -2502,7 +2506,7 @@ msgid "Refresh Entries"
 msgstr ""
 
 #: includes/admin-knowledge-page.php:979
-#: includes/class-mxchat-admin.php:9631
+#: includes/class-mxchat-admin.php:9637
 msgid "Select All"
 msgstr ""
 
@@ -2927,7 +2931,7 @@ msgid "Save & Re-embed"
 msgstr ""
 
 #: includes/admin-knowledge-page.php:1969
-#: includes/class-mxchat-admin.php:9415
+#: includes/class-mxchat-admin.php:9421
 msgid "Saving..."
 msgstr ""
 
@@ -3248,7 +3252,7 @@ msgid "Optional — leave blank to use sensible defaults. You can refine this la
 msgstr ""
 
 #: includes/admin-onboarding-page.php:676
-#: includes/class-mxchat-admin.php:7667
+#: includes/class-mxchat-admin.php:7673
 msgid "View Sample Instructions"
 msgstr ""
 
@@ -3429,7 +3433,7 @@ msgid "Hide the setup guide from the menu — reopen it any time under Settings 
 msgstr ""
 
 #: includes/admin-onboarding-page.php:970
-#: includes/class-mxchat-admin.php:7689
+#: includes/class-mxchat-admin.php:7695
 msgid "Sample AI Instructions"
 msgstr ""
 
@@ -3596,7 +3600,7 @@ msgstr ""
 
 #: includes/admin-settings-page.php:52
 #: includes/admin-settings-page.php:133
-#: includes/class-mxchat-privacy.php:215
+#: includes/class-mxchat-privacy.php:218
 msgid "Chatbot"
 msgstr ""
 
@@ -3633,8 +3637,8 @@ msgstr ""
 #: includes/admin-settings-page.php:65
 #: includes/admin-settings-page.php:151
 #: includes/admin-settings-page.php:581
-#: includes/class-mxchat-admin.php:6195
-#: includes/class-mxchat-admin.php:7583
+#: includes/class-mxchat-admin.php:6201
+#: includes/class-mxchat-admin.php:7589
 msgid "API Keys"
 msgstr ""
 
@@ -3668,14 +3672,14 @@ msgstr ""
 #: includes/admin-settings-page.php:88
 #: includes/admin-settings-page.php:190
 #: includes/admin-settings-page.php:943
-#: includes/class-mxchat-admin.php:8964
+#: includes/class-mxchat-admin.php:8970
 msgid "Slack"
 msgstr ""
 
 #: includes/admin-settings-page.php:89
 #: includes/admin-settings-page.php:191
 #: includes/admin-settings-page.php:1015
-#: includes/class-mxchat-admin.php:8964
+#: includes/class-mxchat-admin.php:8970
 msgid "Telegram"
 msgstr ""
 
@@ -3694,7 +3698,7 @@ msgid "Configure the AI models your chatbot will use for conversations and embed
 msgstr ""
 
 #: includes/admin-settings-page.php:252
-#: includes/class-mxchat-admin.php:6369
+#: includes/class-mxchat-admin.php:6375
 msgid "Chat Model"
 msgstr ""
 
@@ -3703,7 +3707,7 @@ msgid "Select the AI model your chatbot will use for conversations."
 msgstr ""
 
 #: includes/admin-settings-page.php:257
-#: includes/class-mxchat-admin.php:6377
+#: includes/class-mxchat-admin.php:6383
 msgid "Embedding Model"
 msgstr ""
 
@@ -3712,7 +3716,7 @@ msgid "Vector embedding model for knowledge base matching. Changing models requi
 msgstr ""
 
 #: includes/admin-settings-page.php:262
-#: includes/class-mxchat-admin.php:6356
+#: includes/class-mxchat-admin.php:6362
 msgid "Enable Streaming"
 msgstr ""
 
@@ -3733,7 +3737,7 @@ msgid "Control how your AI chatbot responds and processes queries."
 msgstr ""
 
 #: includes/admin-settings-page.php:288
-#: includes/class-mxchat-admin.php:6385
+#: includes/class-mxchat-admin.php:6391
 msgid "AI Instructions (Behavior)"
 msgstr ""
 
@@ -3746,7 +3750,7 @@ msgid "Adjust threshold for content matching. Lower values = more matches, highe
 msgstr ""
 
 #: includes/admin-settings-page.php:298
-#: includes/class-mxchat-admin.php:6302
+#: includes/class-mxchat-admin.php:6308
 msgid "RAG Sources Limit"
 msgstr ""
 
@@ -3755,7 +3759,7 @@ msgid "Number of knowledge base sources (pages/documents) to include in AI conte
 msgstr ""
 
 #: includes/admin-settings-page.php:303
-#: includes/class-mxchat-admin.php:6311
+#: includes/class-mxchat-admin.php:6317
 msgid "RAG Chunks Limit"
 msgstr ""
 
@@ -3774,7 +3778,7 @@ msgid "Knowledge, Chunking & Retrieval"
 msgstr ""
 
 #: includes/admin-settings-page.php:321
-#: includes/class-mxchat-admin.php:6327
+#: includes/class-mxchat-admin.php:6333
 msgid "Contextual Awareness"
 msgstr ""
 
@@ -3783,7 +3787,7 @@ msgid "Allow the chatbot to understand and reference the current page content fo
 msgstr ""
 
 #: includes/admin-settings-page.php:326
-#: includes/class-mxchat-admin.php:6335
+#: includes/class-mxchat-admin.php:6341
 msgid "Citation Links"
 msgstr ""
 
@@ -3792,7 +3796,7 @@ msgid "Allow the AI to include citation links from your knowledge database in re
 msgstr ""
 
 #: includes/admin-settings-page.php:335
-#: includes/class-mxchat-admin.php:6344
+#: includes/class-mxchat-admin.php:6350
 msgid "Satisfaction Rating Prompt"
 msgstr ""
 
@@ -3813,7 +3817,7 @@ msgid "Visibility"
 msgstr ""
 
 #: includes/admin-settings-page.php:366
-#: includes/class-mxchat-admin.php:6319
+#: includes/class-mxchat-admin.php:6325
 msgid "Auto-Display Chatbot"
 msgstr ""
 
@@ -3838,7 +3842,7 @@ msgid "Keep chat history when users navigate or return within 24 hours."
 msgstr ""
 
 #: includes/admin-settings-page.php:381
-#: includes/class-mxchat-admin.php:6506
+#: includes/class-mxchat-admin.php:6512
 msgid "Show Download Transcript Button"
 msgstr ""
 
@@ -3847,7 +3851,7 @@ msgid "Show the \"Download Transcript\" item in the chat window menu."
 msgstr ""
 
 #: includes/admin-settings-page.php:387
-#: includes/class-mxchat-admin.php:6514
+#: includes/class-mxchat-admin.php:6520
 msgid "Show Start-New-Chat Button"
 msgstr ""
 
@@ -3856,7 +3860,7 @@ msgid "Show a \"Start new chat\" item in the chat window menu that clears the cu
 msgstr ""
 
 #: includes/admin-settings-page.php:391
-#: includes/class-mxchat-admin.php:6522
+#: includes/class-mxchat-admin.php:6528
 msgid "Start-New-Chat Button Label"
 msgstr ""
 
@@ -3869,7 +3873,7 @@ msgid "Text & Labels"
 msgstr ""
 
 #: includes/admin-settings-page.php:408
-#: includes/class-mxchat-admin.php:6394
+#: includes/class-mxchat-admin.php:6400
 msgid "Top Bar Title"
 msgstr ""
 
@@ -3878,7 +3882,7 @@ msgid "Title text shown in the chatbot header."
 msgstr ""
 
 #: includes/admin-settings-page.php:413
-#: includes/class-mxchat-admin.php:6402
+#: includes/class-mxchat-admin.php:6408
 msgid "AI Agent Text"
 msgstr ""
 
@@ -3887,7 +3891,7 @@ msgid "Text shown for AI agents in the status indicator."
 msgstr ""
 
 #: includes/admin-settings-page.php:418
-#: includes/class-mxchat-admin.php:6450
+#: includes/class-mxchat-admin.php:6456
 msgid "Introductory Message"
 msgstr ""
 
@@ -3912,7 +3916,7 @@ msgid "Cap how many characters a visitor can type or paste into a single message
 msgstr ""
 
 #: includes/admin-settings-page.php:433
-#: includes/class-mxchat-admin.php:6466
+#: includes/class-mxchat-admin.php:6472
 msgid "Chat Teaser Pop-up"
 msgstr ""
 
@@ -3961,7 +3965,7 @@ msgid "Also require users to enter their name with email."
 msgstr ""
 
 #: includes/admin-settings-page.php:480
-#: includes/class-mxchat-admin.php:6442
+#: includes/class-mxchat-admin.php:6448
 msgid "Name Field Placeholder"
 msgstr ""
 
@@ -3994,17 +3998,17 @@ msgid "Pre-defined questions displayed above the chat input to help users get st
 msgstr ""
 
 #: includes/admin-settings-page.php:523
-#: includes/class-mxchat-admin.php:6530
+#: includes/class-mxchat-admin.php:6536
 msgid "Quick Question 1"
 msgstr ""
 
 #: includes/admin-settings-page.php:528
-#: includes/class-mxchat-admin.php:6538
+#: includes/class-mxchat-admin.php:6544
 msgid "Quick Question 2"
 msgstr ""
 
 #: includes/admin-settings-page.php:533
-#: includes/class-mxchat-admin.php:6546
+#: includes/class-mxchat-admin.php:6552
 msgid "Quick Question 3"
 msgstr ""
 
@@ -4255,7 +4259,7 @@ msgid "documentation page"
 msgstr ""
 
 #: includes/admin-settings-page.php:969
-#: includes/class-mxchat-admin.php:7434
+#: includes/class-mxchat-admin.php:7440
 msgid "Test Connection"
 msgstr ""
 
@@ -4450,7 +4454,7 @@ msgid "Leverage Brave Search for improved query understanding."
 msgstr ""
 
 #: includes/admin-settings-page.php:1211
-#: includes/class-mxchat-admin.php:5884
+#: includes/class-mxchat-admin.php:5890
 msgid "Loops Email Capture"
 msgstr ""
 
@@ -4545,27 +4549,27 @@ msgid "Debug panel ready - send a message to begin..."
 msgstr ""
 
 #: includes/admin-settings-page.php:1644
-#: includes/class-mxchat-admin.php:7071
+#: includes/class-mxchat-admin.php:7077
 msgid "Per Hour"
 msgstr ""
 
 #: includes/admin-settings-page.php:1645
-#: includes/class-mxchat-admin.php:7072
+#: includes/class-mxchat-admin.php:7078
 msgid "Per Day"
 msgstr ""
 
 #: includes/admin-settings-page.php:1646
-#: includes/class-mxchat-admin.php:7073
+#: includes/class-mxchat-admin.php:7079
 msgid "Per Week"
 msgstr ""
 
 #: includes/admin-settings-page.php:1647
-#: includes/class-mxchat-admin.php:7074
+#: includes/class-mxchat-admin.php:7080
 msgid "Per Month"
 msgstr ""
 
 #: includes/admin-settings-page.php:1651
-#: includes/class-mxchat-admin.php:7079
+#: includes/class-mxchat-admin.php:7085
 msgid "Logged Out Users"
 msgstr ""
 
@@ -4617,8 +4621,8 @@ msgstr ""
 
 #: includes/admin-settings-page.php:1794
 #: includes/class-mxchat-admin.php:364
-#: includes/class-mxchat-admin.php:7105
-#: includes/class-mxchat-integrator.php:12848
+#: includes/class-mxchat-admin.php:7111
+#: includes/class-mxchat-integrator.php:12807
 #: includes/class-mxchat-public.php:196
 msgid "Rate limit exceeded. Please try again later."
 msgstr ""
@@ -4949,7 +4953,7 @@ msgid "With conversation"
 msgstr ""
 
 #: includes/admin-transcripts-page.php:737
-#: includes/class-mxchat-admin.php:2579
+#: includes/class-mxchat-admin.php:2582
 msgid "Chat deleted"
 msgstr ""
 
@@ -4994,7 +4998,7 @@ msgid "Email Notifications"
 msgstr ""
 
 #: includes/admin-transcripts-page.php:829
-#: includes/class-mxchat-admin.php:6940
+#: includes/class-mxchat-admin.php:6946
 msgid "Enable Chat Notifications"
 msgstr ""
 
@@ -5015,7 +5019,7 @@ msgid "Auto-Email Transcript"
 msgstr ""
 
 #: includes/admin-transcripts-page.php:871
-#: includes/class-mxchat-admin.php:6972
+#: includes/class-mxchat-admin.php:6978
 msgid "Auto-Email Full Transcript"
 msgstr ""
 
@@ -5051,7 +5055,7 @@ msgid "Transcript Management"
 msgstr ""
 
 #: includes/admin-transcripts-page.php:917
-#: includes/class-mxchat-admin.php:6956
+#: includes/class-mxchat-admin.php:6962
 msgid "Auto-Delete Old Transcripts"
 msgstr ""
 
@@ -5724,7 +5728,7 @@ msgid "Guide customers to purchase"
 msgstr ""
 
 #: includes/class-mxchat-addons.php:468
-#: includes/class-mxchat-admin.php:5980
+#: includes/class-mxchat-admin.php:5986
 msgid "Order History"
 msgstr ""
 
@@ -5930,13 +5934,13 @@ msgid "Start Chat"
 msgstr ""
 
 #: includes/class-mxchat-admin.php:369
-#: includes/class-mxchat-admin.php:8129
+#: includes/class-mxchat-admin.php:8135
 #: includes/class-mxchat-public.php:223
 msgid "Enter your name"
 msgstr ""
 
 #: includes/class-mxchat-admin.php:371
-#: includes/class-mxchat-admin.php:8140
+#: includes/class-mxchat-admin.php:8146
 #: includes/class-mxchat-public.php:181
 msgid "Hello! How can I assist you today?"
 msgstr ""
@@ -5947,8 +5951,8 @@ msgid "AI Agent"
 msgstr ""
 
 #: includes/class-mxchat-admin.php:373
-#: includes/class-mxchat-admin.php:8158
-#: includes/class-mxchat-admin.php:8165
+#: includes/class-mxchat-admin.php:8164
+#: includes/class-mxchat-admin.php:8171
 #: includes/class-mxchat-public.php:195
 msgid "How can I assist?"
 msgstr ""
@@ -5982,40 +5986,40 @@ msgid "0"
 msgstr ""
 
 #: includes/class-mxchat-admin.php:398
-#: includes/class-mxchat-admin.php:7636
+#: includes/class-mxchat-admin.php:7642
 msgid "Hey there! Ask me anything!"
 msgstr ""
 
 #: includes/class-mxchat-admin.php:403
-#: includes/class-mxchat-admin.php:7599
+#: includes/class-mxchat-admin.php:7605
 msgid "Would you like to join our mailing list? Please provide your email below."
 msgstr ""
 
 #: includes/class-mxchat-admin.php:404
-#: includes/class-mxchat-admin.php:7616
+#: includes/class-mxchat-admin.php:7622
 #: includes/class-mxchat-integrator.php:1860
 #: includes/class-mxchat-integrator.php:1879
 msgid "Thank you for providing your email! You've been added to our list."
 msgstr ""
 
 #: includes/class-mxchat-admin.php:408
-#: includes/class-mxchat-admin.php:8853
-#: includes/class-mxchat-integrator.php:3938
+#: includes/class-mxchat-admin.php:8859
+#: includes/class-mxchat-integrator.php:3940
 msgid "Please provide the URL to the PDF you'd like to discuss."
 msgstr ""
 
 #: includes/class-mxchat-admin.php:409
-#: includes/class-mxchat-admin.php:8870
-#: includes/class-mxchat-integrator.php:3939
-#: includes/class-mxchat-integrator.php:4281
+#: includes/class-mxchat-admin.php:8876
+#: includes/class-mxchat-integrator.php:3941
+#: includes/class-mxchat-integrator.php:4337
 msgid "I've processed the PDF. What questions do you have about it?"
 msgstr ""
 
 #: includes/class-mxchat-admin.php:410
-#: includes/class-mxchat-admin.php:8887
+#: includes/class-mxchat-admin.php:8893
 #: includes/class-mxchat-integrator.php:2030
-#: includes/class-mxchat-integrator.php:3940
-#: includes/class-mxchat-integrator.php:4292
+#: includes/class-mxchat-integrator.php:3942
+#: includes/class-mxchat-integrator.php:4348
 msgid "Sorry, I couldn't process the PDF. Please ensure it's a valid file."
 msgstr ""
 
@@ -6138,9 +6142,9 @@ msgstr ""
 
 #: includes/class-mxchat-admin.php:1139
 #: includes/class-mxchat-admin.php:1150
-#: includes/class-mxchat-admin.php:3683
-#: includes/class-mxchat-admin.php:4292
-#: includes/class-mxchat-admin.php:7052
+#: includes/class-mxchat-admin.php:3686
+#: includes/class-mxchat-admin.php:4298
+#: includes/class-mxchat-admin.php:7058
 msgid "Dismiss this notice."
 msgstr ""
 
@@ -6201,1550 +6205,1550 @@ msgid "Please enter a valid email address for notifications."
 msgstr ""
 
 #: includes/class-mxchat-admin.php:1942
-#: includes/class-mxchat-admin.php:2331
+#: includes/class-mxchat-admin.php:2334
 msgid "You do not have sufficient permissions to access this page."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:2707
+#: includes/class-mxchat-admin.php:2710
 msgid "No conversation yet"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:2747
+#: includes/class-mxchat-admin.php:2750
 msgid "just now"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:2748
+#: includes/class-mxchat-admin.php:2751
 msgid "m ago"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:2749
+#: includes/class-mxchat-admin.php:2752
 msgid "h ago"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:2750
+#: includes/class-mxchat-admin.php:2753
 msgid "d ago"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:3683
+#: includes/class-mxchat-admin.php:3686
 msgid "All knowledge has been deleted successfully."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:4041
+#: includes/class-mxchat-admin.php:4044
 msgid "No chat sessions selected for deletion."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:4128
+#: includes/class-mxchat-admin.php:4134
 #, php-format
 msgid "%d chat session(s) have been deleted."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:4253
+#: includes/class-mxchat-admin.php:4259
 msgid "Message ID is required."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:4269
+#: includes/class-mxchat-admin.php:4275
 msgid "No RAG context found for this message."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:4277
+#: includes/class-mxchat-admin.php:4283
 msgid "Invalid RAG context data."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:4480
+#: includes/class-mxchat-admin.php:4486
 msgid "Create and manage custom actions to enhance your chatbot's capabilities."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:4492
+#: includes/class-mxchat-admin.php:4498
 msgid "Search Actions"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:4496
+#: includes/class-mxchat-admin.php:4502
 msgid "All Action Types"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:4506
+#: includes/class-mxchat-admin.php:4512
 msgid "Filter"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:4513
+#: includes/class-mxchat-admin.php:4519
 msgid "Add New Action"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:4563
+#: includes/class-mxchat-admin.php:4569
 msgid "Type:"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:4568
+#: includes/class-mxchat-admin.php:4574
 msgid "Trigger phrases:"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:4585
+#: includes/class-mxchat-admin.php:4591
 msgid "Similarity Threshold:"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:4592
+#: includes/class-mxchat-admin.php:4598
 msgid "Assigned bots:"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:4629
+#: includes/class-mxchat-admin.php:4635
 msgid "Edit Form"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:4636
+#: includes/class-mxchat-admin.php:4642
 msgid "Manage Flows"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:4653
+#: includes/class-mxchat-admin.php:4659
 msgid "Are you sure you want to delete this action?"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:4671
+#: includes/class-mxchat-admin.php:4677
 msgid "No actions found"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:4672
+#: includes/class-mxchat-admin.php:4678
 msgid "Get started by creating your first action to enhance your chatbot."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:4674
+#: includes/class-mxchat-admin.php:4680
 msgid "Create Your First Action"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:4716
+#: includes/class-mxchat-admin.php:4722
 msgid "Select Action Type"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:4722
+#: includes/class-mxchat-admin.php:4728
 msgid "Search action types..."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:4764
-#: includes/class-mxchat-admin.php:4768
+#: includes/class-mxchat-admin.php:4770
+#: includes/class-mxchat-admin.php:4774
 msgid "Add-on Required"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:4774
+#: includes/class-mxchat-admin.php:4780
 #, php-format
 msgid "Use the %s action in your chatbot"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:4805
+#: includes/class-mxchat-admin.php:4811
 msgid "Get Add-on"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:4826
+#: includes/class-mxchat-admin.php:4832
 msgid "Configure Action"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:4832
+#: includes/class-mxchat-admin.php:4838
 msgid "Back to Action Types"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:4839
+#: includes/class-mxchat-admin.php:4845
 msgid "Selected Action"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:4840
+#: includes/class-mxchat-admin.php:4846
 msgid "Configure this action for your chatbot"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:4847
+#: includes/class-mxchat-admin.php:4853
 msgid "Action Label (For your reference only)"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:4851
+#: includes/class-mxchat-admin.php:4857
 msgid "Example: Newsletter Signup"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:4856
+#: includes/class-mxchat-admin.php:4862
 msgid "Trigger Phrases (comma-separated)"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:4860
+#: includes/class-mxchat-admin.php:4866
 msgid "Example: sign me up, subscribe me, I want to join, add me to the newsletter"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:4879
+#: includes/class-mxchat-admin.php:4885
 msgid "Lower values (10-30) make the action trigger more easily. Higher values (70-95) require more exact matches."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:4886
+#: includes/class-mxchat-admin.php:4892
 msgid "Which bots should we enable this action for?"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:4929
+#: includes/class-mxchat-admin.php:4935
 msgid "Save Action"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:4940
+#: includes/class-mxchat-admin.php:4946
 msgid "Saving action, please wait..."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:5018
-#: includes/class-mxchat-admin.php:5123
+#: includes/class-mxchat-admin.php:5024
+#: includes/class-mxchat-admin.php:5129
 msgid "Invalid input. Please ensure all fields are filled out."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:5024
-#: includes/class-mxchat-admin.php:5147
+#: includes/class-mxchat-admin.php:5030
+#: includes/class-mxchat-admin.php:5153
 msgid "Please enter at least one valid phrase."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:5044
-#: includes/class-mxchat-admin.php:5167
+#: includes/class-mxchat-admin.php:5050
+#: includes/class-mxchat-admin.php:5173
 #, php-format
 msgid "Error generating embeddings for phrases: %s. Check your embedding API."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:5052
-#: includes/class-mxchat-admin.php:5175
+#: includes/class-mxchat-admin.php:5058
+#: includes/class-mxchat-admin.php:5181
 msgid "No valid embeddings generated. Please check your phrases."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:5078
+#: includes/class-mxchat-admin.php:5084
 msgid "Failed to update action in database."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:5083
+#: includes/class-mxchat-admin.php:5089
 msgid "Intent updated successfully!"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:5130
+#: includes/class-mxchat-admin.php:5136
 msgid "Invalid callback function selected."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:5136
+#: includes/class-mxchat-admin.php:5142
 msgid "an add-on"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:5138
+#: includes/class-mxchat-admin.php:5144
 #, php-format
 msgid "This action requires the %s to be installed and activated."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:5193
+#: includes/class-mxchat-admin.php:5199
 msgid "Database error: "
 msgstr ""
 
-#: includes/class-mxchat-admin.php:5198
+#: includes/class-mxchat-admin.php:5204
 msgid "New intent added successfully!"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:5347
-#: includes/class-mxchat-admin.php:5634
+#: includes/class-mxchat-admin.php:5353
+#: includes/class-mxchat-admin.php:5640
 msgid "Invalid action ID"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:5362
+#: includes/class-mxchat-admin.php:5368
 msgid "Failed to update action status"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:5381
+#: includes/class-mxchat-admin.php:5387
 msgid "No actions selected"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:5392
+#: includes/class-mxchat-admin.php:5398
 msgid "Failed to delete actions"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:5431
-#: includes/class-mxchat-admin.php:5434
-#: includes/class-mxchat-admin.php:5555
+#: includes/class-mxchat-admin.php:5437
+#: includes/class-mxchat-admin.php:5440
+#: includes/class-mxchat-admin.php:5561
 msgid "Please fill in all required fields."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:5460
-#: includes/class-mxchat-admin.php:5525
+#: includes/class-mxchat-admin.php:5466
+#: includes/class-mxchat-admin.php:5531
 msgid "Failed to add action to database."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:5498
-#: includes/class-mxchat-admin.php:5573
+#: includes/class-mxchat-admin.php:5504
+#: includes/class-mxchat-admin.php:5579
 msgid "Please provide at least one trigger phrase."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:5615
+#: includes/class-mxchat-admin.php:5621
 msgid "Failed to update action."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:5643
+#: includes/class-mxchat-admin.php:5649
 msgid "Failed to delete action"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:5669
+#: includes/class-mxchat-admin.php:5675
 msgid "Please provide an intent ID and phrase."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:5677
+#: includes/class-mxchat-admin.php:5683
 msgid "Action not found."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:5683
+#: includes/class-mxchat-admin.php:5689
 msgid "Failed to generate embedding: "
 msgstr ""
 
-#: includes/class-mxchat-admin.php:5697
+#: includes/class-mxchat-admin.php:5703
 msgid "Failed to add phrase."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:5715
+#: includes/class-mxchat-admin.php:5721
 msgid "Invalid phrase ID."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:5723
+#: includes/class-mxchat-admin.php:5729
 msgid "Failed to delete phrase."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:5741
-#: includes/class-mxchat-admin.php:5770
+#: includes/class-mxchat-admin.php:5747
+#: includes/class-mxchat-admin.php:5776
 msgid "Invalid intent ID."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:5785
+#: includes/class-mxchat-admin.php:5791
 msgid "Failed to clear legacy phrases."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:5834
+#: includes/class-mxchat-admin.php:5840
 msgid "WooCommerce Add-on"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:5839
+#: includes/class-mxchat-admin.php:5845
 msgid "Perplexity Add-on"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:5844
+#: includes/class-mxchat-admin.php:5850
 msgid "Forms Add-on"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:5886
-#: includes/class-mxchat-admin.php:5941
-#: includes/class-mxchat-admin.php:5950
-#: includes/class-mxchat-admin.php:5959
+#: includes/class-mxchat-admin.php:5892
+#: includes/class-mxchat-admin.php:5947
+#: includes/class-mxchat-admin.php:5956
+#: includes/class-mxchat-admin.php:5965
 msgid "Customer Engagement"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:5888
+#: includes/class-mxchat-admin.php:5894
 msgid "Collect visitor emails for your mailing list in Loops"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:5893
+#: includes/class-mxchat-admin.php:5899
 msgid "Brave Web Search"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:5895
-#: includes/class-mxchat-admin.php:5904
-#: includes/class-mxchat-admin.php:6025
+#: includes/class-mxchat-admin.php:5901
+#: includes/class-mxchat-admin.php:5910
+#: includes/class-mxchat-admin.php:6031
 msgid "Search Features"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:5897
+#: includes/class-mxchat-admin.php:5903
 msgid "Let users search the web directly from the chat (requires a Brave Search API key)"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:5902
+#: includes/class-mxchat-admin.php:5908
 msgid "Brave Image Search"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:5906
+#: includes/class-mxchat-admin.php:5912
 msgid "Search and display images in the chat conversation (requires a Brave Search API key)"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:5912
+#: includes/class-mxchat-admin.php:5918
 #: includes/class-mxchat-tool-registry.php:203
 msgid "Generate Image (OpenAI)"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:5914
-#: includes/class-mxchat-admin.php:5923
-#: includes/class-mxchat-admin.php:5932
-#: includes/class-mxchat-admin.php:6126
+#: includes/class-mxchat-admin.php:5920
+#: includes/class-mxchat-admin.php:5929
+#: includes/class-mxchat-admin.php:5938
+#: includes/class-mxchat-admin.php:6132
 msgid "Other Features"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:5916
+#: includes/class-mxchat-admin.php:5922
 msgid "Create images with GPT Image from OpenAI (requires OpenAI API key)"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:5921
+#: includes/class-mxchat-admin.php:5927
 #: includes/class-mxchat-tool-registry.php:211
 msgid "Generate Image (Gemini)"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:5925
+#: includes/class-mxchat-admin.php:5931
 msgid "Create images with Imagen from Google (requires Gemini API key)"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:5930
+#: includes/class-mxchat-admin.php:5936
 msgid "Chat with PDF"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:5934
+#: includes/class-mxchat-admin.php:5940
 msgid "Answer questions about uploaded PDF documents"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:5939
+#: includes/class-mxchat-admin.php:5945
 msgid "Slack Live Agent"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:5943
+#: includes/class-mxchat-admin.php:5949
 msgid "Transfer conversation to a human support agent on Slack"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:5948
+#: includes/class-mxchat-admin.php:5954
 msgid "Telegram Live Agent"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:5952
+#: includes/class-mxchat-admin.php:5958
 msgid "Transfer conversation to a human support agent on Telegram"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:5957
+#: includes/class-mxchat-admin.php:5963
 msgid "Back to Chatbot"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:5961
+#: includes/class-mxchat-admin.php:5967
 msgid "Return from live agent mode to AI chatbot"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:5972
+#: includes/class-mxchat-admin.php:5978
 msgid "Product Recommendations"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:5975
-#: includes/class-mxchat-admin.php:5983
-#: includes/class-mxchat-admin.php:5991
-#: includes/class-mxchat-admin.php:5999
-#: includes/class-mxchat-admin.php:6007
-#: includes/class-mxchat-admin.php:6015
+#: includes/class-mxchat-admin.php:5981
+#: includes/class-mxchat-admin.php:5989
+#: includes/class-mxchat-admin.php:5997
+#: includes/class-mxchat-admin.php:6005
+#: includes/class-mxchat-admin.php:6013
+#: includes/class-mxchat-admin.php:6021
 msgid "WooCommerce Features"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:5977
+#: includes/class-mxchat-admin.php:5983
 msgid "Suggest products based on customer preferences"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:5985
+#: includes/class-mxchat-admin.php:5991
 msgid "Allow customers to check their order status"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:5988
+#: includes/class-mxchat-admin.php:5994
 msgid "Show Product Card"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:5993
+#: includes/class-mxchat-admin.php:5999
 msgid "Display product information in the chat"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:5996
+#: includes/class-mxchat-admin.php:6002
 msgid "Add to Cart"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:6001
+#: includes/class-mxchat-admin.php:6007
 msgid "Add products to cart directly from chat"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:6004
+#: includes/class-mxchat-admin.php:6010
 msgid "Proceed to Checkout"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:6009
+#: includes/class-mxchat-admin.php:6015
 msgid "Redirect customer to checkout page"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:6012
+#: includes/class-mxchat-admin.php:6018
 msgid "Featured Products Showcase"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:6017
+#: includes/class-mxchat-admin.php:6023
 msgid "Display a curated selection of products with an AI-generated message"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:6022
+#: includes/class-mxchat-admin.php:6028
 msgid "Perplexity Research"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:6027
+#: includes/class-mxchat-admin.php:6033
 msgid "Allows the chatbot to search the web for accurate, up-to-date answers"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:6032
+#: includes/class-mxchat-admin.php:6038
 msgid "Form Collection"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:6035
+#: includes/class-mxchat-admin.php:6041
 msgid "Form Features"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:6037
+#: includes/class-mxchat-admin.php:6043
 msgid "Collect user information through custom forms in chat"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:6054
+#: includes/class-mxchat-admin.php:6060
 msgid "Unknown Add-on"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:6133
+#: includes/class-mxchat-admin.php:6139
 msgid "Custom action for your chatbot"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:6187
+#: includes/class-mxchat-admin.php:6193
 msgid "Chatbot Settings"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:6203
+#: includes/class-mxchat-admin.php:6209
 msgid "OpenAI API Key"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:6212
+#: includes/class-mxchat-admin.php:6218
 msgid "X.AI API Key"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:6221
+#: includes/class-mxchat-admin.php:6227
 msgid "Claude API Key"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:6230
+#: includes/class-mxchat-admin.php:6236
 msgid "DeepSeek API Key"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:6239
+#: includes/class-mxchat-admin.php:6245
 msgid "Google Gemini API Key"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:6248
+#: includes/class-mxchat-admin.php:6254
 msgid "Voyage AI API Key"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:6257
+#: includes/class-mxchat-admin.php:6263
 msgid "OpenRouter API Key"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:6266
+#: includes/class-mxchat-admin.php:6272
 msgid "Custom Provider (OpenAI-compatible)"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:6275
+#: includes/class-mxchat-admin.php:6281
 msgid "Loops API Key"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:6284
+#: includes/class-mxchat-admin.php:6290
 msgid "Brave API Key"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:6410
+#: includes/class-mxchat-admin.php:6416
 msgid "Require Email To Chat"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:6418
+#: includes/class-mxchat-admin.php:6424
 msgid "Require Email Chat Content"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:6426
+#: includes/class-mxchat-admin.php:6432
 msgid "Require Email Chat Button Text"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:6434
+#: includes/class-mxchat-admin.php:6440
 msgid "Require Name Field"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:6458
+#: includes/class-mxchat-admin.php:6464
 msgid "Input Copy"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:6474
+#: includes/class-mxchat-admin.php:6480
 msgid "Toggle Privacy Notice"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:6482
+#: includes/class-mxchat-admin.php:6488
 msgid "Enable Complianz"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:6490
+#: includes/class-mxchat-admin.php:6496
 msgid "Open Links in a New Tab"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:6498
+#: includes/class-mxchat-admin.php:6504
 msgid "Enable Chat Persistence"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:6554
+#: includes/class-mxchat-admin.php:6560
 msgid "Additional Quick Questions"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:6563
+#: includes/class-mxchat-admin.php:6569
 msgid "Rate Limits Settings"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:6572
+#: includes/class-mxchat-admin.php:6578
 msgid "Loops Settings"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:6580
+#: includes/class-mxchat-admin.php:6586
 msgid "Loops Mailing List"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:6588
+#: includes/class-mxchat-admin.php:6594
 msgid "Triggered Phrase Response"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:6596
+#: includes/class-mxchat-admin.php:6602
 msgid "Email Capture Response"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:6605
+#: includes/class-mxchat-admin.php:6611
 msgid "Brave Search Settings"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:6613
+#: includes/class-mxchat-admin.php:6619
 msgid "Number of Images to Return"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:6621
+#: includes/class-mxchat-admin.php:6627
 msgid "Safe Search"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:6629
+#: includes/class-mxchat-admin.php:6635
 msgid "Number of News Articles"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:6637
+#: includes/class-mxchat-admin.php:6643
 msgid "Country"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:6645
+#: includes/class-mxchat-admin.php:6651
 msgid "Language"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:6654
+#: includes/class-mxchat-admin.php:6660
 msgid "Toolbar Settings & Intents"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:6661
+#: includes/class-mxchat-admin.php:6667
 msgid "Show Chat Toolbar"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:6670
+#: includes/class-mxchat-admin.php:6676
 msgid "Show PDF Upload Button"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:6679
+#: includes/class-mxchat-admin.php:6685
 msgid "Show Word Upload Button"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:6687
+#: includes/class-mxchat-admin.php:6693
 msgid "Intent Trigger Text"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:6695
+#: includes/class-mxchat-admin.php:6701
 msgid "Success Text"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:6703
+#: includes/class-mxchat-admin.php:6709
 msgid "Error Text"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:6712
+#: includes/class-mxchat-admin.php:6718
 msgid "Maximum Document Pages"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:6721
+#: includes/class-mxchat-admin.php:6727
 msgid "Live Agent Settings"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:6729
-#: includes/class-mxchat-admin.php:6826
+#: includes/class-mxchat-admin.php:6735
+#: includes/class-mxchat-admin.php:6832
 msgid "Live Agent Status"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:6740
-#: includes/class-mxchat-admin.php:6836
+#: includes/class-mxchat-admin.php:6746
+#: includes/class-mxchat-admin.php:6842
 msgid "Availability Schedule"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:6749
-#: includes/class-mxchat-admin.php:6845
+#: includes/class-mxchat-admin.php:6755
+#: includes/class-mxchat-admin.php:6851
 msgid "Notification Message"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:6757
-#: includes/class-mxchat-admin.php:6853
+#: includes/class-mxchat-admin.php:6763
+#: includes/class-mxchat-admin.php:6859
 msgid "Away Message"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:6765
+#: includes/class-mxchat-admin.php:6771
 msgid "Slack Agent User IDs"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:6775
+#: includes/class-mxchat-admin.php:6781
 msgid "Shared Handoff Channel"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:6785
+#: includes/class-mxchat-admin.php:6791
 msgid "Archive Channel When Chat Ends"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:6793
+#: includes/class-mxchat-admin.php:6799
 msgid "Slack Webhook URL"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:6801
+#: includes/class-mxchat-admin.php:6807
 msgid "Slack Secret Key"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:6810
+#: includes/class-mxchat-admin.php:6816
 msgid "Slack Bot OAuth Token"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:6819
+#: includes/class-mxchat-admin.php:6825
 msgid "Telegram Settings"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:6861
+#: includes/class-mxchat-admin.php:6867
 msgid "Telegram Bot Token"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:6869
+#: includes/class-mxchat-admin.php:6875
 msgid "Telegram Group ID"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:6877
+#: includes/class-mxchat-admin.php:6883
 msgid "Webhook Secret Token"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:6886
+#: includes/class-mxchat-admin.php:6892
 msgid "YouTube Tutorials"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:6898
+#: includes/class-mxchat-admin.php:6904
 msgid "MXChat Knowledge Base Settings"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:6921
+#: includes/class-mxchat-admin.php:6927
 msgid "MXChat Transcripts Notification Settings"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:6933
+#: includes/class-mxchat-admin.php:6939
 msgid "Chat Notification Settings"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:6948
+#: includes/class-mxchat-admin.php:6954
 msgid "Notification Email Address"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:6964
+#: includes/class-mxchat-admin.php:6970
 msgid "Custom Retention (Days)"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:7003
+#: includes/class-mxchat-admin.php:7009
 msgid "The Pinecone API key appears to be invalid. Please check your API key."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:7024
+#: includes/class-mxchat-admin.php:7030
 msgid "The Pinecone host appears to be invalid. It should look like \"mxchat-vectors-zrmsquq.svc.aped-4627-b74a.pinecone.io\""
 msgstr ""
 
-#: includes/class-mxchat-admin.php:7051
+#: includes/class-mxchat-admin.php:7057
 msgid "Sync settings updated successfully."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:7060
+#: includes/class-mxchat-admin.php:7066
 msgid "1"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:7086
+#: includes/class-mxchat-admin.php:7092
 msgid "Set message limits for each user role and customize the experience when users reach those limits. You can use {limit}, {timeframe}, {count}, and {remaining} as placeholders."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:7091
+#: includes/class-mxchat-admin.php:7097
 msgid "Markdown Links Supported:"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:7092
+#: includes/class-mxchat-admin.php:7098
 msgid "You can include clickable links in your custom messages using markdown syntax:"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:7133
+#: includes/class-mxchat-admin.php:7139
 msgid "Limit:"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:7146
+#: includes/class-mxchat-admin.php:7152
 msgid "Timeframe:"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:7161
+#: includes/class-mxchat-admin.php:7167
 msgid "Custom Message:"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:7166
+#: includes/class-mxchat-admin.php:7172
 msgid "Enter custom message when rate limit is exceeded"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:7170
+#: includes/class-mxchat-admin.php:7176
 msgid "Example: Rate limit reached! [Visit our pricing page](https://example.com/pricing) to upgrade."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:7197
+#: includes/class-mxchat-admin.php:7203
 msgid "Manage all your API keys in one place. Add the API keys for the services you want to use with your chatbot."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:7208
+#: includes/class-mxchat-admin.php:7214
 msgid "Required for OpenAI GPT models and OpenAI embeddings. Get your API key from OpenAI Platform."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:7221
+#: includes/class-mxchat-admin.php:7227
 msgid "Required for X.AI Grok models. Get your API key from X.AI Console."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:7233
+#: includes/class-mxchat-admin.php:7239
 msgid "Required for Anthropic Claude models. Get your API key from Anthropic Console."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:7246
+#: includes/class-mxchat-admin.php:7252
 msgid "Required for DeepSeek models. Get your API key from DeepSeek Platform."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:7259
+#: includes/class-mxchat-admin.php:7265
 msgid "Required for Google Gemini models and embeddings. Get your API key from Google AI Studio."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:7273
+#: includes/class-mxchat-admin.php:7279
 msgid "Required for OpenRouter models. Get your API key from OpenRouter.ai"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:7291
+#: includes/class-mxchat-admin.php:7297
 msgid "Test key"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:7307
-#: includes/class-mxchat-admin.php:7443
+#: includes/class-mxchat-admin.php:7313
+#: includes/class-mxchat-admin.php:7449
 msgid "Testing..."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:7309
-#: includes/class-mxchat-admin.php:7455
+#: includes/class-mxchat-admin.php:7315
+#: includes/class-mxchat-admin.php:7461
 #: includes/class-mxchat-editor-assistant.php:126
 msgid "Failed"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:7310
-#: includes/class-mxchat-admin.php:7460
+#: includes/class-mxchat-admin.php:7316
+#: includes/class-mxchat-admin.php:7466
 msgid "Request failed"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:7372
+#: includes/class-mxchat-admin.php:7378
 msgid "Point MxChat at any OpenAI-compatible /v1/chat/completions endpoint: Ollama, LM Studio, vLLM, llama.cpp, LocalAI, Azure OpenAI, etc. Then select \"Custom (OpenAI-compatible)\" in the model picker."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:7377
+#: includes/class-mxchat-admin.php:7383
 msgid "Azure OpenAI quick start"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:7379
+#: includes/class-mxchat-admin.php:7385
 msgid "<strong>Base URL</strong> → <code>https://&lt;resource&gt;.openai.azure.com/openai/deployments/&lt;deployment&gt;</code>"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:7380
+#: includes/class-mxchat-admin.php:7386
 msgid "<strong>API Key</strong> → your Azure OpenAI key (required)"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:7381
+#: includes/class-mxchat-admin.php:7387
 msgid "<strong>Auth Scheme</strong> → <code>api-key header (Azure OpenAI)</code>"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:7382
+#: includes/class-mxchat-admin.php:7388
 msgid "<strong>API Version</strong> → required for Azure, e.g. <code>2024-08-01-preview</code>"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:7387
+#: includes/class-mxchat-admin.php:7393
 msgid "Base URL"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:7389
+#: includes/class-mxchat-admin.php:7395
 msgid "Examples: Ollama http://localhost:11434/v1  ·  LM Studio http://localhost:1234/v1  ·  vLLM http://gpu:8000/v1  ·  Azure https://<resource>.openai.azure.com/openai/deployments/<deployment>"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:7393
+#: includes/class-mxchat-admin.php:7399
 msgid "API Key (optional)"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:7395
+#: includes/class-mxchat-admin.php:7401
 msgid "Leave empty for unauthenticated local servers. Required for Azure / vLLM / hosted endpoints."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:7399
+#: includes/class-mxchat-admin.php:7405
 msgid "Model Name"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:7401
+#: includes/class-mxchat-admin.php:7407
 msgid "The model identifier the upstream server expects (e.g. llama3.2, mistral, gpt-oss). For Azure this is the deployment ID — leave empty if the Base URL already includes /deployments/<deployment>."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:7405
+#: includes/class-mxchat-admin.php:7411
 msgid "Auth Scheme"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:7407
+#: includes/class-mxchat-admin.php:7413
 msgid "Authorization: Bearer (OpenAI / Ollama / vLLM / LM Studio)"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:7408
+#: includes/class-mxchat-admin.php:7414
 msgid "api-key header (Azure OpenAI)"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:7410
+#: includes/class-mxchat-admin.php:7416
 msgid "Most OpenAI-compatible servers use Bearer. Azure OpenAI uses the api-key header."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:7414
+#: includes/class-mxchat-admin.php:7420
 msgid "API Version (Azure only)"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:7416
+#: includes/class-mxchat-admin.php:7422
 msgid "Appended as ?api-version=... on the request URL. Required for Azure OpenAI; leave empty for non-Azure providers."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:7421
+#: includes/class-mxchat-admin.php:7427
 msgid "Extended routing (opt-in)"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:7422
+#: includes/class-mxchat-admin.php:7428
 msgid "Use custom provider for embeddings"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:7423
+#: includes/class-mxchat-admin.php:7429
 msgid "Use custom provider for image generation"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:7424
+#: includes/class-mxchat-admin.php:7430
 msgid "When off, embeddings and image generation continue to use OpenAI (current behavior). Turn on only if your endpoint exposes OpenAI-compatible /embeddings or /images/generations routes (e.g. Ollama, vLLM, LocalAI)."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:7428
+#: includes/class-mxchat-admin.php:7434
 msgid "Custom Embedding Model"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:7430
+#: includes/class-mxchat-admin.php:7436
 msgid "Only used when \"Use custom provider for embeddings\" is on. The embedding model name is separate from the chat model name above (e.g. Ollama embedding models: nomic-embed-text, mxbai-embed-large). Leave blank to fall back to the chat model name."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:7452
+#: includes/class-mxchat-admin.php:7458
 msgid "OK"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:7477
+#: includes/class-mxchat-admin.php:7483
 msgid "Required for Voyage AI embedding models. Get your API key from Voyage AI."
 msgstr ""
 
 #. translators: %s: link to the Loops integration tab.
-#: includes/class-mxchat-admin.php:7498
+#: includes/class-mxchat-admin.php:7504
 #, php-format
 msgid "Required for Loops email integration. Get your API key from Loops.so, then choose your mailing list under %s."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:7499
+#: includes/class-mxchat-admin.php:7505
 msgid "Integrations, Loops"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:7527
+#: includes/class-mxchat-admin.php:7533
 msgid "Select a list"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:7541
+#: includes/class-mxchat-admin.php:7547
 msgid "Please select a mailing list to use with Loops."
 msgstr ""
 
 #. translators: %s: link to the API Keys tab.
-#: includes/class-mxchat-admin.php:7546
+#: includes/class-mxchat-admin.php:7552
 #, php-format
 msgid "No lists found. Please check your Loops API key under %s."
 msgstr ""
 
 #. translators: %s: link to the API Keys tab.
-#: includes/class-mxchat-admin.php:7555
+#: includes/class-mxchat-admin.php:7561
 #, php-format
 msgid "Enter your Loops API key under %s to load mailing lists."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:7612
+#: includes/class-mxchat-admin.php:7618
 msgid "Enter the instruction for the AI when a trigger keyword is detected. The AI will use this as guidance to naturally ask for the user's email in a conversational way."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:7629
+#: includes/class-mxchat-admin.php:7635
 msgid "Enter the instruction for the AI when a user provides their email. The AI will use this as guidance to naturally confirm the email capture in a conversational way."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:7657
+#: includes/class-mxchat-admin.php:7663
 msgid "Use {visitor_name} to personalize AI responses when lead capture is enabled."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:7658
+#: includes/class-mxchat-admin.php:7664
 msgid "Example: The visitor's name is {visitor_name}. Address them by name."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:7725
+#: includes/class-mxchat-admin.php:7731
 msgid "Copy Instructions"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:7769
+#: includes/class-mxchat-admin.php:7775
 msgid "After entering your OpenRouter API key above, click the button below to load available models."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:7783
-#: includes/class-mxchat-admin.php:8015
+#: includes/class-mxchat-admin.php:7789
+#: includes/class-mxchat-admin.php:8021
 msgid "API key for OpenAI detected"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:7785
-#: includes/class-mxchat-admin.php:8017
+#: includes/class-mxchat-admin.php:7791
+#: includes/class-mxchat-admin.php:8023
 msgid "No API key for OpenAI detected. Please enter API key in API Keys tab."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:7792
+#: includes/class-mxchat-admin.php:7798
 msgid "API key for Anthropic (Claude) detected"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:7794
+#: includes/class-mxchat-admin.php:7800
 msgid "No API key for Anthropic (Claude) detected. Please enter API key in API Keys tab."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:7801
+#: includes/class-mxchat-admin.php:7807
 msgid "API key for X.AI (Grok) detected"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:7803
+#: includes/class-mxchat-admin.php:7809
 msgid "No API key for X.AI (Grok) detected. Please enter API key in API Keys tab."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:7810
+#: includes/class-mxchat-admin.php:7816
 msgid "API key for DeepSeek detected"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:7812
+#: includes/class-mxchat-admin.php:7818
 msgid "No API key for DeepSeek detected. Please enter API key in API Keys tab."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:7819
-#: includes/class-mxchat-admin.php:8033
+#: includes/class-mxchat-admin.php:7825
+#: includes/class-mxchat-admin.php:8039
 msgid "API key for Google Gemini detected"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:7821
-#: includes/class-mxchat-admin.php:8035
+#: includes/class-mxchat-admin.php:7827
+#: includes/class-mxchat-admin.php:8041
 msgid "No API key for Google Gemini detected. Please enter API key in API Keys tab."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:7828
+#: includes/class-mxchat-admin.php:7834
 msgid "API key for OpenRouter detected"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:7830
+#: includes/class-mxchat-admin.php:7836
 msgid "No API key for OpenRouter detected. Please enter API key in API Keys tab."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:7860
+#: includes/class-mxchat-admin.php:7866
 msgid "Test Streaming Compatibility"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:7918
+#: includes/class-mxchat-admin.php:7924
 msgid "Web search is only available for OpenAI and Gemini models."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:7976
+#: includes/class-mxchat-admin.php:7982
 msgid "OpenAI Embeddings"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:7977
+#: includes/class-mxchat-admin.php:7983
 msgid "TE3 Small (1536, Efficient)"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:7978
+#: includes/class-mxchat-admin.php:7984
 msgid "Ada 2 (1536, Recommended)"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:7979
+#: includes/class-mxchat-admin.php:7985
 msgid "TE3 Large (3072, Powerful)"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:7981
+#: includes/class-mxchat-admin.php:7987
 msgid "Voyage AI Embeddings"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:7982
+#: includes/class-mxchat-admin.php:7988
 msgid "Voyage-3 Large (2048, Most Capable)"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:7984
+#: includes/class-mxchat-admin.php:7990
 msgid "Google Gemini Embeddings"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:7985
+#: includes/class-mxchat-admin.php:7991
 msgid "Gemini Embedding (1536, Stable)"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:8004
+#: includes/class-mxchat-admin.php:8010
 msgid "Custom provider embeddings are in use — the model is set in the Custom Embedding Model field under Custom Provider."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:8024
+#: includes/class-mxchat-admin.php:8030
 msgid "API key for Voyage AI detected"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:8026
+#: includes/class-mxchat-admin.php:8032
 msgid "No API key for Voyage AI detected. Please enter API key in API Keys tab."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:8147
+#: includes/class-mxchat-admin.php:8153
 msgid "Use {visitor_name} to personalize greetings when lead capture is enabled."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:8148
+#: includes/class-mxchat-admin.php:8154
 msgid "Example: Hello {visitor_name}! How can I help you today?"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:8201
+#: includes/class-mxchat-admin.php:8207
 msgid "Post Type Visibility"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:8209
+#: includes/class-mxchat-admin.php:8215
 msgid "Show on all post types"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:8214
+#: includes/class-mxchat-admin.php:8220
 msgid "Only show on selected post types"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:8219
+#: includes/class-mxchat-admin.php:8225
 msgid "Hide on selected post types"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:8323
+#: includes/class-mxchat-admin.php:8329
 msgid "Customize the prompt (optional)"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:8326
+#: includes/class-mxchat-admin.php:8332
 msgid "Idle Timeout"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:8330
+#: includes/class-mxchat-admin.php:8336
 msgid "seconds of user inactivity before the prompt appears (5-600)"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:8335
+#: includes/class-mxchat-admin.php:8341
 msgid "Prompt Question"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:8339
-#: includes/class-mxchat-integrator.php:439
+#: includes/class-mxchat-admin.php:8345
+#: includes/class-mxchat-integrator.php:440
 msgid "Was this helpful?"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:8341
+#: includes/class-mxchat-admin.php:8347
 msgid "Leave blank for the default. Shown above the thumbs up/down."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:8345
+#: includes/class-mxchat-admin.php:8351
 msgid "Thank-You Message"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:8349
-#: includes/class-mxchat-integrator.php:443
+#: includes/class-mxchat-admin.php:8355
+#: includes/class-mxchat-integrator.php:444
 msgid "Thanks! Anything we should improve? (optional)"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:8351
+#: includes/class-mxchat-admin.php:8357
 msgid "Leave blank for the default. Shown after the user clicks a thumb."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:8355
+#: includes/class-mxchat-admin.php:8361
 msgid "Feedback Placeholder"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:8359
-#: includes/class-mxchat-integrator.php:444
+#: includes/class-mxchat-admin.php:8365
+#: includes/class-mxchat-integrator.php:445
 msgid "Tell us what could be better…"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:8361
+#: includes/class-mxchat-admin.php:8367
 msgid "Leave blank for the default. Placeholder text inside the feedback textarea."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:8365
+#: includes/class-mxchat-admin.php:8371
 msgid "Saved Confirmation"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:8369
-#: includes/class-mxchat-integrator.php:447
+#: includes/class-mxchat-admin.php:8375
+#: includes/class-mxchat-integrator.php:448
 msgid "Thanks for the feedback."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:8371
+#: includes/class-mxchat-admin.php:8377
 msgid "Leave blank for the default. Shown after the feedback is sent."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:8404
+#: includes/class-mxchat-admin.php:8410
 #: includes/class-mxchat-public.php:202
 msgid "By chatting, you agree to our <a href=\"https://example.com/privacy-policy\" target=\"_blank\">privacy policy</a>."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:8577
-#: includes/class-mxchat-integrator.php:425
+#: includes/class-mxchat-admin.php:8583
+#: includes/class-mxchat-integrator.php:426
 msgid "Start new chat"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:8592
+#: includes/class-mxchat-admin.php:8598
 msgid "Enter Quick Question 1"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:8608
+#: includes/class-mxchat-admin.php:8614
 msgid "Enter Quick Question 2"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:8624
+#: includes/class-mxchat-admin.php:8630
 msgid "Enter Quick Question 3"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:8648
+#: includes/class-mxchat-admin.php:8654
 #, php-format
 msgid "Enter Additional Quick Question %d"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:8650
-#: includes/class-mxchat-admin.php:8666
+#: includes/class-mxchat-admin.php:8656
+#: includes/class-mxchat-admin.php:8672
 msgid "Remove question"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:8651
-#: includes/class-mxchat-admin.php:8667
+#: includes/class-mxchat-admin.php:8657
+#: includes/class-mxchat-admin.php:8673
 msgid "Remove"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:8665
+#: includes/class-mxchat-admin.php:8671
 msgid "Enter Additional Quick Question 4"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:8673
+#: includes/class-mxchat-admin.php:8679
 msgid "Add question"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:8674
+#: includes/class-mxchat-admin.php:8680
 msgid "Add Question"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:8690
+#: includes/class-mxchat-admin.php:8696
 msgid "Required for Brave Search integration. Get your API key from Brave Search API."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:8707
+#: includes/class-mxchat-admin.php:8713
 msgid "Select the number of images to return (1-6)."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:8721
+#: includes/class-mxchat-admin.php:8727
 msgid "Strict"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:8731
+#: includes/class-mxchat-admin.php:8737
 msgid "Set the Safe Search level for image searches. Brave Search only supports \"Strict\" and \"Off\" options."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:8749
+#: includes/class-mxchat-admin.php:8755
 msgid "Select the number of news articles to retrieve (1-10)."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:8766
+#: includes/class-mxchat-admin.php:8772
 msgid "Enter the country code (e.g., \"us\" for United States)."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:8783
+#: includes/class-mxchat-admin.php:8789
 msgid "Enter the language code (e.g., \"en\" for English)."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:8792
+#: includes/class-mxchat-admin.php:8798
 msgid "Configure the intent settings for the Chat with PDF feature."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:8809
+#: includes/class-mxchat-admin.php:8815
 msgid "Enable to display the chat toolbar, adding two icons below the chatbot input field for uploading PDF and Word documents (default is hidden)."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:8829
+#: includes/class-mxchat-admin.php:8835
 msgid "Enable to show the PDF upload button in the chatbot toolbar. Disable to hide it."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:8849
+#: includes/class-mxchat-admin.php:8855
 msgid "Enable to show the Word document upload button in the chatbot toolbar. Disable to hide it."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:8861
+#: includes/class-mxchat-admin.php:8867
 msgid "Enter trigger text"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:8866
+#: includes/class-mxchat-admin.php:8872
 msgid "Text displayed when the intent is triggered."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:8878
+#: includes/class-mxchat-admin.php:8884
 msgid "Enter success text"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:8883
+#: includes/class-mxchat-admin.php:8889
 msgid "Text displayed when the intent is successful."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:8895
+#: includes/class-mxchat-admin.php:8901
 msgid "Enter error text"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:8900
+#: includes/class-mxchat-admin.php:8906
 msgid "Text displayed when an error occurs during the intent."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:8917
+#: includes/class-mxchat-admin.php:8923
 msgid "Set the maximum number of document pages users can upload for processing. (1-69 pages)"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:8933
-#: includes/class-mxchat-admin.php:9139
+#: includes/class-mxchat-admin.php:8939
+#: includes/class-mxchat-admin.php:9145
 msgid "Online"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:8933
-#: includes/class-mxchat-admin.php:9139
+#: includes/class-mxchat-admin.php:8939
+#: includes/class-mxchat-admin.php:9145
 msgid "Offline"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:8977
-#: includes/class-mxchat-admin.php:9596
+#: includes/class-mxchat-admin.php:8983
+#: includes/class-mxchat-admin.php:9602
 msgid "Scheduled hours"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:8978
-#: includes/class-mxchat-admin.php:9597
+#: includes/class-mxchat-admin.php:8984
+#: includes/class-mxchat-admin.php:9603
 msgid "Always available"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:8997
+#: includes/class-mxchat-admin.php:9003
 #, php-format
 msgid "%s start time"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:9002
+#: includes/class-mxchat-admin.php:9008
 #, php-format
 msgid "%s end time"
 msgstr ""
 
 #. translators: 1: the handoff channel, e.g. Slack or Telegram; 2: the site's timezone, e.g. America/New_York
-#: includes/class-mxchat-admin.php:9014
+#: includes/class-mxchat-admin.php:9020
 #, php-format
 msgid "When on, visitors are only offered a %1$s human handoff during these hours — outside them the chatbot keeps answering and never offers to fetch an agent. Applies to %1$s only. Times use the site timezone (%2$s). Set a day's end time earlier than its start for an overnight shift; identical start and end means all day."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:9025
-#: includes/class-mxchat-admin.php:9158
+#: includes/class-mxchat-admin.php:9031
+#: includes/class-mxchat-admin.php:9164
 msgid "Sorry, live agents are currently unavailable. I can continue helping you as an AI assistant."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:9031
-#: includes/class-mxchat-admin.php:9164
+#: includes/class-mxchat-admin.php:9037
+#: includes/class-mxchat-admin.php:9170
 msgid "Message shown when live agents are offline."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:9037
+#: includes/class-mxchat-admin.php:9043
 msgid "Live agent has been notified."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:9043
-#: includes/class-mxchat-admin.php:9152
+#: includes/class-mxchat-admin.php:9049
+#: includes/class-mxchat-admin.php:9158
 msgid "Message shown when live transfer activated."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:9056
+#: includes/class-mxchat-admin.php:9062
 msgid "Enter your Slack webhook URL for live agent notifications."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:9065
+#: includes/class-mxchat-admin.php:9071
 msgid "Secret key for validating Slack requests. Keep this secure."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:9074
+#: includes/class-mxchat-admin.php:9080
 msgid "Your Slack Bot OAuth Token (starts with xoxb-). Keep this secure."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:9086
+#: includes/class-mxchat-admin.php:9092
 msgid "Enter Slack User IDs of agents who should be automatically invited to chat channels (one per line). Find user IDs in Slack profiles under \"More\" → \"Copy member ID\". Example: U1234567890"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:9095
+#: includes/class-mxchat-admin.php:9101
 msgid "Optional. Route ALL live agent handoffs into this one existing Slack channel — each conversation becomes its own thread there. Enter a channel ID (starts with C) or a #channel-name, and invite your bot to the channel first (/invite @YourBot). Agents reply inside a conversation's thread; !endchat inside the thread ends that chat. Leave blank to keep creating a separate chat- channel per conversation."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:9101
+#: includes/class-mxchat-admin.php:9107
 msgid "⚠ Last handoff could not reach this channel"
 msgstr ""
 
 #. translators: %s: Slack API error code
-#: includes/class-mxchat-admin.php:9104
+#: includes/class-mxchat-admin.php:9110
 #, php-format
 msgid "Slack said \"%s\". Handoffs are falling back to per-conversation channels until this is fixed. Check the channel name or ID and make sure the bot has been invited to it."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:9116
+#: includes/class-mxchat-admin.php:9122
 msgid "Archive the conversation's chat- channel when an agent ends the chat with !endchat"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:9117
+#: includes/class-mxchat-admin.php:9123
 msgid "Keeps your Slack sidebar tidy on busy sites — each ended conversation's channel is archived instead of living forever. Archived channels stay searchable in Slack, so the record is never lost. Only applies to per-conversation chat- channels; a Shared Handoff Channel is never archived. If a returning visitor requests an agent again, a fresh channel is created automatically."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:9124
+#: includes/class-mxchat-admin.php:9130
 msgid "Configure Telegram integration for live agent support."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:9146
+#: includes/class-mxchat-admin.php:9152
 msgid "I've notified a support agent. Please allow a moment for them to respond."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:9172
-#: includes/class-mxchat-admin.php:9200
+#: includes/class-mxchat-admin.php:9178
+#: includes/class-mxchat-admin.php:9206
 msgid "Hide"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:9173
+#: includes/class-mxchat-admin.php:9179
 msgid "Your Telegram Bot Token from @BotFather (e.g., 123456789:ABCdefGhIJKlmNoPQRsTUVwxyZ)."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:9181
+#: includes/class-mxchat-admin.php:9187
 msgid "Your Telegram supergroup ID (starts with -100). The group must have forum topics enabled."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:9201
+#: includes/class-mxchat-admin.php:9207
 msgid "Secret token for webhook verification. Use this when setting up your Telegram webhook with the secret_token parameter."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:9413
+#: includes/class-mxchat-admin.php:9419
 msgid "Are you sure you want to delete this trigger phrase?"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:9414
+#: includes/class-mxchat-admin.php:9420
 msgid "Are you sure you want to delete the selected trigger phrases?"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:9416
+#: includes/class-mxchat-admin.php:9422
 msgid "Saved successfully!"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:9417
-#: includes/class-mxchat-admin.php:9691
+#: includes/class-mxchat-admin.php:9423
+#: includes/class-mxchat-admin.php:9697
 msgid "An error occurred. Please try again."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:9418
+#: includes/class-mxchat-admin.php:9424
 msgid "This feature requires MxChat Pro."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:9419
+#: includes/class-mxchat-admin.php:9425
 msgid "This feature requires an add-on."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:9449
-#: includes/class-mxchat-admin.php:9463
-#: includes/class-mxchat-admin.php:9484
+#: includes/class-mxchat-admin.php:9455
+#: includes/class-mxchat-admin.php:9469
+#: includes/class-mxchat-admin.php:9490
 msgid "Copied"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:9594
+#: includes/class-mxchat-admin.php:9600
 msgid "Discard your unsaved changes?"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:9630
+#: includes/class-mxchat-admin.php:9636
 msgid "Search posts and pages..."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:9632
+#: includes/class-mxchat-admin.php:9638
 msgid "Process Selected"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:9634
+#: includes/class-mxchat-admin.php:9640
 msgid "No content found."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:9635
+#: includes/class-mxchat-admin.php:9641
 #, php-format
 msgid "extracting %d PDF(s)..."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:9636
+#: includes/class-mxchat-admin.php:9642
 #, php-format
 msgid " (%d PDF(s) extracted)"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:9685
+#: includes/class-mxchat-admin.php:9691
 msgid "Generating..."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:9686
+#: includes/class-mxchat-admin.php:9692
 #: includes/class-mxchat-content-generator.php:430
 msgid "Planning content structure..."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:9687
+#: includes/class-mxchat-admin.php:9693
 #: includes/class-mxchat-content-generator.php:439
 msgid "Generating images..."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:9688
+#: includes/class-mxchat-admin.php:9694
 #: includes/class-mxchat-content-generator.php:444
 msgid "Writing full content..."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:9689
+#: includes/class-mxchat-admin.php:9695
 #: includes/class-mxchat-content-generator.php:453
 msgid "Creating WordPress post..."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:9690
+#: includes/class-mxchat-admin.php:9696
 #: includes/class-mxchat-content-generator.php:560
 msgid "Content generated successfully!"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:9692
+#: includes/class-mxchat-admin.php:9698
 #: includes/class-mxchat-content-generator.php:684
 msgid "Content updated successfully."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:9693
+#: includes/class-mxchat-admin.php:9699
 #: includes/class-mxchat-content-generator.php:297
 msgid "Please enter a prompt."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:10564
+#: includes/class-mxchat-admin.php:10570
 msgid "You do not have sufficient permissions to delete all prompts."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:10649
+#: includes/class-mxchat-admin.php:10655
 msgid "You do not have sufficient permissions to delete prompts."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:10657
+#: includes/class-mxchat-admin.php:10663
 msgid "Invalid prompt ID."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:10678
+#: includes/class-mxchat-admin.php:10684
 msgid "Pinecone configuration is missing."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:10696
+#: includes/class-mxchat-admin.php:10702
 msgid "Vector deleted successfully from Pinecone."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:10700
+#: includes/class-mxchat-admin.php:10706
 msgid "Failed to delete from Pinecone: "
 msgstr ""
 
-#: includes/class-mxchat-admin.php:10721
+#: includes/class-mxchat-admin.php:10727
 msgid "Entry deleted successfully."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:10724
+#: includes/class-mxchat-admin.php:10730
 msgid "Failed to delete entry from database."
 msgstr ""
 
@@ -7848,7 +7852,7 @@ msgid "Gemini image generation failed."
 msgstr ""
 
 #: includes/class-mxchat-content-generator.php:1284
-#: includes/class-mxchat-integrator.php:3035
+#: includes/class-mxchat-integrator.php:3037
 msgid "Failed to decode image data."
 msgstr ""
 
@@ -8188,79 +8192,79 @@ msgstr ""
 msgid "Block"
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:422
+#: includes/class-mxchat-integrator.php:423
 msgid "Download Transcript"
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:426
+#: includes/class-mxchat-integrator.php:427
 msgid "Start a new chat? This clears the current conversation."
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:427
+#: includes/class-mxchat-integrator.php:428
 msgid "Stop response"
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:428
+#: includes/class-mxchat-integrator.php:429
 msgid "Chat transcript"
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:440
+#: includes/class-mxchat-integrator.php:441
 msgid "Helpful"
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:441
+#: includes/class-mxchat-integrator.php:442
 msgid "Not helpful"
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:445
-#: includes/class-mxchat-integrator.php:5341
+#: includes/class-mxchat-integrator.php:446
+#: includes/class-mxchat-integrator.php:5397
 #: includes/class-mxchat-public.php:375
 msgid "Send"
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:446
+#: includes/class-mxchat-integrator.php:447
 msgid "Skip"
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:471
-#: includes/class-mxchat-integrator.php:4302
-#: includes/class-mxchat-integrator.php:4308
-#: includes/class-mxchat-integrator.php:4355
+#: includes/class-mxchat-integrator.php:472
+#: includes/class-mxchat-integrator.php:4358
+#: includes/class-mxchat-integrator.php:4364
+#: includes/class-mxchat-integrator.php:4411
 #: includes/class-mxchat-word-handler.php:216
 #: includes/class-mxchat-word-handler.php:222
 #: includes/class-mxchat-word-handler.php:376
 msgid "Session ID missing."
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:677
+#: includes/class-mxchat-integrator.php:678
 msgid "Too many nonce requests. Try again shortly."
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:874
+#: includes/class-mxchat-integrator.php:875
 msgid ""
 "event: error\n"
 "data: "
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:874
+#: includes/class-mxchat-integrator.php:875
 msgid "Missing session_id"
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:888
+#: includes/class-mxchat-integrator.php:889
 msgid ""
 "event: newMessages\n"
 "data: "
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:891
+#: includes/class-mxchat-integrator.php:892
 msgid ""
 "event: keepAlive\n"
 "data: "
 msgstr ""
 
 #: includes/class-mxchat-integrator.php:1361
-#: includes/class-mxchat-integrator.php:4202
-#: includes/class-mxchat-integrator.php:4298
+#: includes/class-mxchat-integrator.php:4256
+#: includes/class-mxchat-integrator.php:4354
 #: includes/class-mxchat-word-handler.php:23
 msgid "Invalid nonce."
 msgstr ""
@@ -8312,7 +8316,7 @@ msgid "Your message is too long. Please keep it under %d characters."
 msgstr ""
 
 #: includes/class-mxchat-integrator.php:1890
-#: includes/class-mxchat-integrator.php:2890
+#: includes/class-mxchat-integrator.php:2892
 msgid "Please provide your email address."
 msgstr ""
 
@@ -8329,506 +8333,510 @@ msgid "Failed to send message to agent"
 msgstr ""
 
 #: includes/class-mxchat-integrator.php:1992
-#: includes/class-mxchat-integrator.php:4258
+#: includes/class-mxchat-integrator.php:4312
 #, php-format
 msgid "The provided PDF exceeds the maximum allowed limit of %d pages. Please provide a smaller document."
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:2151
-#: includes/class-mxchat-integrator.php:2658
+#: includes/class-mxchat-integrator.php:2153
+#: includes/class-mxchat-integrator.php:2660
 msgid "Unable to process your message. The embedding service is not responding correctly."
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:2906
-#: includes/class-mxchat-integrator.php:2965
+#: includes/class-mxchat-integrator.php:2908
+#: includes/class-mxchat-integrator.php:2967
 msgid "Create an image of "
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:2924
-#: includes/class-mxchat-integrator.php:2979
+#: includes/class-mxchat-integrator.php:2926
+#: includes/class-mxchat-integrator.php:2981
 msgid "Generated Image"
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:2925
-#: includes/class-mxchat-integrator.php:2980
+#: includes/class-mxchat-integrator.php:2927
+#: includes/class-mxchat-integrator.php:2982
 msgid "Here is the image I generated:"
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:2944
-#: includes/class-mxchat-integrator.php:2993
+#: includes/class-mxchat-integrator.php:2946
+#: includes/class-mxchat-integrator.php:2995
 msgid "I'm sorry, but I couldn't generate an image based on your request."
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:2969
+#: includes/class-mxchat-integrator.php:2971
 msgid "Gemini API key is not configured."
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:3086
-#: includes/class-mxchat-integrator.php:3173
+#: includes/class-mxchat-integrator.php:3088
+#: includes/class-mxchat-integrator.php:3175
 msgid "Error generating image: "
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:3099
-#: includes/class-mxchat-integrator.php:3187
+#: includes/class-mxchat-integrator.php:3101
+#: includes/class-mxchat-integrator.php:3189
 msgid "Failed to generate image."
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:3110
-#: includes/class-mxchat-integrator.php:6044
-#: includes/class-mxchat-integrator.php:9558
-#: includes/class-mxchat-integrator.php:9732
+#: includes/class-mxchat-integrator.php:3112
+#: includes/class-mxchat-integrator.php:5975
+#: includes/class-mxchat-integrator.php:9517
+#: includes/class-mxchat-integrator.php:9691
 #: includes/class-mxchat-utils.php:625
 msgid "Custom provider Base URL is not configured."
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:3129
+#: includes/class-mxchat-integrator.php:3131
 msgid "Error generating image (custom provider): "
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:3145
+#: includes/class-mxchat-integrator.php:3147
 msgid "Custom provider did not return an image."
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:3208
+#: includes/class-mxchat-integrator.php:3210
 msgid "I apologize, but could you please rephrase your search request?"
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:3220
+#: includes/class-mxchat-integrator.php:3222
 msgid "Search functionality is temporarily unavailable. Please try again later."
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:3256
+#: includes/class-mxchat-integrator.php:3258
 msgid "I encountered an error while searching. Please try again."
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:3265
+#: includes/class-mxchat-integrator.php:3267
 msgid "I received an invalid response from the search service."
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:3281
+#: includes/class-mxchat-integrator.php:3283
 #, php-format
 msgid "Here's what I found about '%s':"
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:3316
+#: includes/class-mxchat-integrator.php:3318
 #, php-format
 msgid "I searched for \"%s\" but couldn't find any relevant results. Would you like to try different search terms?"
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:3340
+#: includes/class-mxchat-integrator.php:3342
 msgid "I'm sorry, I couldn't interpret your search query. Please specify what you'd like to see images of."
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:3354
+#: includes/class-mxchat-integrator.php:3356
 msgid "API key is not configured. Please set it in the Brave Search Settings."
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:3388
-#: includes/class-mxchat-integrator.php:3436
+#: includes/class-mxchat-integrator.php:3390
+#: includes/class-mxchat-integrator.php:3438
 msgid "I'm sorry, I couldn't retrieve any images based on your request."
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:3410
+#: includes/class-mxchat-integrator.php:3412
 msgid "Image"
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:3424
+#: includes/class-mxchat-integrator.php:3426
 #, php-format
 msgid "Here are some images of %s:"
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:3455
+#: includes/class-mxchat-integrator.php:3457
 msgid "Interpret the user's request to provide only the essential keywords or phrases for image searching. Remove conversational language, politeness, or extra context. Return a concise search query that doesn't lose any of the original meaning."
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:3902
+#: includes/class-mxchat-integrator.php:3904
 msgid "MxChat AI Chatbot"
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:4097
+#: includes/class-mxchat-integrator.php:4104
 msgid "Page "
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:4206
+#. translators: 1: skipped page count, 2: successfully embedded page count
+#: includes/class-mxchat-integrator.php:4136
+#, php-format
+msgid "PDF chat: %1$d page(s) skipped because embedding failed; %2$d page(s) stored."
+msgstr ""
+
+#. translators: %s: error reason reported by the embedding provider
+#: includes/class-mxchat-integrator.php:4182
+#, php-format
+msgid "(%s)"
+msgstr ""
+
+#: includes/class-mxchat-integrator.php:4260
 #: includes/class-mxchat-word-handler.php:27
 msgid "Missing required parameters."
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:4215
+#: includes/class-mxchat-integrator.php:4269
 msgid "PDF uploads are currently disabled."
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:4233
+#: includes/class-mxchat-integrator.php:4287
 msgid "Invalid file type. Only PDF files are allowed."
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:4245
+#: includes/class-mxchat-integrator.php:4299
 #: includes/class-mxchat-word-handler.php:69
 msgid "Failed to upload file."
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:4268
+#: includes/class-mxchat-integrator.php:4322
 msgid "The uploaded PDF appears to be empty or contains unsupported content."
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:4341
+#: includes/class-mxchat-integrator.php:4397
 msgid "PDF removed successfully."
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:5323
+#: includes/class-mxchat-integrator.php:5379
 msgid "Bot token not configured"
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:5337
+#: includes/class-mxchat-integrator.php:5393
 msgid "Reply to User"
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:5353
+#: includes/class-mxchat-integrator.php:5409
 #, php-format
 msgid "Reply to session: %s"
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:5361
+#: includes/class-mxchat-integrator.php:5417
 msgid "Type your message here..."
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:5407
+#: includes/class-mxchat-integrator.php:5463
 msgid "Command text is required. Format: /reply session_id message"
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:5416
+#: includes/class-mxchat-integrator.php:5472
 msgid "Invalid format. Use: /reply session_id message"
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:5431
+#: includes/class-mxchat-integrator.php:5487
 msgid "Failed to save message"
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:5450
+#: includes/class-mxchat-integrator.php:5506
 msgid "You are now chatting with the AI chatbot."
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:5846
+#: includes/class-mxchat-integrator.php:5909
 msgid "Voyage AI API key is not configured"
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:5858
-#: includes/class-mxchat-integrator.php:8680
+#: includes/class-mxchat-integrator.php:5917
+#: includes/class-mxchat-integrator.php:8639
 msgid "Google Gemini API key is not configured"
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:5870
-#: includes/class-mxchat-integrator.php:8824
-#: includes/class-mxchat-integrator.php:8873
+#: includes/class-mxchat-integrator.php:5925
+#: includes/class-mxchat-integrator.php:8783
+#: includes/class-mxchat-integrator.php:8832
 msgid "OpenAI API key is not configured"
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:5880
-#: includes/class-mxchat-integrator.php:6040
+#: includes/class-mxchat-integrator.php:5934
+#: includes/class-mxchat-integrator.php:5972
 msgid "No text provided for embedding generation"
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:5941
-msgid "Connection error when generating embeddings: "
-msgstr ""
-
-#: includes/class-mxchat-integrator.php:5964
-msgid "Invalid API key for embedding generation. Please check your API key configuration."
-msgstr ""
-
-#: includes/class-mxchat-integrator.php:5972
-msgid "Authentication failed for embedding generation. Please check your API key."
-msgstr ""
-
-#: includes/class-mxchat-integrator.php:5978
-msgid "Rate limit exceeded for embedding generation. Please try again later."
-msgstr ""
-
-#: includes/class-mxchat-integrator.php:5984
-msgid "API quota exceeded for embedding generation. Please check your billing details."
-msgstr ""
-
-#: includes/class-mxchat-integrator.php:5991
-msgid "Embedding API error - check embedding API key.: "
-msgstr ""
-
-#: includes/class-mxchat-integrator.php:6007
-msgid "Received invalid embedding data from the Gemini API."
-msgstr ""
-
-#: includes/class-mxchat-integrator.php:6018
-msgid "Received invalid embedding data from the API."
-msgstr ""
-
-#: includes/class-mxchat-integrator.php:6026
+#: includes/class-mxchat-integrator.php:5950
 msgid "System error when generating embeddings: "
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:6063
-msgid "Connection error when generating embeddings (custom provider): "
-msgstr ""
-
-#: includes/class-mxchat-integrator.php:6072
-msgid "Custom embedding endpoint error: "
-msgstr ""
-
-#: includes/class-mxchat-integrator.php:6081
+#: includes/class-mxchat-integrator.php:5983
 msgid "Invalid embedding response from custom provider."
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:6763
+#: includes/class-mxchat-integrator.php:5989
+msgid "Connection error when generating embeddings: "
+msgstr ""
+
+#: includes/class-mxchat-integrator.php:6002
+msgid "Received invalid embedding data from the Gemini API."
+msgstr ""
+
+#: includes/class-mxchat-integrator.php:6004
+msgid "Received invalid embedding data from the API."
+msgstr ""
+
+#: includes/class-mxchat-integrator.php:6012
+msgid "Invalid API key for embedding generation. Please check your API key configuration."
+msgstr ""
+
+#: includes/class-mxchat-integrator.php:6020
+msgid "Authentication failed for embedding generation. Please check your API key."
+msgstr ""
+
+#: includes/class-mxchat-integrator.php:6026
+msgid "Rate limit exceeded for embedding generation. Please try again later."
+msgstr ""
+
+#: includes/class-mxchat-integrator.php:6032
+msgid "API quota exceeded for embedding generation. Please check your billing details."
+msgstr ""
+
+#: includes/class-mxchat-integrator.php:6039
+msgid "Embedding API error - check embedding API key.: "
+msgstr ""
+
+#: includes/class-mxchat-integrator.php:6722
 msgid "YouTube video"
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:6766
+#: includes/class-mxchat-integrator.php:6725
 #, php-format
 msgid "Play video: %s"
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:6772
+#: includes/class-mxchat-integrator.php:6731
 msgid "Watch on YouTube"
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:8309
+#: includes/class-mxchat-integrator.php:8268
 msgid "[A visual result has already been shown to the user in the chat. Do not repeat or describe it in detail — reply with at most a brief one-line caption.]"
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:8593
+#: includes/class-mxchat-integrator.php:8552
 msgid "I looked into that but could not put together a final answer. Please try rephrasing your request."
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:8600
+#: includes/class-mxchat-integrator.php:8559
 msgid "I couldn't find relevant information on that topic."
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:8622
+#: includes/class-mxchat-integrator.php:8581
 msgid "No OpenRouter model selected. Please select a model in settings."
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:8633
+#: includes/class-mxchat-integrator.php:8592
 msgid "OpenRouter API key is not configured"
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:8700
+#: includes/class-mxchat-integrator.php:8659
 msgid "Claude API key is not configured"
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:8731
+#: includes/class-mxchat-integrator.php:8690
 msgid "X.AI API key is not configured"
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:8762
-#: includes/class-mxchat-integrator.php:12076
+#: includes/class-mxchat-integrator.php:8721
+#: includes/class-mxchat-integrator.php:12035
 msgid "DeepSeek API key is not configured"
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:8795
+#: includes/class-mxchat-integrator.php:8754
 msgid "Custom provider is not configured. Set Base URL in MxChat → API Keys → Custom Provider."
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:8929
+#: includes/class-mxchat-integrator.php:8888
 #, php-format
 msgid "An error occurred: %s"
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:9721
+#: includes/class-mxchat-integrator.php:9680
 #, php-format
 msgid "Custom provider error: %s"
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:9773
+#: includes/class-mxchat-integrator.php:9732
 #, php-format
 msgid "Custom provider request failed: %s"
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:9777
+#: includes/class-mxchat-integrator.php:9736
 #, php-format
 msgid "Custom provider returned HTTP %d."
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:9783
+#: includes/class-mxchat-integrator.php:9742
 msgid "Custom provider returned an unexpected response shape."
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:9862
+#: includes/class-mxchat-integrator.php:9821
 #, php-format
 msgid "Web search error: %s"
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:9886
+#: includes/class-mxchat-integrator.php:9845
 msgid "Failed to connect to OpenAI web search API"
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:9901
+#: includes/class-mxchat-integrator.php:9860
 #, php-format
 msgid "OpenAI API error: %s"
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:9910
+#: includes/class-mxchat-integrator.php:9869
 msgid "Invalid response from OpenAI"
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:10042
-#: includes/class-mxchat-integrator.php:10113
+#: includes/class-mxchat-integrator.php:10001
+#: includes/class-mxchat-integrator.php:10072
 msgid "The AI provider returned an empty response. Please try again."
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:10946
+#: includes/class-mxchat-integrator.php:10905
 #, php-format
 msgid "response incomplete: %s"
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:10950
+#: includes/class-mxchat-integrator.php:10909
 #, php-format
 msgid "%1$s returned an empty response (%2$s). Please try again."
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:10951
+#: includes/class-mxchat-integrator.php:10910
 #, php-format
 msgid "%s returned an empty response. Please try again."
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:11034
+#: includes/class-mxchat-integrator.php:10993
 msgid "OpenRouter API error: "
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:11052
+#: includes/class-mxchat-integrator.php:11011
 msgid "Unexpected response format from OpenRouter."
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:11059
+#: includes/class-mxchat-integrator.php:11018
 msgid "System error when processing OpenRouter request: "
 msgstr ""
 
 #. translators: %s: raw provider error detail
-#: includes/class-mxchat-integrator.php:11128
+#: includes/class-mxchat-integrator.php:11087
 #, php-format
 msgid "The selected AI model isn't available on your API key. Choose another model in MxChat → Settings. (Details: %s)"
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:11131
+#: includes/class-mxchat-integrator.php:11090
 msgid "The selected AI model isn't available on your API key. Choose another model in MxChat → Settings."
 msgstr ""
 
 #. translators: 1: provider label, 2: raw provider error detail
-#: includes/class-mxchat-integrator.php:11136
+#: includes/class-mxchat-integrator.php:11095
 #, php-format
 msgid "The AI provider (%1$s) returned an error: %2$s. Check your model and API key in MxChat → Settings."
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:11137
+#: includes/class-mxchat-integrator.php:11096
 msgid "AI"
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:11140
+#: includes/class-mxchat-integrator.php:11099
 msgid "The AI provider returned an error. Check your model and API key in MxChat → Settings."
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:11144
+#: includes/class-mxchat-integrator.php:11103
 msgid "Sorry, I'm having trouble responding right now. Please try again in a moment."
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:11374
+#: includes/class-mxchat-integrator.php:11333
 msgid "Invalid OpenAI API key. Please check your API key configuration."
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:11383
+#: includes/class-mxchat-integrator.php:11342
 msgid "Authentication failed with OpenAI. Please check your API key."
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:11390
+#: includes/class-mxchat-integrator.php:11349
 msgid "OpenAI rate limit exceeded. Please try again later."
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:11397
+#: includes/class-mxchat-integrator.php:11356
 msgid "OpenAI API quota exceeded. Please check your billing details."
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:11425
+#: includes/class-mxchat-integrator.php:11384
 msgid "Unexpected response format from OpenAI."
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:11432
+#: includes/class-mxchat-integrator.php:11391
 msgid "System error when processing OpenAI request: "
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:11545
+#: includes/class-mxchat-integrator.php:11504
 msgid "Invalid X.AI API key. Please check your API key configuration."
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:11555
+#: includes/class-mxchat-integrator.php:11514
 msgid "Authentication failed with X.AI. Please check your API key."
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:11566
+#: includes/class-mxchat-integrator.php:11525
 msgid "Invalid model specified for X.AI. Please check your model configuration."
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:11577
+#: includes/class-mxchat-integrator.php:11536
 msgid "X.AI rate limit exceeded. Please try again later."
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:11587
+#: includes/class-mxchat-integrator.php:11546
 msgid "X.AI API quota exceeded. Please check your billing details."
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:11596
+#: includes/class-mxchat-integrator.php:11555
 msgid "X.AI service is currently unavailable. Please try again later."
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:11626
+#: includes/class-mxchat-integrator.php:11585
 msgid "Unexpected response format from X.AI."
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:11634
+#: includes/class-mxchat-integrator.php:11593
 msgid "System error when processing X.AI request: "
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:11739
+#: includes/class-mxchat-integrator.php:11698
 msgid "Authentication failed with DeepSeek. Please check your API key."
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:11747
+#: includes/class-mxchat-integrator.php:11706
 msgid "Invalid DeepSeek API key. Please check your API key configuration."
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:11757
+#: includes/class-mxchat-integrator.php:11716
 msgid "DeepSeek API quota exceeded. Please check your billing details."
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:11763
+#: includes/class-mxchat-integrator.php:11722
 msgid "DeepSeek rate limit exceeded. Please try again later."
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:11774
+#: includes/class-mxchat-integrator.php:11733
 msgid "DeepSeek service is currently unavailable. Please try again later."
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:11801
+#: includes/class-mxchat-integrator.php:11760
 msgid "Unexpected response format from DeepSeek."
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:11809
+#: includes/class-mxchat-integrator.php:11768
 msgid "System error when processing DeepSeek request: "
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:12752
+#: includes/class-mxchat-integrator.php:12711
 msgid "This chatbot has reached its message limit. Please try again later."
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:12854
+#: includes/class-mxchat-integrator.php:12813
 msgid "hour"
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:12857
+#: includes/class-mxchat-integrator.php:12816
 msgid "day"
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:12860
+#: includes/class-mxchat-integrator.php:12819
 msgid "week"
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:12863
+#: includes/class-mxchat-integrator.php:12822
 msgid "month"
 msgstr ""
 
@@ -9138,70 +9146,70 @@ msgstr ""
 msgid "%s — retired by provider, choose a replacement"
 msgstr ""
 
-#: includes/class-mxchat-privacy.php:68
-#: includes/class-mxchat-privacy.php:76
+#: includes/class-mxchat-privacy.php:71
+#: includes/class-mxchat-privacy.php:79
 msgid "MxChat Chat Conversations"
 msgstr ""
 
-#: includes/class-mxchat-privacy.php:170
+#: includes/class-mxchat-privacy.php:173
 msgid "Session ID"
 msgstr ""
 
-#: includes/class-mxchat-privacy.php:171
+#: includes/class-mxchat-privacy.php:174
 msgid "Conversation started"
 msgstr ""
 
-#: includes/class-mxchat-privacy.php:172
+#: includes/class-mxchat-privacy.php:175
 msgid "Last message"
 msgstr ""
 
-#: includes/class-mxchat-privacy.php:175
+#: includes/class-mxchat-privacy.php:178
 msgid "Started on page"
 msgstr ""
 
-#: includes/class-mxchat-privacy.php:178
+#: includes/class-mxchat-privacy.php:181
 msgid "Email on record"
 msgstr ""
 
-#: includes/class-mxchat-privacy.php:181
+#: includes/class-mxchat-privacy.php:184
 msgid "Name on record"
 msgstr ""
 
-#: includes/class-mxchat-privacy.php:184
+#: includes/class-mxchat-privacy.php:187
 msgid "Visitor identifier"
 msgstr ""
 
-#: includes/class-mxchat-privacy.php:196
+#: includes/class-mxchat-privacy.php:199
 msgid "Chat Conversations (MxChat)"
 msgstr ""
 
-#: includes/class-mxchat-privacy.php:197
+#: includes/class-mxchat-privacy.php:200
 msgid "Chatbot conversations recorded by the MxChat plugin."
 msgstr ""
 
-#: includes/class-mxchat-privacy.php:212
+#: includes/class-mxchat-privacy.php:215
 msgid "Visitor"
 msgstr ""
 
-#: includes/class-mxchat-privacy.php:217
+#: includes/class-mxchat-privacy.php:220
 msgid "Agent"
 msgstr ""
 
 #. translators: %s: chat session id
-#: includes/class-mxchat-privacy.php:262
+#: includes/class-mxchat-privacy.php:265
 #, php-format
 msgid "Chat conversation %s was retained by a site-specific policy (mxchat_privacy_erase_session filter)."
 msgstr ""
 
-#: includes/class-mxchat-privacy.php:379
+#: includes/class-mxchat-privacy.php:388
 msgid "This site uses MxChat to provide an AI chat assistant. When you use the chat, your messages and the assistant's replies are stored in this site's own database — they are not stored by a third-party chat service. If you provide your name or email address in the chat, those are stored with the conversation. Logged-in visitors are identified by their username; anonymous visitors are identified by their IP address. The page on which the conversation started is also recorded."
 msgstr ""
 
-#: includes/class-mxchat-privacy.php:380
+#: includes/class-mxchat-privacy.php:389
 msgid "Chat conversations are kept according to the retention period configured by the site administrator, and may be deleted automatically after that period. Documents uploaded to the chat for analysis are processed on this server and their temporary copies expire automatically."
 msgstr ""
 
-#: includes/class-mxchat-privacy.php:381
+#: includes/class-mxchat-privacy.php:390
 msgid "Chat data is included in WordPress's personal data export and erasure tools: if you request a copy or deletion of your personal data from this site, your chat conversations are included in that request automatically."
 msgstr ""
 
@@ -9494,28 +9502,28 @@ msgstr ""
 msgid "No embedding API key configured for the selected embedding model. Configure it in MxChat settings before pushing knowledge."
 msgstr ""
 
-#: mxchat-basic.php:1076
+#: mxchat-basic.php:1101
 msgid "Your chatbot model has been automatically updated due to a model deprecation."
 msgstr ""
 
-#: mxchat-basic.php:1080
+#: mxchat-basic.php:1105
 msgid "MxChat Model Updated"
 msgstr ""
 
-#: mxchat-basic.php:1112
+#: mxchat-basic.php:1137
 msgid "MxChat: your AI model is being rejected by the provider"
 msgstr ""
 
 #. translators: 1: model id, 2: provider name
-#: mxchat-basic.php:1116
+#: mxchat-basic.php:1141
 #, php-format
 msgid "Chat requests using the model \"%1$s\" are failing because %2$s reports it as unavailable on your API key (it may have been retired). Visitors may be seeing errors instead of replies."
 msgstr ""
 
-#: mxchat-basic.php:1118
+#: mxchat-basic.php:1143
 msgid "the AI provider"
 msgstr ""
 
-#: mxchat-basic.php:1121
+#: mxchat-basic.php:1146
 msgid "Choose a different model in MxChat Settings"
 msgstr ""

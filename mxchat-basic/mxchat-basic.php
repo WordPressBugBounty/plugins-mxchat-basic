@@ -3,7 +3,7 @@
  * Plugin Name: MxChat
  * Plugin URI: https://mxchat.ai/
  * Description: AI chatbot for WordPress with OpenAI, Claude, xAI, DeepSeek, live agent, PDF uploads, WooCommerce, and training on website data.
- * Version: 3.2.17
+ * Version: 3.2.18
  * Author: MxChat
  * Author URI: https://mxchat.ai
  * License: GPLv2 or later
@@ -411,6 +411,7 @@ add_filter('flying_press_cacheable', function($cacheable) {
 function mxchat_include_classes() {
     $class_files = array(
         'includes/class-mxchat-model-catalog.php',
+        'includes/class-mxchat-session-store.php',
         'includes/class-mxchat-live-agent-schedule.php',
         'includes/class-mxchat-tool-registry.php',
         'includes/class-mxchat-integrator.php',
@@ -448,6 +449,12 @@ function mxchat_include_classes() {
     // GDPR: register with WP's personal-data export/erase tools (b81e42).
     if (class_exists('MxChat_Privacy')) {
         MxChat_Privacy::init();
+    }
+
+    // Per-session state store: retention cron + the cron-independent
+    // migration drain off admin_init (b64b77).
+    if (class_exists('MxChat_Session_Store')) {
+        MxChat_Session_Store::init();
     }
 
     // Editor Assistant — free, OFF-by-default block-editor AI actions (plan-8cb0cb).
@@ -517,6 +524,24 @@ function mxchat_create_url_clicks_table() {
     
     require_once(ABSPATH . 'wp-admin/includes/upgrade.php');
     dbDelta($sql);
+}
+
+/**
+ * Create the per-session state table (b64b77).
+ *
+ * Callable from the activation hook, which can run before plugins_loaded has
+ * included the class files — so it loads the class itself when needed.
+ */
+function mxchat_create_sessions_table() {
+    if (!class_exists('MxChat_Session_Store')) {
+        $path = plugin_dir_path(__FILE__) . 'includes/class-mxchat-session-store.php';
+        if (!file_exists($path)) {
+            return false;
+        }
+        require_once $path;
+    }
+
+    return MxChat_Session_Store::create_table();
 }
 
 /**
@@ -1134,6 +1159,10 @@ function mxchat_activate() {
     // Create chat transcripts table with improved function
     mxchat_create_chat_transcripts_table();
 
+    // Per-session state table (b64b77). Activation can run before
+    // plugins_loaded has included the class files, so require it directly.
+    mxchat_create_sessions_table();
+
     // System Prompt Content Table - UPDATED: Use TEXT for url and source_url columns
     $system_prompt_table = $wpdb->prefix . 'mxchat_system_prompt_content';
     $sql_system_prompt = "CREATE TABLE $system_prompt_table (
@@ -1368,10 +1397,14 @@ function mxchat_check_for_update() {
         $chat_table = $wpdb->prefix . 'mxchat_chat_transcripts';
         $queue_table = $wpdb->prefix . 'mxchat_processing_queue';
         
+        $sessions_table = $wpdb->prefix . 'mxchat_sessions';
+
         $chat_exists = $wpdb->get_var("SHOW TABLES LIKE '$chat_table'") === $chat_table;
         $queue_exists = $wpdb->get_var("SHOW TABLES LIKE '$queue_table'") === $queue_table;
-        
-        if (!$chat_exists || !$queue_exists) {
+        $sessions_exists = get_option('mxchat_session_store_ready') === '1'
+            || $wpdb->get_var("SHOW TABLES LIKE '$sessions_table'") === $sessions_table;
+
+        if (!$chat_exists || !$queue_exists || !$sessions_exists) {
             //error_log("MxChat: Critical tables missing, running activation");
             mxchat_activate();
         }
@@ -1570,10 +1603,14 @@ function mxchat_ensure_tables_exist() {
     $table_name = $wpdb->prefix . 'mxchat_chat_transcripts';
     $queue_table = $wpdb->prefix . 'mxchat_processing_queue';
     
+    $sessions_table = $wpdb->prefix . 'mxchat_sessions';
+
     $chat_exists = $wpdb->get_var("SHOW TABLES LIKE '$table_name'") === $table_name;
     $queue_exists = $wpdb->get_var("SHOW TABLES LIKE '$queue_table'") === $queue_table;
-    
-    if (!$chat_exists || !$queue_exists) {
+    $sessions_exists = get_option('mxchat_session_store_ready') === '1'
+        || $wpdb->get_var("SHOW TABLES LIKE '$sessions_table'") === $sessions_table;
+
+    if (!$chat_exists || !$queue_exists || !$sessions_exists) {
         //error_log("MxChat: Tables missing on admin load, running activation");
         mxchat_activate();
     }
