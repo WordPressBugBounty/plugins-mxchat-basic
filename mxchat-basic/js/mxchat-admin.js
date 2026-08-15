@@ -1099,7 +1099,7 @@ function setupMxChatModelSelector() {
                 { value: 'claude-opus-4-7', label: 'Claude Opus 4.7', description: 'Previous Anthropic flagship model' },
             ],
             xai: [
-                { value: 'grok-4-0709', label: 'Grok 4', description: 'Latest flagship model' },
+                { value: 'grok-4.6', label: 'Grok 4.6', description: 'Newest xAI flagship — 500K context, accepts image input' },
             ],
             deepseek: [
                 { value: 'deepseek-v4-flash', label: 'DeepSeek V4 Flash', description: 'Fast and cost-effective' },
@@ -1160,7 +1160,15 @@ function setupMxChatModelSelector() {
         $('#mxchat_model_selector_modal').show();
         window.populateModelsGrid('', 'all');
     });
-    
+
+    // Deep link from the model-liveness admin notice (b65e8d): land on Settings
+    // with the picker already open, so "pick a current model" is one click.
+    try {
+        if (new URLSearchParams(window.location.search).get('mxchat_open_model_picker') === '1') {
+            $modelSelectorButton.trigger('click');
+        }
+    } catch (e) {}
+
     $('.mxchat-model-selector-modal-close, #mxchat_cancel_model_selection').on('click', function() {
         $('#mxchat_model_selector_modal').hide();
     });
@@ -3786,6 +3794,220 @@ jQuery(document).ready(function($) {
                 $btn.prop('disabled', false).text(original);
                 window.alert('Reset failed. Please try again.');
             }
+        });
+    });
+});
+// ─── Unsaved-edit guard (plan 7787f8) ────────────────────────────────────
+// Autosave fires on `change`, which for text fields means blur — an edit made
+// with the cursor still in the box is unsaved until the user clicks out. Two
+// purely additive affordances close the loss window without touching how or
+// when saves fire: a persistent "Unsaved" badge on the field's label while its
+// value differs from the last-saved value, and a beforeunload prompt armed
+// only while some field is dirty. Baselines re-sync by observing the existing
+// autosave requests via ajaxSuccess — the save path itself is not modified.
+jQuery(document).ready(function($) {
+    let $sections = $('.mxchat-autosave-section');
+    const $pinecone = $('#mxchat-kb-tab-pinecone');
+    if ($pinecone.length) {
+        $sections = $sections.add($pinecone);
+    }
+    if (!$sections.length) return; // not a MxChat settings screen
+
+    const unsavedLabel = (typeof mxchatAdmin !== 'undefined' && mxchatAdmin.unsaved_label)
+        ? mxchatAdmin.unsaved_label
+        : 'Unsaved';
+
+    function fieldValue($f) {
+        const type = $f.attr('type');
+        if (type === 'checkbox' || type === 'radio') {
+            return $f.is(':checked') ? '1' : '0';
+        }
+        const v = $f.val();
+        return v == null ? '' : String(v);
+    }
+
+    function trackable($f) {
+        if (!$f.attr('name')) return false;
+        if ($f.attr('type') === 'hidden') return false;
+        if ($f.is('#model, #openrouter_selected_model, .mxchat-la-field, select[multiple]')) return false;
+        return true;
+    }
+
+    // name -> last value confirmed persisted. Captured on the user's FIRST
+    // focus of a field, not at page load: other ready/async code (model
+    // pickers, key masks, slider inits) mutates values after load, and a
+    // load-time snapshot reads those programmatic fills as "unsaved edits"
+    // and false-arms the guard at rest. An untouched field cannot hold an
+    // unsaved user edit — same insight as the autosave path's own
+    // userModifiedFields tracking.
+    const baseline = new Map();
+    $sections.on('focusin', 'input, textarea, select', function() {
+        const $f = $(this);
+        if (!trackable($f)) return;
+        const name = $f.attr('name');
+        if (!baseline.has(name)) {
+            baseline.set(name, fieldValue($f));
+        }
+    });
+
+    function isDirty($f) {
+        const name = $f.attr('name');
+        return baseline.has(name) && fieldValue($f) !== baseline.get(name);
+    }
+
+    function syncBadge($f) {
+        const $wrapper = $f.closest('.mxch-field');
+        const $home = $wrapper.length ? $wrapper.find('.mxch-field-label').first() : $();
+        let $badge = $home.length
+            ? $home.children('.mxchat-unsaved-badge')
+            : $f.nextAll('.mxchat-unsaved-badge').first();
+        if (isDirty($f)) {
+            if (!$badge.length) {
+                $badge = $('<span class="mxchat-unsaved-badge"></span>').text(unsavedLabel);
+                if ($home.length) {
+                    $home.append($badge);
+                } else {
+                    $f.after($badge);
+                }
+            }
+        } else {
+            $badge.remove();
+        }
+    }
+
+    // Persistent marker only for free-text fields — toggles and selects save on
+    // the same interaction that changes them; the transient spinner covers those.
+    const textTypes = ['text', 'number', 'url', 'email', 'password', 'search', 'tel'];
+    $sections.on('input change', 'input, textarea, select', function() {
+        const $f = $(this);
+        if (!trackable($f)) return;
+        const textLike = $f.is('textarea') || textTypes.indexOf(($f.attr('type') || '').toLowerCase()) !== -1;
+        if (textLike) {
+            syncBadge($f);
+        }
+    });
+
+    // A successful autosave round-trip re-baselines the field it saved. The
+    // baseline takes the value the request actually SENT, so edits made while
+    // the save was in flight keep the field dirty and the guard armed.
+    $(document).ajaxSuccess(function(event, xhr, settings) {
+        if (!settings || typeof settings.data !== 'string') return;
+        if (settings.data.indexOf('action=mxchat_save_setting') === -1 &&
+            settings.data.indexOf('action=mxchat_save_prompts_setting') === -1) {
+            return;
+        }
+        let params;
+        try { params = new URLSearchParams(settings.data); } catch (err) { return; }
+        const name = params.get('name');
+        if (!name || !baseline.has(name)) return;
+        if (!xhr || !xhr.responseJSON || xhr.responseJSON.success !== true) return;
+        let saved = params.get('value');
+        saved = saved == null ? '' : String(saved);
+        // Checkboxes go over the wire as on/off (or 1/0); normalize to 1/0.
+        if (saved === 'on') saved = '1';
+        if (saved === 'off') saved = '0';
+        baseline.set(name, saved);
+        const $f = $sections.find('[name="' + name.replace(/"/g, '\\"') + '"]').first();
+        if ($f.length) {
+            syncBadge($f);
+        }
+    });
+
+    // Navigation guard — recomputed per-field at the moment of leaving, so it
+    // arms only when a tracked value genuinely differs from last-saved.
+    window.addEventListener('beforeunload', function(e) {
+        let dirty = false;
+        $sections.find('input, textarea, select').each(function() {
+            const $f = $(this);
+            if (trackable($f) && isDirty($f)) {
+                dirty = true;
+                return false;
+            }
+        });
+        if (dirty) {
+            e.preventDefault();
+            e.returnValue = '';
+            return '';
+        }
+    });
+
+    // ─── sendBeacon save-on-exit (plan 18fd68) ───────────────────────────
+    // The prompt above only warns — the user can click "Leave", and browsers
+    // skip the dialog entirely without a prior user gesture. sendBeacon
+    // survives page teardown by design, so each dirty tracked field is also
+    // posted to the same autosave endpoint on the way out. Bound to pagehide
+    // ONLY: it fires once per real teardown, after the leave dialog resolves,
+    // so a cancelled leave never posts and no sent-once flag is needed (a
+    // beforeunload beacon would fire before the user answers the dialog).
+    // Fire-and-forget: baseline and badge stay untouched — if the beacon
+    // lands the server persists it; if the user returns via bfcache the
+    // field is still tracked dirty and the normal flow continues.
+    const BEACON_MAX_FIELDS = 8;     // a pathological page state must not machine-gun admin-ajax
+    const BEACON_MAX_VALUE = 60000;  // sendBeacon's queue budget is ~64KB; the prompt covered oversized edits
+
+    function beaconRoute(name) {
+        // Mirror of the autosave action routing above — prompts-page fields
+        // go to mxchat_save_prompts_setting with its own nonce and URL.
+        const prompts = name.indexOf('mxchat_prompts_options') !== -1 ||
+            name.indexOf('mxchat_auto_sync_') === 0 ||
+            name.indexOf('mxchat_pinecone_addon_options') !== -1 ||
+            name.indexOf('mxchat_chunk') === 0 ||
+            name.indexOf('mxchat_acf_field_') === 0 ||
+            name === 'mxchat_custom_meta_whitelist';
+        if (prompts) {
+            if (typeof mxchatPromptsAdmin === 'undefined') return null;
+            return {
+                url: mxchatPromptsAdmin.ajax_url,
+                action: 'mxchat_save_prompts_setting',
+                nonce: mxchatPromptsAdmin.prompts_setting_nonce
+            };
+        }
+        if (typeof mxchatAdmin === 'undefined') return null;
+        return {
+            url: mxchatAdmin.ajax_url,
+            action: 'mxchat_save_setting',
+            nonce: mxchatAdmin.setting_nonce
+        };
+    }
+
+    function beaconWireValue($f) {
+        // Wire format matches the autosave path, not fieldValue()'s 1/0
+        // dirty-compare normalization: checkboxes post on/off (Pinecone's
+        // post 1/0), everything else posts val().
+        if ($f.attr('type') === 'checkbox') {
+            if (($f.attr('name') || '').indexOf('mxchat_pinecone_addon_options') !== -1) {
+                return $f.is(':checked') ? '1' : '0';
+            }
+            return $f.is(':checked') ? 'on' : 'off';
+        }
+        const v = $f.val();
+        return v == null ? '' : String(v);
+    }
+
+    window.addEventListener('pagehide', function() {
+        if (!navigator.sendBeacon) return;
+        let sent = 0;
+        $sections.find('input, textarea, select').each(function() {
+            const $f = $(this);
+            if (!trackable($f) || !isDirty($f)) return;
+            // An unchecked radio is "dirty" versus its baseline but its val()
+            // is the wrong group value to persist — the checked sibling (if
+            // dirty itself) carries the group's real state.
+            if ($f.attr('type') === 'radio' && !$f.is(':checked')) return;
+            const name = $f.attr('name');
+            const route = beaconRoute(name);
+            if (!route) return;
+            const value = beaconWireValue($f);
+            if (value.length > BEACON_MAX_VALUE) return;
+            const fd = new FormData();
+            fd.append('action', route.action);
+            fd.append('name', name);
+            fd.append('value', value);
+            fd.append('_ajax_nonce', route.nonce);
+            if (navigator.sendBeacon(route.url, fd)) {
+                sent++;
+            }
+            if (sent >= BEACON_MAX_FIELDS) return false;
         });
     });
 });

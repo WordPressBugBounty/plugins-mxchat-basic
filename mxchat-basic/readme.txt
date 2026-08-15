@@ -5,7 +5,7 @@ Tags: ai chatbot, chatgpt, woocommerce, customer support, content generation
 Requires at least: 5.0
 Tested up to: 7.0
 Requires PHP: 7.2
-Stable tag: 3.2.18
+Stable tag: 3.2.19
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -321,6 +321,29 @@ Please ensure compliance with applicable terms and data privacy laws.
 
 
 
+
+= 3.2.19 - August 15, 2026 =
+* Fixed: Hebrew, Arabic and other right-to-left PDFs no longer import with reversed text, and a new WP-CLI repair command fixes entries imported before this update in place.
+* Fixed: Sites still set to the retired Claude Opus 4.1, or to older retired Claude models, are automatically moved to the current Claude generation of the same tier and shown a notice.
+* New: MxChat checks once a day that your selected AI model still exists and warns you on the AI Models screen and dashboard before a retired model can silence your chatbot.
+* Improved: Claude API costs drop on most sites — Anthropic prompt caching now runs automatically, ahead of Anthropic's September 1 Claude Sonnet 5 price change.
+* Fixed: Content generation no longer fails with an Unsupported value error on GPT-5.4 Mini and GPT-5.4 Nano, and any model that rejects a reasoning setting is retried once without it.
+* Improved: The xAI Grok lineup is current again — Grok 4.6 and the rest of the new generation are offered first, and existing selections keep working.
+* New: Settings edits are protected — changed fields show an Unsaved marker, leaving mid-edit asks for confirmation, and edits are handed to the browser for saving if you leave anyway.
+* Fixed: Imported content keeps its currency symbols, and Arabic, Hebrew, Hindi and Thai text keeps the marks its script requires; re-import content added through the bulk website, URL or PDF import tools to repair entries indexed earlier.
+* Improved: Leftover HTML character codes are converted to readable text before indexing; re-import affected entries to clean up existing ones.
+* Fixed: Draft posts published by import tools or scripts are no longer indexed under your homepage address.
+* Fixed: WooCommerce prices are indexed in your store's base currency with the currency code, and on multi-currency stores the chatbot no longer mixes two currencies in one reply; re-import products to update older entries.
+* New: The Notification Email field accepts up to five comma-separated addresses, and an invalid address is refused with a message naming it instead of silently breaking notifications.
+* Improved: Visitor names and emails from the pre-chat form move into MxChat's sessions storage automatically — the Leads tab and live-agent greetings work exactly as before.
+* Improved: Link-click records are covered by WordPress's privacy export and erasure tools, and old records anonymize and delete themselves over time.
+* Fixed: A YouTube video card now appears only when the video actually matches the question, with a new match threshold setting — and video cards can be switched off entirely.
+* New: Transcripts show which AI Tools ran on each message, with timings and errors; tools handling money, customer records or handoffs log only that they ran.
+* Improved: The Slack and Telegram handoff tools arrive with their usage note prefilled, so automatic handoff works without extra setup; you can reword or clear it.
+* Fixed: Inspecting a Pinecone knowledge entry works, and deletes on Pinecone setups using a namespace remove the right copy.
+* Improved: Conversations are stored once instead of duplicated into the options table, and leftover duplicates clean themselves up in the background.
+* Fixed: Shared admin features work again on the Transcripts and License pages, and two pieces of admin text no longer point at settings that do not exist.
+
 = 3.2.18 - August 8, 2026 =
 * Fixed: OpenAI Vector Store knowledge base search works again — an outdated request parameter caused every search to fail silently, so the chatbot answered without your knowledge base content.
 * Fixed: The knowledge base status readout now correctly shows how many vector stores are configured instead of always reporting none.
@@ -614,6 +637,10 @@ Older releases are archived in the plugin's full version history on WordPress.or
 
 
 
+
+
+= 3.2.19 =
+Big maintenance release. Retired AI models are now handled automatically — stranded sites are moved to a current model and a new daily check warns you before a retired model can silence your chatbot — and Claude prompt caching cuts API costs ahead of Anthropic's September 1 price change. Re-import content added through the bulk, URL or PDF import tools, plus WooCommerce products, to repair older entries; if you use the Forms or Anywhere add-ons, update them alongside core.
 
 = 3.2.18 =
 Critical for OpenAI Vector Store users: knowledge base search was failing silently, leaving the chatbot to answer without your content. Per-conversation data also moves out of the options table into its own table, migrated automatically in the background after you update. Plus clearer import errors and several knowledge base indexing fixes.

@@ -2352,6 +2352,36 @@ article .entry-content,
         $status_code = wp_remote_retrieve_response_code($response);
         $decoded     = json_decode(wp_remote_retrieve_body($response), true);
 
+        // plan-25b972 self-heal: supported reasoning_effort VALUES are per-model;
+        // a 400 rejecting the value we sent (stale catalog entry / provider
+        // drift) is deterministic — strip the param and retry ONCE.
+        if ($status_code === 400
+            && isset($body['reasoning_effort'])
+            && isset($decoded['error']['message'])
+            && is_string($decoded['error']['message'])
+            && preg_match('/Unsupported value:.*reasoning_effort/i', $decoded['error']['message'])) {
+            if (defined('WP_DEBUG') && WP_DEBUG) {
+                error_log(sprintf(
+                    '[MxChat] content-generator: model %s rejected reasoning_effort \'%s\' — retrying once without the param (plan-25b972).',
+                    $model, $body['reasoning_effort']
+                ));
+            }
+            unset($body['reasoning_effort']);
+            $response = wp_remote_post($endpoint, array(
+                'headers' => array(
+                    'Authorization' => 'Bearer ' . $api_key,
+                    'Content-Type'  => 'application/json',
+                ),
+                'body'    => wp_json_encode($body),
+                'timeout' => $timeout,
+            ));
+            if (is_wp_error($response)) {
+                return $response;
+            }
+            $status_code = wp_remote_retrieve_response_code($response);
+            $decoded     = json_decode(wp_remote_retrieve_body($response), true);
+        }
+
         if ($status_code !== 200) {
             $error_msg = $decoded['error']['message'] ?? __('API request failed with status ', 'mxchat') . $status_code;
             return new WP_Error('api_error', $error_msg);
@@ -2393,7 +2423,12 @@ article .entry-content,
             'max_tokens' => $max_tokens,
             'temperature' => 0.7,
             'messages'   => $formatted,
-            'system'     => $system_prompt,
+            // Prompt-cache breakpoint (plan 1ff43b): generation pipelines reuse
+            // the same system prompt across consecutive requests within the
+            // 5-minute cache window. Silently no-ops below the model minimum.
+            'system'     => trim((string) $system_prompt) === '' ? $system_prompt : array(
+                array('type' => 'text', 'text' => $system_prompt, 'cache_control' => array('type' => 'ephemeral')),
+            ),
         );
 
         // Anthropic removed temperature on Opus 4.7+ flagships (400 if sent) —

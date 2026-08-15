@@ -3,7 +3,7 @@
  * Plugin Name: MxChat
  * Plugin URI: https://mxchat.ai/
  * Description: AI chatbot for WordPress with OpenAI, Claude, xAI, DeepSeek, live agent, PDF uploads, WooCommerce, and training on website data.
- * Version: 3.2.18
+ * Version: 3.2.19
  * Author: MxChat
  * Author URI: https://mxchat.ai
  * License: GPLv2 or later
@@ -36,6 +36,16 @@ if (!defined('MXCHAT_VERSION')) {
         $version .= '.' . time();
     }
     define('MXCHAT_VERSION', $version);
+}
+
+/**
+ * Default confidence floor for the in-chat YouTube card, as a percentage
+ * (plan-mxchat-20260813-f52492). Higher than the site-wide Similarity
+ * Threshold default of 35 by design — see MxChat_Utils::video_embed_threshold().
+ * Declared here so the gate, the admin field and the tests all read ONE number.
+ */
+if (!defined('MXCHAT_VIDEO_EMBED_THRESHOLD_DEFAULT')) {
+    define('MXCHAT_VIDEO_EMBED_THRESHOLD_DEFAULT', 55);
 }
 
 /**
@@ -411,6 +421,7 @@ add_filter('flying_press_cacheable', function($cacheable) {
 function mxchat_include_classes() {
     $class_files = array(
         'includes/class-mxchat-model-catalog.php',
+        'includes/class-mxchat-model-liveness.php',
         'includes/class-mxchat-session-store.php',
         'includes/class-mxchat-live-agent-schedule.php',
         'includes/class-mxchat-tool-registry.php',
@@ -455,6 +466,13 @@ function mxchat_include_classes() {
     // migration drain off admin_init (b64b77).
     if (class_exists('MxChat_Session_Store')) {
         MxChat_Session_Store::init();
+    }
+
+    // Daily model-liveness check + its warning notice (b65e8d). Read-only and
+    // fail-open: one listing request per in-use provider per day, none at all
+    // when no key is stored.
+    if (class_exists('MxChat_Model_Liveness')) {
+        MxChat_Model_Liveness::init();
     }
 
     // Editor Assistant — free, OFF-by-default block-editor AI actions (plan-8cb0cb).
@@ -1003,29 +1021,46 @@ function mxchat_migrate_deprecated_models() {
 
     $current_model = $options['model'];
 
-    // Migrate deprecated Claude models to Claude Opus 4.6 (recommended replacement per Anthropic)
-    $deprecated_claude_models = array(
+    // Migrate deprecated/retired Claude models BY TIER so a rescued site lands on
+    // the current generation, not an older intermediate (plan dc91bd — the previous
+    // single target, claude-opus-4-6, is now two Opus generations behind).
+    $deprecated_claude_opus = array(
+        'claude-3-opus-20240229',      // Retired Jan 5, 2026
+        'claude-opus-4-20250514',      // Deprecated
+        'claude-opus-4-1-20250805',    // Retired Aug 5, 2026 (first-party API)
+    );
+    $deprecated_claude_sonnet = array(
         'claude-3-5-sonnet-20240620',  // Retired Oct 28, 2025
         'claude-3-5-sonnet-20241022',  // Retired Oct 28, 2025
-        'claude-3-7-sonnet-20250219',  // Retiring Feb 19, 2026
-        'claude-3-opus-20240229',      // Retired Jan 5, 2026
+        'claude-3-7-sonnet-20250219',  // Retired Feb 19, 2026
         'claude-3-sonnet-20240229',    // Legacy
-        'claude-3-haiku-20240307',     // Legacy
+        'claude-sonnet-4-20250514',    // Deprecated
     );
-    if (in_array($current_model, $deprecated_claude_models, true)) {
-        $options['model'] = 'claude-opus-4-6';
+    $deprecated_claude_haiku = array(
+        'claude-3-haiku-20240307',     // Legacy
+        'claude-3-5-haiku-20241022',   // Deprecated
+    );
+    if (in_array($current_model, $deprecated_claude_opus, true)) {
+        $options['model'] = 'claude-opus-5';
         $migrated = true;
         $migration_message = sprintf(
-            'Your chatbot model has been automatically updated from %s to Claude Opus 4.6 due to Anthropic deprecating older Claude models.',
+            'Your chatbot model has been automatically updated from %s to Claude Opus 5 because Anthropic retired the older Claude model.',
             $current_model
         );
-    }
-
-    // Migrate deprecated Claude Haiku 3.5 to Claude Haiku 4.5
-    if ($current_model === 'claude-3-5-haiku-20241022') {
+    } elseif (in_array($current_model, $deprecated_claude_sonnet, true)) {
+        $options['model'] = 'claude-sonnet-5';
+        $migrated = true;
+        $migration_message = sprintf(
+            'Your chatbot model has been automatically updated from %s to Claude Sonnet 5 because Anthropic retired the older Claude model.',
+            $current_model
+        );
+    } elseif (in_array($current_model, $deprecated_claude_haiku, true)) {
         $options['model'] = 'claude-haiku-4-5-20251001';
         $migrated = true;
-        $migration_message = 'Your chatbot model has been automatically updated from Claude Haiku 3.5 to Claude Haiku 4.5 due to Anthropic deprecating the older model.';
+        $migration_message = sprintf(
+            'Your chatbot model has been automatically updated from %s to Claude Haiku 4.5 because Anthropic retired the older Claude model.',
+            $current_model
+        );
     }
 
     // Migrate deprecated GPT-4 series and GPT-3.5 Turbo to GPT-5.6 Sol.
@@ -1339,6 +1374,7 @@ function mxchat_deactivate() {
     wp_clear_scheduled_hook('mxchat_reset_rate_limits');
     wp_clear_scheduled_hook('mxchat_cleanup_old_transcripts');
     wp_clear_scheduled_hook('mxchat_send_delayed_transcript');
+    wp_clear_scheduled_hook('mxchat_model_liveness_check');
     
     // Clear fallback options
     delete_option('mxchat_use_fallback_rate_limits');
@@ -1499,16 +1535,25 @@ function mxchat_check_for_update() {
                 mxchat_migrate_acf_pdf_extraction_option();
             }
 
+            // 3.2.19: Claude Opus 4.1 retired Aug 5, 2026 — auto-move stranded
+            // sites (and the older tiers on the migration's lists) per the
+            // changelog's promise. Idempotent — only rewrites models on the
+            // deprecation lists. Without a gate at this release's version,
+            // nothing calls the migration for 3.2.18 upgraders (plan a5a598;
+            // the gate value must equal the version this block ships in).
+            if (version_compare($current_version, '3.2.19', '<')) {
+                mxchat_migrate_deprecated_models();
+            }
+
             // Run full activation to ensure everything is up to date
             mxchat_activate();
             
             // Run migration functions
             mxchat_migrate_live_agent_status();
 
-            // Add the cleanup function for version 2.1.8
-            if (version_compare($current_version, '2.1.8', '<')) {
-                $deleted = mxchat_cleanup_orphaned_chat_history();
-            }
+            // (The 2.1.8 orphaned-history reconciliation sweep is gone —
+            // 3.2.19's mxchat_history_backlog_* drain supersedes it, and it
+            // self-arms without a version gate: plan 839c4c.)
 
             // Update version LAST
             update_option('mxchat_plugin_version', $plugin_version);
@@ -1607,7 +1652,7 @@ function mxchat_ensure_tables_exist() {
 
     $chat_exists = $wpdb->get_var("SHOW TABLES LIKE '$table_name'") === $table_name;
     $queue_exists = $wpdb->get_var("SHOW TABLES LIKE '$queue_table'") === $queue_table;
-    $sessions_exists = get_option('mxchat_session_store_ready') === '1'
+    $sessions_exists = get_option('mxchat_session_store_ready') !== false
         || $wpdb->get_var("SHOW TABLES LIKE '$sessions_table'") === $sessions_table;
 
     if (!$chat_exists || !$queue_exists || !$sessions_exists) {
@@ -1617,47 +1662,114 @@ function mxchat_ensure_tables_exist() {
 }
 
 /**
- * Clean up orphaned chat history options from the wp_options table
- * @return int Number of options deleted
+ * One-shot cleanup of legacy mxchat_history_<sid> option rows (plan 839c4c).
+ *
+ * 3.2.19 deduplicated per-session chat history into the transcripts table
+ * (which already held a superset of every option copy measured), so nothing
+ * writes these options any more — but an upgraded install still carries one
+ * per session, at up to 64 KB a row (462 rows measured on one production
+ * install). This drain replaces the old mxchat_cleanup_orphaned_chat_history()
+ * reconciliation sweep, which existed only because there were two copies to
+ * reconcile.
+ *
+ * b64b77 pattern throughout: an option_id bookmark that only moves forward
+ * (a crash mid-batch re-processes at most one batch), delete_option() per row
+ * so the object + notoptions caches stay coherent, batches drained off
+ * non-AJAX admin_init plus the session-store maintenance cron. Once the
+ * backlog is gone the state marks done and every later call is one cached
+ * option read.
  */
-function mxchat_cleanup_orphaned_chat_history() {
-    global $wpdb;
-    $count = 0;
-
-    // Get all option keys that match our pattern
-    $history_options = $wpdb->get_results(
-        "SELECT option_name FROM {$wpdb->options}
-         WHERE option_name LIKE 'mxchat_history_%'"
-    );
-
-    if (!empty($history_options)) {
-        foreach ($history_options as $option) {
-            // Extract the session ID from the option name
-            $session_id = str_replace('mxchat_history_', '', $option->option_name);
-
-            // Check if this session still exists in the custom table
-            $table_name = $wpdb->prefix . 'mxchat_chat_transcripts';
-            $exists = $wpdb->get_var(
-                $wpdb->prepare(
-                    "SELECT COUNT(*) FROM {$table_name} WHERE session_id = %s",
-                    $session_id
-                )
-            );
-
-            // If session doesn't exist in the main table, delete the option
-            if ($exists == 0) {
-                delete_option($option->option_name);
-                // Also delete related metadata
-                delete_option("mxchat_email_{$session_id}");
-                delete_option("mxchat_name_{$session_id}");
-                delete_option("mxchat_agent_name_{$session_id}");
-                $count++;
-            }
-        }
+function mxchat_history_backlog_state() {
+    // The state option name MUST NOT start with 'mxchat_history_' — the drain
+    // deletes everything matching that prefix, and a state option inside the
+    // pattern gets eaten by its own drain (caught by the 839c4c rig: batches
+    // ran 2,2,2,1 instead of 2,2,1 because the bookmark row was being deleted
+    // and re-created every pass).
+    $state = get_option('mxchat_legacy_history_cleanup', array());
+    if (!is_array($state)) {
+        $state = array();
     }
 
-    return $count;
+    return wp_parse_args($state, array(
+        'done'           => false,
+        'last_option_id' => 0,
+        'deleted'        => 0,
+    ));
 }
+
+/**
+ * Delete one batch of legacy history options.
+ *
+ * @param int $batch Rows per pass — capped small; these can be 64 KB rows.
+ * @return int Option rows deleted in this pass.
+ */
+function mxchat_history_backlog_batch($batch = 200) {
+    global $wpdb;
+
+    $state = mxchat_history_backlog_state();
+    if (!empty($state['done'])) {
+        return 0;
+    }
+
+    $batch = max(1, (int) $batch);
+
+    $rows = $wpdb->get_results(
+        $wpdb->prepare(
+            "SELECT option_id, option_name FROM {$wpdb->options}
+             WHERE option_id > %d AND option_name LIKE %s
+             ORDER BY option_id ASC LIMIT %d",
+            (int) $state['last_option_id'],
+            $wpdb->esc_like('mxchat_history_') . '%',
+            $batch
+        ),
+        ARRAY_A
+    );
+
+    if (empty($rows)) {
+        $state['done'] = true;
+        update_option('mxchat_legacy_history_cleanup', $state, 'no');
+        return 0;
+    }
+
+    foreach ($rows as $row) {
+        $state['last_option_id'] = max((int) $state['last_option_id'], (int) $row['option_id']);
+        delete_option($row['option_name']);
+        $state['deleted'] = (int) $state['deleted'] + 1;
+    }
+
+    if (count($rows) < $batch) {
+        $state['done'] = true;
+    }
+
+    update_option('mxchat_legacy_history_cleanup', $state, 'no');
+
+    return count($rows);
+}
+
+/** One batch per admin page load until drained. */
+function mxchat_history_backlog_drain() {
+    mxchat_history_backlog_batch();
+}
+
+/** Cron leg: drain faster, same cap per batch. */
+function mxchat_history_backlog_drain_cron() {
+    for ($i = 0; $i < 10; $i++) {
+        if (mxchat_history_backlog_batch() === 0) {
+            break;
+        }
+    }
+}
+
+// wp_doing_ajax() guard is load-bearing, not defensive (b64b77's shipped-and-
+// caught defect): admin-ajax.php fires admin_init too, and the chat widget's
+// message endpoint is an admin-ajax action — without the guard an anonymous
+// visitor would pay for a delete batch inside their own chat request.
+if (!wp_doing_ajax()) {
+    add_action('admin_init', 'mxchat_history_backlog_drain', 21);
+}
+// Belt for installs whose admin is rarely visited: ride the session store's
+// existing daily maintenance event rather than scheduling another.
+add_action('mxchat_session_store_maintenance', 'mxchat_history_backlog_drain_cron');
 
 function mxchat_migrate_live_agent_status() {
     $options = get_option('mxchat_options', []);

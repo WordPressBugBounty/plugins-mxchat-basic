@@ -97,6 +97,9 @@ private function mxchat_init_hooks() {
     // transition_post_status handler (plan 816fb1): wp mxchat prune-unpublished
     if (defined('WP_CLI') && WP_CLI) {
         WP_CLI::add_command('mxchat prune-unpublished', array($this, 'cli_prune_unpublished'));
+        // In-place repair for RTL KB rows imported in visual order before the
+        // 32bf9e normalizer existed: wp mxchat rtl-repair (plan d1e6f7)
+        WP_CLI::add_command('mxchat rtl-repair', array($this, 'cli_rtl_repair'));
     }
 
     add_action('wp_ajax_mxchat_mark_queue_complete', array($this, 'ajax_mxchat_mark_queue_complete'));
@@ -998,15 +1001,16 @@ private function get_pinecone_entry_content( $source_url, $entry_id, $bot_id ) {
     $vector_ids = array( $base_id );
 
     // Find chunk vectors
-    $list_url  = "https://{$host}/vectors/list";
-    $list_body = array( 'prefix' => $base_id . '_chunk_', 'limit' => 100 );
+    // NOTE: Pinecone's /vectors/list is a GET endpoint with query parameters.
+    // A POST is answered 200-with-an-empty-body, which reads as "no vectors".
+    $list_url    = "https://{$host}/vectors/list";
+    $list_params = array( 'prefix' => $base_id . '_chunk_', 'limit' => 100 );
     if ( ! empty($namespace) ) {
-        $list_body['namespace'] = $namespace;
+        $list_params['namespace'] = $namespace;
     }
 
-    $list_resp = wp_remote_post( $list_url, array(
-        'headers' => array( 'Api-Key' => $api_key, 'Content-Type' => 'application/json' ),
-        'body'    => wp_json_encode( $list_body ),
+    $list_resp = wp_remote_get( $list_url . '?' . http_build_query( $list_params ), array(
+        'headers' => array( 'Api-Key' => $api_key, 'accept' => 'application/json' ),
         'timeout' => 15,
     ) );
 
@@ -1020,15 +1024,19 @@ private function get_pinecone_entry_content( $source_url, $entry_id, $bot_id ) {
     }
 
     // Fetch vectors with metadata
-    $fetch_url  = "https://{$host}/vectors/fetch";
-    $fetch_body = array( 'ids' => $vector_ids );
+    // NOTE: /vectors/fetch is a GET endpoint too, and Pinecone expects the ids
+    // repeated (ids=a&ids=b) — http_build_query would emit ids[0]=a, so build
+    // the query string explicitly.
+    $fetch_query = array();
+    foreach ( $vector_ids as $fetch_vid ) {
+        $fetch_query[] = 'ids=' . rawurlencode( $fetch_vid );
+    }
     if ( ! empty($namespace) ) {
-        $fetch_body['namespace'] = $namespace;
+        $fetch_query[] = 'namespace=' . rawurlencode( $namespace );
     }
 
-    $fetch_resp = wp_remote_post( $fetch_url, array(
-        'headers' => array( 'Api-Key' => $api_key, 'Content-Type' => 'application/json' ),
-        'body'    => wp_json_encode( $fetch_body ),
+    $fetch_resp = wp_remote_get( "https://{$host}/vectors/fetch?" . implode( '&', $fetch_query ), array(
+        'headers' => array( 'Api-Key' => $api_key, 'accept' => 'application/json' ),
         'timeout' => 15,
     ) );
 
@@ -1197,15 +1205,16 @@ private function inspect_pinecone_entry( $source_url, $entry_id, $bot_id ) {
     $base_id    = md5( $source_url );
     $vector_ids = array( $base_id );
 
-    $list_url  = "https://{$host}/vectors/list";
-    $list_body = array( 'prefix' => $base_id . '_chunk_', 'limit' => 100 );
+    // NOTE: Pinecone's /vectors/list is a GET endpoint with query parameters.
+    // A POST is answered 200-with-an-empty-body, which reads as "no vectors".
+    $list_url    = "https://{$host}/vectors/list";
+    $list_params = array( 'prefix' => $base_id . '_chunk_', 'limit' => 100 );
     if ( ! empty($namespace) ) {
-        $list_body['namespace'] = $namespace;
+        $list_params['namespace'] = $namespace;
     }
 
-    $list_resp = wp_remote_post( $list_url, array(
-        'headers' => array( 'Api-Key' => $api_key, 'Content-Type' => 'application/json' ),
-        'body'    => wp_json_encode( $list_body ),
+    $list_resp = wp_remote_get( $list_url . '?' . http_build_query( $list_params ), array(
+        'headers' => array( 'Api-Key' => $api_key, 'accept' => 'application/json' ),
         'timeout' => 15,
     ) );
 
@@ -1218,15 +1227,19 @@ private function inspect_pinecone_entry( $source_url, $entry_id, $bot_id ) {
         }
     }
 
-    $fetch_url  = "https://{$host}/vectors/fetch";
-    $fetch_body = array( 'ids' => $vector_ids );
+    // NOTE: /vectors/fetch is a GET endpoint too, and Pinecone expects the ids
+    // repeated (ids=a&ids=b) — http_build_query would emit ids[0]=a, so build
+    // the query string explicitly.
+    $fetch_query = array();
+    foreach ( $vector_ids as $fetch_vid ) {
+        $fetch_query[] = 'ids=' . rawurlencode( $fetch_vid );
+    }
     if ( ! empty($namespace) ) {
-        $fetch_body['namespace'] = $namespace;
+        $fetch_query[] = 'namespace=' . rawurlencode( $namespace );
     }
 
-    $fetch_resp = wp_remote_post( $fetch_url, array(
-        'headers' => array( 'Api-Key' => $api_key, 'Content-Type' => 'application/json' ),
-        'body'    => wp_json_encode( $fetch_body ),
+    $fetch_resp = wp_remote_get( "https://{$host}/vectors/fetch?" . implode( '&', $fetch_query ), array(
+        'headers' => array( 'Api-Key' => $api_key, 'accept' => 'application/json' ),
         'timeout' => 15,
     ) );
 
@@ -1693,6 +1706,138 @@ public function mxchat_handle_sitemap_for_knowledge_base($xml, $sitemap_url, $bo
  * @param string $content The content containing shortcodes
  * @return string Content with shortcode tags removed but inner content preserved
  */
+/**
+ * Single-pass HTML entity decode for text entering the knowledge base.
+ * The corpus should hold what a human reads: a stored `&amp;` consumes
+ * extra tokens, distorts the vector away from the form a visitor's
+ * question uses, and can be quoted back verbatim in an answer.
+ * Deliberately NOT looped to a fixed point — a stored `&amp;amp;` is a
+ * legitimate literal `&amp;` and must not collapse further (data loss).
+ * UTF-8 charset keeps multibyte (CJK/RTL) text untouched. Both assembly
+ * paths call this at their output points so the treatment cannot drift.
+ * (Plan d2c92e.)
+ */
+private function mxchat_decode_entities_for_indexing($text) {
+    return html_entity_decode((string) $text, ENT_QUOTES | ENT_HTML5, 'UTF-8');
+}
+
+/**
+ * Price lines for a product's indexed text, pinned to the store's BASE currency.
+ *
+ * The four product assembly paths each used to call get_woocommerce_currency_symbol()
+ * with no argument, which resolves the currency active on the CURRENT request.
+ * Multi-currency plugins (CURCY, WOOCS, Aelia, WPML Multicurrency) filter that per
+ * request, so whichever currency the store happened to be serving when an import ran
+ * was frozen into every product it indexed. The amounts have the mirror problem: the
+ * woocommerce_product_get_* filters convert prices in the 'view' context but not in
+ * 'edit', so a converted amount could be paired with an unconverted symbol and produce
+ * a price that is not merely wrong but incoherent.
+ *
+ * Base currency option + 'edit' context makes both halves agree and makes the output
+ * independent of when the import ran. The currency CODE is emitted alongside the symbol
+ * so the model cannot read a bare "$" as USD on a store whose plugin swapped symbols.
+ * (Plan 7403ec.)
+ */
+private function mxchat_product_price_lines($product) {
+    if (!is_object($product) || !method_exists($product, 'get_regular_price')) {
+        return '';
+    }
+
+    $currency = get_option('woocommerce_currency');
+    $currency = is_string($currency) ? trim($currency) : '';
+    $symbol   = ($currency !== '')
+        ? get_woocommerce_currency_symbol($currency)
+        : get_woocommerce_currency_symbol();
+    $symbol   = $this->mxchat_decode_entities_for_indexing($symbol);
+
+    $regular_price = $product->get_regular_price('edit');
+    $sale_price    = $product->get_sale_price('edit');
+    $price         = $product->get_price('edit');
+
+    $lines = '';
+
+    if (!empty($regular_price)) {
+        $lines .= "Price: " . $this->mxchat_format_indexed_price($regular_price, $currency, $symbol) . "\n";
+    } elseif (!empty($price)) {
+        $lines .= "Price: " . $this->mxchat_format_indexed_price($price, $currency, $symbol) . "\n";
+    }
+
+    if (!empty($sale_price) && $sale_price !== $regular_price) {
+        $lines .= "Sale Price: " . $this->mxchat_format_indexed_price($sale_price, $currency, $symbol) . "\n";
+    }
+
+    if ($product->is_type('variable')) {
+        list($min_price, $max_price) = $this->mxchat_variation_price_range($product);
+        if ($min_price !== null && $max_price !== null && (float) $min_price !== (float) $max_price) {
+            $lines .= "Price Range: " . $this->mxchat_format_indexed_price($min_price, $currency, $symbol)
+                . " - " . $this->mxchat_format_indexed_price($max_price, $currency, $symbol) . "\n";
+        }
+    }
+
+    return $lines;
+}
+
+/**
+ * One indexed price amount, labelled with its currency code.
+ *
+ * "INR 1299.00 (Rs.1299.00)" — the code is what the model should reason from; the symbol
+ * is kept so a quoted price still reads naturally. Falls back to the old symbol-only
+ * shape when WooCommerce has no base currency configured, and drops the parenthetical
+ * when the symbol is absent or IS the code (several currencies have no distinct glyph).
+ */
+private function mxchat_format_indexed_price($amount, $currency, $symbol) {
+    $amount = (string) $amount;
+
+    if ($currency === '') {
+        return $symbol . $amount;
+    }
+
+    if ($symbol === '' || $symbol === $currency) {
+        return $currency . ' ' . $amount;
+    }
+
+    return $currency . ' ' . $amount . ' (' . $symbol . $amount . ')';
+}
+
+/**
+ * Min/max variation price read from the variations themselves in 'edit' context.
+ *
+ * get_variation_price() reads WooCommerce's display price cache, which multi-currency
+ * plugins populate with converted values — the same defect the rest of this helper
+ * exists to remove. Returns raw stored strings (not floats) so the indexed text keeps
+ * the store's own price formatting, and (null, null) when no variation carries a price.
+ */
+private function mxchat_variation_price_range($product) {
+    $min_raw = null;
+    $max_raw = null;
+    $min_val = null;
+    $max_val = null;
+
+    $children = method_exists($product, 'get_children') ? $product->get_children() : array();
+
+    foreach ($children as $child_id) {
+        $variation = wc_get_product($child_id);
+        if (!$variation) {
+            continue;
+        }
+        $raw = $variation->get_price('edit');
+        if ($raw === '' || $raw === null) {
+            continue;
+        }
+        $val = (float) $raw;
+        if ($min_val === null || $val < $min_val) {
+            $min_val = $val;
+            $min_raw = $raw;
+        }
+        if ($max_val === null || $val > $max_val) {
+            $max_val = $val;
+            $max_raw = $raw;
+        }
+    }
+
+    return array($min_raw, $max_raw);
+}
+
 private function strip_shortcode_tags_preserve_content($content) {
     // Single-pass regex removes all shortcode brackets: [tag], [tag attr="val"], [/tag], [tag /]
     // Content between tags is inherently preserved since only brackets are targeted
@@ -1752,8 +1897,27 @@ public function mxchat_sanitize_content_for_api($content) {
     
     // Replace any remaining potentially problematic characters with spaces
     // BUT preserve newlines by temporarily replacing them
+    //
+    // \p{Sc} (Symbol, currency) is in the allowlist because every currency sign —
+    // $ € £ ¥ ₹ — is Sc, not Sm, and without it this pass silently replaced every
+    // one of them with a space. That hit far more than product prices: any indexed
+    // page quoting "$4.99" was embedded as " 4.99", leaving the model no way to know
+    // which currency (or that it was money at all). Found while verifying plan 7403ec.
+    //
+    // \p{M} (Mark) is in the allowlist because combining marks are not decoration —
+    // they are letters' other half. Arabic harakat, Hebrew niqqud, and above all the
+    // Devanagari vowel signs and virama (Mc/Mn) are mandatory in their scripts. Each
+    // one used to be replaced by a SPACE, which split one word into several fragments
+    // and turned Indic text into gibberish. Decomposed (NFD) Latin lost every accent
+    // the same way. Invisible in English, which is why it went unreported for so long.
+    //
+    // \p{So} (Symbol, other) covers ™ © ® ° ✓ — meaning-bearing marks that were also
+    // becoming spaces ("Brand® name" indexed as "Brand  name", "200°C" as "200  C").
+    // Emoji are ALSO So: they stay stripped by the emoji-block pass immediately above,
+    // which runs BEFORE this line. That ordering is load-bearing now — moving this
+    // line above the emoji strip would let emoji back into the index. Plan a19914.
     $content = str_replace("\n", "NEWLINE_PLACEHOLDER", $content);
-    $content = preg_replace('/[^\p{L}\p{N}\p{P}\p{Z}\p{Sm}]/u', ' ', $content);
+    $content = preg_replace('/[^\p{L}\p{N}\p{P}\p{Z}\p{Sm}\p{Sc}\p{M}\p{So}]/u', ' ', $content);
     $content = str_replace("NEWLINE_PLACEHOLDER", "\n", $content);
     
     // Limit to reasonable length if needed (byte limit — MySQL TEXT is byte-sized,
@@ -3993,7 +4157,9 @@ public function ajax_mxchat_process_selected_content() {
     }
 
     // Get content including title, short description (for WooCommerce), and main content
-    $content = $post->post_title . "\n\n";
+    // Entity decode at output time (single-pass, shared helper) — a stored
+    // `&amp;` embeds worse than `&` and gets quoted back to visitors (d2c92e).
+    $content = $this->mxchat_decode_entities_for_indexing($post->post_title) . "\n\n";
 
     // Add short description if it exists (WooCommerce products use post_excerpt for short description)
     // Strip FIRST, then test: an excerpt that is nothing but shortcodes strips to
@@ -4004,47 +4170,23 @@ public function ajax_mxchat_process_selected_content() {
     // excerpt and must not produce a labelled line with nothing after it.
     $clean_excerpt = $this->strip_shortcode_tags_preserve_content($post->post_excerpt);
     if (trim($clean_excerpt) !== '') {
-        $content .= "Short Description: " . wp_strip_all_tags($clean_excerpt) . "\n\n";
+        $content .= "Short Description: " . $this->mxchat_decode_entities_for_indexing(wp_strip_all_tags($clean_excerpt)) . "\n\n";
     }
 
     // Add main content - remove shortcode tags but preserve content inside them
     $clean_content = $this->strip_shortcode_tags_preserve_content($post->post_content);
-    $content .= wp_strip_all_tags($clean_content);
+    $content .= $this->mxchat_decode_entities_for_indexing(wp_strip_all_tags($clean_content));
 
     // ADD WOOCOMMERCE PRODUCT DATA (pricing, stock, categories, custom tabs)
     if (get_post_type($post_id) === 'product' && class_exists('WooCommerce')) {
         $product = wc_get_product($post_id);
 
         if ($product) {
-            // Get pricing information
-            $regular_price = $product->get_regular_price();
-            $sale_price = $product->get_sale_price();
-            $price = $product->get_price();
             $sku = $product->get_sku();
 
-            // Get currency symbol
-            $currency_symbol = get_woocommerce_currency_symbol();
-
-            // Add pricing information
+            // Add pricing information (base-currency pinned — see mxchat_product_price_lines)
             $content .= "\n";
-            if (!empty($regular_price)) {
-                $content .= "Price: " . $currency_symbol . $regular_price . "\n";
-            } elseif (!empty($price)) {
-                $content .= "Price: " . $currency_symbol . $price . "\n";
-            }
-
-            if (!empty($sale_price) && $sale_price !== $regular_price) {
-                $content .= "Sale Price: " . $currency_symbol . $sale_price . "\n";
-            }
-
-            // Handle variable products - show price range
-            if ($product->is_type('variable')) {
-                $min_price = $product->get_variation_price('min');
-                $max_price = $product->get_variation_price('max');
-                if ($min_price !== $max_price) {
-                    $content .= "Price Range: " . $currency_symbol . $min_price . " - " . $currency_symbol . $max_price . "\n";
-                }
-            }
+            $content .= $this->mxchat_product_price_lines($product);
 
             if (!empty($sku)) {
                 $content .= "SKU: " . $sku . "\n";
@@ -5802,7 +5944,9 @@ private function mxchat_extract_pdf_text_by_attachment_id($attachment_id) {
         $pdf = $parser->parseFile($pdf_path);
         $pages = $pdf->getPages();
         $page_texts = array();
+        $acf_page_num = 0;
         foreach ($pages as $page) {
+            $acf_page_num++;
             $page_text = '';
             try {
                 $page_text = $page->getText();
@@ -5810,6 +5954,7 @@ private function mxchat_extract_pdf_text_by_attachment_id($attachment_id) {
                 $page_text = '';
             }
             if (!empty($page_text)) {
+                $page_text = MxChat_Utils::normalize_pdf_rtl($page_text, 'acf_pdf attachment ' . $attachment_id . ' page ' . $acf_page_num);
                 $page_texts[] = $page_text;
             }
         }
@@ -6025,6 +6170,20 @@ private function mxchat_index_published_post($post_id, $post) {
         // Get the source URL
         $source_url = get_permalink($post_id);
 
+        // A draft published programmatically (wp_publish_post) can reach this
+        // point with an EMPTY post_name — wp_insert_post skips slug generation
+        // for draft/pending — and get_permalink() then resolves to the bare
+        // site root. A knowledge row keyed to the homepage cites the wrong URL
+        // and answers homepage questions with this post's body, so refuse to
+        // write it; the post indexes correctly on its next save, once the slug
+        // exists. The empty-post_name test is what keeps a legitimate static
+        // front page (which has a slug but a root permalink) indexable.
+        // (Plan d138c4.)
+        if ('' === $post->post_name
+            && untrailingslashit($source_url) === untrailingslashit(home_url())) {
+            return;
+        }
+
         /**
          * Allow developers to modify post data before processing into the knowledge base.
          * Same filter and signature as the manual bulk-import path
@@ -6049,7 +6208,7 @@ private function mxchat_index_published_post($post_id, $post) {
         // chrome. The knowledge base stores facts, not display strings — and the
         // bulk-import path has always read the raw title, so this is also what
         // makes the two paths agree.
-        $title = $post->post_title;
+        $title = $this->mxchat_decode_entities_for_indexing($post->post_title);
         $content = get_post_field('post_content', $post);
         $excerpt = get_post_field('post_excerpt', $post);
 
@@ -6058,7 +6217,8 @@ private function mxchat_index_published_post($post_id, $post) {
         $excerpt = $this->strip_shortcode_tags_preserve_content($excerpt);
 
         // Strip tags but preserve structure (don't use 'the_content' filter as it may re-add shortcodes)
-        $content = wp_strip_all_tags($content);
+        // Entity decode at output time, matching the bulk-import path (d2c92e).
+        $content = $this->mxchat_decode_entities_for_indexing(wp_strip_all_tags($content));
 
         // Combine title, short description (if exists), and content
         $final_content = $title . "\n\n";
@@ -6066,7 +6226,7 @@ private function mxchat_index_published_post($post_id, $post) {
         // Add short description if it exists (WooCommerce products use post_excerpt for short description)
         // trim() only in the TEST — see the matching note on the bulk-import path.
         if (trim($excerpt) !== '') {
-            $final_content .= "Short Description: " . wp_strip_all_tags($excerpt) . "\n\n";
+            $final_content .= "Short Description: " . $this->mxchat_decode_entities_for_indexing(wp_strip_all_tags($excerpt)) . "\n\n";
         }
 
         $final_content .= $content;
@@ -6076,35 +6236,11 @@ private function mxchat_index_published_post($post_id, $post) {
             $product = wc_get_product($post_id);
 
             if ($product) {
-                // Get pricing information
-                $regular_price = $product->get_regular_price();
-                $sale_price = $product->get_sale_price();
-                $price = $product->get_price();
                 $sku = $product->get_sku();
 
-                // Get currency symbol
-                $currency_symbol = get_woocommerce_currency_symbol();
-
-                // Add pricing information
+                // Add pricing information (base-currency pinned — see mxchat_product_price_lines)
                 $final_content .= "\n";
-                if (!empty($regular_price)) {
-                    $final_content .= "Price: " . $currency_symbol . $regular_price . "\n";
-                } elseif (!empty($price)) {
-                    $final_content .= "Price: " . $currency_symbol . $price . "\n";
-                }
-
-                if (!empty($sale_price) && $sale_price !== $regular_price) {
-                    $final_content .= "Sale Price: " . $currency_symbol . $sale_price . "\n";
-                }
-
-                // Handle variable products - show price range
-                if ($product->is_type('variable')) {
-                    $min_price = $product->get_variation_price('min');
-                    $max_price = $product->get_variation_price('max');
-                    if ($min_price !== $max_price) {
-                        $final_content .= "Price Range: " . $currency_symbol . $min_price . " - " . $currency_symbol . $max_price . "\n";
-                    }
-                }
+                $final_content .= $this->mxchat_product_price_lines($product);
 
                 if (!empty($sku)) {
                     $final_content .= "SKU: " . $sku . "\n";
@@ -6451,6 +6587,214 @@ public function cli_prune_unpublished($args, $assoc_args) {
     ));
 }
 
+/**
+ * WP-CLI: repair knowledge-base rows whose PDF text was imported in visual
+ * (reversed) order before the RTL normalizer existed. 32bf9e fixed new
+ * imports only; this fixes rows already in the table without the customer
+ * having to re-source and re-upload the original PDFs (plan d1e6f7).
+ *
+ * Detection reuses MxChat_Utils::normalize_pdf_rtl() on the stored text: a
+ * row is a candidate exactly when the normalizer would change it, so the
+ * import-time heuristic and the repair heuristic can never disagree.
+ * Repaired rows are RE-EMBEDDED — the stored vector was computed over
+ * reversed text and is as broken as the text — so a wet run calls the
+ * embedding provider once per repaired row on the site's API key. Runs
+ * beyond 25 rows therefore require --yes.
+ *
+ * Scope notes:
+ * - Scans the WordPress knowledge table. Pinecone-mode entries live in
+ *   Pinecone, not this table, and are not scanned; if a scanned row's bot
+ *   ALSO has Pinecone enabled (hybrid drift), the repaired entry is
+ *   re-submitted through the normal import path so the md5-keyed Pinecone
+ *   vector is replaced too.
+ * - Knowledge rows do not carry a bot id; --bot only selects whose
+ *   embedding configuration (model + key) is used for re-embedding.
+ * - The mxchat_pdf_rtl_normalize filter is honoured: a site that disabled
+ *   normalization gets detections of zero, not surprise rewrites.
+ * - The metadata header the PDF importer stores before the text separator
+ *   is preserved byte-identical; only the text segment is repaired.
+ *
+ * ## OPTIONS
+ *
+ * [--dry-run]
+ * : List the rows that would be repaired without changing anything.
+ *
+ * [--bot=<id>]
+ * : Embedding configuration to use for re-embedding. Default: default.
+ *
+ * [--all-content]
+ * : Scan every row containing right-to-left text, not just rows with PDF
+ * provenance (a page anchor in the source URL, or pdf content type).
+ *
+ * [--yes]
+ * : Proceed even when more than 25 rows need re-embedding (API cost gate).
+ *
+ * ## EXAMPLES
+ *
+ *     wp mxchat rtl-repair --dry-run
+ *     wp mxchat rtl-repair
+ *     wp mxchat rtl-repair --all-content --yes
+ */
+public function cli_rtl_repair($args, $assoc_args) {
+    global $wpdb;
+    $dry_run = !empty($assoc_args['dry-run']);
+    $all     = !empty($assoc_args['all-content']);
+    $yes     = !empty($assoc_args['yes']);
+    $bot_id  = isset($assoc_args['bot']) ? sanitize_key($assoc_args['bot']) : 'default';
+    $table   = $wpdb->prefix . 'mxchat_system_prompt_content';
+
+    // Detection pass — no API calls. Walk the table in id batches so a large
+    // knowledge base never loads at once.
+    $rtl_re     = '/[\x{0590}-\x{05FF}\x{0600}-\x{06FF}\x{0750}-\x{077F}\x{FB50}-\x{FDFF}\x{FE70}-\x{FEFF}]/u';
+    $candidates = array();
+    $scanned    = 0;
+    $last_id    = 0;
+    do {
+        if ($all) {
+            $rows = $wpdb->get_results($wpdb->prepare(
+                "SELECT id, article_content, source_url, content_type FROM {$table}
+                 WHERE id > %d ORDER BY id ASC LIMIT 200",
+                $last_id
+            ));
+        } else {
+            $rows = $wpdb->get_results($wpdb->prepare(
+                "SELECT id, article_content, source_url, content_type FROM {$table}
+                 WHERE id > %d AND (source_url LIKE %s OR content_type = 'pdf')
+                 ORDER BY id ASC LIMIT 200",
+                $last_id,
+                '%' . $wpdb->esc_like('#page=') . '%'
+            ));
+        }
+        foreach ($rows as $row) {
+            $last_id = (int) $row->id;
+            $scanned++;
+            $content = (string) $row->article_content;
+            if (!preg_match($rtl_re, $content)) {
+                continue;
+            }
+            list($header, $text) = $this->mxchat_rtl_repair_split($content);
+            $normalized = MxChat_Utils::normalize_pdf_rtl($text, 'rtl-repair row ' . $row->id);
+            if (is_string($normalized) && $normalized !== $text) {
+                $candidates[] = array(
+                    'id'           => (int) $row->id,
+                    'source_url'   => (string) $row->source_url,
+                    'content_type' => (string) $row->content_type,
+                    'new_content'  => $header . $normalized,
+                );
+            }
+        }
+    } while (count($rows) === 200);
+
+    WP_CLI::log(sprintf('Scanned %d row(s); %d stored in reversed (visual) order.', $scanned, count($candidates)));
+    if (empty($candidates)) {
+        WP_CLI::success('No reversed RTL rows found — nothing to repair.');
+        return;
+    }
+
+    foreach ($candidates as $c) {
+        WP_CLI::log(sprintf('%s row %d  %s', $dry_run ? 'Would repair' : 'Will repair', $c['id'], $c['source_url']));
+    }
+    if ($dry_run) {
+        WP_CLI::success(sprintf('Dry run: %d row(s) would be repaired and re-embedded. Run without --dry-run to apply.', count($candidates)));
+        return;
+    }
+
+    // Cost gate: re-embedding spends the customer's API budget.
+    WP_CLI::log(sprintf('Re-embedding will call the embedding provider once per row — %d call(s) on this site\'s API key.', count($candidates)));
+    if (count($candidates) > 25 && !$yes) {
+        WP_CLI::error(sprintf('%d rows need re-embedding (more than 25). Re-run with --yes to confirm the API cost. No rows were changed.', count($candidates)));
+    }
+
+    $bot_options = $this->get_bot_options($bot_id);
+    $options     = !empty($bot_options) ? $bot_options : get_option('mxchat_options');
+    $preflight   = MxChat_Utils::embedding_preflight($options);
+    if (!$preflight['ok']) {
+        WP_CLI::error('Embedding configuration problem: ' . $preflight['reason']);
+    }
+    $api_key = $preflight['api_key'];
+
+    $pinecone_hybrid = $this->mxchat_rtl_repair_pinecone_enabled($bot_id);
+    $repaired = 0;
+    $failed   = 0;
+    foreach ($candidates as $c) {
+        $vector = MxChat_Utils::regenerate_embedding($c['new_content'], $api_key, $bot_id);
+        if (!is_array($vector)) {
+            $failed++;
+            $reason = is_wp_error($vector) ? $vector->get_error_message() : 'embedding request failed';
+            // Text and vector must stay consistent: never write repaired text
+            // beside the stale reversed-text vector.
+            WP_CLI::warning(sprintf('Row %d NOT repaired — %s. Row left unchanged.', $c['id'], $reason));
+            continue;
+        }
+        $wpdb->update(
+            $table,
+            array(
+                'article_content'  => $c['new_content'],
+                'embedding_vector' => maybe_serialize($vector),
+            ),
+            array('id' => $c['id']),
+            array('%s', '%s'),
+            array('%d')
+        );
+        $repaired++;
+        if (class_exists('MxChat_Admin')) {
+            MxChat_Admin::mxchat_log_debug('pdf_rtl_repaired', 'Stored KB row restored to logical order and re-embedded', array(
+                'row_id'     => $c['id'],
+                'source_url' => $c['source_url'],
+                'bot'        => $bot_id,
+            ));
+        }
+        // Hybrid drift: the bot indexes into Pinecone but this row sat in the
+        // WP table — push the repaired entry through the normal import path so
+        // the md5(source_url)-keyed Pinecone vector is replaced as well.
+        if ($pinecone_hybrid) {
+            MxChat_Utils::submit_content_to_db(
+                $c['new_content'],
+                $c['source_url'],
+                $api_key,
+                null,
+                $bot_id,
+                $c['content_type'] !== '' ? $c['content_type'] : 'pdf'
+            );
+        }
+    }
+
+    WP_CLI::success(sprintf('Repaired + re-embedded %d row(s); %d failed; %d scanned.', $repaired, $failed, $scanned));
+}
+
+/**
+ * Split a stored KB row into (metadata header incl. separator, text segment).
+ * The PDF importer stores wp_json_encode($metadata) . "\n---\n" . $text —
+ * repair must touch only the text and keep the header byte-identical.
+ */
+private function mxchat_rtl_repair_split($content) {
+    $sep = "\n---\n";
+    $pos = strpos($content, $sep);
+    if ($pos !== false && $pos > 0 && $content[0] === '{') {
+        $maybe_json = substr($content, 0, $pos);
+        if (json_decode($maybe_json) !== null) {
+            return array(substr($content, 0, $pos + strlen($sep)), substr($content, $pos + strlen($sep)));
+        }
+    }
+    return array('', $content);
+}
+
+/**
+ * Mirror of MxChat_Utils::is_pinecone_enabled_for_bot() (private there) for
+ * the repair CLI's hybrid-drift check.
+ */
+private function mxchat_rtl_repair_pinecone_enabled($bot_id) {
+    if ($bot_id !== 'default' && class_exists('MxChat_Multi_Bot_Manager')) {
+        $cfg = apply_filters('mxchat_get_bot_pinecone_config', array(), $bot_id);
+        if (!empty($cfg)) {
+            return !empty($cfg['use_pinecone']) && !empty($cfg['api_key']) && !empty($cfg['host']);
+        }
+    }
+    $po = get_option('mxchat_pinecone_addon_options');
+    return !empty($po['mxchat_use_pinecone']) && $po['mxchat_use_pinecone'] !== '0'
+        && !empty($po['mxchat_pinecone_api_key']) && !empty($po['mxchat_pinecone_host']);
+}
+
 public function mxchat_handle_post_delete($post_id) {
     // Get post data before it's deleted
     $post = get_post($post_id);
@@ -6556,13 +6900,7 @@ private function mxchat_store_product_embedding($product) {
     $title = $product->get_name();
     $description = $product->get_description();
     $short_description = $product->get_short_description();
-    $regular_price = $product->get_regular_price();
-    $sale_price = $product->get_sale_price();
-    $price = $product->get_price();
     $sku = $product->get_sku();
-
-    // Get currency symbol
-    $currency_symbol = get_woocommerce_currency_symbol();
 
     // Format content consistently
     $content = $title . "\n\n";
@@ -6575,25 +6913,8 @@ private function mxchat_store_product_embedding($product) {
         $content .= wp_strip_all_tags($description) . "\n\n";
     }
 
-    // Add pricing information
-    if (!empty($regular_price)) {
-        $content .= "Price: " . $currency_symbol . $regular_price . "\n";
-    } elseif (!empty($price)) {
-        $content .= "Price: " . $currency_symbol . $price . "\n";
-    }
-
-    if (!empty($sale_price) && $sale_price !== $regular_price) {
-        $content .= "Sale Price: " . $currency_symbol . $sale_price . "\n";
-    }
-
-    // Handle variable products - show price range
-    if ($product->is_type('variable')) {
-        $min_price = $product->get_variation_price('min');
-        $max_price = $product->get_variation_price('max');
-        if ($min_price !== $max_price) {
-            $content .= "Price Range: " . $currency_symbol . $min_price . " - " . $currency_symbol . $max_price . "\n";
-        }
-    }
+    // Add pricing information (base-currency pinned — see mxchat_product_price_lines)
+    $content .= $this->mxchat_product_price_lines($product);
 
     if (!empty($sku)) {
         $content .= "SKU: " . $sku . "\n";
@@ -6723,9 +7044,10 @@ public function mxchat_handle_pinecone_prompt_delete() {
     // Delete from Pinecone
     $pinecone_manager = MxChat_Pinecone_Manager::get_instance();
     $result = $pinecone_manager->mxchat_delete_from_pinecone_by_vector_id(
-        $vector_id, 
-        $pinecone_options['mxchat_pinecone_api_key'], 
-        $pinecone_options['mxchat_pinecone_host']
+        $vector_id,
+        $pinecone_options['mxchat_pinecone_api_key'],
+        $pinecone_options['mxchat_pinecone_host'],
+        $pinecone_options['mxchat_pinecone_namespace'] ?? ''
     );
     
     if ($result['success']) {
@@ -6778,11 +7100,12 @@ public function ajax_mxchat_delete_pinecone_prompt() {
         exit;
     }
     
-    // Delete from the correct Pinecone index
+    // Delete from the correct Pinecone index and namespace
     $result = $pinecone_manager->mxchat_delete_from_pinecone_by_vector_id(
-        $vector_id, 
-        $pinecone_options['mxchat_pinecone_api_key'], 
-        $pinecone_options['mxchat_pinecone_host']
+        $vector_id,
+        $pinecone_options['mxchat_pinecone_api_key'],
+        $pinecone_options['mxchat_pinecone_host'],
+        $pinecone_options['mxchat_pinecone_namespace'] ?? ''
     );
     
     if ($result['success']) {
@@ -7052,6 +7375,7 @@ public function ajax_mxchat_bulk_delete_knowledge() {
 
     $api_key = $pinecone_options['mxchat_pinecone_api_key'] ?? '';
     $host = $pinecone_options['mxchat_pinecone_host'] ?? '';
+    $namespace = $pinecone_options['mxchat_pinecone_namespace'] ?? '';
 
     // =============================================
     // PHASE 1: Collect all Pinecone vector IDs
@@ -7086,6 +7410,9 @@ public function ajax_mxchat_bulk_delete_knowledge() {
                 $all_vector_ids[] = $base_vector_id;
 
                 $list_url = 'https://' . $host . '/vectors/list?prefix=' . urlencode($base_vector_id . '_chunk_') . '&limit=100';
+                if (!empty($namespace)) {
+                    $list_url .= '&namespace=' . rawurlencode($namespace);
+                }
                 $list_response = wp_remote_get($list_url, array(
                     'headers' => array(
                         'Api-Key' => $api_key,
@@ -7122,13 +7449,17 @@ public function ajax_mxchat_bulk_delete_knowledge() {
         $batches = array_chunk($all_vector_ids, 100);
 
         foreach ($batches as $batch) {
+            $delete_body = array('ids' => $batch);
+            if (!empty($namespace)) {
+                $delete_body['namespace'] = $namespace;
+            }
             $delete_response = wp_remote_post("https://{$host}/vectors/delete", array(
                 'headers' => array(
                     'Api-Key' => $api_key,
                     'accept' => 'application/json',
                     'content-type' => 'application/json'
                 ),
-                'body' => wp_json_encode(array('ids' => $batch)),
+                'body' => wp_json_encode($delete_body),
                 'timeout' => 60
             ));
 
@@ -8450,6 +8781,7 @@ private function mxchat_process_pdf_url_inline($pdf_url, $response, $api_key, $b
         for ($i = 0; $i < $total_pages; $i++) {
             $page_num = $i + 1;
             $text = $pages[$i]->getText();
+            $text = MxChat_Utils::normalize_pdf_rtl($text, 'kb_pdf_import page ' . $page_num);
             if (empty($text)) {
                 $skipped_pages[] = 'Page ' . $page_num . ': No text could be extracted — page may contain only images, links, or non-standard encoding';
                 continue;
@@ -8544,14 +8876,6 @@ private function mxchat_extract_woocommerce_product_content($url) {
     $short_description = $product->get_short_description();
     $sku = $product->get_sku();
 
-    // Get pricing information
-    $regular_price = $product->get_regular_price();
-    $sale_price = $product->get_sale_price();
-    $price = $product->get_price(); // Current active price
-
-    // Get currency symbol
-    $currency_symbol = get_woocommerce_currency_symbol();
-
     // Format content
     $content = $title . "\n\n";
 
@@ -8563,25 +8887,8 @@ private function mxchat_extract_woocommerce_product_content($url) {
         $content .= wp_strip_all_tags($description) . "\n\n";
     }
 
-    // Add pricing information
-    if (!empty($regular_price)) {
-        $content .= "Price: " . $currency_symbol . $regular_price . "\n";
-    } elseif (!empty($price)) {
-        $content .= "Price: " . $currency_symbol . $price . "\n";
-    }
-
-    if (!empty($sale_price) && $sale_price !== $regular_price) {
-        $content .= "Sale Price: " . $currency_symbol . $sale_price . "\n";
-    }
-
-    // Handle variable products - show price range
-    if ($product->is_type('variable')) {
-        $min_price = $product->get_variation_price('min');
-        $max_price = $product->get_variation_price('max');
-        if ($min_price !== $max_price) {
-            $content .= "Price Range: " . $currency_symbol . $min_price . " - " . $currency_symbol . $max_price . "\n";
-        }
-    }
+    // Add pricing information (base-currency pinned — see mxchat_product_price_lines)
+    $content .= $this->mxchat_product_price_lines($product);
 
     if (!empty($sku)) {
         $content .= "SKU: " . $sku . "\n";
@@ -8656,6 +8963,7 @@ private function mxchat_process_queue_pdf_page($item_data, $bot_id = 'default') 
         }
         
         $text = $pages[$page_number - 1]->getText();
+        $text = MxChat_Utils::normalize_pdf_rtl($text, 'kb_pdf_page page ' . $page_number);
 
         if (empty($text)) {
             return new WP_Error('empty_page', 'Page ' . $page_number . ': No text could be extracted — page may contain only images, links, or non-standard encoding');

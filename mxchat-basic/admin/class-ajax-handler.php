@@ -430,6 +430,32 @@ public function mxchat_save_setting_callback() {
             wp_send_json_success(['message' => esc_html__('Setting saved', 'mxchat')]);
             return;
 
+        // In-chat YouTube card: master switch + its own confidence floor
+        // (plan f52492). STANDALONE options, same pattern as the cases above.
+        // Default ON — the card already ships, so this is an opt-OUT.
+        case 'mxchat_video_embed_enabled':
+            $vce_value = ($value === 'on' || $value === '1') ? 'on' : 'off';
+            update_option('mxchat_video_embed_enabled', $vce_value);
+            wp_send_json_success(['message' => esc_html__('Setting saved', 'mxchat')]);
+            return;
+
+        // Clamped to the same 20-95 the field advertises. An out-of-range or
+        // non-numeric POST is corrected rather than refused, and the corrected
+        // value is echoed back so the field can reconcile — a silently stored
+        // 0 here would put a video on every answer, which is the bug.
+        case 'mxchat_video_embed_threshold':
+            $vct_value = is_numeric($value)
+                ? (int) $value
+                : MXCHAT_VIDEO_EMBED_THRESHOLD_DEFAULT;
+            if ($vct_value < 20) { $vct_value = 20; }
+            if ($vct_value > 95) { $vct_value = 95; }
+            update_option('mxchat_video_embed_threshold', $vct_value);
+            wp_send_json_success([
+                'message' => esc_html__('Setting saved', 'mxchat'),
+                'value'   => $vct_value,
+            ]);
+            return;
+
         // Live-agent availability schedules (plans 8ccaa2 + 99d7a4). STANDALONE
         // options, same reasoning as the Editor Assistant case above — nested
         // structures that mxchat_sanitize() would strip on the next autosave of any
@@ -637,7 +663,18 @@ public function mxchat_save_setting_callback() {
                     } else {
                         // For text/select fields, sanitize appropriately
                         if ($field_name === 'mxchat_notification_email') {
-                            $transcripts_options[$field_name] = sanitize_email($value);
+                            // sanitize_email() alone CANNOT validate this field: given
+                            // "a@x.com, b@y.com" it returns the single concatenated
+                            // address "a@x.comby.com", which is_email() then accepts.
+                            // That is how two addresses used to be stored as one dead
+                            // one, silently. MxChat_Utils validates the raw parts first
+                            // and refuses the whole list if any of them is bad.
+                            $parsed = MxChat_Utils::parse_notification_emails($value);
+                            if ($parsed['error'] !== '') {
+                                // Reject: the previously stored value stays untouched.
+                                wp_send_json_error(array('message' => $parsed['error']));
+                            }
+                            $transcripts_options[$field_name] = implode(', ', $parsed['emails']);
                         } else {
                             $transcripts_options[$field_name] = sanitize_text_field($value);
                         }

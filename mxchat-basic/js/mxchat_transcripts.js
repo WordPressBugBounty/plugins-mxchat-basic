@@ -944,7 +944,10 @@ jQuery(document).ready(function($) {
 
                     // Update badge counts
                     const sourcesCount = response.data.top_matches ? response.data.top_matches.length : 0;
-                    const actionsCount = response.data.action_analysis ? response.data.action_analysis.length : 0;
+                    // 470f68: the Actions tab now carries two mechanisms — tools
+                    // that ran and trigger phrases that scored. Badge counts both.
+                    const toolCallsCount = response.data.tool_calls ? response.data.tool_calls.length : 0;
+                    const actionsCount = (response.data.action_analysis ? response.data.action_analysis.length : 0) + toolCallsCount;
 
                     if (sourcesCount > 0) {
                         $('#mxch-sources-count').text(sourcesCount).show();
@@ -1095,17 +1098,84 @@ jQuery(document).ready(function($) {
         $container.html(html);
     }
 
+    // AI Tools trace (470f68): one card per tool EXECUTION for this message.
+    // Rendered ABOVE the trigger-phrase scores — a tool that actually ran
+    // outranks a phrase that merely scored.
+    function renderToolCalls(toolCalls) {
+        const failed = toolCalls.filter(function(t) { return !t.ok; }).length;
+
+        let html = '<div class="mxch-rag-summary">';
+        html += '<div class="mxch-rag-summary-item"><span class="mxch-rag-label">Tools Used:</span> <span class="mxch-rag-value">' + toolCalls.length + '</span></div>';
+        if (failed > 0) {
+            html += '<div class="mxch-rag-summary-item"><span class="mxch-rag-label">Failed:</span> <span class="mxch-rag-value" style="color: #ef4444; font-weight: 600;">' + failed + '</span></div>';
+        }
+        html += '</div>';
+
+        html += '<div class="mxch-rag-matches">';
+        html += '<h3>AI Tools</h3>';
+        html += '<p style="color: var(--mxch-text-secondary); font-size: 13px; margin-bottom: 16px;">Tools the assistant chose and ran for this message, in order.</p>';
+
+        toolCalls.forEach(function(tool) {
+            const ok = !!tool.ok;
+            const cardClass = ok ? 'mxch-rag-match-used' : 'mxch-tool-failed';
+            const statusClass = ok ? 'status-used' : 'status-failed';
+            const statusIcon = ok ? '&#10003;' : '&#10007;';
+            const statusLabel = ok ? 'Ran' : 'Failed';
+
+            html += '<div class="mxch-rag-match-card ' + cardClass + '">';
+            html += '<div class="mxch-rag-match-header">';
+            html += '<span class="mxch-rag-match-score">&#9889;</span>';
+            if (typeof tool.ms === 'number') {
+                html += '<span class="mxch-tool-duration">' + tool.ms + ' ms</span>';
+            }
+            html += '<span class="mxch-rag-match-status ' + statusClass + '">' + statusIcon + ' ' + statusLabel + '</span>';
+            html += '</div>';
+
+            html += '<div class="mxch-action-details">';
+            html += '<div class="mxch-action-label">' + escapeHtml(tool.label || tool.name) + '</div>';
+            html += '<div class="mxch-action-callback"><span class="mxch-action-callback-label">Tool:</span> ' + escapeHtml(tool.name) + '</div>';
+            html += '</div>';
+
+            if (!ok && tool.error) {
+                html += '<div class="mxch-tool-error">' + escapeHtml(tool.error) + '</div>';
+            }
+
+            if (tool.args_redacted === 'sensitive') {
+                html += '<div class="mxch-tool-redacted">Arguments not recorded &mdash; this tool is marked sensitive.</div>';
+            } else if (tool.args_excerpt) {
+                html += '<details class="mxch-tool-args"><summary>Arguments</summary>';
+                html += '<div class="mxch-tool-args-body">' + escapeHtml(tool.args_excerpt) + '</div></details>';
+            }
+
+            html += '</div>';
+        });
+
+        html += '</div>';
+        return html;
+    }
+
     function renderActionsContext(data, $container) {
         let html = '';
 
-        // Check if we have action analysis data
-        if (!data.action_analysis || data.action_analysis.length === 0) {
-            html += '<div class="mxch-no-results"><p>No action analysis available for this message.</p><p style="color: var(--mxch-text-secondary); font-size: 13px; margin-top: 8px;">Actions are only evaluated when enabled in your bot configuration.</p></div>';
+        const toolCalls = (data.tool_calls && data.tool_calls.length) ? data.tool_calls : [];
+        const actions = (data.action_analysis && data.action_analysis.length) ? data.action_analysis : [];
+
+        // 95d79d's empty state now shows only when NEITHER mechanism produced
+        // anything — the string itself is unchanged.
+        if (toolCalls.length === 0 && actions.length === 0) {
+            html += '<div class="mxch-no-results"><p>No trigger-phrase analysis for this message.</p><p style="color: var(--mxch-text-secondary); font-size: 13px; margin-top: 8px;">This panel shows how your <strong>Trigger Phrases</strong> scored &mdash; it stays empty if you have none enabled for this bot, or if the answer came from <strong>AI Tools</strong>, which don\'t produce similarity scores. It\'s recorded when the answer is generated, so it won\'t appear on older conversations.</p></div>';
             $container.html(html);
             return;
         }
 
-        const actions = data.action_analysis;
+        if (toolCalls.length > 0) {
+            html += renderToolCalls(toolCalls);
+        }
+
+        if (actions.length === 0) {
+            $container.html(html);
+            return;
+        }
         const triggeredAction = actions.find(a => a.triggered);
         const actionsAboveThreshold = actions.filter(a => a.above_threshold).length;
 

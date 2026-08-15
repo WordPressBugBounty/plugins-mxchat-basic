@@ -15,10 +15,14 @@
  * dedicated table, plus a retention sweep that does not depend on WP-Cron
  * (WP-Cron is disabled on some installs; see plan-mxchat-20260805-b64b77).
  *
- * Fields owned by this store: owner, originating_page, mode, channel.
- * NOT yet owned (still wp_options, deliberately — mxchat-forms and
- * mxchat-woo co-own the reads/writes and must move in the same change):
- * mxchat_name_, mxchat_email_, mxchat_history_.
+ * Fields owned by this store: owner, originating_page, mode, channel, plus
+ * (since schema v2 / plan 5658f2) the visitor identity keys name, email and
+ * agent_name — moved atomically with the mxchat-forms and mxchat-embed
+ * writers so no plugin half writes options while another reads the table.
+ * Chat history is deliberately NOT here either: plan 839c4c deduplicated the
+ * mxchat_history_ options into the transcripts table (their content was a
+ * second copy of it all along) — MxChat_Utils::get_session_history() is the
+ * accessor.
  *
  * @package MxChat
  */
@@ -31,6 +35,21 @@ class MxChat_Session_Store {
 
     /** Table name without the wpdb prefix. */
     const TABLE_SUFFIX = 'mxchat_sessions';
+
+    /**
+     * Bump when create_table()'s schema changes. ensure_table() compares the
+     * READY option against this, so existing installs re-run dbDelta once and
+     * pick up new columns ('1' = b64b77 original, '2' = 5658f2 identity
+     * columns).
+     */
+    const SCHEMA_VERSION = '2';
+
+    /**
+     * Bump when $legacy_prefixes gains entries. A stale version in the stored
+     * migration state resets the bookmark so the new prefixes get a full
+     * re-scan (the migration upsert is a no-op on already-moved rows).
+     */
+    const MIGRATION_VERSION = 2;
 
     /** Batched-migration bookmark. Non-autoloaded. */
     const MIGRATION_OPTION = 'mxchat_session_store_migration';
@@ -65,6 +84,9 @@ class MxChat_Session_Store {
         'originating_page' => 'originating_page',
         'mode'             => 'mode',
         'channel'          => 'channel',
+        'name'             => 'visitor_name',
+        'email'            => 'visitor_email',
+        'agent_name'       => 'agent_name',
     );
 
     /** Logical field => the wp_options prefix it used to live under. */
@@ -73,6 +95,9 @@ class MxChat_Session_Store {
         'originating_page' => 'mxchat_originating_page_',
         'mode'             => 'mxchat_mode_',
         'channel'          => 'mxchat_channel_',
+        'name'             => 'mxchat_name_',
+        'email'            => 'mxchat_email_',
+        'agent_name'       => 'mxchat_agent_name_',
     );
 
     /** Fields stored as JSON rather than a scalar. */
@@ -130,6 +155,9 @@ class MxChat_Session_Store {
             originating_page longtext DEFAULT NULL,
             mode varchar(32) DEFAULT NULL,
             channel varchar(191) DEFAULT NULL,
+            visitor_name varchar(191) DEFAULT NULL,
+            visitor_email varchar(191) DEFAULT NULL,
+            agent_name varchar(191) DEFAULT NULL,
             created_at datetime DEFAULT NULL,
             updated_at datetime DEFAULT NULL,
             PRIMARY KEY  (session_id),
@@ -141,7 +169,7 @@ class MxChat_Session_Store {
 
         $exists = $wpdb->get_var($wpdb->prepare('SHOW TABLES LIKE %s', $table)) === $table;
         if ($exists) {
-            update_option(self::READY_OPTION, '1', 'yes');
+            update_option(self::READY_OPTION, self::SCHEMA_VERSION, 'yes');
             self::$table_ready = true;
         }
 
@@ -157,12 +185,25 @@ class MxChat_Session_Store {
             return true;
         }
 
-        if (get_option(self::READY_OPTION) === '1') {
+        // The stored value is the schema version the table was last built at.
+        // Anything else (including b64b77's '1') re-runs create_table() once —
+        // dbDelta adds the missing columns to existing installs.
+        if (get_option(self::READY_OPTION) === self::SCHEMA_VERSION) {
             self::$table_ready = true;
             return true;
         }
 
         return self::create_table();
+    }
+
+    /**
+     * Feature probe for add-ons: does this core's store handle $field?
+     * mxchat-forms / mxchat-embed call this before routing identity writes to
+     * the table, falling back to the legacy option write against an older
+     * core whose allowlist would silently reject the field.
+     */
+    public static function supports($field) {
+        return isset(self::$columns[$field]);
     }
 
     /* ---------------------------------------------------------------------
@@ -351,6 +392,58 @@ class MxChat_Session_Store {
         return is_string($session_id) ? $session_id : '';
     }
 
+    /**
+     * Sessions whose stored visitor email matches (collation-insensitive, same
+     * as the option sweeps' strtolower compare). The lead-wipe and GDPR
+     * lingering sweeps use this as the table-side twin of their
+     * "option_name LIKE 'mxchat_email_%'" scans (5658f2).
+     *
+     * @param string $email
+     * @return string[] Session ids, possibly empty.
+     */
+    public static function find_by_email($email) {
+        global $wpdb;
+
+        $email = is_scalar($email) ? trim((string) $email) : '';
+        if ($email === '' || !self::ensure_table()) {
+            return array();
+        }
+
+        $table = self::table();
+
+        $sids = $wpdb->get_col(
+            $wpdb->prepare("SELECT session_id FROM `$table` WHERE visitor_email = %s", $email)
+        );
+
+        return is_array($sids) ? $sids : array();
+    }
+
+    /**
+     * Every session row holding a visitor email — the table-side source for
+     * the Leads tab's orphan bucket (pre-chat captures with no transcript
+     * rows). Bounded by lead count, not session count: identity columns are
+     * only ever set by the capture paths.
+     *
+     * @return array[] Rows of [session_id, visitor_email, visitor_name].
+     */
+    public static function identity_rows() {
+        global $wpdb;
+
+        if (!self::ensure_table()) {
+            return array();
+        }
+
+        $table = self::table();
+
+        $rows = $wpdb->get_results(
+            "SELECT session_id, visitor_email, visitor_name FROM `$table`
+             WHERE visitor_email IS NOT NULL AND visitor_email != ''",
+            ARRAY_A
+        );
+
+        return is_array($rows) ? $rows : array();
+    }
+
     private static function row($session_id) {
         if (array_key_exists($session_id, self::$cache)) {
             return self::$cache[$session_id];
@@ -398,15 +491,31 @@ class MxChat_Session_Store {
             $state = array();
         }
 
-        return wp_parse_args(
+        $state = wp_parse_args(
             $state,
             array(
                 'done'           => false,
                 'last_option_id' => 0,
                 'moved'          => 0,
                 'sessions'       => 0,
+                'version'        => 1, // states written before versioning are b64b77's v1
             )
         );
+
+        // A version bump means $legacy_prefixes gained entries after this
+        // install finished (or started) migrating — reset the bookmark so the
+        // new prefixes get a full pass. Re-processing already-moved rows is a
+        // no-op (COALESCE upsert), so the re-scan is safe. The reset lives
+        // here rather than in migrate_batch() so is_migrated() flips false at
+        // the same moment, which re-arms the legacy_get() read-through for
+        // rows the re-scan has not reached yet.
+        if ((int) $state['version'] !== self::MIGRATION_VERSION) {
+            $state['version']        = self::MIGRATION_VERSION;
+            $state['done']           = false;
+            $state['last_option_id'] = 0;
+        }
+
+        return $state;
     }
 
     public static function is_migrated() {
@@ -611,9 +720,16 @@ class MxChat_Session_Store {
         // site-local cutoff.
         $cutoff = get_date_from_gmt($cutoff, 'Y-m-d H:i:s');
 
+        // Identity guard (5658f2): rows holding a visitor name/email are LEADS
+        // — the Leads tab lists them and the legacy option rows they replace
+        // were never expired. Retention only sweeps anonymous session state;
+        // identity rows leave via the eraser / lead-delete / wipe paths.
         $deleted = $wpdb->query(
             $wpdb->prepare(
-                "DELETE FROM `$table` WHERE updated_at IS NOT NULL AND updated_at < %s LIMIT %d",
+                "DELETE FROM `$table` WHERE updated_at IS NOT NULL AND updated_at < %s
+                 AND (visitor_email IS NULL OR visitor_email = '')
+                 AND (visitor_name IS NULL OR visitor_name = '')
+                 LIMIT %d",
                 $cutoff,
                 $limit
             )

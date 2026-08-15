@@ -87,11 +87,21 @@ class MxChat_Tool_Registry {
      * Accepts BOTH the legacy bare-bool shape AND the new
      * { enabled, usage_hint } object shape (back-compat, HARD — plan 27d3e6).
      *
-     * @param mixed $saved       The stored entry, or null when the tool is unset.
-     * @param bool  $is_cautious Whether the tool defaults off (sensitive).
+     * A tool may ship a catalog `default_hint` (plan caee10). It applies ONLY
+     * when the stored entry carries no `usage_hint` KEY AT ALL — an absent key
+     * means the owner has never been shown a hint for this tool, so seeding one
+     * is new guidance rather than an override. A key that is PRESENT BUT EMPTY
+     * is an owner who deliberately cleared the box, and it stays empty. That
+     * distinction is the whole correctness of the default and it mirrors the
+     * `array_key_exists` idiom this function already uses for `enabled`.
+     *
+     * @param mixed  $saved        The stored entry, or null when the tool is unset.
+     * @param bool   $is_cautious  Whether the tool defaults off (sensitive).
+     * @param string $default_hint Catalog-shipped hint, used only on an ABSENT key.
      * @return array{0:bool,1:string}
      */
-    public static function resolve_tool_setting($saved, $is_cautious) {
+    public static function resolve_tool_setting($saved, $is_cautious, $default_hint = '') {
+        $default_hint = self::clip_hint($default_hint);
         if (is_array($saved)) {
             // Object shape. An absent 'enabled' key means the owner never turned
             // this tool on → OFF. AI Tools default to ZERO active on a fresh
@@ -104,14 +114,23 @@ class MxChat_Tool_Registry {
             $enabled = array_key_exists('enabled', $saved)
                 ? (bool) $saved['enabled']
                 : false;
-            $hint = isset($saved['usage_hint']) ? (string) $saved['usage_hint'] : '';
+            // NOTE: array_key_exists, NOT isset — isset() is false for a stored
+            // null and would silently re-seed the default over a cleared hint.
+            $hint = array_key_exists('usage_hint', $saved)
+                ? (string) $saved['usage_hint']
+                : $default_hint;
             return array($enabled, $hint);
         }
         if ($saved === null) {
-            return array(false, ''); // unset → OFF (no tool active until added)
+            // Unset → OFF (no tool active until added), but the catalog default
+            // hint applies: nothing has been stored for this tool yet.
+            return array(false, $default_hint);
         }
-        // Legacy bare-bool: a plain true/false enables/disables with no hint.
-        return array((bool) $saved, '');
+        // Legacy bare-bool: a plain true/false enables/disables. Written before
+        // hints existed (pre-27d3e6), so it carries no usage_hint key either —
+        // it gets the catalog default too, or a site that enabled the tool back
+        // then would stay silently hint-less forever.
+        return array((bool) $saved, $default_hint);
     }
 
     /** Trim + length-bound a usage hint before it is stored or sent to the model. */
@@ -220,13 +239,22 @@ class MxChat_Tool_Registry {
                 'label'       => __('Collect Email', 'mxchat'),
                 'description' => __('Begin collecting the visitor\'s email address for the mailing list.', 'mxchat'),
             ),
+            // The two handoff tools ship a default usage hint (plan caee10).
+            // "Escalate when you don't know" is the most-requested handoff
+            // behavior, and the base description says only WHAT the tool does,
+            // never WHEN — so before this, the behavior worked only for an owner
+            // who independently guessed they had to type the condition into the
+            // hint box. The second clause is deliberate: a bare "when you don't
+            // know" invites the model to escalate on small talk.
             'mxchat_live_agent_handover' => array(
-                'label'       => __('Hand Off to Live Agent (Slack)', 'mxchat'),
-                'description' => __('Transfer the conversation to a human support agent on Slack.', 'mxchat'),
+                'label'        => __('Hand Off to Live Agent (Slack)', 'mxchat'),
+                'description'  => __('Transfer the conversation to a human support agent on Slack.', 'mxchat'),
+                'default_hint' => __('Use this when the visitor has asked something you cannot answer from the knowledge base, or has asked twice about the same unresolved problem.', 'mxchat'),
             ),
             'mxchat_telegram_live_agent_handover' => array(
-                'label'       => __('Hand Off to Live Agent (Telegram)', 'mxchat'),
-                'description' => __('Transfer the conversation to a human support agent on Telegram.', 'mxchat'),
+                'label'        => __('Hand Off to Live Agent (Telegram)', 'mxchat'),
+                'description'  => __('Transfer the conversation to a human support agent on Telegram.', 'mxchat'),
+                'default_hint' => __('Use this when the visitor has asked something you cannot answer from the knowledge base, or has asked twice about the same unresolved problem.', 'mxchat'),
             ),
         ));
     }
@@ -287,6 +315,10 @@ class MxChat_Tool_Registry {
                 // Admin-facing setup metadata (plan 183856) — core tools only.
                 'requires_key'  => isset($meta['requires_key']) ? $meta['requires_key'] : '',
                 'setup_note'    => isset($meta['setup_note']) ? $meta['setup_note'] : '',
+                // Catalog-shipped "when to use" default (plan caee10). Applied
+                // only when the stored entry has no usage_hint key — see
+                // resolve_tool_setting(). Core tools only in this build.
+                'default_hint'  => isset($meta['default_hint']) ? $meta['default_hint'] : '',
             );
         }
 
@@ -368,7 +400,11 @@ class MxChat_Tool_Registry {
         foreach ($entries as $fn => $e) {
             $is_cautious = in_array($fn, $cautious, true);
             $saved = array_key_exists($fn, $enabled_map) ? $enabled_map[$fn] : null;
-            list($enabled, $usage_hint) = self::resolve_tool_setting($saved, $is_cautious);
+            list($enabled, $usage_hint) = self::resolve_tool_setting(
+                $saved,
+                $is_cautious,
+                isset($e['default_hint']) ? $e['default_hint'] : ''
+            );
             $tools[] = array(
                 'name'        => self::tool_name($fn),
                 'callback'    => $fn,

@@ -1398,6 +1398,7 @@ public function fetch_pinecone_vectors_by_ids($pinecone_options, $vector_ids) {
 public function mxchat_delete_all_from_pinecone($pinecone_options, $content_type_filter = '') {
     $api_key = $pinecone_options['mxchat_pinecone_api_key'] ?? '';
     $host = $pinecone_options['mxchat_pinecone_host'] ?? '';
+    $namespace = $pinecone_options['mxchat_pinecone_namespace'] ?? '';
 
     if (empty($api_key) || empty($host)) {
         return array(
@@ -1444,7 +1445,7 @@ public function mxchat_delete_all_from_pinecone($pinecone_options, $content_type
             $batches = array_chunk($vector_ids, $batch_size);
 
             foreach ($batches as $batch) {
-                $result = $this->mxchat_delete_pinecone_batch($batch, $api_key, $host);
+                $result = $this->mxchat_delete_pinecone_batch($batch, $api_key, $host, $namespace);
                 if ($result['success']) {
                     $total_deleted += count($batch);
                 } else {
@@ -1487,7 +1488,7 @@ public function mxchat_delete_all_from_pinecone($pinecone_options, $content_type
     /**
      * Deletes batch of vectors from Pinecone database
      */
-     public function mxchat_delete_pinecone_batch($vector_ids, $api_key, $host) {
+     public function mxchat_delete_pinecone_batch($vector_ids, $api_key, $host, $namespace = '') {
          // Build the API endpoint
          $api_endpoint = "https://{$host}/vectors/delete";
 
@@ -1495,6 +1496,11 @@ public function mxchat_delete_all_from_pinecone($pinecone_options, $content_type
          $request_body = array(
              'ids' => $vector_ids
          );
+
+         // Add namespace if provided — omitting it targets the default namespace
+         if (!empty($namespace)) {
+             $request_body['namespace'] = $namespace;
+         }
 
          // Make the deletion request
          $response = wp_remote_post($api_endpoint, array(

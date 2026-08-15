@@ -108,7 +108,6 @@ class MxChat_Model_Catalog {
                     'claude-sonnet-4-6'           => array('label' => 'Claude Sonnet 4.6',   'description' => __('Previous Sonnet - excellent balance of speed and capability', 'mxchat')),
                     'claude-opus-4-5'             => array('label' => 'Claude Opus 4.5',     'description' => __('Highly capable for complex tasks', 'mxchat')),
                     'claude-sonnet-4-5-20250929'  => array('label' => 'Claude Sonnet 4.5',   'description' => __('Best for complex agents and coding', 'mxchat')),
-                    'claude-opus-4-1-20250805'    => array('label' => 'Claude Opus 4.1',     'description' => __('Exceptional for specialized complex tasks', 'mxchat')),
                     'claude-haiku-4-5-20251001'   => array('label' => 'Claude Haiku 4.5',    'description' => __('Fastest and most intelligent Haiku', 'mxchat')),
                 ),
             ),
@@ -116,14 +115,33 @@ class MxChat_Model_Catalog {
                 'label'                       => __('xAI Grok', 'mxchat'),
                 'key_option'                  => 'xai_api_key',
                 'requires_key_to_load_models' => false,
+                // Refreshed 2026-08-14 (plan-mxchat-20260814-e1aa4a) against TWO
+                // primary sources that agree: a live pull of xAI's /v1/models with
+                // a real key, and docs.x.ai/docs/models. Context windows below are
+                // that listing's own context_length; image-input support for every
+                // current-generation id was confirmed by a 32x32 probe returning a
+                // correct answer (all HTTP 200), not inferred from docs.
+                //
+                // The legacy block below is INTENTIONALLY still here. xAI has
+                // published no retirement dates for these ids and they still answer
+                // HTTP 200 (grok-4-0709 re-probed 2026-08-14), so 'deprecated_on'
+                // would be an invented date and deleting them would strand every
+                // install saved on one. Current generation simply sorts above them.
                 'models' => array(
-                    'grok-4-1-fast-reasoning'     => array('label' => 'Grok 4.1 Fast (Reasoning)',     'description' => __('2M context window and reasoning', 'mxchat')),
-                    'grok-4-1-fast-non-reasoning' => array('label' => 'Grok 4.1 Fast (Non-Reasoning)', 'description' => __('2M context window and faster responses', 'mxchat')),
-                    'grok-4-0709'                 => array('label' => 'Grok 4',                        'description' => __('Latest flagship model - unparalleled performance in natural language, math and reasoning', 'mxchat')),
-                    'grok-3-beta'                 => array('label' => 'Grok-3',                        'description' => __('Powerful model with 131K context', 'mxchat')),
-                    'grok-3-fast-beta'            => array('label' => 'Grok-3 Fast',                   'description' => __('High performance with faster responses', 'mxchat')),
-                    'grok-3-mini-beta'            => array('label' => 'Grok-3 Mini',                   'description' => __('Affordable model with good performance', 'mxchat')),
-                    'grok-3-mini-fast-beta'       => array('label' => 'Grok-3 Mini Fast',              'description' => __('Quick and cost-effective', 'mxchat')),
+                    'grok-4.6'                    => array('label' => 'Grok 4.6',                      'description' => __('Newest xAI flagship — 500K context, accepts image input', 'mxchat')),
+                    'grok-4.5'                    => array('label' => 'Grok 4.5',                      'description' => __('Previous flagship — 500K context, accepts image input', 'mxchat')),
+                    'grok-4.3'                    => array('label' => 'Grok 4.3',                      'description' => __('Largest context in the Grok lineup — 1M tokens, accepts image input', 'mxchat')),
+                    'grok-4.20-0309-reasoning'    => array('label' => 'Grok 4.20 (Reasoning)',         'description' => __('1M context with reasoning — dated release, pinned behaviour', 'mxchat')),
+                    'grok-4.20-0309-non-reasoning'=> array('label' => 'Grok 4.20 (Non-Reasoning)',     'description' => __('1M context without reasoning — faster replies at the same price', 'mxchat')),
+                    // --- Previous generations. Still served by xAI, no announced
+                    // retirement date, kept so saved selections keep working. ---
+                    'grok-4-1-fast-reasoning'     => array('label' => 'Grok 4.1 Fast (Reasoning)',     'description' => __('Previous generation — no longer listed by xAI, still served', 'mxchat')),
+                    'grok-4-1-fast-non-reasoning' => array('label' => 'Grok 4.1 Fast (Non-Reasoning)', 'description' => __('Previous generation — no longer listed by xAI, still served', 'mxchat')),
+                    'grok-4-0709'                 => array('label' => 'Grok 4',                        'description' => __('Previous generation — no longer listed by xAI, still served', 'mxchat')),
+                    'grok-3-beta'                 => array('label' => 'Grok-3',                        'description' => __('Older generation — no longer listed by xAI, still served', 'mxchat')),
+                    'grok-3-fast-beta'            => array('label' => 'Grok-3 Fast',                   'description' => __('Older generation — no longer listed by xAI, still served', 'mxchat')),
+                    'grok-3-mini-beta'            => array('label' => 'Grok-3 Mini',                   'description' => __('Older generation — no longer listed by xAI, still served', 'mxchat')),
+                    'grok-3-mini-fast-beta'       => array('label' => 'Grok-3 Mini Fast',              'description' => __('Older generation — no longer listed by xAI, still served', 'mxchat')),
                 ),
             ),
             'deepseek' => array(
@@ -207,6 +225,140 @@ class MxChat_Model_Catalog {
         $emb = self::embedding_models();
         if (isset($emb[$slug])) return $emb[$slug]['key_option'];
         return '';
+    }
+
+    /**
+     * The provider slug that owns a chat model id, or '' when the catalog
+     * doesn't list it (plan b65e8d).
+     *
+     * NOTE for callers doing retirement work: a model the provider has already
+     * retired is frequently ABSENT from this catalog while still saved on an
+     * install — that is precisely the state the liveness check exists to catch.
+     * Treat '' as "catalog doesn't know", not "not a real model", and fall back
+     * to a family-prefix guess if you need one.
+     */
+    public static function provider_for_chat_model($model_id) {
+        $model_id = (string) $model_id;
+        foreach (self::chat_models() as $provider_slug => $provider) {
+            if (isset($provider['models'][$model_id])) {
+                return $provider_slug;
+            }
+        }
+        return '';
+    }
+
+    /**
+     * URL + auth headers for a provider's public model-listing endpoint
+     * (plan b65e8d — the daily liveness check).
+     *
+     * Only providers that actually publish a listing are mapped. OpenRouter is
+     * deliberately excluded: its 'openrouter' catalog entry is a meta-selector
+     * that resolves to a per-account sub-model at request time, so "is the
+     * configured id listed" is not a meaningful question. DeepSeek and the
+     * custom OpenAI-compatible provider are excluded too — a self-hosted or
+     * proxied endpoint's /models is not authoritative about retirement.
+     *
+     * @param string $provider Provider slug.
+     * @param string $api_key  The install's key for that provider.
+     * @return array|null array('url' => string, 'headers' => array) or null.
+     */
+    public static function models_listing_request($provider, $api_key) {
+        $api_key = (string) $api_key;
+        if ($api_key === '') {
+            return null;
+        }
+
+        switch ($provider) {
+            case 'openai':
+                return array(
+                    'url'     => 'https://api.openai.com/v1/models',
+                    'headers' => array('Authorization' => 'Bearer ' . $api_key),
+                );
+            case 'claude':
+                return array(
+                    'url'     => 'https://api.anthropic.com/v1/models?limit=1000',
+                    'headers' => array(
+                        'x-api-key'         => $api_key,
+                        'anthropic-version' => '2023-06-01',
+                    ),
+                );
+            case 'gemini':
+                return array(
+                    'url'     => 'https://generativelanguage.googleapis.com/v1beta/models?pageSize=1000',
+                    'headers' => array('x-goog-api-key' => $api_key),
+                );
+            case 'xai':
+                return array(
+                    'url'     => 'https://api.x.ai/v1/models',
+                    'headers' => array('Authorization' => 'Bearer ' . $api_key),
+                );
+        }
+
+        return null;
+    }
+
+    /**
+     * A minimal 1-token chat request used ONLY to confirm whether a model id
+     * still exists (plan b65e8d). Never used for content — the response is
+     * thrown away; only the HTTP status and error code are read.
+     *
+     * WHY THIS EXISTS: a provider's model LISTING is not authoritative about
+     * retirement, in either direction (all probed live 2026-08-13):
+     *   - OpenAI KEEPS retired ids listed — gpt-5.3-chat-latest is in
+     *     /v1/models and 404s "model_deprecated" on use.
+     *   - Anthropic DROPS working aliases — claude-opus-4-5 is absent from
+     *     /v1/models and answers HTTP 200 perfectly.
+     *   - xAI's listing is partial — grok-4-0709 is absent and answers 200.
+     * So "absent from the listing" is a suspicion, not a verdict. This probe is
+     * the verdict, and it is the only thing allowed to raise a warning.
+     *
+     * @return array|null array('url','headers','body') or null when unsupported.
+     */
+    public static function inference_probe_request($provider, $api_key, $model) {
+        $api_key = (string) $api_key;
+        $model   = (string) $model;
+        if ($api_key === '' || $model === '') {
+            return null;
+        }
+
+        $msg = array(array('role' => 'user', 'content' => 'hi'));
+
+        switch ($provider) {
+            case 'openai':
+                return array(
+                    'url'     => 'https://api.openai.com/v1/chat/completions',
+                    'headers' => array('Authorization' => 'Bearer ' . $api_key, 'Content-Type' => 'application/json'),
+                    'body'    => array('model' => $model, 'messages' => $msg, 'max_completion_tokens' => 1),
+                );
+            case 'xai':
+                return array(
+                    'url'     => 'https://api.x.ai/v1/chat/completions',
+                    'headers' => array('Authorization' => 'Bearer ' . $api_key, 'Content-Type' => 'application/json'),
+                    'body'    => array('model' => $model, 'messages' => $msg, 'max_tokens' => 1),
+                );
+            case 'claude':
+                return array(
+                    'url'     => 'https://api.anthropic.com/v1/messages',
+                    'headers' => array(
+                        'x-api-key'         => $api_key,
+                        'anthropic-version' => '2023-06-01',
+                        'Content-Type'      => 'application/json',
+                    ),
+                    'body'    => array('model' => $model, 'max_tokens' => 1, 'messages' => $msg),
+                );
+            case 'gemini':
+                return array(
+                    'url'     => 'https://generativelanguage.googleapis.com/v1beta/models/'
+                                 . rawurlencode($model) . ':generateContent',
+                    'headers' => array('x-goog-api-key' => $api_key, 'Content-Type' => 'application/json'),
+                    'body'    => array(
+                        'contents'         => array(array('parts' => array(array('text' => 'hi')))),
+                        'generationConfig' => array('maxOutputTokens' => 1),
+                    ),
+                );
+        }
+
+        return null;
     }
 
     /**
@@ -433,10 +585,13 @@ class MxChat_Model_Catalog {
      *     2026-08-10 (which this map previously pinned; plan e46b8f).
      *   - claude: the current Haiku — image analysis wants fast + cheap; Haiku
      *     is vision-capable and the catalog's newest Haiku generation.
-     *   - xai: the catalog's dated id for what the bare 'grok-4' alias resolves
-     *     to today — documented vision-capable. The grok-4-1-fast pair is newer
-     *     but its image-input support is unconfirmed; promote it HERE once
-     *     confirmed and every asking add-on follows.
+     *   - xai: grok-4.6, the current flagship. Promoted 2026-08-14 (plan
+     *     e1aa4a) from grok-4-0709, which was two generations behind and no
+     *     longer appears in xAI's /v1/models listing. Image input is CONFIRMED,
+     *     not assumed: a 32x32 fixture probe on 2026-08-14 returned the correct
+     *     colour on grok-4.6 / 4.5 / 4.3 and both 4.20 variants (all HTTP 200).
+     *     grok-4.3 is the cheaper vision option (roughly half the image-token
+     *     price, 1M context) if cost ever outweighs capability here.
      *   - gemini: current stable Flash — vision-capable, no per-image surcharge.
      *
      * NOT covered: image-GENERATION models (Gemini Imagen / Flash Image etc.).
@@ -451,7 +606,7 @@ class MxChat_Model_Catalog {
         $map = array(
             'openai' => 'gpt-5.6-sol',
             'claude' => 'claude-haiku-4-5-20251001',
-            'xai'    => 'grok-4-0709',
+            'xai'    => 'grok-4.6',
             'gemini' => 'gemini-3.5-flash',
         );
         $model = isset($map[$provider]) ? $map[$provider] : '';
@@ -472,15 +627,20 @@ class MxChat_Model_Catalog {
      * The mapping is DELIBERATELY per-context because the surfaces genuinely
      * differ today (they are NOT a single clamped ladder):
      *   - 'chat'      — /v1/chat/completions main chat. gpt-5.5 and gpt-5.4 use
-     *                   'none'; the *-chat-latest / mini / nano / gpt-5.2 ids
-     *                   send NO reasoning_effort.
+     *                   'none'; the *-chat-latest / 5.4-mini / 5.4-nano /
+     *                   gpt-5.2 ids send NO reasoning_effort; the original
+     *                   gpt-5 / gpt-5-mini / gpt-5-nano send 'minimal' (their
+     *                   generation requires it — 25b972 probe). Unknown future
+     *                   gpt-5* ids send NOTHING (allowlist fall-through).
      *   - 'content'   — content generation (content-generator, AC ai-client,
      *                   AC content-calendar). gpt-5.5 / gpt-5.4 use 'low';
-     *                   gpt-5.3-chat-latest / gpt-5.4-mini / gpt-5.4-nano use
-     *                   'minimal'; only gpt-5.2 and gpt-5.1-chat-latest send
-     *                   nothing. This is an ALLOWLIST (5621dd safe-default):
-     *                   a future gpt-5* id not listed gets NO param rather than
-     *                   a guessed value that might 400.
+     *                   gpt-5.4-mini / gpt-5.4-nano use 'none' (they never
+     *                   supported 'minimal' — 25b972); gpt-5.3-chat-latest and
+     *                   the original gpt-5 / -mini / -nano use 'minimal'; only
+     *                   gpt-5.2 and gpt-5.1-chat-latest send nothing. This is
+     *                   an ALLOWLIST (5621dd safe-default): a future gpt-5* id
+     *                   not listed gets NO param rather than a guessed value
+     *                   that might 400.
      *   - 'websearch' — /v1/responses web-search. Only the gpt-5.6 trio, 5.5,
      *                   5.4, and 5.1-2025-11-13 send 'low'; every other gpt-5 id
      *                   (including gpt-5 / mini / nano / chat-latest) sends
@@ -516,6 +676,13 @@ class MxChat_Model_Catalog {
             case 'content':
                 // content-generator + AC class-ai-client + AC content-calendar.
                 // ALLOWLIST (5621dd): a gpt-5* id absent here sends nothing.
+                //
+                // plan-25b972 (probed live 2026-08-13): supported reasoning_effort
+                // VALUES are per-model. gpt-5.4-mini/nano never supported
+                // 'minimal' (their floor is 'none' — the old 'minimal' entries
+                // 400'd on every call); the original gpt-5/-mini/-nano still
+                // REQUIRE 'minimal' and reject 'none'. Do not "harmonize" these
+                // — the two generations genuinely differ.
                 $map = array(
                     'gpt-5.6-sol'         => 'low',
                     'gpt-5.6-terra'       => 'low',
@@ -523,8 +690,8 @@ class MxChat_Model_Catalog {
                     'gpt-5.5'             => 'low',
                     'gpt-5.4'             => 'low',
                     'gpt-5.1-2025-11-13'  => 'low',
-                    'gpt-5.4-mini'        => 'minimal',
-                    'gpt-5.4-nano'        => 'minimal',
+                    'gpt-5.4-mini'        => 'none',
+                    'gpt-5.4-nano'        => 'none',
                     'gpt-5.3-chat-latest' => 'minimal',
                     'gpt-5'               => 'minimal',
                     'gpt-5-mini'          => 'minimal',
@@ -555,7 +722,15 @@ class MxChat_Model_Catalog {
                 if (in_array($model, array('gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna'), true)) {
                     return 'low';
                 }
-                return 'minimal';
+                // plan-25b972: the original gpt-5 generation REQUIRES 'minimal'
+                // (probed 2026-08-13: 'none' is rejected for these three).
+                if (in_array($model, array('gpt-5', 'gpt-5-mini', 'gpt-5-nano'), true)) {
+                    return 'minimal';
+                }
+                // plan-25b972: allowlist fall-through (5621dd philosophy). An
+                // unknown future gpt-5* id sends NO param — a guessed value is
+                // exactly how the 5.4-mini/nano 400s shipped.
+                return null;
         }
     }
 

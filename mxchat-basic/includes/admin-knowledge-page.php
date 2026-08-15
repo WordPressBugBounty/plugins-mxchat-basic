@@ -1442,6 +1442,46 @@ function mxchat_render_chunking_section() {
                 </div>
             </div>
         </div>
+
+        <?php
+        // Video cards (plan f52492). Lives on the Knowledge screen because that
+        // is where the owner imported the video in the first place, and beside
+        // Retrieval because it is a retrieval-confidence question. Standalone
+        // options — see the mxchat_video_embed_* cases in class-ajax-handler.php.
+        $video_embed_enabled   = MxChat_Utils::video_embed_enabled();
+        $video_embed_threshold = (int) round(MxChat_Utils::video_embed_threshold() * 100);
+        $mxchat_core_options   = get_option('mxchat_options', array());
+        $site_threshold        = isset($mxchat_core_options['similarity_threshold'])
+            ? (int) $mxchat_core_options['similarity_threshold']
+            : 35;
+        ?>
+        <div class="mxch-card">
+            <div class="mxch-card-header">
+                <h2 class="mxch-card-title"><?php esc_html_e('Video Cards', 'mxchat'); ?></h2>
+            </div>
+            <div class="mxch-card-body mxchat-autosave-section">
+                <div class="mxch-field" style="margin-bottom: 20px; padding-bottom: 20px; border-bottom: 1px solid var(--mxch-card-border);">
+                    <div style="display: flex; align-items: center; gap: 12px;">
+                        <label class="mxchat-toggle-switch">
+                            <input type="checkbox" name="mxchat_video_embed_enabled" id="mxchat_video_embed_enabled" class="mxchat-autosave-field" value="on" <?php checked($video_embed_enabled, true); ?>>
+                            <span class="mxchat-toggle-slider"></span>
+                        </label>
+                        <span style="font-weight: 500;"><?php esc_html_e('Show a video card when a YouTube source answers the question', 'mxchat'); ?></span>
+                    </div>
+                    <p class="mxch-field-description" style="margin-top: 8px;"><?php esc_html_e('Adds a click-to-play card beneath the reply when the answer came from a YouTube video you imported. Turn this off to stop video cards entirely without removing the videos from your knowledge base.', 'mxchat'); ?></p>
+                </div>
+
+                <div class="mxch-field" id="mxchat-video-embed-threshold-field" style="<?php echo $video_embed_enabled ? '' : 'display: none;'; ?>">
+                    <label class="mxch-field-label" for="mxchat_video_embed_threshold"><?php esc_html_e('Video Card Match Threshold (%)', 'mxchat'); ?></label>
+                    <input type="number" name="mxchat_video_embed_threshold" id="mxchat_video_embed_threshold" class="mxch-input mxchat-autosave-field" value="<?php echo esc_attr($video_embed_threshold); ?>" min="20" max="95" step="1" style="max-width: 200px;">
+                    <p class="mxch-field-description"><?php
+                        /* translators: %d is the site-wide Similarity Threshold percentage. */
+                        printf(esc_html__('How closely the video must match the question before its card is shown. Higher means fewer, more relevant cards. This is separate from the site-wide Similarity Threshold (currently %d%%), which decides what the AI reads — a video is worth reading from at a lower score than it is worth putting on screen.', 'mxchat'), (int) $site_threshold);
+                    ?></p>
+                    <p class="mxch-field-hint"><?php esc_html_e('Range 20-95. Raise this if visitors are shown videos unrelated to what they asked; lower it if a video that clearly answers the question is not appearing. The right number depends on your embedding model: older models such as text-embedding-ada-002 score even unrelated content around 70%, so those sites usually need 80 or higher before this has any effect. The Transcripts sources panel shows the match percentage of each source, which is the number to compare against.', 'mxchat'); ?></p>
+                </div>
+            </div>
+        </div>
     </div>
     <?php
 }
@@ -2197,80 +2237,12 @@ function mxchat_render_knowledge_page_scripts() {
 
         // Wait for DOM
         document.addEventListener('DOMContentLoaded', function() {
-            initKnowledgeNavigation();
-            initMobileMenu();
+            // Tab navigation + mobile menu live in the shared shell script
+            // (js/admin-sidebar.js), enqueued for this page by plan c192a4.
             initImportOptions();
             initCustomPostTypesToggle();
             // Sitemap detection is now initialized when user clicks the Sitemap Import option
         });
-
-        function initKnowledgeNavigation() {
-            const navLinks = document.querySelectorAll('.mxch-nav-link[data-target], .mxch-mobile-nav-link[data-target]');
-            const sections = document.querySelectorAll('.mxch-section');
-
-            function showSection(targetId) {
-                // Hide all sections
-                sections.forEach(section => section.classList.remove('active'));
-                // Show target section
-                const target = document.getElementById(targetId);
-                if (target) {
-                    target.classList.add('active');
-                }
-                // Update nav links
-                navLinks.forEach(link => {
-                    link.classList.toggle('active', link.dataset.target === targetId);
-                });
-                // Update URL hash
-                history.replaceState(null, null, '#' + targetId);
-            }
-
-            navLinks.forEach(link => {
-                link.addEventListener('click', function(e) {
-                    e.preventDefault();
-                    const targetId = this.dataset.target;
-                    showSection(targetId);
-                    // Close mobile menu if open
-                    const mobileMenu = document.querySelector('.mxch-mobile-menu');
-                    const overlay = document.querySelector('.mxch-mobile-overlay');
-                    if (mobileMenu) mobileMenu.classList.remove('open');
-                    if (overlay) overlay.classList.remove('open');
-                });
-            });
-
-            // Handle initial hash
-            const hash = window.location.hash.substring(1);
-            if (hash && document.getElementById(hash)) {
-                showSection(hash);
-            }
-        }
-
-        function initMobileMenu() {
-            const menuBtn = document.querySelector('.mxch-mobile-menu-btn');
-            const closeBtn = document.querySelector('.mxch-mobile-menu-close');
-            const overlay = document.querySelector('.mxch-mobile-overlay');
-            const menu = document.querySelector('.mxch-mobile-menu');
-
-            if (menuBtn && menu) {
-                menuBtn.addEventListener('click', function() {
-                    menu.classList.add('open');
-                    if (overlay) overlay.classList.add('open');
-                });
-            }
-
-            if (closeBtn && menu) {
-                closeBtn.addEventListener('click', function() {
-                    menu.classList.remove('open');
-                    if (overlay) overlay.classList.remove('open');
-                });
-            }
-
-            if (overlay && menu) {
-                overlay.addEventListener('click', function() {
-                    menu.classList.remove('open');
-                    overlay.classList.remove('open');
-                });
-            }
-        }
 
         function initImportOptions() {
             const importBoxes = document.querySelectorAll('.mxchat-import-box');

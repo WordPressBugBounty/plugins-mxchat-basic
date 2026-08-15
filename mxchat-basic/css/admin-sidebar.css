@@ -41,6 +41,8 @@
     /* Status Colors */
     --mxch-success: #10b981;
     --mxch-warning: #f59e0b;
+    --mxch-warning-light: rgba(245, 158, 11, 0.12);
+    --mxch-warning-text: #92400e;
     --mxch-error: #ef4444;
     --mxch-info: #3b82f6;
 
@@ -1344,6 +1346,13 @@ body.rtl .mxch-nav-link.active {
     border: 1px solid #fecaca;
 }
 
+/* Standalone notice sitting between a content header and the first card.
+   Token-based replacement for the inline margin declarations this component
+   has been carrying at its call sites (b65e8d). */
+.mxch-notice-block {
+    margin-bottom: var(--mxch-spacing-lg);
+}
+
 /* ==========================================================================
    Disclosure (collapsible <details>)
    Generic Advanced/opt-in surface — used for static-bearer fallback on
@@ -2131,6 +2140,41 @@ body.rtl .mxch-nav-link.active {
 /* Feedback inside slider container */
 .mxch-admin-wrapper .slider-container + .feedback-container {
     margin-left: 15px;
+}
+
+/* Persistent unsaved-state badge (plan 7787f8). Quiet warning, not an error:
+   a field whose value differs from its last-saved state carries this on its
+   label until the autosave round-trip confirms. */
+.mxch-admin-wrapper .mxchat-unsaved-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    margin-left: 8px;
+    padding: 1px 8px 1px 6px;
+    border-radius: 10px;
+    background: var(--mxch-warning-light);
+    color: var(--mxch-warning-text);
+    font-size: 11px;
+    font-weight: 600;
+    line-height: 1.6;
+    letter-spacing: 0.2px;
+    vertical-align: middle;
+    white-space: nowrap;
+    animation: mxchUnsavedIn 0.15s ease-out;
+}
+
+.mxch-admin-wrapper .mxchat-unsaved-badge::before {
+    content: '';
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--mxch-warning);
+    flex: none;
+}
+
+@keyframes mxchUnsavedIn {
+    from { opacity: 0; transform: translateY(1px); }
+    to   { opacity: 1; transform: none; }
 }
 
 /* ==========================================================================

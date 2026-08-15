@@ -233,7 +233,11 @@ class MxChat_Editor_Assistant_Stream {
         $body = array(
             'model'      => $model,
             'max_tokens' => 1024,
-            'system'     => $system_prompt,
+            // Prompt-cache breakpoint (plan 1ff43b): the editor-assistant
+            // instruction is a fixed template reused across requests.
+            'system'     => trim((string) $system_prompt) === '' ? $system_prompt : array(
+                array('type' => 'text', 'text' => $system_prompt, 'cache_control' => array('type' => 'ephemeral')),
+            ),
             'messages'   => array(
                 array('role' => 'user', 'content' => $user_content),
             ),

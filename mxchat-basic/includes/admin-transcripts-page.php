@@ -833,12 +833,13 @@ function mxchat_render_transcripts_page($admin_instance, $page_data) {
 
                             <div class="mxch-field">
                                 <label class="mxch-field-label"><?php esc_html_e('Notification Email', 'mxchat'); ?></label>
-                                <input type="email"
+                                <?php /* type="text", not "email": the browser rejects a comma-separated list outright (plan 2f131a). Validation is server-side in MxChat_Utils. */ ?>
+                                <input type="text"
                                        name="mxchat_transcripts_options[mxchat_notification_email]"
                                        class="mxch-input mxchat-autosave-field"
                                        value="<?php echo esc_attr($email); ?>"
                                        data-nonce="<?php echo wp_create_nonce('mxchat_autosave_nonce'); ?>">
-                                <p class="mxch-field-description"><?php esc_html_e('Email address where notifications will be sent.', 'mxchat'); ?></p>
+                                <p class="mxch-field-description"><?php printf(esc_html__('Email address where notifications will be sent. Separate up to %d addresses with commas. Defaults to the site admin email.', 'mxchat'), (int) MxChat_Utils::NOTIFICATION_EMAIL_MAX); ?></p>
                             </div>
                         </div>
                     </div>

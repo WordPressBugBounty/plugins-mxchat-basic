@@ -245,6 +245,16 @@ function mxchat_render_settings_page($admin_instance) {
                     <p class="mxch-content-subtitle"><?php esc_html_e('Configure the AI models your chatbot will use for conversations and embeddings.', 'mxchat'); ?></p>
                 </div>
 
+                <?php
+                // Model-retirement warning (b65e8d). Rendered HERE rather than via
+                // admin_notices because the branded shell paints over WP's notice
+                // region — a core notice on this screen is invisible. No-ops unless
+                // the daily liveness check has flagged the configured model.
+                if (class_exists('MxChat_Model_Liveness')) {
+                    MxChat_Model_Liveness::render_inline_notice();
+                }
+                ?>
+
                 <div class="mxch-card">
                     <div class="mxch-card-body mxchat-autosave-section">
                         <?php
@@ -1346,142 +1356,10 @@ function mxchat_render_settings_page($admin_instance) {
 
     <script>
     document.addEventListener('DOMContentLoaded', function() {
-        // Sidebar navigation
-        const navLinks = document.querySelectorAll('.mxch-nav-link, .mxch-nav-sub-link');
-        const sections = document.querySelectorAll('.mxch-section');
-        const navItems = document.querySelectorAll('.mxch-nav-item');
-
-        function showSection(target) {
-            // Show target section
-            sections.forEach(section => {
-                section.classList.remove('active');
-                if (section.id === target) {
-                    section.classList.add('active');
-                }
-            });
-
-            // Scroll content area to top
-            const contentArea = document.querySelector('.mxch-content');
-            if (contentArea) {
-                contentArea.scrollTop = 0;
-            }
-        }
-
-        function setActiveNav(clickedLink) {
-            // Remove active from all links
-            navLinks.forEach(l => l.classList.remove('active'));
-
-            // Add active to clicked link
-            clickedLink.classList.add('active');
-
-            // If clicking a sub-link, also highlight parent
-            if (clickedLink.classList.contains('mxch-nav-sub-link')) {
-                const parent = clickedLink.closest('.mxch-nav-item');
-                if (parent) {
-                    parent.querySelector('.mxch-nav-link').classList.add('active');
-                }
-            }
-        }
-
-        navLinks.forEach(link => {
-            link.addEventListener('click', function(e) {
-                e.preventDefault();
-                e.stopPropagation();
-                const target = this.dataset.target;
-                const parentItem = this.closest('.mxch-nav-item');
-                const hasSubmenu = parentItem && parentItem.querySelector('.mxch-nav-sub');
-
-                // If this is a parent nav link WITH children (expandable menu)
-                if (this.classList.contains('mxch-nav-link') && hasSubmenu) {
-                    const wasExpanded = parentItem.classList.contains('expanded');
-
-                    // Collapse all other expandable items
-                    navItems.forEach(item => {
-                        if (item !== parentItem && item.querySelector('.mxch-nav-sub')) {
-                            item.classList.remove('expanded');
-                        }
-                    });
-
-                    // Toggle this item
-                    parentItem.classList.toggle('expanded');
-
-                    // If expanding, show the first sub-item's content and mark it active
-                    if (!wasExpanded) {
-                        const firstSubLink = parentItem.querySelector('.mxch-nav-sub-link');
-                        if (firstSubLink) {
-                            const firstTarget = firstSubLink.dataset.target;
-                            showSection(firstTarget);
-                            setActiveNav(firstSubLink);
-                            // Also mark parent as active
-                            this.classList.add('active');
-                            history.replaceState(null, null, '#' + firstTarget);
-                        }
-                    }
-                }
-                // If this is a nav link WITHOUT children (like API Keys, Tutorials)
-                else if (this.classList.contains('mxch-nav-link') && !hasSubmenu && target) {
-                    // Collapse all expandable items
-                    navItems.forEach(item => {
-                        if (item.querySelector('.mxch-nav-sub')) {
-                            item.classList.remove('expanded');
-                        }
-                    });
-
-                    // Show the section
-                    showSection(target);
-                    setActiveNav(this);
-                    history.replaceState(null, null, '#' + target);
-                }
-                // If this is a sub-link
-                else if (this.classList.contains('mxch-nav-sub-link') && target) {
-                    // Ensure parent stays expanded
-                    if (parentItem) {
-                        parentItem.classList.add('expanded');
-                    }
-                    showSection(target);
-                    setActiveNav(this);
-                    history.replaceState(null, null, '#' + target);
-                }
-            });
-        });
-
-        // Handle initial deep-link (?tab=<slug> takes precedence over #hash so the
-        // Onboarding setup-step CTAs land on the right sub-tab). Whitelist of valid
-        // section ids must stay in sync with the .mxch-section[id] values above.
-        const validTabs = [
-            'chatbot-ai-models', 'chatbot-behavior', 'chatbot-display',
-            'chatbot-lead-capture', 'chatbot-quick-questions', 'chatbot-rate-limits',
-            'api-keys', 'optimization', 'testing',
-            'integrations-toolbar', 'integrations-loops', 'integrations-brave',
-            'integrations-slack', 'integrations-telegram',
-            'tutorials'
-        ];
-        function activateTab(target) {
-            if (!target) return false;
-            if (validTabs.indexOf(target) === -1) return false;
-            const targetLink = document.querySelector('[data-target="' + target + '"]');
-            if (!targetLink) return false;
-            const parentItem = targetLink.closest('.mxch-nav-item');
-            if (parentItem && targetLink.classList.contains('mxch-nav-sub-link')) {
-                parentItem.classList.add('expanded');
-            }
-            showSection(target);
-            setActiveNav(targetLink);
-            return true;
-        }
-        const urlParams = new URLSearchParams(window.location.search);
-        const tabParam = urlParams.get('tab');
-        let tabActivated = false;
-        if (tabParam) {
-            tabActivated = activateTab(tabParam);
-            // Invalid ?tab=… silently falls through to default (#hash or AI Models).
-        }
-        if (!tabActivated) {
-            const hash = window.location.hash.slice(1);
-            if (hash) {
-                activateTab(hash);
-            }
-        }
+        // Sidebar/tab navigation, accordion groups, ?tab=/#hash deep-linking
+        // and the mobile menu all live in the shared shell script
+        // (js/admin-sidebar.js) — consolidated by plan c192a4. Only the
+        // page-local widgets below remain inline.
 
         // Rate limit accordion
         const rateLimitHeaders = document.querySelectorAll('.mxch-rate-limit-header');
@@ -1510,100 +1388,6 @@ function mxchat_render_settings_page($admin_instance) {
             };
             sel.addEventListener('change', sync);
             sync();
-        });
-
-        // =====================================================
-        // Mobile Menu Functionality
-        // =====================================================
-        const mobileMenuBtn = document.querySelector('.mxch-mobile-menu-btn');
-        const mobileMenuClose = document.querySelector('.mxch-mobile-menu-close');
-        const mobileMenu = document.querySelector('.mxch-mobile-menu');
-        const mobileOverlay = document.querySelector('.mxch-mobile-overlay');
-        const mobileNavLinks = document.querySelectorAll('.mxch-mobile-nav-link, .mxch-mobile-nav-sub-link');
-
-        function openMobileMenu() {
-            mobileMenu.classList.add('open');
-            mobileOverlay.classList.add('open');
-            document.body.style.overflow = 'hidden';
-        }
-
-        function closeMobileMenu() {
-            mobileMenu.classList.remove('open');
-            mobileOverlay.classList.remove('open');
-            document.body.style.overflow = '';
-        }
-
-        if (mobileMenuBtn) {
-            mobileMenuBtn.addEventListener('click', openMobileMenu);
-        }
-
-        if (mobileMenuClose) {
-            mobileMenuClose.addEventListener('click', closeMobileMenu);
-        }
-
-        if (mobileOverlay) {
-            mobileOverlay.addEventListener('click', closeMobileMenu);
-        }
-
-        // Mobile navigation links
-        mobileNavLinks.forEach(link => {
-            link.addEventListener('click', function(e) {
-                e.preventDefault();
-                e.stopPropagation();
-
-                const target = this.dataset.target;
-                const parentId = this.dataset.parent;
-
-                // If this is an expandable parent link
-                if (parentId && !target) {
-                    const subNav = document.querySelector('.mxch-mobile-nav-sub[data-parent="' + parentId + '"]');
-                    if (subNav) {
-                        const isExpanded = subNav.classList.contains('expanded');
-                        // Collapse all sub navs
-                        document.querySelectorAll('.mxch-mobile-nav-sub').forEach(nav => {
-                            nav.classList.remove('expanded');
-                        });
-                        document.querySelectorAll('.mxch-mobile-nav-link').forEach(l => {
-                            l.classList.remove('expanded');
-                        });
-                        // Toggle this one
-                        if (!isExpanded) {
-                            subNav.classList.add('expanded');
-                            this.classList.add('expanded');
-                        }
-                    }
-                }
-                // If this is a direct link or sub-link with a target
-                else if (target) {
-                    // Update mobile nav active state
-                    document.querySelectorAll('.mxch-mobile-nav-link, .mxch-mobile-nav-sub-link').forEach(l => {
-                        l.classList.remove('active');
-                    });
-                    this.classList.add('active');
-
-                    // Also update desktop sidebar nav
-                    const desktopLink = document.querySelector('.mxch-sidebar [data-target="' + target + '"]');
-                    if (desktopLink) {
-                        setActiveNav(desktopLink);
-                        const parentItem = desktopLink.closest('.mxch-nav-item');
-                        if (parentItem && desktopLink.classList.contains('mxch-nav-sub-link')) {
-                            parentItem.classList.add('expanded');
-                        }
-                    }
-
-                    // Show section and close menu
-                    showSection(target);
-                    history.replaceState(null, null, '#' + target);
-                    closeMobileMenu();
-                }
-            });
-        });
-
-        // Close mobile menu on escape key
-        document.addEventListener('keydown', function(e) {
-            if (e.key === 'Escape' && mobileMenu && mobileMenu.classList.contains('open')) {
-                closeMobileMenu();
-            }
         });
     });
     </script>

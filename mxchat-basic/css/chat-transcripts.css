@@ -1949,6 +1949,67 @@
     border-top: 4px solid #ef4444;
 }
 
+/* AI Tools trace (plan-mxchat-20260813-470f68)
+   One card per tool EXECUTION, rendered above the trigger-phrase scores. The box
+   itself reuses .mxch-rag-match-card / .mxch-rag-match-used; the rules below are
+   only the states the trigger-phrase cards have no equivalent of — a failed run,
+   a duration chip, and the argument excerpt. */
+.mxch-tool-failed {
+    border-color: rgba(239, 68, 68, 0.35);
+    background: rgba(239, 68, 68, 0.05);
+}
+
+.mxch-rag-match-status.status-failed {
+    color: var(--mxch-error);
+    font-weight: 600;
+}
+
+.mxch-tool-duration {
+    font-size: 11px;
+    padding: 2px 8px;
+    background: rgba(100, 116, 139, 0.1);
+    color: var(--mxch-text-secondary);
+    border-radius: 10px;
+}
+
+.mxch-tool-error {
+    margin-top: var(--mxch-spacing-sm);
+    font-size: 12px;
+    color: var(--mxch-error);
+    word-break: break-word;
+}
+
+.mxch-tool-args {
+    margin-top: var(--mxch-spacing-sm);
+}
+
+.mxch-tool-args > summary {
+    font-size: 12px;
+    color: var(--mxch-text-secondary);
+    cursor: pointer;
+    list-style: revert;
+}
+
+.mxch-tool-args-body {
+    margin-top: 6px;
+    padding: var(--mxch-spacing-sm);
+    background: #f8fafc;
+    border: 1px solid var(--mxch-card-border);
+    border-radius: var(--mxch-radius-sm);
+    font-size: 12px;
+    font-family: 'SF Mono', Monaco, 'Cascadia Code', monospace;
+    color: var(--mxch-text-secondary);
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+.mxch-tool-redacted {
+    margin-top: var(--mxch-spacing-sm);
+    font-size: 12px;
+    color: var(--mxch-text-muted);
+    font-style: italic;
+}
+
 /* No Results State */
 .mxch-no-results {
     text-align: center;

@@ -1169,7 +1169,7 @@ public function show_live_agent_disabled_banner() {
                 </button>
                 <div class="mxchat-live-agent-content">
                     <h3>🔧 Live Agent Integration Updated!</h3>
-                    <p>We've temporarily disabled your Live Agent integration due to recent enhancements that have made it much better! You can easily turn it back on by going to <strong>Toolbar & Components → Live Agent Settings</strong> and reviewing the new configuration options.</p>
+                    <p>We've temporarily disabled your Live Agent integration due to recent enhancements that have made it much better! You can easily turn it back on by going to <strong>Settings &rarr; Integrations &rarr; Toolbar</strong> and reviewing the new configuration options.</p>
                 </div>
             </div>
         </div>
@@ -1613,12 +1613,13 @@ public function mxchat_notification_email_callback() {
     $options = get_option('mxchat_transcripts_options', array());
     $email = isset($options['mxchat_notification_email']) ? $options['mxchat_notification_email'] : get_option('admin_email');
     ?>
-    <input type="email" id="mxchat_notification_email"
+    <?php /* type="text", not "email": the browser rejects a comma-separated list outright (plan 2f131a). Validation is server-side in MxChat_Utils. */ ?>
+    <input type="text" id="mxchat_notification_email"
            name="mxchat_transcripts_options[mxchat_notification_email]"
            value="<?php echo esc_attr($email); ?>"
            class="regular-text">
     <p class="description">
-        <?php esc_html_e('Enter the email address where notifications should be sent. Defaults to the admin email address.', 'mxchat'); ?>
+        <?php printf(esc_html__('Enter the email address where notifications should be sent. Separate up to %d addresses with commas. Defaults to the admin email address.', 'mxchat'), (int) MxChat_Utils::NOTIFICATION_EMAIL_MAX); ?>
     </p>
     <?php
 }
@@ -1734,15 +1735,27 @@ public function sanitize_transcripts_options($input) {
     $sanitized['mxchat_enable_notifications'] = isset($input['mxchat_enable_notifications']) ? 1 : 0;
 
     if (isset($input['mxchat_notification_email'])) {
-        $sanitized['mxchat_notification_email'] = sanitize_email($input['mxchat_notification_email']);
-        if (!is_email($sanitized['mxchat_notification_email'])) {
+        // Same list rule as the Transcripts autosave path (plan 2f131a). These two
+        // paths disagreeing is how the original bug survived: this one DID call
+        // is_email(), but on sanitize_email()'s output — which is valid even when
+        // the input was two addresses mashed into one. See MxChat_Utils.
+        $parsed = MxChat_Utils::parse_notification_emails($input['mxchat_notification_email']);
+        if ($parsed['error'] !== '') {
             add_settings_error(
                 'mxchat_transcripts_options',
                 'invalid_email',
-                __('Please enter a valid email address for notifications.', 'mxchat'),
+                $parsed['error'],
                 'error'
             );
-            $sanitized['mxchat_notification_email'] = get_option('admin_email');
+            // Keep whatever was already stored. Do NOT fall back to admin_email:
+            // that fallback belongs to a genuinely EMPTY field, and using it here
+            // would quietly redirect notifications away from the address on screen.
+            $existing = get_option('mxchat_transcripts_options', array());
+            if (is_array($existing) && isset($existing['mxchat_notification_email'])) {
+                $sanitized['mxchat_notification_email'] = $existing['mxchat_notification_email'];
+            }
+        } else {
+            $sanitized['mxchat_notification_email'] = implode(', ', $parsed['emails']);
         }
     }
 
@@ -2002,8 +2015,9 @@ public function export_chat_transcripts() {
 //
 // Leads are derived from existing data — no dedicated table. Primary source:
 // wp_mxchat_chat_transcripts rows where user_email is populated. Secondary
-// source: wp_options entries `mxchat_email_{session_id}` / `mxchat_name_{sid}`
-// for "orphan" leads who submitted the pre-chat form but never chatted.
+// source: the mxchat_sessions table's visitor_email/visitor_name columns
+// (plus any unmigrated legacy `mxchat_email_{sid}` wp_options rows) for
+// "orphan" leads who submitted the pre-chat form but never chatted.
 // ============================================================================
 
 /**
@@ -2294,8 +2308,18 @@ private static function mxchat_wipe_leads_by_email(array $emails) {
         }
     }
 
-    // Clean up any lingering option entries (orphan pre-chat captures + chat_deleted
-    // preservations) whose stored value matches one of the emails being wiped.
+    // Table-side twin of the option sweep below (5658f2): orphan pre-chat
+    // captures now live in the sessions table's identity columns.
+    if (class_exists('MxChat_Session_Store') && method_exists('MxChat_Session_Store', 'find_by_email')) {
+        foreach ($emails as $email) {
+            foreach (MxChat_Session_Store::find_by_email($email) as $sid) {
+                MxChat_Session_Store::delete_session($sid);
+            }
+        }
+    }
+
+    // Clean up any lingering option entries (unmigrated orphan pre-chat captures +
+    // chat_deleted preservations) whose stored value matches one of the emails being wiped.
     $lingering = $wpdb->get_results(
         "SELECT option_name, option_value FROM {$wpdb->options}
          WHERE option_name LIKE 'mxchat_email_%' OR option_name LIKE 'mxchat_lead_del_email_%'"
@@ -2645,11 +2669,17 @@ private static function mxchat_collect_orphan_leads($search = '') {
     global $wpdb;
     $table = $wpdb->prefix . 'mxchat_chat_transcripts';
 
+    // Primary source since 5658f2: the sessions table's identity columns.
+    // The legacy option scan stays for installs still mid-migration.
+    $store_rows = (class_exists('MxChat_Session_Store') && method_exists('MxChat_Session_Store', 'identity_rows'))
+        ? MxChat_Session_Store::identity_rows()
+        : [];
+
     $option_rows = $wpdb->get_results(
         "SELECT option_name, option_value FROM {$wpdb->options}
          WHERE option_name LIKE 'mxchat_email_%'"
     );
-    if (empty($option_rows)) {
+    if (empty($option_rows) && empty($store_rows)) {
         return [];
     }
 
@@ -2673,12 +2703,33 @@ private static function mxchat_collect_orphan_leads($search = '') {
     $orphans_by_email = [];
     $needle = strtolower(trim((string) $search));
 
+    // Normalize both sources into [sid, email, name] candidates. Table rows
+    // first — a session can only live in one home, and dedup-by-email below
+    // handles any overlap either way.
+    $candidates = [];
+    foreach ($store_rows as $row) {
+        $candidates[] = [
+            'sid'   => (string) $row['session_id'],
+            'email' => (string) $row['visitor_email'],
+            'name'  => is_string($row['visitor_name'] ?? null) ? $row['visitor_name'] : '',
+        ];
+    }
     foreach ($option_rows as $opt) {
-        $email = sanitize_email(trim((string) $opt->option_value));
+        $sid = substr($opt->option_name, strlen('mxchat_email_'));
+        $name_option = $sid ? get_option('mxchat_name_' . $sid, '') : '';
+        $candidates[] = [
+            'sid'   => (string) $sid,
+            'email' => (string) $opt->option_value,
+            'name'  => is_string($name_option) ? $name_option : '',
+        ];
+    }
+
+    foreach ($candidates as $cand) {
+        $email = sanitize_email(trim($cand['email']));
         if (!$email) {
             continue;
         }
-        $sid = substr($opt->option_name, strlen('mxchat_email_'));
+        $sid = $cand['sid'];
         if (!$sid) {
             continue;
         }
@@ -2690,8 +2741,7 @@ private static function mxchat_collect_orphan_leads($search = '') {
             continue;
         }
 
-        $name_option = get_option('mxchat_name_' . $sid, '');
-        $name = is_string($name_option) ? trim($name_option) : '';
+        $name = trim($cand['name']);
 
         if ($needle !== '') {
             $hay = strtolower($email . ' ' . $name);
@@ -3053,7 +3103,12 @@ private function translate_with_claude($api_key, $model, $system_prompt, $text) 
         'body' => wp_json_encode([
             'model' => $model,
             'max_tokens' => 4096,
-            'system' => $system_prompt,
+            // Prompt-cache breakpoint (plan 1ff43b): the translate instruction
+            // repeats across every message in a batch, so cache reads bill at
+            // 0.1x. Below the model's minimum prefix it silently no-ops.
+            'system' => trim((string) $system_prompt) === '' ? $system_prompt : [
+                ['type' => 'text', 'text' => $system_prompt, 'cache_control' => ['type' => 'ephemeral']]
+            ],
             'messages' => [
                 ['role' => 'user', 'content' => $text]
             ]
@@ -9374,6 +9429,12 @@ private function enqueue_core_admin_assets($plugin_url, $version) {
 private function enqueue_page_specific_assets($current_page, $plugin_url, $version) {
     switch ($current_page) {
         case 'mxchat-prompts':
+            // Shared shell JS: tab switching, deep-linking and the mobile menu
+            // for this page's flat nav (inline copies removed by plan c192a4).
+            wp_enqueue_script('mxchat-admin-sidebar-js', $plugin_url . 'js/admin-sidebar.js', array(), $version, true);
+            wp_localize_script('mxchat-admin-sidebar-js', 'MxChatAdminSidebarI18n', array(
+                'copied' => __('Copied', 'mxchat'),
+            ));
             // Knowledge processing page assets
             wp_enqueue_style('mxchat-content-selector-css', $plugin_url . 'css/content-selector.css', array(), $version);
             wp_enqueue_script('mxchat-content-selector-js', $plugin_url . 'js/content-selector.js', array('jquery'), $version, true);
@@ -9576,9 +9637,17 @@ private function enqueue_page_specific_assets($current_page, $plugin_url, $versi
             break;
     }
 }
-private function localize_admin_scripts($current_page) {
-    // Base localization data for main admin script
-    $base_data = array(
+/**
+ * The base mxchatAdmin payload shared by every MxChat admin page.
+ *
+ * Extracted (plan c192a4) so page-specific re-localizations of the SAME
+ * global — the knowledge page prints a second `var mxchatAdmin` via the
+ * mxchat-knowledge-processing handle, and last-printed wins — can merge
+ * their extra keys on top of this instead of silently narrowing the object
+ * that mxchat-admin.js also reads on that page.
+ */
+private function mxchat_get_admin_base_localization() {
+    return array(
         'ajax_url' => admin_url('admin-ajax.php'),
         'nonce' => wp_create_nonce('mxchat_admin_nonce'),
         'admin_url' => admin_url(),
@@ -9598,12 +9667,17 @@ private function localize_admin_scripts($current_page) {
         'is_activated' => $this->is_activated ? '1' : '0',
         'status_refresh_interval' => 5000,
         'discard_changes_confirm' => __('Discard your unsaved changes?', 'mxchat'),
+        'unsaved_label' => __('Unsaved', 'mxchat'),
         // Live-agent schedule status text (plan 8ccaa2).
         'i18n_scheduled_hours' => __('Scheduled hours', 'mxchat'),
         'i18n_always_available' => __('Always available', 'mxchat'),
         'prompts_setting_nonce' => wp_create_nonce('mxchat_prompts_setting_nonce'),
         'ajaxurl' => admin_url('admin-ajax.php')
     );
+}
+private function localize_admin_scripts($current_page) {
+    // Base localization data for main admin script
+    $base_data = $this->mxchat_get_admin_base_localization();
 
     // Localize main admin script with base data
     wp_localize_script('mxchat-admin-js', 'mxchatAdmin', $base_data);
@@ -9643,25 +9717,35 @@ private function localize_page_specific_scripts($current_page) {
                 )
             ));
 
-            wp_localize_script('mxchat-knowledge-processing', 'mxchatAdmin', array(
-                'ajax_url' => admin_url('admin-ajax.php'),
-                'status_nonce' => wp_create_nonce('mxchat_status_nonce'),
-                'queue_nonce' => wp_create_nonce('mxchat_queue_nonce'),
-                'stop_nonce' => wp_create_nonce('mxchat_stop_processing_action'),
-                'settings_nonce' => wp_create_nonce('mxchat_prompts_setting_nonce'),
-                'setting_nonce' => wp_create_nonce('mxchat_save_setting_nonce'),
-                'entries_nonce' => wp_create_nonce('mxchat_entries_nonce'),
-                'admin_url' => admin_url(),
-                'ajaxurl' => admin_url('admin-ajax.php'),
-                'status_refresh_interval' => 2000,
-                'bot_id' => isset($_GET['bot_id']) ? sanitize_text_field($_GET['bot_id']) : 'default'
+            // This prints a SECOND `var mxchatAdmin` (after mxchat-admin-js's
+            // base one) and last-printed wins — so it must carry the FULL base
+            // payload plus the knowledge-page extras, or every mxchatAdmin.*
+            // key mxchat-admin.js reads on this page comes up undefined
+            // (plan c192a4). Extras merge last: status_refresh_interval stays
+            // at this page's faster 2000ms cadence.
+            wp_localize_script('mxchat-knowledge-processing', 'mxchatAdmin', array_merge(
+                $this->mxchat_get_admin_base_localization(),
+                array(
+                    'status_nonce' => wp_create_nonce('mxchat_status_nonce'),
+                    'queue_nonce' => wp_create_nonce('mxchat_queue_nonce'),
+                    'stop_nonce' => wp_create_nonce('mxchat_stop_processing_action'),
+                    'settings_nonce' => wp_create_nonce('mxchat_prompts_setting_nonce'),
+                    'entries_nonce' => wp_create_nonce('mxchat_entries_nonce'),
+                    'status_refresh_interval' => 2000,
+                    'bot_id' => isset($_GET['bot_id']) ? sanitize_text_field($_GET['bot_id']) : 'default'
+                )
             ));
             break;
 
         case 'mxchat-activation':
-            wp_localize_script('mxchat-activation-js', 'mxchatAdmin', array(
-                'ajax_url' => admin_url('admin-ajax.php'),
-                'license_nonce' => wp_create_nonce('mxchat_activate_license_nonce')
+            // Same last-printed-wins clobber as the knowledge page (plan c192a4,
+            // fixed here by a5b297): this second `var mxchatAdmin` must carry
+            // the full base payload plus the page extras.
+            wp_localize_script('mxchat-activation-js', 'mxchatAdmin', array_merge(
+                $this->mxchat_get_admin_base_localization(),
+                array(
+                    'license_nonce' => wp_create_nonce('mxchat_activate_license_nonce')
+                )
             ));
             break;
 
@@ -9705,12 +9789,18 @@ private function localize_page_specific_scripts($current_page) {
             // Get chart data for localization
             $chart_data = $this->get_transcripts_chart_data();
 
-            wp_localize_script('mxchat-transcripts-js', 'mxchatAdmin', array(
-                'ajax_url' => admin_url('admin-ajax.php'),
-                'export_nonce' => wp_create_nonce('mxchat_export_transcripts'),
-                'delete_nonce' => wp_create_nonce('mxchat_delete_chat_history'),
-                'setting_nonce' => wp_create_nonce('mxchat_save_setting_nonce'),
-                'translate_nonce' => wp_create_nonce('mxchat_translate_messages')
+            // Same last-printed-wins clobber as the knowledge page (plan c192a4,
+            // fixed here by a5b297): merge the base payload under the page keys.
+            // export_nonce/setting_nonce/ajax_url duplicate base values identically;
+            // delete_nonce and translate_nonce are the page-specific adds.
+            wp_localize_script('mxchat-transcripts-js', 'mxchatAdmin', array_merge(
+                $this->mxchat_get_admin_base_localization(),
+                array(
+                    'export_nonce' => wp_create_nonce('mxchat_export_transcripts'),
+                    'delete_nonce' => wp_create_nonce('mxchat_delete_chat_history'),
+                    'setting_nonce' => wp_create_nonce('mxchat_save_setting_nonce'),
+                    'translate_nonce' => wp_create_nonce('mxchat_translate_messages')
+                )
             ));
 
             // Localize chart data separately - use array_values to ensure proper JSON array encoding
@@ -10666,8 +10756,11 @@ public function mxchat_handle_delete_all_prompts() {
          $success = false;
          $error_message = '';
 
-         // Check if Pinecone is enabled and determine source automatically if not specified
-         $pinecone_options = get_option('mxchat_pinecone_addon_options', array());
+         // Resolve per-bot Pinecone settings — the global option is the wrong
+         // index entirely when the row belongs to a bot with its own host
+         $bot_id = isset($_GET['bot_id']) ? sanitize_text_field($_GET['bot_id']) : 'default';
+         $pinecone_manager = MxChat_Pinecone_Manager::get_instance();
+         $pinecone_options = $pinecone_manager->mxchat_get_bot_pinecone_options($bot_id);
          $use_pinecone = ($pinecone_options['mxchat_use_pinecone'] ?? '0') === '1';
 
          // If source is not specified, determine based on Pinecone configuration
@@ -10685,11 +10778,11 @@ public function mxchat_handle_delete_all_prompts() {
              }
 
              // Delete from Pinecone using the vector ID directly
-                $pinecone_manager = MxChat_Pinecone_Manager::get_instance();
                 $result = $pinecone_manager->mxchat_delete_from_pinecone_by_vector_id(
                     $id,
                     $pinecone_options['mxchat_pinecone_api_key'],
-                    $pinecone_options['mxchat_pinecone_host']
+                    $pinecone_options['mxchat_pinecone_host'],
+                    $pinecone_options['mxchat_pinecone_namespace'] ?? ''
                 );
              if ($result['success']) {
                  $success = true;

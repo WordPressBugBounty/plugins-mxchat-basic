@@ -39,6 +39,225 @@ public static function sanitize_session_id($raw) {
 }
 
 /**
+ * Per-request cache for get_session_history(). Mirrors get_option()'s
+ * request-scoped caching, which the mxchat_history_ option reads got for
+ * free before plan 839c4c moved history reads onto the transcripts table.
+ */
+private static $history_cache = array();
+
+/**
+ * Session chat history read from the transcripts table, in the exact array
+ * shape the legacy mxchat_history_<sid> option stored (plan 839c4c). The
+ * option was a second copy of state the table already held — measured
+ * byte-identical in role/content/order on 174 of 177 real sessions, with
+ * the table a superset on the rest — at up to 64 KB per option row. The
+ * table is now the single store; nothing writes the option any more.
+ *
+ * Shape notes, load-bearing for the consumers:
+ * - id: the transcripts row id (int). Integer ids make the pollers'
+ *   ">" comparisons correct where the old uniqid() strings only worked by
+ *   accident of hex ordering.
+ * - timestamp: milliseconds, derived from the table's second-resolution GMT
+ *   column (x1000). Consumers comparing against a real-millisecond client
+ *   cutoff MUST floor the cutoff to the second and err inclusive — see the
+ *   persistence-off filters in class-mxchat-integrator.php.
+ * - agent_name: the row's user_identifier, which the writer sets to the
+ *   same displayed_name value the option carried (agent name when present,
+ *   else email, else identifier).
+ *
+ * Public and static so mxchat-woo / mxchat-forms can call the same accessor
+ * as core, guarded with method_exists against an older mxchat-basic.
+ *
+ * @param string $session_id
+ * @return array[] Chronological entries: id, role, content, timestamp, agent_name.
+ */
+public static function get_session_history($session_id) {
+    global $wpdb;
+
+    $session_id = self::sanitize_session_id($session_id);
+    if ($session_id === '') {
+        return array();
+    }
+
+    if (array_key_exists($session_id, self::$history_cache)) {
+        return self::$history_cache[$session_id];
+    }
+
+    $table = $wpdb->prefix . 'mxchat_chat_transcripts';
+
+    // No SHOW TABLES guard: this is the chat hot path and the table is
+    // created on activation (with an admin-load safety net). A genuinely
+    // missing table fails the query and yields the same empty history the
+    // old option read produced on a fresh session.
+    $rows = $wpdb->get_results(
+        $wpdb->prepare(
+            "SELECT id, role, message, user_identifier, timestamp
+             FROM `$table` WHERE session_id = %s ORDER BY id ASC",
+            $session_id
+        ),
+        ARRAY_A
+    );
+
+    $history = array();
+    if (is_array($rows)) {
+        foreach ($rows as $row) {
+            // The column stores GMT (current_time('mysql', 1) at the writer),
+            // so pin the parse to UTC rather than the site timezone.
+            $ts = strtotime($row['timestamp'] . ' +0000');
+            $history[] = array(
+                'id'         => (int) $row['id'],
+                'role'       => (string) $row['role'],
+                'content'    => (string) $row['message'],
+                'timestamp'  => ($ts ? $ts : 0) * 1000,
+                'agent_name' => (string) $row['user_identifier'],
+            );
+        }
+    }
+
+    self::$history_cache[$session_id] = $history;
+
+    return $history;
+}
+
+/**
+ * Drop the cached history for one session (or all). The writer calls this
+ * after every insert so a later read in the same request — e.g. the AI
+ * context build that follows saving the user's message — sees the new row,
+ * matching the read-your-own-write behavior update_option() gave the old
+ * option copy.
+ *
+ * @param string|null $session_id Null flushes everything (test seam).
+ */
+public static function flush_session_history_cache($session_id = null) {
+    if ($session_id === null) {
+        self::$history_cache = array();
+        return;
+    }
+
+    unset(self::$history_cache[(string) $session_id]);
+}
+
+/**
+ * Most recipients the Notification Email field will accept (plan 2f131a).
+ * A settings field is not a mailing list.
+ */
+const NOTIFICATION_EMAIL_MAX = 5;
+
+/**
+ * Parse the Notification Email field into a list of recipients (plan 2f131a).
+ *
+ * THE TRAP THIS EXISTS TO CLOSE: sanitize_email() cannot be the validator for
+ * this field, because its output for the failing input is VALID. WordPress
+ * strips the separator and the surplus '@' and concatenates the remains:
+ *
+ *   support@acme.com, sales@acme.com  ->  support@acme.comsalesacme.com
+ *
+ * and is_email() then returns true on that. So every guard in the plugin passed,
+ * the address was stored, the autosave ticked green, and both the new-session
+ * notification and the auto-emailed transcript went to a domain that does not
+ * exist — with no error anywhere. Validating the RAW part BEFORE sanitizing is
+ * the whole point; reversing those two lines silently restores the bug.
+ *
+ * All-or-nothing by design: if any entry is bad the caller must store NOTHING.
+ * A partial accept — keeping the good addresses and dropping the bad one — is
+ * the same defect in a new costume, because the owner still believes everyone
+ * on their list is being notified.
+ *
+ * @param mixed $raw Raw field value, exactly as submitted.
+ * @return array{emails: string[], error: string} Empty emails + empty error
+ *                                                means the field was empty.
+ */
+public static function parse_notification_emails($raw) {
+    $out = array('emails' => array(), 'error' => '');
+
+    if (!is_scalar($raw)) {
+        $out['error'] = __('The notification email could not be read.', 'mxchat');
+        return $out;
+    }
+
+    $raw = trim((string) $raw);
+    if ($raw === '') {
+        return $out;   // genuinely empty — the caller falls back to admin_email
+    }
+
+    $seen = array();
+    foreach (preg_split('/[,;]/', $raw) as $part) {
+        $part = trim($part);
+        if ($part === '') {
+            // A trailing or doubled separator carries no address, so skipping it
+            // cannot silently drop a recipient. This is the ONLY thing tolerated.
+            continue;
+        }
+
+        // RAW first. See the note above — order is load-bearing.
+        $clean = is_email($part) ? sanitize_email($part) : '';
+        if ($clean === '' || !is_email($clean)) {
+            return array(
+                'emails' => array(),
+                'error'  => sprintf(
+                    /* translators: %s: the email address the owner typed. */
+                    __('"%s" is not a valid email address, so nothing was saved. Separate multiple addresses with a comma.', 'mxchat'),
+                    esc_html($part)
+                ),
+            );
+        }
+
+        $key = strtolower($clean);
+        if (isset($seen[$key])) {
+            continue;   // same address twice would simply mail them twice
+        }
+        $seen[$key] = true;
+        $out['emails'][] = $clean;
+    }
+
+    if (count($out['emails']) > self::NOTIFICATION_EMAIL_MAX) {
+        return array(
+            'emails' => array(),
+            'error'  => sprintf(
+                /* translators: %d: maximum number of notification recipients. */
+                __('Enter at most %d email addresses, separated by commas.', 'mxchat'),
+                self::NOTIFICATION_EMAIL_MAX
+            ),
+        );
+    }
+
+    return $out;
+}
+
+/**
+ * The stored recipient list, ready to hand to wp_mail() (plan 2f131a).
+ *
+ * Fallback rule, and it is narrow on purpose: an EMPTY field falls back to the
+ * site admin address, because that is the documented behaviour and an owner who
+ * never filled the field in still wants their notifications. A field holding
+ * something unusable does NOT fall back — it sends nowhere, exactly as before
+ * this plan. Falling back on bad input would mean a typo silently redirects a
+ * store's transcripts to a different mailbox than the one on screen.
+ *
+ * @param array|null $options mxchat_transcripts_options, or null to read it.
+ * @return string[] Recipients; empty means do not send.
+ */
+public static function notification_recipients($options = null) {
+    if (!is_array($options)) {
+        $options = get_option('mxchat_transcripts_options', array());
+        if (!is_array($options)) {
+            $options = array();
+        }
+    }
+
+    $raw = isset($options['mxchat_notification_email']) ? $options['mxchat_notification_email'] : '';
+    $raw = is_scalar($raw) ? trim((string) $raw) : '';
+
+    if ($raw === '') {
+        $admin = get_option('admin_email');
+        return is_email($admin) ? array($admin) : array();
+    }
+
+    $parsed = self::parse_notification_emails($raw);
+    return $parsed['error'] === '' ? $parsed['emails'] : array();
+}
+
+/**
  * Centralized embedding model registry. Single source of truth for dimensions
  * and provider, so model-switch protection logic doesn't drift across files.
  */
@@ -148,6 +367,43 @@ public static function parse_youtube_id($url) {
     }
     $id = preg_replace('/[^A-Za-z0-9_-]/', '', (string) $id);
     return (strlen($id) === 11) ? $id : '';
+}
+
+/**
+ * plan-mxchat-20260813-f52492 — video-card gating.
+ *
+ * Two standalone options (NOT mxchat_options — they skip the sanitize/autosave
+ * traps entirely), read here so the gate in the integrator and the fields on
+ * Knowledge -> Chunking & Retrieval can never disagree about a default.
+ *
+ * Master switch. Default ON: the card is existing behavior, and this is an
+ * opt-out for owners who never want one, not a new feature to opt into.
+ */
+public static function video_embed_enabled() {
+    return get_option('mxchat_video_embed_enabled', 'on') === 'on';
+}
+
+/**
+ * The video card's OWN confidence floor, as a 0-1 cosine — deliberately not
+ * the site-wide Similarity Threshold (default 35). "Good enough to quote in
+ * the answer" and "good enough to put a video on screen" are different
+ * questions: retrieval is allowed to be generous because the model still
+ * decides what to say, whereas the card is asserted to the visitor with no
+ * such filter. Stored as an int percentage to match the site-wide slider's
+ * convention; the default (55) sits above it on purpose.
+ *
+ * MXCHAT_VIDEO_EMBED_THRESHOLD_DEFAULT is the single source of that number.
+ */
+public static function video_embed_threshold() {
+    $stored = get_option('mxchat_video_embed_threshold', null);
+    $percent = ($stored === null || $stored === '')
+        ? MXCHAT_VIDEO_EMBED_THRESHOLD_DEFAULT
+        : (int) $stored;
+    if ($percent < 0)   { $percent = 0; }
+    if ($percent > 100) { $percent = 100; }
+    // Cast: PHP evaluates 100/100 to int(1), so an unclamped return type would
+    // vary with the stored value. Callers compare against a cosine — keep it float.
+    return (float) $percent / 100;
 }
 
 /**
@@ -1440,5 +1696,260 @@ public static function mxchat_hybrid_detect_capability($force = false) {
     $capability = $index_exists ? 'fulltext' : 'like';
     update_option('mxchat_hybrid_keyword_capability', $capability);
     return $capability;
+}
+
+/**
+ * Public entry for re-embedding already-stored content in place (wp mxchat
+ * rtl-repair, plan d1e6f7). Thin wrapper so the repair CLI gets the exact
+ * provider routing the import path uses — the repaired vector must come from
+ * the same model family the bot indexes with, or retrieval stays broken.
+ */
+public static function regenerate_embedding($text, $api_key, $bot_id = 'default') {
+    return self::generate_embedding($text, $api_key, $bot_id);
+}
+
+/**
+ * Restore logical character order in PDF-extracted RTL text (plan 32bf9e).
+ *
+ * The bundled Smalot parser only un-reverses text runs tagged with the
+ * ReversedChars marked-content operator (Word emits it; LibreOffice and most
+ * other producers do not), so their Hebrew/Arabic PDFs extract in visual
+ * (reversed) order and embed/search as garbage. This is OUR post-processing
+ * seam over getText() — the parser itself is never patched (it gets replaced
+ * wholesale on library updates).
+ *
+ * Heuristic and deliberately conservative, per line:
+ * - lines without strong RTL codepoints are untouched (a fully-Latin line in
+ *   an RTL document therefore stays as extracted — accepted limitation);
+ * - Arabic presentation forms are a definitive visual-order signal (they only
+ *   appear in shaped output): de-shape to base letters and reverse;
+ * - otherwise flip only on positive evidence — Hebrew final-letter position
+ *   (a sofit at word START only happens in reversed text) or sentence
+ *   punctuation position (leading in visual order, trailing in logical);
+ * - ambiguous lines are left alone: a conservative miss beats corrupting a
+ *   Word-produced extraction the parser already handled (the double-flip
+ *   guard this plan's approval named mandatory).
+ *
+ * @param string $text    One extracted page string, straight from getText().
+ * @param string $context Caller tag for the Debug Mode entry (site + page).
+ * @return string Text with RTL lines restored to logical order.
+ */
+public static function normalize_pdf_rtl($text, $context = '') {
+    if (!is_string($text) || '' === $text) {
+        return $text;
+    }
+    // Escape hatch for sites whose PDFs already extract logically.
+    if (!apply_filters('mxchat_pdf_rtl_normalize', true, $text)) {
+        return $text;
+    }
+    // Fast bail: nothing RTL anywhere in the page.
+    if (!preg_match('/[\x{0590}-\x{05FF}\x{0600}-\x{06FF}\x{0750}-\x{077F}\x{FB50}-\x{FDFF}\x{FE70}-\x{FEFF}]/u', $text)) {
+        return $text;
+    }
+
+    $parts = preg_split('/(\R)/u', $text, -1, PREG_SPLIT_DELIM_CAPTURE);
+    if (false === $parts) {
+        return $text;
+    }
+
+    $flipped_lines  = 0;
+    $deshaped_lines = 0;
+    foreach ($parts as $i => $part) {
+        if ('' === $part || preg_match('/^\R$/u', $part)) {
+            continue;
+        }
+        $was_flipped  = false;
+        $was_deshaped = false;
+        $new = self::pdf_rtl_normalize_line($part, $was_flipped, $was_deshaped);
+        if ($new !== $part) {
+            $parts[$i] = $new;
+        }
+        if ($was_flipped) {
+            $flipped_lines++;
+        }
+        if ($was_deshaped) {
+            $deshaped_lines++;
+        }
+    }
+
+    if (($flipped_lines || $deshaped_lines) && class_exists('MxChat_Admin')) {
+        MxChat_Admin::mxchat_log_debug('pdf_rtl_normalized', 'RTL PDF text restored to logical order', array(
+            'context'        => (string) $context,
+            'lines_flipped'  => $flipped_lines,
+            'lines_deshaped' => $deshaped_lines,
+            'decision'       => 'visual-order extraction detected',
+        ));
+    }
+
+    return implode('', $parts);
+}
+
+/**
+ * Normalize one line. Sets $flipped/$deshaped for the caller's debug entry.
+ */
+private static function pdf_rtl_normalize_line($line, &$flipped, &$deshaped) {
+    $flipped  = false;
+    $deshaped = false;
+
+    if (!preg_match('/[\x{0590}-\x{05FF}\x{0600}-\x{06FF}\x{0750}-\x{077F}\x{FB50}-\x{FDFF}\x{FE70}-\x{FEFF}]/u', $line)) {
+        return $line;
+    }
+
+    $has_forms = (bool) preg_match('/[\x{FB50}-\x{FDFF}\x{FE70}-\x{FEFF}]/u', $line);
+    $work = $line;
+    if ($has_forms) {
+        $work = strtr($work, self::pdf_rtl_deshape_map());
+        $deshaped = ($work !== $line);
+    }
+
+    $verdict = 'ambiguous';
+    if ($has_forms) {
+        // Shaped glyph codepoints only exist in visual-order output.
+        $verdict = 'visual';
+    } else {
+        // Strong-direction dominance gate first: an LTR-dominant line with an
+        // embedded RTL word is not flip material.
+        $rtl_count = preg_match_all('/[\x{0590}-\x{05FF}\x{0600}-\x{06FF}\x{0750}-\x{077F}]/u', $work, $m_rtl);
+        $ltr_count = preg_match_all('/[A-Za-z]/u', $work, $m_ltr);
+        if ($rtl_count < 1 || $rtl_count <= $ltr_count) {
+            return $line;
+        }
+
+        // Hebrew final letters (ך ם ן ף ץ) end words in logical text; one at
+        // a word START (Hebrew letter follows, none precedes) is reversal
+        // evidence. Positional, so it survives the line being reversed.
+        $sofit_initial  = preg_match_all('/(?<![\x{05D0}-\x{05EA}])[\x{05DA}\x{05DD}\x{05DF}\x{05E3}\x{05E5}](?=[\x{05D0}-\x{05EA}])/u', $work, $m_i);
+        $sofit_terminal = preg_match_all('/(?<=[\x{05D0}-\x{05EA}])[\x{05DA}\x{05DD}\x{05DF}\x{05E3}\x{05E5}](?![\x{05D0}-\x{05EA}])/u', $work, $m_t);
+        if ($sofit_initial > $sofit_terminal) {
+            $verdict = 'visual';
+        } elseif ($sofit_terminal > $sofit_initial) {
+            $verdict = 'logical';
+        } else {
+            // Sentence punctuation lands at the visual LEFT edge of an RTL
+            // line, i.e. the START of a visual-order extraction.
+            $trimmed = trim($work);
+            $starts_punct = (bool) preg_match('/^[.?!:;,]/u', $trimmed);
+            $ends_punct   = (bool) preg_match('/[.?!:;,]$/u', $trimmed);
+            if ($starts_punct && !$ends_punct) {
+                $verdict = 'visual';
+            } elseif ($ends_punct && !$starts_punct) {
+                $verdict = 'logical';
+            }
+        }
+    }
+
+    if ('visual' !== $verdict) {
+        // Ambiguous or logical: hand back the original line UNLESS we
+        // de-shaped (de-shaping alone is always safe — same letters, same
+        // order, un-ligated).
+        return $deshaped ? $work : $line;
+    }
+
+    $flipped = true;
+    return self::pdf_rtl_flip_line($work);
+}
+
+/**
+ * Reverse a visual-order line into logical order: full character reversal,
+ * mirror paired punctuation, then re-reverse embedded LTR runs (Latin words
+ * and digit sequences, incl. Arabic-Indic digits) so they stay readable.
+ */
+private static function pdf_rtl_flip_line($line) {
+    $chars = preg_split('//u', $line, -1, PREG_SPLIT_NO_EMPTY);
+    if (false === $chars) {
+        return $line;
+    }
+    $reversed = implode('', array_reverse($chars));
+    $reversed = strtr($reversed, array(
+        '(' => ')', ')' => '(',
+        '[' => ']', ']' => '[',
+        '{' => '}', '}' => '{',
+        '<' => '>', '>' => '<',
+    ));
+    $restored = preg_replace_callback(
+        '/[0-9A-Za-z\x{0660}-\x{0669}\x{06F0}-\x{06F9}](?:[0-9A-Za-z\x{0660}-\x{0669}\x{06F0}-\x{06F9} .,\'"%\-:\/]*[0-9A-Za-z\x{0660}-\x{0669}\x{06F0}-\x{06F9}])?/u',
+        function ($m) {
+            $run = preg_split('//u', $m[0], -1, PREG_SPLIT_NO_EMPTY);
+            return false === $run ? $m[0] : implode('', array_reverse($run));
+        },
+        $reversed
+    );
+    return null === $restored ? $reversed : $restored;
+}
+
+/**
+ * Arabic presentation forms (A + B) -> base letters. Built once from range
+ * specs rather than ~120 hand-written literal entries; every codepoint in a
+ * range maps to the same base sequence (isolated/final/initial/medial forms
+ * of one letter are contiguous in the FE70 block).
+ */
+private static function pdf_rtl_deshape_map() {
+    static $map = null;
+    if (null !== $map) {
+        return $map;
+    }
+    $ranges = array(
+        // Form B harakat (each pair = standalone + tatweel-joined form).
+        array(0xFE70, 0xFE71, array(0x064B)), array(0xFE72, 0xFE72, array(0x064C)),
+        array(0xFE74, 0xFE74, array(0x064D)), array(0xFE76, 0xFE77, array(0x064E)),
+        array(0xFE78, 0xFE79, array(0x064F)), array(0xFE7A, 0xFE7B, array(0x0650)),
+        array(0xFE7C, 0xFE7D, array(0x0651)), array(0xFE7E, 0xFE7F, array(0x0652)),
+        // Form B letters.
+        array(0xFE80, 0xFE80, array(0x0621)), array(0xFE81, 0xFE82, array(0x0622)),
+        array(0xFE83, 0xFE84, array(0x0623)), array(0xFE85, 0xFE86, array(0x0624)),
+        array(0xFE87, 0xFE88, array(0x0625)), array(0xFE89, 0xFE8C, array(0x0626)),
+        array(0xFE8D, 0xFE8E, array(0x0627)), array(0xFE8F, 0xFE92, array(0x0628)),
+        array(0xFE93, 0xFE94, array(0x0629)), array(0xFE95, 0xFE98, array(0x062A)),
+        array(0xFE99, 0xFE9C, array(0x062B)), array(0xFE9D, 0xFEA0, array(0x062C)),
+        array(0xFEA1, 0xFEA4, array(0x062D)), array(0xFEA5, 0xFEA8, array(0x062E)),
+        array(0xFEA9, 0xFEAA, array(0x062F)), array(0xFEAB, 0xFEAC, array(0x0630)),
+        array(0xFEAD, 0xFEAE, array(0x0631)), array(0xFEAF, 0xFEB0, array(0x0632)),
+        array(0xFEB1, 0xFEB4, array(0x0633)), array(0xFEB5, 0xFEB8, array(0x0634)),
+        array(0xFEB9, 0xFEBC, array(0x0635)), array(0xFEBD, 0xFEC0, array(0x0636)),
+        array(0xFEC1, 0xFEC4, array(0x0637)), array(0xFEC5, 0xFEC8, array(0x0638)),
+        array(0xFEC9, 0xFECC, array(0x0639)), array(0xFECD, 0xFED0, array(0x063A)),
+        array(0xFED1, 0xFED4, array(0x0641)), array(0xFED5, 0xFED8, array(0x0642)),
+        array(0xFED9, 0xFEDC, array(0x0643)), array(0xFEDD, 0xFEE0, array(0x0644)),
+        array(0xFEE1, 0xFEE4, array(0x0645)), array(0xFEE5, 0xFEE8, array(0x0646)),
+        array(0xFEE9, 0xFEEC, array(0x0647)), array(0xFEED, 0xFEEE, array(0x0648)),
+        array(0xFEEF, 0xFEF0, array(0x0649)), array(0xFEF1, 0xFEF4, array(0x064A)),
+        // Form B lam-alef ligatures decompose to two letters.
+        array(0xFEF5, 0xFEF6, array(0x0644, 0x0622)), array(0xFEF7, 0xFEF8, array(0x0644, 0x0623)),
+        array(0xFEF9, 0xFEFA, array(0x0644, 0x0625)), array(0xFEFB, 0xFEFC, array(0x0644, 0x0627)),
+        // Form A: Persian / Urdu letters in common use.
+        array(0xFB56, 0xFB59, array(0x067E)), array(0xFB66, 0xFB69, array(0x0679)),
+        array(0xFB7A, 0xFB7D, array(0x0686)), array(0xFB88, 0xFB89, array(0x0688)),
+        array(0xFB8A, 0xFB8B, array(0x0698)), array(0xFB8E, 0xFB91, array(0x06A9)),
+        array(0xFB92, 0xFB95, array(0x06AF)), array(0xFBA6, 0xFBA9, array(0x06C1)),
+        array(0xFBAA, 0xFBAD, array(0x06BE)), array(0xFBAE, 0xFBAF, array(0x06D2)),
+        array(0xFBFC, 0xFBFF, array(0x06CC)),
+    );
+    $map = array();
+    foreach ($ranges as $range) {
+        $base = '';
+        foreach ($range[2] as $cp) {
+            $base .= self::pdf_rtl_cp_to_utf8($cp);
+        }
+        for ($cp = $range[0]; $cp <= $range[1]; $cp++) {
+            $map[self::pdf_rtl_cp_to_utf8($cp)] = $base;
+        }
+    }
+    return $map;
+}
+
+/**
+ * Codepoint to UTF-8 without ext-intl / mbstring entity tricks (PHP 7.2 floor).
+ */
+private static function pdf_rtl_cp_to_utf8($cp) {
+    if ($cp < 0x80) {
+        return chr($cp);
+    }
+    if ($cp < 0x800) {
+        return chr(0xC0 | ($cp >> 6)) . chr(0x80 | ($cp & 0x3F));
+    }
+    if ($cp < 0x10000) {
+        return chr(0xE0 | ($cp >> 12)) . chr(0x80 | (($cp >> 6) & 0x3F)) . chr(0x80 | ($cp & 0x3F));
+    }
+    return chr(0xF0 | ($cp >> 18)) . chr(0x80 | (($cp >> 12) & 0x3F)) . chr(0x80 | (($cp >> 6) & 0x3F)) . chr(0x80 | ($cp & 0x3F));
 }
 }

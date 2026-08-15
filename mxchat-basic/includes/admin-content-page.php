@@ -547,9 +547,20 @@ function mxchat_render_content_page($admin_instance) {
                                             'gemini-2.5-flash'              => 'Gemini 2.5 Flash',
                                             'gemini-2.5-flash-lite'         => 'Gemini 2.5 Flash-Lite',
                                         ),
+                                        // xAI lineup refreshed 2026-08-14 (plan e1aa4a) against a
+                                        // live /v1/models pull: none of the three ids previously
+                                        // here appear in xAI's listing any more. The old ids are
+                                        // KEPT below the current generation because xAI still
+                                        // serves them and deleting one would blank the selection
+                                        // of an install saved on it.
                                         'xAI' => array(
-                                            'grok-4-0709'                  => 'Grok 4',
-                                            'grok-4-1-fast-non-reasoning'  => 'Grok 4.1 Fast',
+                                            'grok-4.6'                     => 'Grok 4.6',
+                                            'grok-4.5'                     => 'Grok 4.5',
+                                            'grok-4.3'                     => 'Grok 4.3',
+                                            'grok-4.20-0309-reasoning'     => 'Grok 4.20 (Reasoning)',
+                                            'grok-4.20-0309-non-reasoning' => 'Grok 4.20 (Non-Reasoning)',
+                                            'grok-4-0709'                  => 'Grok 4 (previous generation)',
+                                            'grok-4-1-fast-non-reasoning'  => 'Grok 4.1 Fast (previous generation)',
                                             'grok-code-fast-1'             => 'Grok Code Fast',
                                         ),
                                     );

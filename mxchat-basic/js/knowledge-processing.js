@@ -1930,7 +1930,7 @@ function checkForActiveQueues() {
                 ? '<a href="' + entry.source_url + '" target="_blank" style="color: var(--mxch-primary); text-decoration: none;"><span class="dashicons dashicons-external" style="font-size: 14px;"></span> View</a>'
                 : '<span style="color: var(--mxch-text-muted);">Manual</span>';
 
-            const deleteUrl = mxchatAdmin.admin_url + 'admin-post.php?action=mxchat_delete_prompt&id=' + entry.id + '&_wpnonce=' + entry.delete_nonce;
+            const deleteUrl = mxchatAdmin.admin_url + 'admin-post.php?action=mxchat_delete_prompt&id=' + entry.id + '&bot_id=' + encodeURIComponent(mxchatAdmin.bot_id || 'default') + '&_wpnonce=' + entry.delete_nonce;
 
             // Check if content needs expand button (content longer than preview)
             const needsExpand = entry.content_length > entry.preview_length;
@@ -2384,4 +2384,16 @@ function checkForActiveQueues() {
             }
         });
     })();
+
+    // ========================================
+    // VIDEO CARDS — threshold follows the master switch (plan f52492)
+    // ========================================
+    // Presentation only. The server gate does NOT consult the threshold when
+    // the switch is off, so hiding the field never changes behavior — it just
+    // stops the page offering a number that is currently inert. Mirrors the
+    // YouTube import form's own show/hide idiom on this same page. Autosave is
+    // untouched: both fields keep their own change handler in mxchat-admin.js.
+    $('#mxchat_video_embed_enabled').on('change', function() {
+        $('#mxchat-video-embed-threshold-field').toggle($(this).is(':checked'));
+    });
 });

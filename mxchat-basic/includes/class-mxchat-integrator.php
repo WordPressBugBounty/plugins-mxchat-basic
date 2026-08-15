@@ -23,6 +23,12 @@ class MxChat_Integrator {
     private $fc_ui_html = '';
     private $fc_ui_images = array();
     private $fc_ui_captured = false;
+    // plan-mxchat-20260813-470f68 — per-message trace of the AI Tools that fired.
+    // Request-scoped: one entry per tool EXECUTION (so a multi-round loop records
+    // every round), appended in mxchat_fc_execute_tool and folded into the
+    // message's rag_context at save time. Never a new table — an additive key
+    // alongside the existing rag/action channels.
+    private $fc_tool_records = array();
     // plan-mxchat-20260722-59bc1b — {context} placeholder support. When the
     // owner's system instructions carry {context}, the assembled KB block is
     // stashed here (instead of being appended to $context_content) and
@@ -488,7 +494,7 @@ function mxchat_fetch_conversation_history() {
         MxChat_Session_Store::set($session_id, 'owner', $current_user_identifier);
     }
     
-    $history = get_option("mxchat_history_{$session_id}", []); // Retrieve stored history
+    $history = MxChat_Utils::get_session_history($session_id); // Transcripts table since 3.2.19 (839c4c)
     $chat_mode = MxChat_Session_Store::get($session_id, 'mode', 'ai'); // Get current chat mode
 
     if (empty($history)) {
@@ -507,7 +513,7 @@ function mxchat_fetch_conversation_history() {
     wp_die();
 }
 private function mxchat_fetch_conversation_history_for_ai($session_id, $session_start_timestamp = 0) {
-    $history = get_option("mxchat_history_{$session_id}", []);
+    $history = MxChat_Utils::get_session_history($session_id);
 
     // Check persistence setting - when OFF, only include messages from current page load
     $options = get_option('mxchat_options', []);
@@ -515,9 +521,15 @@ private function mxchat_fetch_conversation_history_for_ai($session_id, $session_
 
     // Filter history when persistence is OFF to match what the user sees
     if (!$persistence_enabled && $session_start_timestamp > 0) {
-        $history = array_filter($history, function($entry) use ($session_start_timestamp) {
+        // History timestamps are second-resolution x1000 since 3.2.19
+        // (839c4c) while the client cutoff is real milliseconds. Floor the
+        // cutoff to the second boundary and keep >= : erring inclusive means
+        // at worst one pre-load message from the same second replays, where
+        // the exclusive direction silently eats the visitor's first message.
+        $cutoff = (int) floor($session_start_timestamp / 1000) * 1000;
+        $history = array_filter($history, function($entry) use ($cutoff) {
             // Include messages from this page load onwards
-            return isset($entry['timestamp']) && $entry['timestamp'] >= $session_start_timestamp;
+            return isset($entry['timestamp']) && $entry['timestamp'] >= $cutoff;
         });
         // Re-index array after filtering
         $history = array_values($history);
@@ -877,11 +889,23 @@ public function mxchat_stream_events(WP_REST_Request $request) {
         exit;
     }
 
-    $history = get_option("mxchat_history_{$session_id}", []);
+    $history = MxChat_Utils::get_session_history($session_id);
+
+    // Message ids are transcripts-table integers since 3.2.19 (839c4c). A
+    // client that was mid-conversation at upgrade time still holds a legacy
+    // uniqid() string as last_seen_id — PHP compares an int against a
+    // non-numeric string AS STRINGS ('6a7e...' outranks any row id), which
+    // silently marks everything already-seen and drops live-agent messages.
+    // Treat any non-numeric bookmark as "replay from session start" instead:
+    // one duplicate replay beats a dropped message.
+    if ($last_seen_id !== '' && !ctype_digit($last_seen_id)) {
+        $last_seen_id = '';
+    }
+    $last_seen = ($last_seen_id === '') ? 0 : (int) $last_seen_id;
 
     // Filter only new messages
-    $new_messages = array_filter($history, function ($message) use ($last_seen_id) {
-        return !empty($message['id']) && $message['id'] > $last_seen_id;
+    $new_messages = array_filter($history, function ($message) use ($last_seen) {
+        return !empty($message['id']) && (int) $message['id'] > $last_seen;
     });
 
     // Send new messages if available
@@ -934,17 +958,14 @@ private function mxchat_save_chat_message($session_id, $role, $message, $origina
     if (preg_match('/^Agent: (.*?) - /', $message, $matches)) {
         $agent_name = $matches[1];
         $message    = str_replace("Agent: $agent_name - ", '', $message);
-        $session_meta_key = "mxchat_agent_name_{$session_id}";
-        if (empty(get_option($session_meta_key))) {
-            update_option($session_meta_key, $agent_name);
-            //error_log("[DEBUG] mxchat_save_chat_message -> Stored agent_name in option: {$session_meta_key} => {$agent_name}");
+        if (empty(MxChat_Session_Store::get($session_id, 'agent_name'))) {
+            MxChat_Session_Store::set($session_id, 'agent_name', $agent_name);
         }
     }
     
-    // 2) Generate unique message_id
-    $message_id = uniqid();
-    //error_log("[DEBUG] mxchat_save_chat_message -> Generated message_id: {$message_id}");
-    
+    // 2) The message id is the transcripts row id since 3.2.19 (plan 839c4c)
+    //    — assigned by the INSERT below, not generated here.
+
     // 3) Determine user_id
     $user_id = is_user_logged_in() ? get_current_user_id() : 0;
     
@@ -957,15 +978,11 @@ private function mxchat_save_chat_message($session_id, $role, $message, $origina
     $user_email = MxChat_User::mxchat_get_user_email();
     $displayed_name = $agent_name ? $agent_name : ($user_email ?: $user_identifier);
     
-    // 6) Check for a saved email in wp_options
-    $email_option_key = "mxchat_email_{$session_id}";
-    $saved_email = get_option($email_option_key);
-    //error_log("[DEBUG] mxchat_save_chat_message -> Checking wp_options for email_option_key: {$email_option_key}, found: {$saved_email}");
-    
-    //   Check for a saved name in wp_options
-    $name_option_key = "mxchat_name_{$session_id}";
-    $saved_name = get_option($name_option_key);
-    //error_log("[DEBUG] mxchat_save_chat_message -> Checking wp_options for name_option_key: {$name_option_key}, found: {$saved_name}");
+    // 6) Check for a saved email in the session store
+    $saved_email = MxChat_Session_Store::get($session_id, 'email');
+
+    //   Check for a saved name in the session store
+    $saved_name = MxChat_Session_Store::get($session_id, 'name');
     
     // If found, update DB user_email and user_name
     if ($saved_email || $saved_name) {
@@ -989,19 +1006,12 @@ private function mxchat_save_chat_message($session_id, $role, $message, $origina
         }
     }
     
-    // 7) Save to session history in wp_options
-    $history_key = "mxchat_history_{$session_id}";
-    $history = get_option($history_key, []);
-    $history[] = [
-        'id' => $message_id,
-        'role' => $role,
-        'content' => $message,
-        'timestamp' => round(microtime(true) * 1000),
-        'agent_name' => $displayed_name,
-    ];
-    update_option($history_key, $history, 'no');
-    //error_log("[DEBUG] mxchat_save_chat_message -> Updated session history in option: {$history_key}");
-    
+    // 7) Session history lives ONLY in the transcripts table since 3.2.19
+    //    (plan 839c4c). The mxchat_history_<sid> option this step used to
+    //    write was a duplicate of the INSERT below at up to 64 KB a row;
+    //    MxChat_Utils::get_session_history() now serves every reader from
+    //    the table in the same array shape.
+
     // 8) Save the message to DB (INSERT)
     $insert_data = [
         'user_id'        => $user_id,
@@ -1085,7 +1095,14 @@ private function mxchat_save_chat_message($session_id, $role, $message, $origina
 
     $wpdb->insert($table_name, $insert_data);
     //error_log("[DEBUG] mxchat_save_chat_message -> Inserted message into DB. row_id: {$wpdb->insert_id}, data: " . print_r($insert_data, true));
-    
+
+    // The row id IS the message id now. Flush the per-request history cache
+    // so a read later in this same request (the AI context build, the
+    // handover context slice) sees this message — the read-your-own-write
+    // behavior the old update_option() write provided.
+    $message_id = (int) $wpdb->insert_id;
+    MxChat_Utils::flush_session_history_cache($session_id);
+
     // 9) Send notification email if this is the first user message in a new session
     if ($wpdb->insert_id && $is_new_session && $role === 'user') {
         $this->send_new_chat_notification($session_id, array(
@@ -1113,14 +1130,15 @@ private function send_new_chat_notification($session_id, $user_info = array()) {
     }
     
     // Get notification email
-    $to = !empty($options['mxchat_notification_email']) ? 
-          $options['mxchat_notification_email'] : 
-          get_option('admin_email');
-    
-    if (!is_email($to)) {
+    // Multiple recipients supported (plan 2f131a). wp_mail() takes the array
+    // directly. Empty field still falls back to admin_email inside the helper;
+    // an unusable stored value sends nowhere, as before.
+    $to = MxChat_Utils::notification_recipients($options);
+
+    if (empty($to)) {
         return false;
     }
-    
+
     // Prepare email content
     $subject = sprintf('[%s] New Chat Session Started', get_bloginfo('name'));
     
@@ -1161,14 +1179,12 @@ private function schedule_delayed_transcript_email($session_id) {
     }
     
     // Get notification email
-    $email = !empty($options['mxchat_notification_email']) ? 
-             $options['mxchat_notification_email'] : 
-             get_option('admin_email');
-    
-    if (!is_email($email)) {
+    // Gate only — the recipients are resolved again at send time, not carried
+    // through the cron args (plan 2f131a).
+    if (empty(MxChat_Utils::notification_recipients($options))) {
         return;
     }
-    
+
     // Get delay in minutes (default 30)
     $delay_minutes = isset($options['mxchat_auto_email_transcript_delay']) ? 
                      intval($options['mxchat_auto_email_transcript_delay']) : 30;
@@ -1251,12 +1267,10 @@ public function mxchat_send_delayed_transcript($session_id) {
 
     $options = get_option('mxchat_transcripts_options');
 
-    // Get notification email
-    $to = !empty($options['mxchat_notification_email']) ?
-          $options['mxchat_notification_email'] :
-          get_option('admin_email');
+    // Get notification recipients (plan 2f131a — may be a list)
+    $to = MxChat_Utils::notification_recipients($options);
 
-    if (!is_email($to)) {
+    if (empty($to)) {
         return false;
     }
 
@@ -1385,16 +1399,12 @@ public function mxchat_handle_save_email_and_response() {
         wp_die();
     }
 
-    // 1) Always store email in wp_options
-    $email_option_key = "mxchat_email_{$session_id}";
-    update_option($email_option_key, $email, 'no');
-    //error_log("[DEBUG] handle_save_email_and_response -> updated option: {$email_option_key} => {$email}");
+    // 1) Always store email in the session store (one row per session, 5658f2)
+    MxChat_Session_Store::set($session_id, 'email', $email);
 
-    //   Store name in wp_options if provided
+    //   Store name if provided
     if (!empty($name)) {
-        $name_option_key = "mxchat_name_{$session_id}";
-        update_option($name_option_key, $name, 'no');
-        //error_log("[DEBUG] handle_save_email_and_response -> updated option: {$name_option_key} => {$name}");
+        MxChat_Session_Store::set($session_id, 'name', $name);
     }
 
     // 2) (Optional) Also store in DB if a row already exists
@@ -1474,15 +1484,10 @@ public function mxchat_check_email_provided() {
     $name_field_enabled = isset($options['enable_name_field']) && 
         ($options['enable_name_field'] === '1' || $options['enable_name_field'] === 'on');
 
-    $email_option_key = "mxchat_email_{$session_id}";
-    $stored_email = get_option($email_option_key, '');
-    
-    //   Check for stored name
-    $name_option_key = "mxchat_name_{$session_id}";
-    $stored_name = get_option($name_option_key, '');
+    $stored_email = MxChat_Session_Store::get($session_id, 'email', '');
 
-    //error_log("[DEBUG] mxchat_check_email_provided -> Checking email option: {$email_option_key}, found: {$stored_email}");
-    //error_log("[DEBUG] mxchat_check_email_provided -> Checking name option: {$name_option_key}, found: {$stored_name}, required: " . ($name_field_enabled ? 'yes' : 'no'));
+    //   Check for stored name
+    $stored_name = MxChat_Session_Store::get($session_id, 'name', '');
 
     //   Check if we have email and name (if name is required)
     $has_required_info = !empty($stored_email);
@@ -2244,6 +2249,7 @@ if ($testing_data !== null && !empty($this->current_valid_urls)) {
         
         $kb_block = !empty($relevant_content)
             ? "===== OFFICIAL KNOWLEDGE DATABASE CONTENT =====\n" . $relevant_content . "\n===== END OF OFFICIAL KNOWLEDGE DATABASE CONTENT =====\n\n"
+                . $this->mxchat_kb_currency_note($relevant_content)
             : "===== NO RELEVANT CONTENT FOUND IN KNOWLEDGE DATABASE =====\n";
 
         // {context} placeholder (plan 59bc1b): when the resolved instructions
@@ -2335,7 +2341,11 @@ if ($testing_data !== null && !empty($this->current_valid_urls)) {
                 $fc_html = isset($this->fc_ui_html) ? $this->fc_ui_html : '';
 
                 if ($fc_text !== '') {
-                    $this->mxchat_save_chat_message($session_id, 'bot', $fc_text, null, null);
+                    // plan-mxchat-20260813-470f68 — the FC path is the ONLY exit
+                    // for a tool-answered turn, and it stored no context at all,
+                    // which is why Message Context was empty exactly when tools
+                    // fired. Attach the trace here.
+                    $this->mxchat_save_chat_message($session_id, 'bot', $fc_text, null, $this->mxchat_fc_attach_tool_trace(null));
                 }
 
                 // A video-backed KB source queued during retrieval (03ba33) must
@@ -2484,7 +2494,7 @@ if ($testing_data !== null && !empty($this->current_valid_urls)) {
         }
 
         // Save the cleaned response with RAG context
-        $this->mxchat_save_chat_message($session_id, 'bot', $response, null, $rag_context_for_storage);
+        $this->mxchat_save_chat_message($session_id, 'bot', $response, null, $this->mxchat_fc_attach_tool_trace($rag_context_for_storage));
 
         // Step 5: Save additional content if available
         if (!empty($this->productCardHtml)) {
@@ -2535,6 +2545,86 @@ if ($testing_data !== null && !empty($this->current_valid_urls)) {
 
         wp_send_json($response_data);
         wp_die();
+}
+
+/**
+ * Tell the model which currency the retrieved product prices are in — but ONLY on the
+ * stores where that is ambiguous.
+ *
+ * Two surfaces quote a price in the same reply and they legitimately disagree:
+ *
+ *   - the PROSE comes from the knowledge base, which since plan 7403ec is pinned to the
+ *     store's BASE currency and labelled with its ISO code ("Price: INR 1299.00");
+ *   - the CARD comes from WooCommerce live at render time via get_price_html(), which is
+ *     the DISPLAY price — a multi-currency plugin converts it to whatever currency the
+ *     visitor is browsing in.
+ *
+ * So a shopper browsing an INR-base store in USD can get a card reading $15.59 directly
+ * above a sentence reading "it costs INR 1299.00". Both values are correct; together they
+ * read as a bug, and the bot has no way of knowing it should not present the base amount
+ * as the price this visitor pays. This note is that missing piece (plan eb5f81, option (a)
+ * — Maxwell's decision).
+ *
+ * Deliberately NOT conversion. Converting the indexed price means storing or fetching
+ * rates, and a stale rate quoting a wrong price to a shopper is the exact failure class
+ * 7403ec existed to remove. The card already does this correctly and live; defer to it.
+ *
+ * Three gates, cheapest first, and ALL of them must hold — on a single-currency store
+ * (the overwhelming majority) and on every non-product answer this returns '' and costs
+ * nothing:
+ *   1. WooCommerce is active at all;
+ *   2. base currency and display currency actually differ (get_woocommerce_currency()
+ *      applies the 'woocommerce_currency' filter — that IS the hook every multi-currency
+ *      plugin swaps, so this is the same value the card will be rendered in);
+ *   3. the retrieved text actually carries price lines PREFIXED WITH THE BASE CODE.
+ *
+ * Gate 3 is stricter than "does this look like a product" on purpose. Rows indexed before
+ * 7403ec carry a bare symbol and may not be base currency at all — that was the bug — so
+ * matching the code keeps this note's claim provably true of the very text it accompanies
+ * rather than an assertion about what the importer intended.
+ */
+private function mxchat_kb_currency_note($relevant_content) {
+    if (!function_exists('get_woocommerce_currency')) {
+        return '';
+    }
+
+    $base = get_option('woocommerce_currency');
+    $base = is_string($base) ? trim($base) : '';
+    if ($base === '') {
+        return '';
+    }
+
+    $display = get_woocommerce_currency();
+    $display = is_string($display) ? trim($display) : '';
+    if ($display === '' || $display === $base) {
+        return '';
+    }
+
+    // Matches the shapes mxchat_product_price_lines() emits: "Price:", "Sale Price:" and
+    // "Price Range:", each followed by the base currency code.
+    //
+    // NOT anchored to line start, deliberately. The indexer writes each price on its own
+    // line, but the retrieval path reassembles a source's chunks into a SINGLE line —
+    // "…test store. Price: INR 1299.00 (₹1299.00) SKU: …" — so a /^…/m anchor matches the
+    // stored row and never the text this method is actually handed. The word boundary is
+    // what keeps it honest: the code must immediately follow the label, so prose that
+    // merely contains the word "Price:" does not qualify.
+    $pattern = '/\b(?:Price|Sale Price|Price Range):\s*' . preg_quote($base, '/') . '\b/';
+    if (!preg_match($pattern, $relevant_content)) {
+        return '';
+    }
+
+    return "===== PRICE CURRENCY NOTE =====\n"
+        . "Any price in the knowledge database content above is recorded in this store's base currency, "
+        . $base . ", and is labelled with that code.\n"
+        . "This visitor is browsing the store in " . $display . ". If a product card is shown alongside your reply, "
+        . "that card displays the price converted to " . $display . " — it, not the knowledge database, is the amount "
+        . "this visitor will actually pay.\n"
+        . "Therefore: quote knowledge database prices with their currency code (for example \"" . $base . " 1299.00\"), "
+        . "and say the product card shows the price in the visitor's own currency. Do NOT convert prices yourself, "
+        . "do NOT invent an exchange rate, and do NOT present the " . $base . " amount as though it were the "
+        . $display . " price.\n"
+        . "===== END PRICE CURRENCY NOTE =====\n\n";
 }
 
 /**
@@ -3710,6 +3800,54 @@ private function mxchat_reasoning_effort_fallback($model, $context) {
 }
 
 /**
+ * plan-mxchat-20260813-25b972: does this non-200 provider response reject the
+ * reasoning_effort VALUE we sent? Supported values are per-model (some
+ * generations take 'minimal', newer ones bottom out at 'none'), so a stale
+ * catalog entry manifests as this specific 400. Callers strip the param and
+ * retry ONCE — value-support drift degrades to one wasted round-trip instead
+ * of a hard outage.
+ *
+ * @param int    $status HTTP status of the failed attempt.
+ * @param string $body   Raw response body (error JSON).
+ * @return bool
+ */
+private function mxchat_is_reasoning_effort_rejection($status, $body) {
+    if ((int) $status !== 400 || !is_string($body) || $body === '') {
+        return false;
+    }
+    $decoded = json_decode($body, true);
+    $msg = isset($decoded['error']['message']) && is_string($decoded['error']['message'])
+        ? $decoded['error']['message']
+        : '';
+    return $msg !== '' && preg_match('/Unsupported value:.*reasoning_effort/i', $msg) === 1;
+}
+
+/**
+ * Wrap a system prompt as Anthropic content blocks with a prompt-cache
+ * breakpoint on the last block (plan 1ff43b). Cache reads bill at 0.1x base
+ * input; the 5-minute write costs 1.25x, so a prefix reused once already pays
+ * for itself — and the system prompt is ~47% of billed input on a typical
+ * install. The breakpoint is SKIPPED when the owner's prompt embeds the
+ * per-query {context} KB block (context_kb_block non-null): that prefix
+ * changes every message, and paying the write premium on a never-reused
+ * prefix is a net loss. Below the model's minimum cacheable prefix the API
+ * silently ignores the marker — no error, no surcharge.
+ */
+private function mxchat_anthropic_system_blocks($system_prompt) {
+    $system_prompt = (string) $system_prompt;
+    if (trim($system_prompt) === '') {
+        // Preserve legacy behavior for empty prompts — an empty text BLOCK
+        // would be rejected by the API where an empty string is tolerated.
+        return $system_prompt;
+    }
+    $block = array('type' => 'text', 'text' => $system_prompt);
+    if ($this->context_kb_block === null) {
+        $block['cache_control'] = array('type' => 'ephemeral');
+    }
+    return array($block);
+}
+
+/**
  * Interpret query using Claude models
  */
 private function interpret_query_with_claude($user_query, $system_prompt, $api_key, $model) {
@@ -3721,7 +3859,7 @@ private function interpret_query_with_claude($user_query, $system_prompt, $api_k
 
     $payload = [
         'model' => $model,
-        'system' => $system_prompt,
+        'system' => $this->mxchat_anthropic_system_blocks($system_prompt),
         'messages' => [
             ['role' => 'user', 'content' => sanitize_text_field($user_query)]
         ],
@@ -4092,6 +4230,7 @@ private function fetch_and_split_pdf_pages($pdf_source, $max_pages) {
 
         foreach ($pages as $page_number => $page) {
             $text = $page->getText();
+            $text = MxChat_Utils::normalize_pdf_rtl($text, 'chat_pdf page ' . ($page_number + 1));
 
             if (empty(trim($text))) {
                 //error_log("Skipping empty page: " . ($page_number + 1));
@@ -4412,14 +4551,18 @@ function mxchat_fetch_new_messages() {
         wp_die();
     }
 
-    $history = get_option("mxchat_history_{$session_id}", []);
+    $history = MxChat_Utils::get_session_history($session_id);
 
     //error_log("MxChat WhatsApp DEBUG: Fetch new messages for session {$session_id}");
     //error_log("MxChat WhatsApp DEBUG: last_seen_id = " . var_export($last_seen_id, true));
     //error_log("MxChat WhatsApp DEBUG: History count = " . count($history));
-    //error_log("MxChat WhatsApp DEBUG: Full history = " . print_r($history, true));
 
-    $new_messages = array_filter($history, function ($message) use ($last_seen_id, $persistence_enabled, $initial_timestamp) {
+    // Second-resolution timestamps since 3.2.19 (839c4c): floor the client's
+    // millisecond cutoff to the second boundary and compare inclusively —
+    // same reasoning as the persistence-off filter in the AI context build.
+    $initial_cutoff = (int) floor($initial_timestamp / 1000) * 1000;
+
+    $new_messages = array_filter($history, function ($message) use ($last_seen_id, $persistence_enabled, $initial_cutoff) {
         //error_log("MxChat WhatsApp DEBUG: Checking message - ID: " . ($message['id'] ?? 'NO_ID') . ", Role: " . ($message['role'] ?? 'NO_ROLE'));
 
         // If persistence is enabled, show all new messages
@@ -4427,11 +4570,14 @@ function mxchat_fetch_new_messages() {
             $has_id = !empty($message['id']);
             $is_agent = $message['role'] === 'agent';
 
-            // If last_seen_id is empty, 'NaN', or invalid, show all agent messages
-            if (empty($last_seen_id) || $last_seen_id === 'NaN' || $last_seen_id === 'undefined') {
+            // Ids are integers since 3.2.19 (839c4c). Empty / 'NaN' /
+            // 'undefined' / any non-numeric bookmark — including a legacy
+            // uniqid() a mid-upgrade client still holds, which strcmp would
+            // wrongly outrank every integer id — replays all agent messages.
+            if (empty($last_seen_id) || !ctype_digit($last_seen_id)) {
                 $is_newer = true;
             } else {
-                $is_newer = strcmp($message['id'] ?? '', $last_seen_id) > 0;
+                $is_newer = (int) ($message['id'] ?? 0) > (int) $last_seen_id;
             }
 
             //error_log("MxChat WhatsApp DEBUG: has_id={$has_id}, is_newer={$is_newer}, is_agent={$is_agent}");
@@ -4442,7 +4588,7 @@ function mxchat_fetch_new_messages() {
         // If persistence is disabled, only show messages after initial timestamp
         return !empty($message['id']) &&
                $message['role'] === 'agent' &&
-               $message['timestamp'] > $initial_timestamp;
+               $message['timestamp'] >= $initial_cutoff;
     });
 
     //error_log("MxChat WhatsApp DEBUG: Filtered messages count = " . count($new_messages));
@@ -4510,7 +4656,7 @@ public function mxchat_live_agent_handover($message, $user_id, $session_id) {
     }
 
     // Get recent chat history
-    $history = get_option("mxchat_history_{$session_id}", []);
+    $history = MxChat_Utils::get_session_history($session_id);
     $recent_history = array_slice($history, -5);
 
     // Format conversation context
@@ -4839,20 +4985,16 @@ private function generate_channel_name($session_id) {
     
     // 2. Second priority: Check for saved email/name from "require email to chat" option
     if (empty($email)) {
-        $email_option_key = "mxchat_email_{$session_id}";
-        $saved_email = get_option($email_option_key);
+        $saved_email = MxChat_Session_Store::get($session_id, 'email');
         if (!empty($saved_email)) {
             $email = $saved_email;
-            //error_log("[DEBUG] Using saved email from session for channel: {$email}");
         }
     }
-    
+
     if (empty($name)) {
-        $name_option_key = "mxchat_name_{$session_id}";
-        $saved_name = get_option($name_option_key);
+        $saved_name = MxChat_Session_Store::get($session_id, 'name');
         if (!empty($saved_name)) {
             $name = $saved_name;
-            //error_log("[DEBUG] Using saved name from session for channel: {$name}");
         }
     }
     
@@ -5008,7 +5150,7 @@ public function mxchat_telegram_live_agent_handover($message, $user_id, $session
     }
 
     // Get recent chat history
-    $history = get_option("mxchat_history_{$session_id}", []);
+    $history = MxChat_Utils::get_session_history($session_id);
     $recent_history = array_slice($history, -5);
 
     // Format conversation context for Telegram (HTML format)
@@ -5024,8 +5166,8 @@ public function mxchat_telegram_live_agent_handover($message, $user_id, $session
     }
 
     // Get user info
-    $user_email = get_option("mxchat_email_{$session_id}", 'Not provided');
-    $user_name = get_option("mxchat_name_{$session_id}", 'Anonymous');
+    $user_email = MxChat_Session_Store::get($session_id, 'email', 'Not provided');
+    $user_name = MxChat_Session_Store::get($session_id, 'name', 'Anonymous');
 
     // Update session mode
     MxChat_Session_Store::set($session_id, 'mode', 'agent');
@@ -5096,10 +5238,10 @@ private function generate_telegram_topic_name($session_id) {
 
     // Check session data
     if (empty($name)) {
-        $name = get_option("mxchat_name_{$session_id}");
+        $name = MxChat_Session_Store::get($session_id, 'name');
     }
     if (empty($email)) {
-        $email = get_option("mxchat_email_{$session_id}");
+        $email = MxChat_Session_Store::get($session_id, 'email');
     }
 
     // Generate topic name
@@ -5283,7 +5425,7 @@ public function handle_telegram_webhook(WP_REST_Request $request) {
             $this->mxchat_save_chat_message($session_id, 'agent', $formatted_message);
 
             // Verify the message was saved to history
-            $history = get_option("mxchat_history_{$session_id}", []);
+            $history = MxChat_Utils::get_session_history($session_id);
             $last_message = end($history);
             //error_log("[MxChat Telegram DEBUG] History after save - count: " . count($history) . ", last message role: " . ($last_message['role'] ?? 'none'));
 
@@ -5557,7 +5699,7 @@ private function normalize_slack_text($text) {
 
 /**
  * Resolve the visitor's name + email for a session, mirroring generate_channel_name()'s
- * priority order: logged-in user, then the pre-chat gate options (mxchat_email_/mxchat_name_),
+ * priority order: logged-in user, then the pre-chat gate capture (session store name/email),
  * then the chat transcript. Returns ['name' => ..., 'email' => ...] (either may be ''). plan-e2195b.
  */
 private function mxchat_get_visitor_identity($session_id) {
@@ -5571,11 +5713,11 @@ private function mxchat_get_visitor_identity($session_id) {
     }
 
     if (empty($email)) {
-        $saved_email = get_option("mxchat_email_{$session_id}", '');
+        $saved_email = MxChat_Session_Store::get($session_id, 'email', '');
         if (!empty($saved_email)) { $email = $saved_email; }
     }
     if (empty($name)) {
-        $saved_name = get_option("mxchat_name_{$session_id}", '');
+        $saved_name = MxChat_Session_Store::get($session_id, 'name', '');
         if (!empty($saved_name)) { $name = $saved_name; }
     }
 
@@ -6403,6 +6545,7 @@ private function find_relevant_content_wordpress($user_embedding, $bot_id = 'def
             $url_groups[$group_key] = array(
                 'source_url' => $source_url,
                 'best_score' => 0,
+                'best_similarity' => 0,
                 'is_chunked' => $is_chunked,
                 'chunks' => array(),
                 'single_text' => '',
@@ -6415,6 +6558,16 @@ private function find_relevant_content_wordpress($user_embedding, $bot_id = 'def
         $cand_rank_score = $cand['rank_score'] ?? $cand['similarity'];
         if ($cand_rank_score > $url_groups[$group_key]['best_score']) {
             $url_groups[$group_key]['best_score'] = $cand_rank_score;
+        }
+
+        // best_similarity is the group's true COSINE, tracked separately from
+        // best_score because the two diverge the moment hybrid fusion is on
+        // (best_score becomes an RRF rank). Only consumers that need a real
+        // 0-1 confidence read this — today the video-card floor (f52492).
+        // Ordering is untouched: best_score still decides it.
+        $cand_similarity = (float) ($cand['similarity'] ?? 0);
+        if ($cand_similarity > $url_groups[$group_key]['best_similarity']) {
+            $url_groups[$group_key]['best_similarity'] = $cand_similarity;
         }
 
         if ($is_chunked) {
@@ -6610,8 +6763,10 @@ private function find_relevant_content_wordpress($user_embedding, $bot_id = 'def
                     $content .= "URL: " . $source_url . "\n\n";
                 }
 
-                // Video-backed source → queue the consent-safe embed (03ba33)
-                $this->maybe_queue_youtube_embed($source_url, $full_text);
+                // Video-backed source → queue the consent-safe embed (03ba33),
+                // subject to the card's own confidence floor (f52492). Pass the
+                // group's true cosine, NOT best_score — see the gate's docblock.
+                $this->maybe_queue_youtube_embed($source_url, $full_text, $group['best_similarity'] ?? null);
             } else {
                 // Manual entry — no reference number, no citation
                 $content .= "## Information ##\n";
@@ -6681,13 +6836,44 @@ private function find_relevant_content_wordpress($user_embedding, $bot_id = 'def
  * real-URL winner branch, in ranked order — so the first (best) video wins and
  * later matches are ignored. Only KB/admin-ingested sources ever reach this
  * point; a URL a visitor pastes in chat never does.
+ *
+ * plan-mxchat-20260813-f52492 — placing in the winner set is NOT evidence the
+ * video answered anything. Ten logged instances in eight days of a correct
+ * prose answer carrying an unrelated video card, including a paying customer
+ * reporting a broken add-on and being shown two tutorials. Two gates now stand
+ * between "a video-backed source was retrieved" and "show the visitor a video":
+ * an owner-facing master switch, and the card's own similarity floor.
+ *
+ * BOTH gates live HERE, at the SET site, and never at the five render sites
+ * (:2329 / :2366 / :2396 / :2481 / :2494 — streaming, non-streaming and
+ * function-calling). A suppressed card leaves $videoEmbedHtml empty, so every
+ * one of those `!empty()` guards short-circuits together and no empty bot row
+ * is saved. Gating per-render site would let the paths diverge.
+ *
+ * @param float|null $match_similarity Cosine similarity of the BEST match in
+ *        this source's group (see best_similarity in both winner loops).
+ *        Deliberately FAIL-CLOSED on null: a card we cannot justify with a
+ *        score is exactly the card this plan exists to stop. Both callers pass
+ *        it; verify-f52492.php asserts on the deployed file that they still do.
  */
-private function maybe_queue_youtube_embed($source_url, $full_text) {
+private function maybe_queue_youtube_embed($source_url, $full_text, $match_similarity = null) {
     if (!empty($this->videoEmbedHtml)) {
         return; // one video per response
     }
+    if (!MxChat_Utils::video_embed_enabled()) {
+        return; // owner turned video cards off entirely
+    }
     $video_id = MxChat_Utils::parse_youtube_id($source_url);
     if (empty($video_id)) {
+        return;
+    }
+    // Confidence floor. NOTE the score read here must be a true cosine — with
+    // the hybrid keyword boost on, a group's best_score is a fused RRF rank
+    // (~0.016 at rank 1), so comparing THAT to a 0-1 threshold would suppress
+    // every card on every hybrid install. best_similarity is tracked separately
+    // for precisely this reason.
+    $floor = MxChat_Utils::video_embed_threshold();
+    if ($match_similarity === null || (float) $match_similarity < $floor) {
         return;
     }
     // Ingestion writes "YouTube Video: {title}" / "Channel: {name}" / "URL: …"
@@ -6976,6 +7162,7 @@ private function find_relevant_content_pinecone($user_embedding, $bot_id = 'defa
             $url_groups[$group_key] = array(
                 'source_url' => $source_url,
                 'best_score' => 0,
+                'best_similarity' => 0,
                 'is_chunked' => isset($metadata['is_chunked']) && $metadata['is_chunked'],
                 'chunks' => array(),
                 'single_text' => ''
@@ -6985,6 +7172,14 @@ private function find_relevant_content_pinecone($user_embedding, $bot_id = 'defa
         // Track best score for this group
         if ($match['score'] > $url_groups[$group_key]['best_score']) {
             $url_groups[$group_key]['best_score'] = $match['score'];
+        }
+
+        // best_similarity mirrors best_score on this backend — Pinecone's score
+        // IS the cosine — but the key is carried under the same name as the
+        // WP-DB builder's so the shared video-card gate (f52492) has one
+        // contract across both retrieval paths.
+        if ((float) $match['score'] > $url_groups[$group_key]['best_similarity']) {
+            $url_groups[$group_key]['best_similarity'] = (float) $match['score'];
         }
 
         // Store chunk info or single text
@@ -7088,8 +7283,10 @@ private function find_relevant_content_pinecone($user_embedding, $bot_id = 'defa
                     $content .= "URL: " . $source_url . "\n\n";
                 }
 
-                // Video-backed source → queue the consent-safe embed (03ba33)
-                $this->maybe_queue_youtube_embed($source_url, $full_text);
+                // Video-backed source → queue the consent-safe embed (03ba33),
+                // subject to the card's own confidence floor (f52492). Pass the
+                // group's true cosine, NOT best_score — see the gate's docblock.
+                $this->maybe_queue_youtube_embed($source_url, $full_text, $group['best_similarity'] ?? null);
             } else {
                 // Manual entry — no reference number, no citation. Count it as a USED
                 // source (plan-mxchat-20260622-c1fe6a): without this, manual/Direct-Content
@@ -7999,8 +8196,7 @@ private function get_system_instructions($bot_id = 'default', $session_id = '') 
 
     // Replace {visitor_name} placeholder with actual visitor name if available
     if (!empty($instructions) && !empty($session_id) && stripos($instructions, '{visitor_name}') !== false) {
-        $name_option_key = "mxchat_name_{$session_id}";
-        $visitor_name = get_option($name_option_key, '');
+        $visitor_name = MxChat_Session_Store::get($session_id, 'name', '');
 
         if (!empty($visitor_name)) {
             $instructions = str_ireplace('{visitor_name}', sanitize_text_field($visitor_name), $instructions);
@@ -8197,8 +8393,142 @@ private function mxchat_fc_normalize_history($conversation_history) {
     return $out;
 }
 
+/* ---------------- Per-message AI Tools trace (plan-mxchat-20260813-470f68) ---------------- */
+
+/** Hard ceiling on recorded tool entries per message (multi-round loops included). */
+const FC_TRACE_MAX_ENTRIES = 20;
+/** Max stored length of a single tool's argument excerpt. */
+const FC_TRACE_ARGS_MAX = 500;
+/** Max stored length of a failed tool's error excerpt. */
+const FC_TRACE_ERROR_MAX = 300;
+
+/** Byte-safe clip used by the trace (never splits a multibyte character). */
+private function mxchat_fc_trace_clip($s, $max) {
+    $s = (string) $s;
+    if (function_exists('mb_strlen') && mb_strlen($s) > $max) {
+        return mb_substr($s, 0, $max) . '…';
+    }
+    if (!function_exists('mb_strlen') && strlen($s) > $max) {
+        return substr($s, 0, $max) . '…';
+    }
+    return $s;
+}
+
+/**
+ * Argument excerpt for the trace: credential-looking values replaced, then
+ * clipped. There is no shared redaction list in the plugin (the dev-mode logger
+ * only str_replaces the known api key), so this list is the trace's own — it is
+ * matched on the KEY, recursively, because a nested arg is just as readable in
+ * the panel as a top-level one.
+ */
+private function mxchat_fc_redact_args($args) {
+    if (!is_array($args)) {
+        return $args;
+    }
+    $out = array();
+    foreach ($args as $k => $v) {
+        if (is_string($k) && preg_match('/(api[_\-]?key|secret|token|password|passwd|pwd|credential|bearer|auth|signature|private[_\-]?key)/i', $k)) {
+            $out[$k] = '[redacted]';
+            continue;
+        }
+        $out[$k] = is_array($v) ? $this->mxchat_fc_redact_args($v) : $v;
+    }
+    return $out;
+}
+
+/** Serialize a tool call's arguments for storage: redact, encode, clip. */
+private function mxchat_fc_trace_args_excerpt($args) {
+    if ($args === null || $args === '' || $args === array()) {
+        return '';
+    }
+    $safe = $this->mxchat_fc_redact_args($args);
+    if (is_array($safe)) {
+        $json = wp_json_encode($safe, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+        $safe = ($json === false) ? '' : $json;
+    }
+    return $this->mxchat_fc_trace_clip((string) $safe, self::FC_TRACE_ARGS_MAX);
+}
+
+/**
+ * Record ONE tool execution for the message's trace. Called for every exit path
+ * of mxchat_fc_execute_tool — including "tool not available" and a callback that
+ * threw — because a tool that failed is exactly what an owner is hunting for.
+ */
+private function mxchat_fc_record_tool_call($tool_name, $args, $result, $started) {
+    // Cap keeps a runaway multi-round loop from bloating the row. The FIRST
+    // entries are kept: they are the ones that explain how the turn began.
+    if (count($this->fc_tool_records) >= self::FC_TRACE_MAX_ENTRIES) {
+        return;
+    }
+
+    $tool = MxChat_Tool_Registry::tool_by_name($tool_name, false); // may be null
+    $ok   = is_array($result) && !empty($result['ok']);
+
+    $record = array(
+        'name'  => (string) $tool_name,
+        'label' => (is_array($tool) && !empty($tool['label'])) ? (string) $tool['label'] : (string) $tool_name,
+        'ok'    => $ok,
+        'ms'    => (int) round((microtime(true) - $started) * 1000),
+    );
+
+    // Sensitive tools — the cautious/default-off list (money, cart mutation,
+    // customer PII, live-agent handoff, data-collection flows) — record the FACT
+    // that they fired and NOTHING of their arguments. The fired-fact is the half
+    // an owner most needs on exactly these tools; the arguments are the half that
+    // carries the PII.
+    if (is_array($tool) && !empty($tool['cautious'])) {
+        $record['args_redacted'] = 'sensitive';
+    } else {
+        $excerpt = $this->mxchat_fc_trace_args_excerpt($args);
+        if ($excerpt !== '') {
+            $record['args_excerpt'] = $excerpt;
+        }
+    }
+
+    // Failures carry the error excerpt — that is the actual debugging value.
+    if (!$ok) {
+        $err = (is_array($result) && isset($result['content'])) ? (string) $result['content'] : '';
+        if ($err !== '') {
+            $record['error'] = $this->mxchat_fc_trace_clip($err, self::FC_TRACE_ERROR_MAX);
+        }
+    }
+
+    $this->fc_tool_records[] = $record;
+}
+
+/**
+ * Fold this turn's tool trace into the rag_context about to be stored.
+ *
+ * Additive by construction: with no tool records the argument is returned
+ * UNCHANGED (null stays null), so every non-FC save path is byte-identical to
+ * before. Called at each save site rather than inside mxchat_save_chat_message
+ * because a turn writes several bot rows (card html, video embed) and the trace
+ * belongs to the ANSWER row only.
+ */
+private function mxchat_fc_attach_tool_trace($rag_context_for_storage) {
+    if (empty($this->fc_tool_records)) {
+        return $rag_context_for_storage;
+    }
+    if (!is_array($rag_context_for_storage)) {
+        $rag_context_for_storage = array();
+    }
+    $rag_context_for_storage['tool_calls'] = $this->fc_tool_records;
+    // Consume: a turn's trace attaches to ONE row. Without this a later save in
+    // the same request (product card, video embed) would carry a duplicate.
+    $this->fc_tool_records = array();
+    return $rag_context_for_storage;
+}
+
 /** Execute the matched callback for a tool call. Returns ['ok'=>bool,'content'=>string]. */
 private function mxchat_fc_execute_tool($tool_name, $args, $orig_message, $user_id, $session_id) {
+    $started = microtime(true);
+    $result  = $this->mxchat_fc_execute_tool_inner($tool_name, $args, $orig_message, $user_id, $session_id);
+    $this->mxchat_fc_record_tool_call($tool_name, $args, $result, $started);
+    return $result;
+}
+
+/** Unchanged tool-execution body; wrapped above so every exit path is traced. */
+private function mxchat_fc_execute_tool_inner($tool_name, $args, $orig_message, $user_id, $session_id) {
     $tool = MxChat_Tool_Registry::tool_by_name($tool_name, true); // enabled-only
     if (!$tool) {
         return array('ok' => false, 'content' => 'This tool is not available or not enabled.');
@@ -8421,7 +8751,10 @@ private function mxchat_fc_loop_anthropic($prov, $system, $relevant_content, $co
     for ($step = 0; $step <= $depth; $step++) {
         $offer_tools = ($step < $depth) && !empty($tool_schema);
         $body = array('model' => $prov['model'], 'max_tokens' => 1024, 'temperature' => 0.8,
-                      'messages' => $messages, 'system' => $system);
+                      'messages' => $messages,
+                      // Breakpoint on the last system block caches tools+system
+                      // together (tools precede system in Anthropic's prefix).
+                      'system' => $this->mxchat_anthropic_system_blocks($system));
         if ($omit_temp) unset($body['temperature']);
         if ($offer_tools) {
             $body['tools'] = $tool_schema;
@@ -9110,7 +9443,7 @@ private function mxchat_generate_response_openrouter_stream($selected_model, $op
                         $rag_context_for_storage['action_analysis'] = $this->last_action_analysis;
                     }
                 }
-                $this->mxchat_save_chat_message($session_id, 'bot', $full_response, null, $rag_context_for_storage);
+                $this->mxchat_save_chat_message($session_id, 'bot', $full_response, null, $this->mxchat_fc_attach_tool_trace($rag_context_for_storage));
             }
             return true;
         }
@@ -9233,10 +9566,12 @@ private function mxchat_generate_response_openai_stream($selected_model, $api_ke
         $http_code = 0;
         $max_attempts = $this->mxchat_retry_enabled() ? 3 : 1;
         $backoff_ms = array(0, 750, 2000);
+        $reasoning_stripped = false; // plan-25b972: one strip-and-retry allowed
 
         for ($attempt = 0; $attempt < $max_attempts; $attempt++) {
-            if ($attempt > 0 && $backoff_ms[$attempt] > 0) {
-                usleep($backoff_ms[$attempt] * 1000);
+            $delay = isset($backoff_ms[$attempt]) ? $backoff_ms[$attempt] : 0;
+            if ($attempt > 0 && $delay > 0) {
+                usleep($delay * 1000);
             }
 
             // Reset per-attempt capture state.
@@ -9336,6 +9671,32 @@ private function mxchat_generate_response_openai_stream($selected_model, $api_ke
                 break; // Happy path — WRITEFUNCTION already streamed everything.
             }
 
+            // plan-25b972 self-heal: a 400 rejecting our reasoning_effort VALUE
+            // (per-model support drift / stale catalog entry) is deterministic —
+            // strip the param and retry ONCE immediately, independent of the
+            // transient-retry setting. Checked BEFORE transient classification
+            // so the same body is never re-sent to a guaranteed 400.
+            if (!$reasoning_stripped
+                && !$this->streaming_headers_sent
+                && !$errno
+                && isset($request_body['reasoning_effort'])
+                && $this->mxchat_is_reasoning_effort_rejection($http_code, $captured_body_pre_stream)) {
+                $reasoning_stripped = true;
+                if (defined('WP_DEBUG') && WP_DEBUG) {
+                    error_log(sprintf(
+                        '[MxChat] openai_stream: model %s rejected reasoning_effort \'%s\' — retrying once without the param (plan-25b972).',
+                        $selected_model, $request_body['reasoning_effort']
+                    ));
+                }
+                unset($request_body['reasoning_effort']);
+                $body = json_encode($request_body);
+                if ($max_attempts <= $attempt + 1) {
+                    $max_attempts = $attempt + 2; // grant the retry even when transient retry is off
+                }
+                $backoff_ms[$attempt + 1] = 0; // deterministic 400 — no backoff needed
+                continue;
+            }
+
             $is_transient = $this->mxchat_is_transient_provider_error_raw($http_code, $captured_body_pre_stream, 'openai', $errno);
             $can_retry = !$this->streaming_headers_sent
                       && ($attempt + 1) < $max_attempts
@@ -9378,7 +9739,7 @@ private function mxchat_generate_response_openai_stream($selected_model, $api_ke
                         $rag_context_for_storage['action_analysis'] = $this->last_action_analysis;
                     }
                 }
-                $this->mxchat_save_chat_message($session_id, 'bot', $full_response, null, $rag_context_for_storage);
+                $this->mxchat_save_chat_message($session_id, 'bot', $full_response, null, $this->mxchat_fc_attach_tool_trace($rag_context_for_storage));
             }
 
             return true;
@@ -10096,7 +10457,7 @@ private function mxchat_web_search_streaming_response($request_body, $api_key, $
                 $rag_context_for_storage['action_analysis'] = $this->last_action_analysis;
             }
         }
-        $this->mxchat_save_chat_message($session_id, 'bot', $full_response, null, $rag_context_for_storage);
+        $this->mxchat_save_chat_message($session_id, 'bot', $full_response, null, $this->mxchat_fc_attach_tool_trace($rag_context_for_storage));
     }
 
     return true;
@@ -10151,7 +10512,7 @@ private function mxchat_generate_response_claude_stream($selected_model, $claude
             'messages' => $conversation_history,
             'max_tokens' => 1000,
             'temperature' => 0.8,
-            'system' => $system_prompt_instructions,
+            'system' => $this->mxchat_anthropic_system_blocks($system_prompt_instructions),
             'stream' => true
         ];
         if ($this->mxchat_claude_omits_temperature($selected_model)) { unset($payload['temperature']); }
@@ -10361,7 +10722,7 @@ private function mxchat_generate_response_claude_stream($selected_model, $claude
                     $rag_context_for_storage['action_analysis'] = $this->last_action_analysis;
                 }
             }
-            $this->mxchat_save_chat_message($session_id, 'bot', $full_response, null, $rag_context_for_storage);
+            $this->mxchat_save_chat_message($session_id, 'bot', $full_response, null, $this->mxchat_fc_attach_tool_trace($rag_context_for_storage));
         }
 
         return true; // Indicate streaming completed successfully
@@ -10602,7 +10963,7 @@ private function mxchat_generate_response_xai_stream($selected_model, $xai_api_k
                     $rag_context_for_storage['action_analysis'] = $this->last_action_analysis;
                 }
             }
-            $this->mxchat_save_chat_message($session_id, 'bot', $full_response, null, $rag_context_for_storage);
+            $this->mxchat_save_chat_message($session_id, 'bot', $full_response, null, $this->mxchat_fc_attach_tool_trace($rag_context_for_storage));
         }
 
         return true; // Indicate streaming completed successfully
@@ -10847,7 +11208,7 @@ private function mxchat_generate_response_deepseek_stream($selected_model, $deep
                     $rag_context_for_storage['action_analysis'] = $this->last_action_analysis;
                 }
             }
-            $this->mxchat_save_chat_message($session_id, 'bot', $full_response, null, $rag_context_for_storage);
+            $this->mxchat_save_chat_message($session_id, 'bot', $full_response, null, $this->mxchat_fc_attach_tool_trace($rag_context_for_storage));
         }
 
         return true; // Indicate streaming completed successfully
@@ -11148,7 +11509,7 @@ private function mxchat_generate_response_claude($selected_model, $claude_api_ke
         'max_tokens' => 1000,
         'temperature' => 0.8,
         'messages' => $conversation_history,
-        'system' => $system_prompt_instructions
+        'system' => $this->mxchat_anthropic_system_blocks($system_prompt_instructions)
     ];
     if ($this->mxchat_claude_omits_temperature($selected_model)) { unset($payload['temperature']); }
     $body = json_encode($payload);
@@ -11198,11 +11559,23 @@ private function mxchat_generate_response_claude($selected_model, $claude_api_ke
 
     // Parse response
     $response_body = json_decode(wp_remote_retrieve_body($response), true);
-    
+
     // Check for JSON decode errors
     if (json_last_error() !== JSON_ERROR_NONE) {
         //error_log("Claude API JSON decode error: " . json_last_error_msg());
         return "Sorry, there was an error processing the API response.";
+    }
+
+    // Prompt-cache visibility (plan 1ff43b), dev mode only: a working cache
+    // shows cache_creation_input_tokens on the first request of a conversation
+    // and cache_read_input_tokens > 0 on the ones after it.
+    if (defined('MXCHAT_DEV_MODE') && MXCHAT_DEV_MODE && isset($response_body['usage'])) {
+        error_log(sprintf(
+            '[MxChat Anthropic cache] input=%d cache_write=%d cache_read=%d',
+            intval($response_body['usage']['input_tokens'] ?? 0),
+            intval($response_body['usage']['cache_creation_input_tokens'] ?? 0),
+            intval($response_body['usage']['cache_read_input_tokens'] ?? 0)
+        ));
     }
 
     // Extract and validate response content. claude-fable-5 prepends a
@@ -11313,6 +11686,28 @@ private function mxchat_generate_response_openai($selected_model, $api_key, $con
         }
 
         $status_code = wp_remote_retrieve_response_code($response);
+
+        // plan-25b972 self-heal: a 400 rejecting our reasoning_effort VALUE is
+        // deterministic (per-model support drift / stale catalog entry) — strip
+        // the param and retry ONCE.
+        if ($status_code !== 200
+            && isset($request_body['reasoning_effort'])
+            && $this->mxchat_is_reasoning_effort_rejection($status_code, wp_remote_retrieve_body($response))) {
+            if (defined('WP_DEBUG') && WP_DEBUG) {
+                error_log(sprintf(
+                    '[MxChat] openai chat: model %s rejected reasoning_effort \'%s\' — retrying once without the param (plan-25b972).',
+                    $selected_model, $request_body['reasoning_effort']
+                ));
+            }
+            unset($request_body['reasoning_effort']);
+            $args['body'] = json_encode($request_body);
+            $retry_response = $this->mxchat_provider_call_with_retry('https://api.openai.com/v1/chat/completions', $args, 'openai');
+            if (!is_wp_error($retry_response)) {
+                $response = $retry_response;
+                $status_code = wp_remote_retrieve_response_code($response);
+            }
+        }
+
         if ($status_code !== 200) {
             $response_body = wp_remote_retrieve_body($response);
             $decoded_response = json_decode($response_body, true);
@@ -13285,8 +13680,12 @@ public function mxchat_start_fresh_session() {
  * Clear ALL data associated with a session (ENHANCED)
  */
 private function clear_complete_session_data($session_id) {
-    // Clear chat history
+    // Clear chat history. The option is a pre-3.2.19 leftover only (839c4c);
+    // the transcript rows for the abandoned session id deliberately stay —
+    // they are the admin's conversation record, and the fresh session gets a
+    // new id so the widget never replays them.
     delete_option("mxchat_history_{$session_id}");
+    MxChat_Utils::flush_session_history_cache($session_id);
 
     // Clear any PDF/Word transients
     $this->clear_pdf_transients($session_id);
@@ -13303,14 +13702,12 @@ private function clear_complete_session_data($session_id) {
     }
 
     // Clear agent-related data. delete_session() drops the whole session row —
-    // mode, channel, owner and originating_page in one statement. The old code
-    // deleted mode and channel by hand and never touched owner or
-    // originating_page, which is why those two prefixes accumulated one row per
-    // session forever (b64b77).
+    // mode, channel, owner, originating_page and (since 5658f2) the visitor
+    // identity + agent name — plus every legacy option key for installs still
+    // mid-migration. The old per-key deletes for agent_name/email are covered
+    // by that legacy sweep now.
     MxChat_Session_Store::delete_session($session_id);
     delete_option("mxchat_thread_{$session_id}");
-    delete_option("mxchat_agent_name_{$session_id}");
-    delete_option("mxchat_email_{$session_id}");
     
     // Clear any recommendation flow state
     delete_option("mxchat_sr_flow_state_{$session_id}");
@@ -13439,7 +13836,14 @@ public function mxchat_track_url_click() {
             'user_agent' => $_SERVER['HTTP_USER_AGENT']
         ]
     );
-    
+
+    // Opportunistic retention sweep on the write path — click rows must not
+    // accumulate identifiers unboundedly, and WP-Cron cannot be relied on
+    // (plan 23c4a1). Time-gated + batched inside, so this stays cheap.
+    if (class_exists('MxChat_Privacy')) {
+        MxChat_Privacy::maybe_sweep_url_clicks();
+    }
+
     wp_send_json_success(['message' => 'Click tracked']);
     wp_die();
 }
