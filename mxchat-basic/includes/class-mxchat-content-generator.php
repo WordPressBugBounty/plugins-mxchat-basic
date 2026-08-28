@@ -2243,6 +2243,20 @@ article .entry-content,
     /**
      * Call the configured content model
      */
+    /**
+     * Provider slugs (MxChat_Model_Catalog keys) that call_content_model() can
+     * dispatch to. MUST mirror the if/elseif chain below — the Content Model
+     * picker derives its provider set from this list (plan ccb751), so a
+     * provider added to the dispatch without updating this is never offered,
+     * and one added here without dispatch support would break generation.
+     * OpenRouter and the custom OpenAI-compatible provider are absent on
+     * purpose: their pseudo-model ids would fall through to the OpenAI default
+     * branch with the wrong key and endpoint.
+     */
+    public static function supported_content_providers() {
+        return array('openai', 'claude', 'gemini', 'xai', 'deepseek');
+    }
+
     private function call_content_model($system_prompt, $messages, $max_tokens = 4096) {
         $options = get_option('mxchat_options', array());
         $model   = $options['content_model'] ?? $options['model'] ?? 'gpt-5.6-sol';

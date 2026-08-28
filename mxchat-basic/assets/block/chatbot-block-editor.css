@@ -1,0 +1,43 @@
+/* MxChat Chatbot block — editor placeholder (plan 95dd1e). Static by design;
+   the live widget never renders in the editor canvas. */
+.mxchat-block-placeholder {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 20px 24px;
+    border: 1px dashed #949494;
+    border-radius: 4px;
+    background: #f0f0f0;
+    color: #1e1e1e;
+}
+
+.mxchat-block-placeholder-icon {
+    display: flex;
+    flex-shrink: 0;
+    width: 48px;
+    height: 48px;
+    color: #212121;
+}
+
+.mxchat-block-placeholder-icon svg {
+    width: 100%;
+    height: 100%;
+}
+
+.mxchat-block-placeholder-text {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+}
+
+.mxchat-block-placeholder-text strong {
+    font-size: 14px;
+    line-height: 1.4;
+}
+
+.mxchat-block-placeholder-meta {
+    font-size: 12px;
+    line-height: 1.4;
+    color: #555d66;
+}

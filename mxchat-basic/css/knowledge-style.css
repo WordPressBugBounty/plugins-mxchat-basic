@@ -611,6 +611,17 @@ input:checked + .mxchat-toggle-slider:before {
     transform: translateX(26px);
 }
 
+/* Group-level ACF toggle, mixed state: some fields in the group are excluded.
+   Knob parks mid-track on a washed-out tint of the brand gradient until the
+   owner picks a side (plan bf57e0). */
+input:indeterminate + .mxchat-toggle-slider {
+    background: linear-gradient(135deg, #e3b8dd, #b9b6e8);
+}
+
+input:indeterminate + .mxchat-toggle-slider:before {
+    transform: translateX(13px);
+}
+
 .mxchat-toggle-label {
     font-size: 14px;
     color: #333;
@@ -1210,6 +1221,10 @@ input:checked + .mxchat-toggle-slider:before {
 
 .rtl input:checked + .mxchat-toggle-slider:before {
    transform: translateX(-26px);
+}
+
+.rtl input:indeterminate + .mxchat-toggle-slider:before {
+   transform: translateX(-13px);
 }
 
 .rtl .mxchat-error-notice {

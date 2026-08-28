@@ -494,6 +494,10 @@ private function mxchat_list_pinecone_records($pinecone_options, $page = 1, $per
 
     // Pinecone's list endpoint returns vector IDs with pagination
     // We then fetch the metadata for those specific IDs
+    // NOTE (plan 793b82): /vectors/list is a GET endpoint with query parameters.
+    // A POST is answered 200-with-an-empty-body, which reads as "no vectors" —
+    // this call used to POST and only ever "worked" because the empty result
+    // tripped the query-based fallback below.
     $list_url = "https://{$host}/vectors/list";
 
     // Calculate pagination token from page number
@@ -519,17 +523,18 @@ private function mxchat_list_pinecone_records($pinecone_options, $page = 1, $per
         }
     }
 
-    $response = wp_remote_post($list_url, array(
+    $response = wp_remote_get($list_url . '?' . http_build_query($list_params), array(
         'headers' => array(
             'Api-Key' => $api_key,
-            'Content-Type' => 'application/json'
+            'accept' => 'application/json'
         ),
-        'body' => json_encode($list_params),
         'timeout' => 15
     ));
 
     if (is_wp_error($response) || wp_remote_retrieve_response_code($response) !== 200) {
-        // Fallback to query-based approach
+        // Genuine transport/API failure — fall back to the query-based approach,
+        // but say so: a silent fallback is what masked the POST bug for a year.
+        error_log('MxChat Pinecone: /vectors/list GET failed (' . (is_wp_error($response) ? $response->get_error_message() : wp_remote_retrieve_response_code($response)) . ') — falling back to query-based listing.');
         return $this->mxchat_query_based_list($pinecone_options, $page, $per_page, $bot_id, $content_type);
     }
 
@@ -550,13 +555,24 @@ private function mxchat_list_pinecone_records($pinecone_options, $page = 1, $per
         }
     }
 
-    // If list endpoint returned empty, fall back to query-based approach
+    // A 200 with no vector ids is a REAL answer now (the namespace is empty),
+    // not the failure signature it was under POST — return the empty listing
+    // rather than routing into the fallback and masking a broken primary.
     if (empty($vector_ids)) {
-        return $this->mxchat_query_based_list($pinecone_options, $page, $per_page, $bot_id, $content_type);
+        return array('data' => array(), 'total' => 0);
     }
 
     // Fetch metadata for these vector IDs
-    return $this->mxchat_fetch_vectors_by_ids_for_list($pinecone_options, $vector_ids, $page, $per_page, $bot_id, $content_type);
+    $fetched = $this->mxchat_fetch_vectors_by_ids_for_list($pinecone_options, $vector_ids, $page, $per_page, $bot_id, $content_type);
+
+    // null = the fetch itself failed in transport (distinct from "ids had no
+    // metadata matches") — log and fall back so the screen still lists.
+    if ($fetched === null) {
+        error_log('MxChat Pinecone: /vectors/fetch GET failed for the listing — falling back to query-based listing.');
+        return $this->mxchat_query_based_list($pinecone_options, $page, $per_page, $bot_id, $content_type);
+    }
+
+    return $fetched;
 }
 
 /**
@@ -662,27 +678,29 @@ private function mxchat_fetch_vectors_by_ids_for_list($pinecone_options, $vector
     $host = $pinecone_options['mxchat_pinecone_host'] ?? '';
     $namespace = $pinecone_options['mxchat_pinecone_namespace'] ?? '';
 
-    $fetch_url = "https://{$host}/vectors/fetch";
-
-    $fetch_data = array(
-        'ids' => $vector_ids
-    );
-
+    // NOTE (plan 793b82): /vectors/fetch is a GET endpoint, and Pinecone expects
+    // the ids repeated (ids=a&ids=b) — http_build_query would emit ids[0]=a.
+    // A POST here is answered 200-with-an-empty-body, which reads as "no vectors".
+    $fetch_query = array();
+    foreach ($vector_ids as $fetch_vid) {
+        $fetch_query[] = 'ids=' . rawurlencode($fetch_vid);
+    }
     if (!empty($namespace)) {
-        $fetch_data['namespace'] = $namespace;
+        $fetch_query[] = 'namespace=' . rawurlencode($namespace);
     }
 
-    $response = wp_remote_post($fetch_url, array(
+    $response = wp_remote_get("https://{$host}/vectors/fetch?" . implode('&', $fetch_query), array(
         'headers' => array(
             'Api-Key' => $api_key,
-            'Content-Type' => 'application/json'
+            'accept' => 'application/json'
         ),
-        'body' => json_encode($fetch_data),
         'timeout' => 15
     ));
 
+    // Transport/API failure is distinct from "nothing matched": return null so
+    // the caller can tell the difference (plan 793b82's empty-vs-failed rule).
     if (is_wp_error($response) || wp_remote_retrieve_response_code($response) !== 200) {
-        return array('data' => array(), 'total' => 0);
+        return null;
     }
 
     $body = wp_remote_retrieve_body($response);
@@ -1105,29 +1123,43 @@ public function mxchat_scan_pinecone_for_processed_content($pinecone_options, $p
             return array();
         }
 
-        // Batch check Pinecone using fetch API (max 1000 IDs per request)
+        // Batch check Pinecone using fetch API.
+        // NOTE (plan 793b82): /vectors/fetch is a GET endpoint with the ids
+        // repeated in the query string (ids=a&ids=b); the old POST here was
+        // answered 200-with-an-empty-body, so this scan saw NOTHING as indexed
+        // and callers re-embedded content Pinecone already had. Chunk size 100:
+        // measured on a live serverless index, ~9KB of URL is accepted and
+        // ~18KB draws HTTP 414, so 100 32-char ids (~4KB) leaves real margin.
+        $namespace = $pinecone_options['mxchat_pinecone_namespace'] ?? '';
         $all_vector_ids = array_keys($vector_id_map);
-        $chunks = array_chunk($all_vector_ids, 1000);
+        $chunks = array_chunk($all_vector_ids, 100);
         $processed_data = array();
 
         foreach ($chunks as $chunk) {
-            $fetch_url = "https://{$host}/vectors/fetch";
+            $fetch_query = array();
+            foreach ($chunk as $fetch_vid) {
+                $fetch_query[] = 'ids=' . rawurlencode($fetch_vid);
+            }
+            if (!empty($namespace)) {
+                $fetch_query[] = 'namespace=' . rawurlencode($namespace);
+            }
 
-            $response = wp_remote_post($fetch_url, array(
+            $response = wp_remote_get("https://{$host}/vectors/fetch?" . implode('&', $fetch_query), array(
                 'headers' => array(
                     'Api-Key' => $api_key,
-                    'Content-Type' => 'application/json'
+                    'accept' => 'application/json'
                 ),
-                'body' => json_encode(array('ids' => $chunk)),
                 'timeout' => 30
             ));
 
             if (is_wp_error($response)) {
+                error_log('MxChat Pinecone: processed-content scan /vectors/fetch GET failed: ' . $response->get_error_message());
                 continue;
             }
 
             $response_code = wp_remote_retrieve_response_code($response);
             if ($response_code !== 200) {
+                error_log('MxChat Pinecone: processed-content scan /vectors/fetch GET returned HTTP ' . $response_code);
                 continue;
             }
 
@@ -1312,48 +1344,58 @@ private function get_bot_pinecone_config($bot_id = 'default') {
 public function fetch_pinecone_vectors_by_ids($pinecone_options, $vector_ids) {
     $api_key = $pinecone_options['mxchat_pinecone_api_key'] ?? '';
     $host = $pinecone_options['mxchat_pinecone_host'] ?? '';
+    $namespace = $pinecone_options['mxchat_pinecone_namespace'] ?? '';
 
     if (empty($api_key) || empty($host) || empty($vector_ids)) {
         return array();
     }
 
     try {
-        $fetch_url = "https://{$host}/vectors/fetch";
+        // NOTE (plan 793b82): /vectors/fetch is a GET endpoint with the ids
+        // repeated in the query string; the old POST here was answered
+        // 200-with-an-empty-body. Chunked at 100 ids to stay well under the
+        // measured HTTP 414 URL-length boundary.
+        $vectors = array();
+        foreach (array_chunk(array_values($vector_ids), 100) as $chunk) {
+            $fetch_query = array();
+            foreach ($chunk as $fetch_vid) {
+                $fetch_query[] = 'ids=' . rawurlencode($fetch_vid);
+            }
+            if (!empty($namespace)) {
+                $fetch_query[] = 'namespace=' . rawurlencode($namespace);
+            }
 
-        // Pinecone fetch API allows fetching specific vectors by ID
-        $fetch_data = array(
-            'ids' => array_values($vector_ids)
-        );
+            $response = wp_remote_get("https://{$host}/vectors/fetch?" . implode('&', $fetch_query), array(
+                'headers' => array(
+                    'Api-Key' => $api_key,
+                    'accept' => 'application/json'
+                ),
+                'timeout' => 30
+            ));
 
-        $response = wp_remote_post($fetch_url, array(
-            'headers' => array(
-                'Api-Key' => $api_key,
-                'Content-Type' => 'application/json'
-            ),
-            'body' => json_encode($fetch_data),
-            'timeout' => 30
-        ));
+            if (is_wp_error($response)) {
+                error_log('MxChat Pinecone: fetch_pinecone_vectors_by_ids GET failed: ' . $response->get_error_message());
+                continue;
+            }
 
-        if (is_wp_error($response)) {
-            return array();
+            if (wp_remote_retrieve_response_code($response) !== 200) {
+                error_log('MxChat Pinecone: fetch_pinecone_vectors_by_ids GET returned HTTP ' . wp_remote_retrieve_response_code($response));
+                continue;
+            }
+
+            $data = json_decode(wp_remote_retrieve_body($response), true);
+            if (isset($data['vectors']) && is_array($data['vectors'])) {
+                $vectors += $data['vectors'];
+            }
         }
 
-        $response_code = wp_remote_retrieve_response_code($response);
-        
-        if ($response_code !== 200) {
-            return array();
-        }
-
-        $body = wp_remote_retrieve_body($response);
-        $data = json_decode($body, true);
-
-        if (!isset($data['vectors'])) {
+        if (empty($vectors)) {
             return array();
         }
 
         $processed_data = array();
 
-        foreach ($data['vectors'] as $vector_id => $vector_data) {
+        foreach ($vectors as $vector_id => $vector_data) {
             $metadata = $vector_data['metadata'] ?? array();
             $source_url = $metadata['source_url'] ?? '';
 

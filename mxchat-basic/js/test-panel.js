@@ -275,6 +275,17 @@ handleTestingData(testingData) {
     if (testingData.approved_urls && testingData.approved_urls.length > 0) {
         this.log(`🔗 Approved URLs for citations: ${testingData.approved_urls.length}`);
     }
+
+    // 58f8b4: URL-guard outcome — stripping used to be completely silent,
+    // which is why fabricated/stripped links were invisible from this panel.
+    if (testingData.url_validation) {
+        const uv = testingData.url_validation;
+        if (uv.removed_count > 0) {
+            this.log(`🚫 URL guard stripped ${uv.removed_count} unapproved link${uv.removed_count !== 1 ? 's' : ''}: ${(uv.removed_urls || []).join(', ')}`);
+        } else if (uv.checked > 0) {
+            this.log(`🔗 URL guard: all ${uv.checked} link${uv.checked !== 1 ? 's' : ''} in the answer approved (${uv.strict ? 'strict' : 'lenient'} mode)`);
+        }
+    }
     
     // Show summary in debug console
     if (testingData.top_matches && testingData.top_matches.length > 0) {

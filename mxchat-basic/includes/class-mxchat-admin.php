@@ -31,9 +31,13 @@ class MxChat_Admin {
         $this->is_activated = $this->is_license_active();
         $this->knowledge_manager = $knowledge_manager;
 
-        // Initialize default options if they are not set
+        // Seed defaults on init, not here — the constructor runs on
+        // plugins_loaded, before the mxchat textdomain loads (init, priority 10),
+        // so translating the default strings here both triggers WP 6.7's
+        // _load_textdomain_just_in_time notice and stores the untranslated
+        // English fallbacks. Priority 20 lands after mxchat_load_textdomain().
         if (!$this->options) {
-            $this->initialize_default_options();
+            add_action('init', array($this, 'initialize_default_options'), 20);
         }
 
         // Add admin menu and initialize settings
@@ -328,7 +332,12 @@ private function is_license_active() {
     return ($license_status === 'active');
 }
 
-private function initialize_default_options() {
+public function initialize_default_options() {
+    // Re-check under the hook: another request may have seeded the option
+    // between the constructor's check on plugins_loaded and init firing.
+    if (get_option('mxchat_options')) {
+        return;
+    }
     $default_options = array(
         'api_key' => '',
         'xai_api_key' => '',
@@ -358,8 +367,8 @@ private function initialize_default_options() {
         - NEVER invent or hallucinate URLs, links, product specs, procedures, dates, statistics, names, contacts, or company information
         - When knowledge base information is unclear or contradictory, acknowledge the limitation rather than guessing
         - Better to admit insufficient information than provide inaccurate answers',
-        'model' => esc_html__('gpt-5.6-sol', 'mxchat'),
-        'rate_limit_logged_out' => esc_html__('100', 'mxchat'),
+        'model' => 'gpt-5.6-sol',
+        'rate_limit_logged_out' => '100',
         'role_rate_limits' => array(),
         'rate_limit_message' => esc_html__('Rate limit exceeded. Please try again later.', 'mxchat'),
         'enable_email_block' => '',
@@ -367,11 +376,14 @@ private function initialize_default_options() {
         'email_blocker_button_text' => esc_html__('Start Chat', 'mxchat'),
         'enable_name_field' => 'off', // NEW
         'name_field_placeholder' => esc_html__('Enter your name', 'mxchat'), // NEW
+        'enable_consent_checkbox' => 'off', // b062c4 — default OFF: changes an existing form on every install
+        'consent_checkbox_label' => __('I agree to the Privacy Policy.', 'mxchat'),
+        'consent_checkbox_required' => 'off',
         'top_bar_title' => esc_html__('MxChat', 'mxchat'),
         'intro_message' => __('Hello! How can I assist you today?', 'mxchat'),
         'ai_agent_text' => esc_html__('AI Agent', 'mxchat'),
         'input_copy' => esc_html__('How can I assist?', 'mxchat'),
-        'append_to_body' => esc_html__('off', 'mxchat'),
+        'append_to_body' => 'off',
         'post_type_visibility_mode' => 'all', // 'all', 'include', 'exclude'
         'post_type_visibility_list' => array(), // Array of post type slugs
         'contextual_awareness_toggle' => 'off',
@@ -382,19 +394,19 @@ private function initialize_default_options() {
         'satisfaction_rating_thanks' => '',
         'satisfaction_rating_placeholder' => '',
         'satisfaction_rating_saved' => '',
-        'close_button_color' => esc_html__('#fff', 'mxchat'),
-        'chatbot_bg_color' => esc_html__('#fff', 'mxchat'),
-        'user_message_bg_color' => esc_html__('#fff', 'mxchat'),
-        'user_message_font_color' => esc_html__('#212121', 'mxchat'),
-        'bot_message_bg_color' => esc_html__('#212121', 'mxchat'),
-        'bot_message_font_color' => esc_html__('#fff', 'mxchat'),
-        'top_bar_bg_color' => esc_html__('#212121', 'mxchat'),
-        'send_button_font_color' => esc_html__('#212121', 'mxchat'),
-        'chat_input_font_color' => esc_html__('#212121', 'mxchat'),
-        'chatbot_background_color' => esc_html__('#212121', 'mxchat'),
-        'icon_color' => esc_html__('#fff', 'mxchat'),
-        'enable_woocommerce_integration' => esc_html__('0', 'mxchat'),
-        'link_target_toggle' => esc_html__('off', 'mxchat'),
+        'close_button_color' => '#fff',
+        'chatbot_bg_color' => '#fff',
+        'user_message_bg_color' => '#fff',
+        'user_message_font_color' => '#212121',
+        'bot_message_bg_color' => '#212121',
+        'bot_message_font_color' => '#fff',
+        'top_bar_bg_color' => '#212121',
+        'send_button_font_color' => '#212121',
+        'chat_input_font_color' => '#212121',
+        'chatbot_background_color' => '#212121',
+        'icon_color' => '#fff',
+        'enable_woocommerce_integration' => '0',
+        'link_target_toggle' => 'off',
         'pre_chat_message' => esc_html__('Hey there! Ask me anything!', 'mxchat'),
 
         // New fields for Loops Integration
@@ -416,8 +428,8 @@ private function initialize_default_options() {
         'live_agent_webhook_url' => '',
         'live_agent_secret_key' => '',
         'live_agent_bot_token' => '',
-        'live_agent_message_bg_color' => esc_html__('#ffffff', 'mxchat'),
-        'live_agent_message_font_color' => esc_html__('#333333', 'mxchat'),
+        'live_agent_message_bg_color' => '#ffffff',
+        'live_agent_message_font_color' => '#333333',
 
         // Telegram Integration
         'telegram_status' => 'off',
@@ -427,10 +439,17 @@ private function initialize_default_options() {
         'telegram_notification_message' => __("I've notified a support agent. Please allow a moment for them to respond. If you'd like to continue with AI, just type \"Switch to AI\" at any time.", 'mxchat'),
         'telegram_away_message' => __("I just checked, and it looks like our support team isn't personally available at the moment. If you'd like, you can leave your email address, and they'll get back to you as soon as possible. In the meantime, you can keep chatting with me — just let me know how I can help!", 'mxchat'),
 
-        'chat_toolbar_toggle' => esc_html__('off', 'mxchat'),
-        'mode_indicator_bg_color' => esc_html__('#767676', 'mxchat'),
-        'mode_indicator_font_color' => esc_html__('#ffffff', 'mxchat'),
-        'toolbar_icon_color' => esc_html__('#212121', 'mxchat'),
+        // Webhook handoff destination (plan d88e22, outbound-only)
+        'webhook_handoff_status' => 'off',
+        'webhook_handoff_url' => '',
+        'webhook_handoff_secret' => '',
+        'webhook_handoff_notification_message' => __("I've notified our support team — they'll follow up with you soon. Meanwhile, I'm happy to keep helping.", 'mxchat'),
+        'webhook_handoff_away_message' => __('Sorry, live agents are currently unavailable. I can continue helping you as an AI assistant.', 'mxchat'),
+
+        'chat_toolbar_toggle' => 'off',
+        'mode_indicator_bg_color' => '#767676',
+        'mode_indicator_font_color' => '#ffffff',
+        'toolbar_icon_color' => '#212121',
 
         // Optimization settings
         'script_loading_strategy' => 'default',
@@ -452,7 +471,7 @@ private function initialize_default_options() {
             // Add default limits for each role
     $roles = wp_roles()->get_names();
     foreach ($roles as $role_id => $role_name) {
-        $default_options['role_rate_limits'][$role_id] = esc_html__('100', 'mxchat');
+        $default_options['role_rate_limits'][$role_id] = '100';
     }
 
     return $default_options;
@@ -881,7 +900,8 @@ public function register_pinecone_settings() {
                 'mxchat_pinecone_api_key' => '',
                 'mxchat_pinecone_host' => '',
                 'mxchat_pinecone_index' => '',
-                'mxchat_pinecone_environment' => ''
+                'mxchat_pinecone_environment' => '',
+                'mxchat_pinecone_top_k' => '50'
             )
         )
     );
@@ -895,6 +915,11 @@ public function sanitize_pinecone_settings($input) {
     $sanitized['mxchat_pinecone_host'] = sanitize_text_field($input['mxchat_pinecone_host'] ?? '');
     $sanitized['mxchat_pinecone_index'] = sanitize_text_field($input['mxchat_pinecone_index'] ?? '');
     $sanitized['mxchat_pinecone_environment'] = sanitize_text_field($input['mxchat_pinecone_environment'] ?? '');
+
+    // d0cae1: this function REBUILDS the array, so the topK key must be
+    // carried here or any form save strips it. Clamp mirrors the read site.
+    $top_k = absint($input['mxchat_pinecone_top_k'] ?? 50);
+    $sanitized['mxchat_pinecone_top_k'] = (string) (($top_k >= 1 && $top_k <= 1000) ? $top_k : 50);
 
     // Remove https:// from host if present
     $sanitized['mxchat_pinecone_host'] = str_replace(['https://', 'http://'], '', $sanitized['mxchat_pinecone_host']);
@@ -912,7 +937,9 @@ public function register_openai_vectorstore_settings() {
             'default' => array(
                 'mxchat_use_openai_vectorstore' => '0',
                 'mxchat_vectorstore_ids' => '',
-                'mxchat_vectorstore_max_results' => 5
+                'mxchat_vectorstore_max_results' => 5,
+                'mxchat_vectorstore_sync_enabled' => '0',
+                'mxchat_vectorstore_sync_store_id' => ''
             )
         )
     );
@@ -924,6 +951,11 @@ public function sanitize_openai_vectorstore_settings($input) {
     $sanitized['mxchat_use_openai_vectorstore'] = isset($input['mxchat_use_openai_vectorstore']) ? '1' : '0';
     $sanitized['mxchat_vectorstore_ids'] = sanitize_text_field($input['mxchat_vectorstore_ids'] ?? '');
     $sanitized['mxchat_vectorstore_max_results'] = absint($input['mxchat_vectorstore_max_results'] ?? 5);
+
+    // Knowledge-base sync (write path, plan 15b5c6). Store ID may be blank —
+    // the sync falls back to the first retrieval ID above.
+    $sanitized['mxchat_vectorstore_sync_enabled'] = isset($input['mxchat_vectorstore_sync_enabled']) ? '1' : '0';
+    $sanitized['mxchat_vectorstore_sync_store_id'] = sanitize_text_field($input['mxchat_vectorstore_sync_store_id'] ?? '');
 
     // Ensure max results is within reasonable range
     if ($sanitized['mxchat_vectorstore_max_results'] < 1) {
@@ -1774,7 +1806,17 @@ public function sanitize_transcripts_options($input) {
         $days = (int) $input['mxchat_retention_days'];
         $sanitized['mxchat_retention_days'] = max(0, min(3650, $days));
     } else {
-        $sanitized['mxchat_retention_days'] = 0;
+        // Absent key = a partial save (WP-CLI patch, a snippet, any
+        // update_option with a subset — this filter runs on ALL of them).
+        // Preserve the stored value instead of zeroing it: resetting here
+        // silently discarded a hand-set retention on the next unrelated
+        // save of this option (plan-3c3338). The page's own autosave path
+        // bypasses this filter entirely (direct $wpdb write), so this
+        // branch only ever sees programmatic saves.
+        $mxch_prev = get_option('mxchat_transcripts_options', array());
+        $sanitized['mxchat_retention_days'] = (is_array($mxch_prev) && isset($mxch_prev['mxchat_retention_days']))
+            ? max(0, min(3650, (int) $mxch_prev['mxchat_retention_days']))
+            : 0;
     }
 
     // Get old values to check if auto-delete or retention-days changed.
@@ -2210,6 +2252,22 @@ public function mxchat_fetch_leads() {
         }
     }
 
+    // Consent state per lead (b062c4). Chat-deleted rows already carry it from
+    // their preserved options; the rest read the newest session-store record
+    // for that email. Empty string = NOT RECORDED (pre-feature capture or the
+    // checkbox was off) — distinct from 'no', which is a recorded decline.
+    $can_read_consent = class_exists('MxChat_Session_Store') && method_exists('MxChat_Session_Store', 'latest_consent');
+    foreach ($leads as &$lead_consent_ref) {
+        if (array_key_exists('consent', $lead_consent_ref)) {
+            continue;
+        }
+        $consent = $can_read_consent ? MxChat_Session_Store::latest_consent($lead_consent_ref['email']) : null;
+        $lead_consent_ref['consent']       = $consent ? $consent['given'] : '';
+        $lead_consent_ref['consent_at']    = $consent ? $consent['recorded_at'] : '';
+        $lead_consent_ref['consent_label'] = $consent ? wp_strip_all_tags($consent['label']) : '';
+    }
+    unset($lead_consent_ref);
+
     wp_send_json([
         'success'        => true,
         'leads'          => $leads,
@@ -2299,6 +2357,9 @@ private static function mxchat_wipe_leads_by_email(array $emails) {
             delete_option('mxchat_lead_del_email_' . $sid);
             delete_option('mxchat_lead_del_name_' . $sid);
             delete_option('mxchat_lead_del_ts_' . $sid);
+            delete_option('mxchat_lead_del_consent_' . $sid);
+            delete_option('mxchat_lead_del_consent_label_' . $sid);
+            delete_option('mxchat_lead_del_consent_at_' . $sid);
             if (class_exists('MxChat_Session_Store')) {
                 MxChat_Session_Store::delete_session($sid); // b64b77
             }
@@ -2333,6 +2394,9 @@ private static function mxchat_wipe_leads_by_email(array $emails) {
             delete_option('mxchat_lead_del_email_' . $sid);
             delete_option('mxchat_lead_del_name_' . $sid);
             delete_option('mxchat_lead_del_ts_' . $sid);
+            delete_option('mxchat_lead_del_consent_' . $sid);
+            delete_option('mxchat_lead_del_consent_label_' . $sid);
+            delete_option('mxchat_lead_del_consent_at_' . $sid);
         } else {
             $sid = substr($opt->option_name, strlen('mxchat_email_'));
             delete_option('mxchat_email_' . $sid);
@@ -2431,6 +2495,9 @@ public function mxchat_export_leads() {
                 'conversation_count' => 0,
                 'last_seen'          => $cd['last_seen'],
                 'top_page_url'       => '',
+                'consent'            => isset($cd['consent']) ? $cd['consent'] : '',
+                'consent_at'         => isset($cd['consent_at']) ? $cd['consent_at'] : '',
+                'consent_label'      => isset($cd['consent_label']) ? $cd['consent_label'] : '',
             ];
         }
         foreach (self::mxchat_collect_orphan_leads('') as $orphan) {
@@ -2451,6 +2518,21 @@ public function mxchat_export_leads() {
         wp_die();
     }
 
+    // Consent columns (b062c4). Chat-deleted rows already carry the preserved
+    // values; the rest read the newest session-store record for that email.
+    // Empty consent = "not recorded" — a pre-feature capture, NOT a decline.
+    $can_read_consent = class_exists('MxChat_Session_Store') && method_exists('MxChat_Session_Store', 'latest_consent');
+    foreach ($export_rows as &$export_consent_ref) {
+        if (array_key_exists('consent', $export_consent_ref)) {
+            continue;
+        }
+        $consent = $can_read_consent ? MxChat_Session_Store::latest_consent($export_consent_ref['email']) : null;
+        $export_consent_ref['consent']       = $consent ? $consent['given'] : '';
+        $export_consent_ref['consent_at']    = $consent ? $consent['recorded_at'] : '';
+        $export_consent_ref['consent_label'] = $consent ? wp_strip_all_tags($consent['label']) : '';
+    }
+    unset($export_consent_ref);
+
     $filename = 'mxchat-leads-' . date('Y-m-d') . '.csv';
     header('Content-Type: text/csv');
     header('Content-Disposition: attachment; filename="' . $filename . '"');
@@ -2466,7 +2548,7 @@ public function mxchat_export_leads() {
             fputcsv($output, [$r['email']]);
         }
     } else {
-        fputcsv($output, ['Email', 'Name', 'Conversations', 'Last seen', 'Top page']);
+        fputcsv($output, ['Email', 'Name', 'Conversations', 'Last seen', 'Top page', 'Consent', 'Consent recorded', 'Consent text shown']);
         foreach ($export_rows as $r) {
             fputcsv($output, [
                 $r['email'],
@@ -2474,6 +2556,9 @@ public function mxchat_export_leads() {
                 $r['conversation_count'],
                 $r['last_seen'],
                 $r['top_page_url'],
+                $r['consent'] !== '' ? $r['consent'] : 'not recorded',
+                $r['consent_at'],
+                $r['consent_label'],
             ]);
         }
     }
@@ -2598,6 +2683,10 @@ private static function mxchat_collect_chat_deleted_leads($search = '', $date_cu
 
         $key = strtolower($email);
         if (!isset($by_email[$key]) || (isset($by_email[$key]['last_seen']) && $ts > $by_email[$key]['last_seen'])) {
+            // Consent proof preserved at chat-delete time (b062c4) — the
+            // session row is gone, so these options are the only copy.
+            $consent_state = (string) get_option('mxchat_lead_del_consent_' . $sid, '');
+
             $by_email[$key] = [
                 'email'              => $email,
                 'name'               => $name,
@@ -2610,6 +2699,9 @@ private static function mxchat_collect_chat_deleted_leads($search = '', $date_cu
                 'top_page_title'     => '',
                 'is_orphan'          => false,
                 'status'             => 'chat_deleted',
+                'consent'            => $consent_state,
+                'consent_at'         => $consent_state !== '' ? (string) get_option('mxchat_lead_del_consent_at_' . $sid, '') : '',
+                'consent_label'      => $consent_state !== '' ? wp_strip_all_tags((string) get_option('mxchat_lead_del_consent_label_' . $sid, '')) : '',
             ];
         }
     }
@@ -4137,6 +4229,20 @@ public function mxchat_delete_chat_history() {
             $wpdb->delete($translations_table, ['session_id' => $session_id_sanitized]);
         }
 
+        // Read the consent record BEFORE delete_session() destroys the row —
+        // a preserved "chat deleted" lead must keep its consent proof (b062c4).
+        $consent_to_preserve = null;
+        if ($lead_row && !empty($lead_row->user_email) && class_exists('MxChat_Session_Store')) {
+            $consent_state = MxChat_Session_Store::get($session_id_sanitized, 'consent', '');
+            if ($consent_state !== '' && $consent_state !== false) {
+                $consent_to_preserve = [
+                    'given' => (string) $consent_state,
+                    'label' => (string) MxChat_Session_Store::get($session_id_sanitized, 'consent_label', ''),
+                    'at'    => (string) MxChat_Session_Store::get($session_id_sanitized, 'consent_at', ''),
+                ];
+            }
+        }
+
         delete_option('mxchat_history_' . $session_id_sanitized);
         delete_option('mxchat_agent_name_' . $session_id_sanitized);
         if (class_exists('MxChat_Session_Store')) {
@@ -4160,6 +4266,11 @@ public function mxchat_delete_chat_history() {
                 }
                 if (!empty($lead_row->last_ts)) {
                     update_option('mxchat_lead_del_ts_' . $session_id_sanitized, $lead_row->last_ts, false);
+                }
+                if ($consent_to_preserve !== null) {
+                    update_option('mxchat_lead_del_consent_' . $session_id_sanitized, $consent_to_preserve['given'], false);
+                    update_option('mxchat_lead_del_consent_label_' . $session_id_sanitized, $consent_to_preserve['label'], false);
+                    update_option('mxchat_lead_del_consent_at_' . $session_id_sanitized, $consent_to_preserve['at'], false);
                 }
                 // Clean up pre-chat capture options for this session — chat_deleted supersedes.
                 delete_option('mxchat_email_' . $session_id_sanitized);
@@ -6014,6 +6125,15 @@ private function mxchat_get_available_callbacks($grouped = false, $include_all =
             'addon'       => false,
             'installed'   => true
         ),
+        'mxchat_webhook_live_agent_handover' => array(
+            'label'       => __('Webhook Live Agent', 'mxchat'),
+            'pro_only'    => false,
+            'group'       => __('Customer Engagement', 'mxchat'),
+            'icon'        => 'external',
+            'description' => __('Send the conversation to your own webhook URL so your team can follow up', 'mxchat'),
+            'addon'       => false,
+            'installed'   => true
+        ),
         'mxchat_handle_switch_to_chatbot_intent' => array(
             'label'       => __('Back to Chatbot', 'mxchat'),
             'pro_only'    => false,
@@ -6395,6 +6515,16 @@ public function mxchat_page_init() {
         'citation_links_toggle',
         esc_html__('Citation Links', 'mxchat'),
         array($this, 'mxchat_citation_links_toggle_callback'),
+        'mxchat-chatbot',
+        'mxchat_chatbot_section'
+    );
+
+    // Strip unapproved links (plan 58f8b4) — the enforcement half of the old
+    // Citation Links conflation, now its own control.
+    add_settings_field(
+        'strip_unapproved_links_toggle',
+        esc_html__('Strip Unapproved Links', 'mxchat'),
+        array($this, 'mxchat_strip_unapproved_links_toggle_callback'),
         'mxchat-chatbot',
         'mxchat_chatbot_section'
     );
@@ -6939,6 +7069,66 @@ public function mxchat_page_init() {
         array($this, 'mxchat_telegram_webhook_secret_callback'),
         'mxchat-embed',
         'mxchat_telegram_section'
+    );
+
+    // Webhook Handoff Section (plan d88e22) — the third live-agent destination.
+    // Outbound-only: handoffs POST to the owner's URL; the chat stays in AI mode.
+    add_settings_section(
+        'mxchat_webhook_handoff_section',
+        __('Webhook Handoff Settings', 'mxchat'),
+        array($this, 'mxchat_webhook_handoff_section_callback'),
+        'mxchat-embed'
+    );
+
+    add_settings_field(
+        'webhook_handoff_status',
+        __('Live Agent Status', 'mxchat'),
+        array($this, 'mxchat_webhook_handoff_status_callback'),
+        'mxchat-embed',
+        'mxchat_webhook_handoff_section'
+    );
+
+    // Webhook availability schedule — independent of Slack's and Telegram's,
+    // same parameterized editor (plans 8ccaa2 + 99d7a4 + d88e22).
+    add_settings_field(
+        'live_agent_schedule_webhook',
+        __('Availability Schedule', 'mxchat'),
+        array($this, 'mxchat_live_agent_schedule_callback'),
+        'mxchat-embed',
+        'mxchat_webhook_handoff_section',
+        array('channel' => 'webhook')
+    );
+
+    add_settings_field(
+        'webhook_handoff_notification_message',
+        __('Notification Message', 'mxchat'),
+        array($this, 'mxchat_webhook_handoff_notification_message_callback'),
+        'mxchat-embed',
+        'mxchat_webhook_handoff_section'
+    );
+
+    add_settings_field(
+        'webhook_handoff_away_message',
+        __('Away Message', 'mxchat'),
+        array($this, 'mxchat_webhook_handoff_away_message_callback'),
+        'mxchat-embed',
+        'mxchat_webhook_handoff_section'
+    );
+
+    add_settings_field(
+        'webhook_handoff_url',
+        __('Webhook URL', 'mxchat'),
+        array($this, 'mxchat_webhook_handoff_url_callback'),
+        'mxchat-embed',
+        'mxchat_webhook_handoff_section'
+    );
+
+    add_settings_field(
+        'webhook_handoff_secret',
+        __('Signing Secret', 'mxchat'),
+        array($this, 'mxchat_webhook_handoff_secret_callback'),
+        'mxchat-embed',
+        'mxchat_webhook_handoff_section'
     );
 
     // General Settings Section
@@ -8192,6 +8382,51 @@ public function name_field_placeholder_callback() {
     echo '<input type="text" id="name_field_placeholder" name="name_field_placeholder" value="' . esc_attr($placeholder) . '" style="width: 300px;" />';
 }
 
+// Consent checkbox toggle (b062c4)
+public function enable_consent_checkbox_callback() {
+    $all_options = get_option('mxchat_options', []);
+    $enabled = isset($all_options['enable_consent_checkbox']) ? $all_options['enable_consent_checkbox'] : 'off';
+    $checked = ($enabled === 'on') ? 'checked' : '';
+    echo '<label class="toggle-switch">';
+    echo sprintf(
+        '<input type="checkbox" id="enable_consent_checkbox" name="enable_consent_checkbox" value="on" %s />',
+        esc_attr($checked)
+    );
+    echo '<span class="slider"></span>';
+    echo '</label>';
+}
+
+// Consent checkbox label (b062c4). Owner content; a safe HTML subset is
+// allowed (anchor + inline emphasis) so the Privacy Policy can be linked.
+public function consent_checkbox_label_callback() {
+    $all_options = get_option('mxchat_options', []);
+    $label = isset($all_options['consent_checkbox_label'])
+        ? $all_options['consent_checkbox_label']
+        : __('I agree to the Privacy Policy.', 'mxchat');
+
+    echo '<textarea
+            id="consent_checkbox_label"
+            name="consent_checkbox_label"
+            rows="2"
+            cols="70"
+            data-setting="consent_checkbox_label"
+          >' . esc_textarea($label) . '</textarea>';
+}
+
+// Consent required toggle (b062c4)
+public function consent_checkbox_required_callback() {
+    $all_options = get_option('mxchat_options', []);
+    $required = isset($all_options['consent_checkbox_required']) ? $all_options['consent_checkbox_required'] : 'off';
+    $checked = ($required === 'on') ? 'checked' : '';
+    echo '<label class="toggle-switch">';
+    echo sprintf(
+        '<input type="checkbox" id="consent_checkbox_required" name="consent_checkbox_required" value="on" %s />',
+        esc_attr($checked)
+    );
+    echo '<span class="slider"></span>';
+    echo '</label>';
+}
+
 
 
 public function mxchat_intro_message_callback() {
@@ -8328,6 +8563,30 @@ public function mxchat_citation_links_toggle_callback() {
     echo '<label class="toggle-switch">';
     echo sprintf(
         '<input type="checkbox" id="citation_links_toggle" name="citation_links_toggle" value="on" %s />',
+        esc_attr($checked)
+    );
+    echo '<span class="slider"></span>';
+    echo '</label>';
+}
+
+/**
+ * "Strip unapproved links" toggle (plan 58f8b4). Until the site saves an
+ * explicit value the rendered state is the install-stamp default — on for
+ * installs born at 3.2.20+, off for upgrades — so what the admin sees here
+ * always matches what the response URL guard is actually doing.
+ */
+public function mxchat_strip_unapproved_links_toggle_callback() {
+    if (isset($this->options['strip_unapproved_links_toggle'])) {
+        $strip_links = $this->options['strip_unapproved_links_toggle'];
+    } else {
+        $strip_links = function_exists('mxchat_strip_unapproved_links_default')
+            ? mxchat_strip_unapproved_links_default()
+            : 'off';
+    }
+    $checked = ($strip_links === 'on') ? 'checked' : '';
+    echo '<label class="toggle-switch">';
+    echo sprintf(
+        '<input type="checkbox" id="strip_unapproved_links_toggle" name="strip_unapproved_links_toggle" value="on" %s />',
         esc_attr($checked)
     );
     echo '<span class="slider"></span>';
@@ -9016,13 +9275,20 @@ public function mxchat_live_agent_schedule_callback($args = array()) {
     if (!class_exists('MxChat_Live_Agent_Schedule')) {
         return;
     }
-    $channel = (isset($args['channel']) && $args['channel'] === 'telegram') ? 'telegram' : 'slack';
+    $channel = (isset($args['channel']) && in_array($args['channel'], MxChat_Live_Agent_Schedule::channels(), true))
+        ? $args['channel']
+        : 'slack';
     $field   = 'live_agent_schedule_' . $channel;
     $sched   = MxChat_Live_Agent_Schedule::get($channel);
     $labels  = MxChat_Live_Agent_Schedule::day_labels();
     $tz      = MxChat_Live_Agent_Schedule::timezone_label();
     $enabled = !empty($sched['enabled']);
-    $channel_label = ($channel === 'telegram') ? __('Telegram', 'mxchat') : __('Slack', 'mxchat');
+    $channel_labels = array(
+        'slack'    => __('Slack', 'mxchat'),
+        'telegram' => __('Telegram', 'mxchat'),
+        'webhook'  => __('Webhook', 'mxchat'),
+    );
+    $channel_label = $channel_labels[$channel];
     ?>
     <div class="mxchat-la-schedule<?php echo $enabled ? ' is-active' : ''; ?>"
          id="mxchat-la-schedule-<?php echo esc_attr($channel); ?>"
@@ -9260,6 +9526,83 @@ public function mxchat_telegram_webhook_secret_callback() {
     );
     echo '<button type="button" class="button button-secondary" onclick="var f=document.getElementById(\'telegram_webhook_secret\'); if(f.type===\'password\'){f.type=\'text\';this.textContent=\'' . esc_js(__('Hide', 'mxchat')) . '\';}else{f.type=\'password\';this.textContent=\'' . esc_js(__('Show', 'mxchat')) . '\';}">' . esc_html__('Show', 'mxchat') . '</button>';
     echo '<p class="description">' . esc_html__('Secret token for webhook verification. Use this when setting up your Telegram webhook with the secret_token parameter.', 'mxchat') . '</p>';
+}
+
+/**
+ * Webhook Handoff Callbacks (plan d88e22)
+ */
+public function mxchat_webhook_handoff_section_callback() {
+    echo '<p>' . esc_html__('Send live-agent handoffs to any URL you choose — your helpdesk, an automation flow, a CRM.', 'mxchat') . '</p>';
+}
+
+public function mxchat_webhook_handoff_status_callback() {
+    $fresh_options = get_option('mxchat_options');
+    $status = isset($fresh_options['webhook_handoff_status']) ? $fresh_options['webhook_handoff_status'] : 'off';
+
+    echo '<label class="toggle-switch">';
+    echo sprintf(
+        '<input type="checkbox" id="webhook_handoff_status" name="webhook_handoff_status" value="on" %s />',
+        checked($status, 'on', false)
+    );
+    echo '<span class="slider"></span>';
+    echo '</label>';
+    echo '<label for="webhook_handoff_status" class="mxchat-status-label">';
+    echo '<span class="status-text">' . ($status === 'on' ? esc_html__('Online', 'mxchat') : esc_html__('Offline', 'mxchat')) . '</span>';
+    echo '</label>';
+}
+
+public function mxchat_webhook_handoff_notification_message_callback() {
+    $message = isset($this->options['webhook_handoff_notification_message'])
+        ? $this->options['webhook_handoff_notification_message']
+        : __("I've notified our support team — they'll follow up with you soon. Meanwhile, I'm happy to keep helping.", 'mxchat');
+
+    printf(
+        '<textarea id="webhook_handoff_notification_message" name="webhook_handoff_notification_message" rows="3" cols="50">%s</textarea>',
+        esc_textarea($message)
+    );
+    echo '<p class="description">' . esc_html__('Message shown after the handoff is delivered. The chat stays in AI mode — your team follows up separately, so let the visitor know what to expect.', 'mxchat') . '</p>';
+}
+
+public function mxchat_webhook_handoff_away_message_callback() {
+    $message = isset($this->options['webhook_handoff_away_message'])
+        ? $this->options['webhook_handoff_away_message']
+        : __('Sorry, live agents are currently unavailable. I can continue helping you as an AI assistant.', 'mxchat');
+
+    printf(
+        '<textarea id="webhook_handoff_away_message" name="webhook_handoff_away_message" rows="3" cols="50">%s</textarea>',
+        esc_textarea($message)
+    );
+    echo '<p class="description">' . esc_html__('Message shown when this destination is offline or outside its scheduled hours.', 'mxchat') . '</p>';
+}
+
+public function mxchat_webhook_handoff_url_callback() {
+    $value = isset($this->options['webhook_handoff_url']) ? $this->options['webhook_handoff_url'] : '';
+    printf(
+        '<input type="url" id="webhook_handoff_url" name="webhook_handoff_url" value="%s" class="regular-text" placeholder="https://example.com/hooks/mxchat" />',
+        esc_attr($value)
+    );
+    echo '<p class="description">' . esc_html__('Where handoffs are sent as a JSON POST. Must be https and publicly reachable (localhost and private-network hosts are rejected).', 'mxchat') . '</p>';
+
+    // Surface the last failed delivery right where it gets fixed — a handoff
+    // that silently 404s is worse than no handoff. A successful one clears this.
+    $webhook_error = get_option('mxchat_webhook_handoff_error');
+    if (!empty($webhook_error['error']) && trim((string) $value) !== '' && ($webhook_error['configured'] ?? '') === trim((string) $value)) {
+        echo '<p class="description"><strong>' . esc_html__('⚠ Last handoff could not reach this URL', 'mxchat') . '</strong> — '
+            . esc_html(sprintf(
+                /* translators: %s: the delivery failure, e.g. an HTTP status or a transport error */
+                __('the request failed with "%s". Until this is fixed, the chatbot answers these conversations itself instead of telling visitors a human was notified.', 'mxchat'),
+                $webhook_error['error']
+            )) . '</p>';
+    }
+}
+
+public function mxchat_webhook_handoff_secret_callback() {
+    printf(
+        '<input type="password" id="webhook_handoff_secret" name="webhook_handoff_secret" value="%s" class="regular-text" />',
+        isset($this->options['webhook_handoff_secret']) ? esc_attr($this->options['webhook_handoff_secret']) : ''
+    );
+    echo '<button type="button" class="button button-secondary" onclick="var f=document.getElementById(\'webhook_handoff_secret\'); if(f.type===\'password\'){f.type=\'text\';this.textContent=\'' . esc_js(__('Hide', 'mxchat')) . '\';}else{f.type=\'password\';this.textContent=\'' . esc_js(__('Show', 'mxchat')) . '\';}">' . esc_html__('Show', 'mxchat') . '</button>';
+    echo '<p class="description">' . esc_html__('Optional. When set, each POST carries an X-MxChat-Signature header (sha256 HMAC of the body) so your endpoint can verify the sender. The secret itself is never sent.', 'mxchat') . '</p>';
 }
 
 public function mxchat_similarity_threshold_callback() {
@@ -9953,6 +10296,10 @@ public function mxchat_sanitize($input) {
     $new_input['citation_links_toggle'] = $input['citation_links_toggle'] === 'on' ? 'on' : 'off';
 }
 
+    if (isset($input['strip_unapproved_links_toggle'])) {
+    $new_input['strip_unapproved_links_toggle'] = $input['strip_unapproved_links_toggle'] === 'on' ? 'on' : 'off';
+}
+
     // Satisfaction rating prompt — defaults ON when unchecked (so first save
     // doesn't accidentally disable it). The form posts 'on' when checked;
     // unchecked checkboxes don't post a value at all, so we infer 'off' only
@@ -10017,6 +10364,22 @@ public function mxchat_sanitize($input) {
     //  Sanitize name field placeholder
     if (isset($input['name_field_placeholder'])) {
         $new_input['name_field_placeholder'] = sanitize_text_field($input['name_field_placeholder']);
+    }
+    // Consent checkbox (b062c4). Both toggles default off — an unchecked box
+    // posts nothing, so the else-branch is what makes unticking stick.
+    if (isset($input['enable_consent_checkbox'])) {
+        $new_input['enable_consent_checkbox'] = ($input['enable_consent_checkbox'] === 'on') ? 'on' : 'off';
+    } else {
+        $new_input['enable_consent_checkbox'] = 'off';
+    }
+    if (isset($input['consent_checkbox_label'])) {
+        // Shared allowlist with the render path — see MxChat_Utils::sanitize_consent_label().
+        $new_input['consent_checkbox_label'] = MxChat_Utils::sanitize_consent_label($input['consent_checkbox_label']);
+    }
+    if (isset($input['consent_checkbox_required'])) {
+        $new_input['consent_checkbox_required'] = ($input['consent_checkbox_required'] === 'on') ? 'on' : 'off';
+    } else {
+        $new_input['consent_checkbox_required'] = 'off';
     }
     if (isset($input['intro_message'])) {
         $new_input['intro_message'] = wp_kses_post($input['intro_message']);  // Use wp_kses_post instead
@@ -10382,6 +10745,25 @@ if (isset($input['openrouter_selected_model_name'])) {
     }
     if (isset($input['telegram_away_message'])) {
         $new_input['telegram_away_message'] = sanitize_textarea_field($input['telegram_away_message']);
+    }
+
+    // Webhook Handoff (plan d88e22)
+    if (isset($input['webhook_handoff_status'])) {
+        $new_input['webhook_handoff_status'] = ($input['webhook_handoff_status'] === 'on') ? 'on' : 'off';
+    }
+    if (isset($input['webhook_handoff_url'])) {
+        // https only — esc_url_raw with an https-only protocol list stores ''
+        // for anything else, so a non-https URL can never persist.
+        $new_input['webhook_handoff_url'] = esc_url_raw(trim((string) $input['webhook_handoff_url']), array('https'));
+    }
+    if (isset($input['webhook_handoff_secret'])) {
+        $new_input['webhook_handoff_secret'] = sanitize_text_field($input['webhook_handoff_secret']);
+    }
+    if (isset($input['webhook_handoff_notification_message'])) {
+        $new_input['webhook_handoff_notification_message'] = sanitize_textarea_field($input['webhook_handoff_notification_message']);
+    }
+    if (isset($input['webhook_handoff_away_message'])) {
+        $new_input['webhook_handoff_away_message'] = sanitize_textarea_field($input['webhook_handoff_away_message']);
     }
 
     // Sanitize script loading strategy

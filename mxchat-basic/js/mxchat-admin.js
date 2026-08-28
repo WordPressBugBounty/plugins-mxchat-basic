@@ -542,7 +542,9 @@ jQuery(document).ready(function($) {
         // input and fires ONE change, which this same handler then saves. Without
         // the exclusion each keystroke would POST a nameless field the server can
         // only reject.
-        $autosaveSections.find('input, textarea, select').not('#model, #openrouter_selected_model, .mxchat-la-field').on('change', function() {
+        // .mxchat-acf-group-toggle is excluded: group toggles are nameless and
+        // save through their own batch action (bf57e0), never this per-field path.
+        $autosaveSections.find('input, textarea, select').not('#model, #openrouter_selected_model, .mxchat-la-field, .mxchat-acf-group-toggle').on('change', function() {
                     const $field = $(this);
                     const name = $field.attr('name');
 
@@ -3890,27 +3892,48 @@ jQuery(document).ready(function($) {
     // A successful autosave round-trip re-baselines the field it saved. The
     // baseline takes the value the request actually SENT, so edits made while
     // the save was in flight keep the field dirty and the guard armed.
+    function rebaselineField(name, saved) {
+        saved = saved == null ? '' : String(saved);
+        // Checkboxes go over the wire as on/off (or 1/0); normalize to 1/0.
+        if (saved === 'on') saved = '1';
+        if (saved === 'off') saved = '0';
+        baseline.set(name, saved);
+        const $fs = $sections.find('[name="' + name.replace(/"/g, '\\"') + '"]');
+        if ($fs.length > 1) {
+            // The baseline Map is per-NAME, so duplicate names share one entry
+            // and dirty-compare against each other's state — the exact shape
+            // that let the exit beacon revert saves through same-named ACF
+            // twins before 30e81f moved those toggles onto unique field keys.
+            console.warn('MxChat: duplicate field name "' + name + '" in autosave sections — per-name dirty tracking may misreport these fields.');
+        }
+        $fs.each(function() { syncBadge($(this)); });
+    }
+
     $(document).ajaxSuccess(function(event, xhr, settings) {
         if (!settings || typeof settings.data !== 'string') return;
-        if (settings.data.indexOf('action=mxchat_save_setting') === -1 &&
+        const isGroupBatch = settings.data.indexOf('action=mxchat_acf_toggle_group') !== -1;
+        if (!isGroupBatch &&
+            settings.data.indexOf('action=mxchat_save_setting') === -1 &&
             settings.data.indexOf('action=mxchat_save_prompts_setting') === -1) {
+            return;
+        }
+        if (!xhr || !xhr.responseJSON || xhr.responseJSON.success !== true) return;
+        if (isGroupBatch) {
+            // A group batch (bf57e0) flips many toggles in one response —
+            // re-baseline every field it touched, or the pagehide beacon
+            // would post them all individually on the way out (and silently
+            // drop everything past BEACON_MAX_FIELDS).
+            const fields = (xhr.responseJSON.data && xhr.responseJSON.data.fields) || [];
+            fields.forEach(function(f) {
+                if (f && f.name) rebaselineField(f.name, f.value);
+            });
             return;
         }
         let params;
         try { params = new URLSearchParams(settings.data); } catch (err) { return; }
         const name = params.get('name');
         if (!name || !baseline.has(name)) return;
-        if (!xhr || !xhr.responseJSON || xhr.responseJSON.success !== true) return;
-        let saved = params.get('value');
-        saved = saved == null ? '' : String(saved);
-        // Checkboxes go over the wire as on/off (or 1/0); normalize to 1/0.
-        if (saved === 'on') saved = '1';
-        if (saved === 'off') saved = '0';
-        baseline.set(name, saved);
-        const $f = $sections.find('[name="' + name.replace(/"/g, '\\"') + '"]').first();
-        if ($f.length) {
-            syncBadge($f);
-        }
+        rebaselineField(name, params.get('value'));
     });
 
     // Navigation guard — recomputed per-field at the moment of leaving, so it
@@ -4008,6 +4031,96 @@ jQuery(document).ready(function($) {
                 sent++;
             }
             if (sent >= BEACON_MAX_FIELDS) return false;
+        });
+    });
+});
+
+// ─── ACF group-level toggles (plan bf57e0) ──────────────────────────────
+// One click includes/excludes every field in an ACF field group via a
+// DEDICATED batch action — one option write server-side. Looping the
+// per-field autosave endpoint from here would be a lost-update race: each
+// request reads the exclusion option before the others have written it
+// back, and the last write wins.
+jQuery(function($) {
+    const $groups = $('[data-mxchat-acf-group]');
+    if (!$groups.length || typeof mxchatPromptsAdmin === 'undefined') return;
+
+    function groupInputs($group) {
+        return $group.find('input.mxchat-autosave-field[name^="mxchat_acf_field_"]');
+    }
+
+    // Derived state, never stored: ON when nothing in the group is excluded,
+    // OFF when everything is, indeterminate when mixed. Recomputed from the
+    // field toggles' DOM so it can never drift from the real per-field state.
+    function refreshGroupToggle($group) {
+        const $toggle = $group.find('.mxchat-acf-group-toggle').first();
+        if (!$toggle.length) return;
+        const $fields = groupInputs($group);
+        const on = $fields.filter(':checked').length;
+        $toggle.prop('indeterminate', on > 0 && on < $fields.length);
+        $toggle.prop('checked', $fields.length > 0 && on === $fields.length);
+    }
+
+    // indeterminate is a JS-only property; the server carries the mixed
+    // state via data-indeterminate on render.
+    $groups.find('.mxchat-acf-group-toggle[data-indeterminate="1"]').prop('indeterminate', true);
+
+    // A hand-flipped field toggle updates its group's header state right away.
+    $groups.on('change', 'input.mxchat-autosave-field[name^="mxchat_acf_field_"]', function() {
+        refreshGroupToggle($(this).closest('[data-mxchat-acf-group]'));
+    });
+
+    $groups.on('change', '.mxchat-acf-group-toggle', function() {
+        const $toggle = $(this);
+        const $group = $toggle.closest('[data-mxchat-acf-group]');
+        // A click on an indeterminate box lands on checked — i.e. include
+        // everything, the less destructive direction. Documented choice.
+        const include = $toggle.is(':checked');
+
+        const feedbackContainer = $('<div class="feedback-container"></div>');
+        const spinner = $('<div class="saving-spinner"></div>');
+        const successIcon = $('<div class="success-icon">✔</div>');
+        $toggle.closest('.mxchat-toggle-switch').after(feedbackContainer);
+        feedbackContainer.append(spinner);
+        $toggle.prop('disabled', true);
+
+        $.ajax({
+            url: mxchatPromptsAdmin.ajax_url,
+            type: 'POST',
+            data: {
+                action: 'mxchat_acf_toggle_group',
+                group_key: $group.attr('data-mxchat-acf-group'),
+                state: include ? 'on' : 'off',
+                _ajax_nonce: $toggle.data('nonce')
+            },
+            success: function(response) {
+                if (response && response.success) {
+                    const fields = (response.data && response.data.fields) || [];
+                    fields.forEach(function(f) {
+                        if (!f || !f.name) return;
+                        $group.find('[name="' + f.name.replace(/"/g, '\\"') + '"]').prop('checked', f.value === 'on');
+                    });
+                    refreshGroupToggle($group);
+                    spinner.fadeOut(200, function() {
+                        feedbackContainer.append(successIcon);
+                        successIcon.fadeIn(200).delay(1000).fadeOut(200, function() {
+                            feedbackContainer.remove();
+                        });
+                    });
+                } else {
+                    feedbackContainer.remove();
+                    refreshGroupToggle($group); // fall back to the fields' real state
+                    alert('Error saving: ' + ((response && response.data && response.data.message) || 'Unknown error'));
+                }
+            },
+            error: function() {
+                feedbackContainer.remove();
+                refreshGroupToggle($group);
+                alert('Error saving: request failed');
+            },
+            complete: function() {
+                $toggle.prop('disabled', false);
+            }
         });
     });
 });

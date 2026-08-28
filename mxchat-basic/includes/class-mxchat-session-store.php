@@ -40,9 +40,9 @@ class MxChat_Session_Store {
      * Bump when create_table()'s schema changes. ensure_table() compares the
      * READY option against this, so existing installs re-run dbDelta once and
      * pick up new columns ('1' = b64b77 original, '2' = 5658f2 identity
-     * columns).
+     * columns, '3' = b062c4 consent record).
      */
-    const SCHEMA_VERSION = '2';
+    const SCHEMA_VERSION = '3';
 
     /**
      * Bump when $legacy_prefixes gains entries. A stale version in the stored
@@ -87,6 +87,11 @@ class MxChat_Session_Store {
         'name'             => 'visitor_name',
         'email'            => 'visitor_email',
         'agent_name'       => 'agent_name',
+        // Consent record (b062c4). Never lived in wp_options, so no legacy
+        // prefixes: legacy_get() correctly falls through to the default.
+        'consent'          => 'consent_given',
+        'consent_label'    => 'consent_label',
+        'consent_at'       => 'consent_recorded_at',
     );
 
     /** Logical field => the wp_options prefix it used to live under. */
@@ -158,6 +163,9 @@ class MxChat_Session_Store {
             visitor_name varchar(191) DEFAULT NULL,
             visitor_email varchar(191) DEFAULT NULL,
             agent_name varchar(191) DEFAULT NULL,
+            consent_given varchar(8) DEFAULT NULL,
+            consent_label text DEFAULT NULL,
+            consent_recorded_at datetime DEFAULT NULL,
             created_at datetime DEFAULT NULL,
             updated_at datetime DEFAULT NULL,
             PRIMARY KEY  (session_id),
@@ -359,6 +367,12 @@ class MxChat_Session_Store {
             delete_option($prefix . $session_id);
         }
 
+        // d0cae1: integrations holding per-session state outside WP purge on
+        // this. Fires on every ended session — the retention sweep in trim()
+        // fires it too with reason 'retention'; an integration that only
+        // listens to one path leaks state on the other.
+        do_action('mxchat_session_ended', $session_id, array('reason' => 'deleted'));
+
         return true;
     }
 
@@ -442,6 +456,101 @@ class MxChat_Session_Store {
         );
 
         return is_array($rows) ? $rows : array();
+    }
+
+    /**
+     * Record the lead-capture consent decision in one atomic upsert (b062c4).
+     *
+     * Three facts travel together — whether the box was ticked, when, and the
+     * exact label text the visitor saw — because a "yes" without "to what"
+     * proves nothing once the owner rewrites the label. One query rather than
+     * three set() calls so a crash can never store half a consent record.
+     *
+     * Rows written here always also carry visitor_email (the capture endpoint
+     * stores the email in the same request), so the retention sweep's identity
+     * guard keeps consent records exactly as long as it keeps the lead.
+     *
+     * @param string $session_id
+     * @param bool   $given True when the box was ticked.
+     * @param string $label The sanitized label markup as rendered to the visitor.
+     * @return bool True when the write was attempted against a live table.
+     */
+    public static function record_consent($session_id, $given, $label) {
+        global $wpdb;
+
+        $session_id = self::sanitize($session_id);
+        if ($session_id === '' || !self::ensure_table()) {
+            return false;
+        }
+
+        $table = self::table();
+        $now   = current_time('mysql');
+
+        $wpdb->query(
+            $wpdb->prepare(
+                "INSERT INTO `$table` (session_id, consent_given, consent_label, consent_recorded_at, created_at, updated_at)
+                 VALUES (%s, %s, %s, %s, %s, %s)
+                 ON DUPLICATE KEY UPDATE
+                    consent_given = VALUES(consent_given),
+                    consent_label = VALUES(consent_label),
+                    consent_recorded_at = VALUES(consent_recorded_at),
+                    updated_at = VALUES(updated_at)",
+                $session_id,
+                $given ? 'yes' : 'no',
+                (string) $label,
+                $now,
+                $now,
+                $now
+            )
+        );
+
+        unset(self::$cache[$session_id]);
+        self::maybe_trim();
+
+        return true;
+    }
+
+    /**
+     * Newest recorded consent for a lead email, across all their sessions.
+     * The Leads tab and CSV export read this — a lead is aggregated by email
+     * while consent is captured per session, so "the lead's consent state" is
+     * the most recent record. NULL result means NOT RECORDED, which the
+     * callers must render as exactly that ("not recorded" and "no consent"
+     * are different facts).
+     *
+     * @param string $email
+     * @return array|null ['given' => 'yes'|'no', 'label' => string, 'recorded_at' => string] or null.
+     */
+    public static function latest_consent($email) {
+        global $wpdb;
+
+        $email = is_scalar($email) ? trim((string) $email) : '';
+        if ($email === '' || !self::ensure_table()) {
+            return null;
+        }
+
+        $table = self::table();
+
+        $row = $wpdb->get_row(
+            $wpdb->prepare(
+                "SELECT consent_given, consent_label, consent_recorded_at
+                 FROM `$table`
+                 WHERE visitor_email = %s AND consent_given IS NOT NULL AND consent_given != ''
+                 ORDER BY consent_recorded_at DESC LIMIT 1",
+                $email
+            ),
+            ARRAY_A
+        );
+
+        if (!is_array($row)) {
+            return null;
+        }
+
+        return array(
+            'given'       => (string) $row['consent_given'],
+            'label'       => is_string($row['consent_label']) ? $row['consent_label'] : '',
+            'recorded_at' => is_string($row['consent_recorded_at']) ? $row['consent_recorded_at'] : '',
+        );
     }
 
     private static function row($session_id) {
@@ -724,6 +833,45 @@ class MxChat_Session_Store {
         // — the Leads tab lists them and the legacy option rows they replace
         // were never expired. Retention only sweeps anonymous session state;
         // identity rows leave via the eraser / lead-delete / wipe paths.
+        //
+        // d0cae1: when something listens for ended sessions the swept ids must
+        // be known, so the delete goes SELECT-then-DELETE-by-id. Unhooked, the
+        // original single-statement bulk delete runs unchanged.
+        if (has_action('mxchat_session_ended')) {
+            $swept_ids = $wpdb->get_col(
+                $wpdb->prepare(
+                    "SELECT session_id FROM `$table` WHERE updated_at IS NOT NULL AND updated_at < %s
+                     AND (visitor_email IS NULL OR visitor_email = '')
+                     AND (visitor_name IS NULL OR visitor_name = '')
+                     LIMIT %d",
+                    $cutoff,
+                    $limit
+                )
+            );
+
+            if (empty($swept_ids)) {
+                return 0;
+            }
+
+            $placeholders = implode(',', array_fill(0, count($swept_ids), '%s'));
+            $deleted = $wpdb->query(
+                $wpdb->prepare(
+                    "DELETE FROM `$table` WHERE session_id IN ($placeholders)",
+                    $swept_ids
+                )
+            );
+
+            if ($deleted) {
+                self::flush_cache();
+            }
+
+            foreach ($swept_ids as $swept_id) {
+                do_action('mxchat_session_ended', $swept_id, array('reason' => 'retention'));
+            }
+
+            return (int) $deleted;
+        }
+
         $deleted = $wpdb->query(
             $wpdb->prepare(
                 "DELETE FROM `$table` WHERE updated_at IS NOT NULL AND updated_at < %s

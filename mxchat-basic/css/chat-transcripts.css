@@ -2636,6 +2636,18 @@
     padding: 0 10px;
 }
 
+/* Consent column (b062c4). Yes/No are recorded decisions; "not recorded"
+   renders via .mxch-leads-muted (different fact, different look). */
+.mxch-leads-pill-consent-yes {
+    background: rgba(16, 185, 129, 0.14);
+    color: var(--mxch-success, #059669);
+}
+
+.mxch-leads-pill-consent-no {
+    background: rgba(239, 68, 68, 0.12);
+    color: var(--mxch-danger, #dc2626);
+}
+
 .mxch-leads-row.is-chat-deleted .mxch-leads-lead-email {
     color: var(--mxch-text-secondary);
 }

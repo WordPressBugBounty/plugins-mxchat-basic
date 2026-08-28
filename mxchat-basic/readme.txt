@@ -5,7 +5,7 @@ Tags: ai chatbot, chatgpt, woocommerce, customer support, content generation
 Requires at least: 5.0
 Tested up to: 7.0
 Requires PHP: 7.2
-Stable tag: 3.2.19
+Stable tag: 3.2.20
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -321,6 +321,49 @@ Please ensure compliance with applicable terms and data privacy laws.
 
 
 
+
+= 3.2.20 - August 28, 2026 =
+* New: The knowledge base can now populate and maintain your OpenAI Vector Store — every addition, edit and deletion is mirrored automatically, and an Import Existing Knowledge Base button (or the wp mxchat vectorstore-import command) uploads what you already have in resumable batches; role-restricted entries are never uploaded.
+* New: Chat answers can no longer link to pages that do not exist — every finished answer, streaming included, is checked and links to your own site that would 404 are removed while the sentence stays intact.
+* New: A Strip Unapproved Links setting separates link enforcement from Citation Links, so invented links are removed even with citations off; on for new installs, opt-in for existing sites.
+* New: A third live-agent handoff destination, Webhook — send handoffs to your helpdesk, CRM or automation flow as a signed JSON POST, with its own availability schedule and delivery errors shown on the settings screen.
+* New: The pre-chat email form can show a consent checkbox with your own label and Privacy Policy link, optionally required, enforced on the server — and each capture records whether it was ticked, when, and the exact label shown, visible in Leads, the CSV export and privacy exports.
+* New: The chatbot can be placed with a Gutenberg block, or an Elementor widget on Elementor 3.5+ — inline or floating, with a bot picker when Multi-Bot is active, and a neutral placeholder in the editor instead of a live chat.
+* New: A Document Upload import method takes .docx, .txt and .md files straight into the knowledge base; the file itself is never stored and re-uploading the same name replaces rather than duplicates.
+* New: A Custom Retention (Days) field on Transcripts lets you delete transcripts after any number of days instead of only the weekly and monthly presets.
+* New: Pinecone knowledge entries can now be edited in the admin — saving re-chunks and re-embeds in place, so fixing a typo no longer means delete and re-import.
+* New: Each ACF field group gains a group-level toggle that includes or excludes every field in it at once, with a distinct half-way state when only some are included.
+* New: Add-on AI tools now receive the model's full tool-call arguments, so a tool declaring typed parameters gets them delivered instead of everything but the query being discarded.
+* New: Three developer hooks for custom retrieval — mxchat_retrieval_query rewrites the lookup text without touching the transcript, mxchat_pinecone_query_body tunes Pinecone queries, and mxchat_session_ended fires on both deletion and retention expiry.
+* New: The mxchat_final_response_text filter runs on the complete answer on every response path, streaming included, before it is shown and saved.
+* Security: With Contextual Awareness on, page text captured from the visitor's browser is now fenced as untrusted reference material, capped at 8,000 characters and required to belong to your own site, so instructions hidden in comments or reviews are far less likely to be followed.
+* Fixed: ACF field toggles now identify each field precisely, so same-named fields in different groups no longer share one toggle or switch each other back off; existing exclusions are migrated on the safe side with a one-time notice.
+* Fixed: All remaining Pinecone reads use the correct call shape and respect a configured namespace, so listings, chunked answers and already-indexed detection work on serverless indexes instead of silently returning nothing.
+* Fixed: Long manually pasted entries each keep their own identity — previously a second long pasted document silently deleted the first one's content, in Pinecone and the local database alike.
+* Fixed: Shortening an entry below the chunking threshold now removes its old chunk records, so answers can no longer draw on stale text alongside the new version.
+* Fixed: Knowledge entries whose address contains percent-encoded characters, such as non-English permalinks, no longer go missing or save a duplicate under a different identity.
+* Fixed: Importing Persian, Hindi and other Indic-script content no longer splits words at invisible joiner characters; re-import content added earlier to repair it.
+* Fixed: The pre-chat email form now scrolls when taller than the chat window, so the submit button stays reachable — especially on phones with the keyboard open.
+* Fixed: Product cards from filtered WooCommerce searches display correctly after a refresh instead of showing raw markup, and history replay now recognizes every MxChat card type automatically.
+* Fixed: Cards from an AI tool answer keep their position below the answer text when the chat is refreshed or reopened, matching the order the visitor originally saw.
+* Fixed: A floating chatbot placed by shortcode or block on a page that also auto-displays one no longer renders two overlapping bubbles with duplicate element ids.
+* Fixed: With citation links on, real published pages on your own site and web-search source links are no longer stripped from answers as unknown.
+* Fixed: The Sources tab in Message Context now lists the documents behind tool-answered replies, and tells apart a search that found nothing from a reply with no recorded retrieval.
+* Fixed: The "Translation loading for the mxchat domain was triggered too early" notice on WordPress 6.7 and newer is resolved.
+* Fixed: A custom retention value set by hand or by code is no longer reset to zero when other transcript settings are saved.
+* Fixed: Status pills on admin screens outside API Access now render with their intended styling instead of as plain text.
+* Fixed: The chat message input has a real accessible name for screen readers, rather than relying on placeholder text that disappears on typing.
+* Fixed: Sites that saved the AI Tools screen on earlier versions now receive the recommended usage guidance for the handoff tools; hints you wrote yourself are never changed.
+* Improved: Screen reader support for the conversation is complete — a streamed answer is announced once when it finishes rather than continuously as it types, the waiting state and error notices are read out, and restored history stays silent.
+* Improved: On phones and tablets the chat input no longer takes focus after each reply, so the keyboard stays closed while the visitor reads; desktop is unchanged and the mxchat_autofocus_after_reply filter forces either behavior.
+* Improved: Saving a WooCommerce product no longer generates two knowledge-base embeddings for the same product, halving embedding API usage on product saves.
+* Improved: The daily model health check now watches every model in use, including per-bot models from Multi-Bot, via the new mxchat_models_in_use filter.
+* Improved: Replacements for retired AI models live in one shared mapping used across the plugin and its add-ons, and content generation is now rescued from any retired model.
+* Improved: The Content Generation model picker derives from the central model catalog, so new models appear automatically and a saved model that is no longer offered stays selected and labeled.
+* Improved: The Video Card Match Threshold is now a slider with a live value readout, matching the other threshold controls; its range and limits are unchanged.
+* Improved: The admin Testing panel reports how many links the guard checked and which it removed, which was previously silent.
+* Improved: On non-English sites, the chat widget's default texts are saved in the site language on a fresh install.
+* Improved: A Pinecone listing call that genuinely fails now logs that the fallback fired instead of masking it.
 
 = 3.2.19 - August 15, 2026 =
 * Fixed: Hebrew, Arabic and other right-to-left PDFs no longer import with reversed text, and a new WP-CLI repair command fixes entries imported before this update in place.
@@ -638,6 +681,9 @@ Older releases are archived in the plugin's full version history on WordPress.or
 
 
 
+
+= 3.2.20 =
+The knowledge base can now populate and maintain your OpenAI Vector Store — every change is mirrored automatically and a resumable import uploads what you already have, where before the store was read-only. Chat answers can no longer link to pages that do not exist, a new Webhook destination routes live-agent handoffs to your own helpdesk or automation flow, and the chatbot is placeable as a Gutenberg block or an Elementor widget. Also adds a consent checkbox for the pre-chat form, completes screen reader support for the conversation, and fixes Pinecone reads on serverless indexes. Re-import Persian, Hindi and other Indic-script content to repair entries indexed earlier.
 
 = 3.2.19 =
 Big maintenance release. Retired AI models are now handled automatically — stranded sites are moved to a current model and a new daily check warns you before a retired model can silence your chatbot — and Claude prompt caching cuts API costs ahead of Anthropic's September 1 price change. Re-import content added through the bulk, URL or PDF import tools, plus WooCommerce products, to repair older entries; if you use the Forms or Anywhere add-ons, update them alongside core.

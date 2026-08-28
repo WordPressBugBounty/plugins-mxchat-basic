@@ -99,6 +99,31 @@ class MXChat_Word_Handler {
     }
 
     /**
+     * Extract plain text from a .docx file. THE one .docx parser — the
+     * visitor-facing toolbar upload (via mxchat_process_word_document) and the
+     * admin knowledge importer (plan 0485e5) both call this; do not fork a
+     * second copy. Returns the cleaned text, or false on unreadable/empty
+     * files (not a Zip, no word/document.xml, no text content).
+     */
+    public static function extract_docx_text($file_path) {
+        try {
+            $zip = new ZipArchive();
+            if ($zip->open($file_path) !== true) {
+                return false;
+            }
+            $content = $zip->getFromName('word/document.xml');
+            $zip->close();
+            if ($content === false) {
+                return false;
+            }
+            $text = self::clean_word_xml($content);
+            return $text === '' ? false : $text;
+        } catch (Exception $e) {
+            return false;
+        }
+    }
+
+    /**
      * Process Word document and generate embeddings
      */
 private function mxchat_process_word_document($file_path) {
@@ -106,22 +131,11 @@ private function mxchat_process_word_document($file_path) {
     $max_pages = isset($this->options['pdf_max_pages']) ? intval($this->options['pdf_max_pages']) : 69; // Use same setting as PDF
 
     try {
-        $zip = new ZipArchive();
-        if ($zip->open($file_path) !== true) {
+        $text = self::extract_docx_text($file_path);
+        if ($text === false) {
             return false;
         }
 
-        // Extract main document content
-        $content = $zip->getFromName('word/document.xml');
-        $zip->close();
-
-        if ($content === false) {
-            return false;
-        }
-
-        // Clean up the content
-        $text = $this->mxchat_clean_word_content($content);
-        
         // Count pages (roughly estimate based on paragraphs)
         $paragraphs = explode("\n\n", $text);
         $estimated_pages = ceil(count($paragraphs) / 3); // Assume ~3 paragraphs per page
@@ -160,23 +174,24 @@ private function mxchat_process_word_document($file_path) {
     }
 }
     /**
-     * Clean Word XML content
+     * Clean Word XML content (word/document.xml) to plain text.
+     * Static so both callers of extract_docx_text share one implementation.
      */
-    private function mxchat_clean_word_content($content) {
+    public static function clean_word_xml($content) {
         // Remove XML namespaces
         $content = preg_replace('/xmlns[^=]*="[^"]*"/i', '', $content);
-        
+
         // Convert Word XML elements to text
         $content = str_replace('</w:p>', "\n", $content);
         $content = str_replace('</w:tr>', "\n", $content);
-        
+
         // Strip remaining XML tags
         $content = strip_tags($content);
-        
+
         // Clean up whitespace
         $content = preg_replace('/\s+/', ' ', $content);
         $content = preg_replace('/\n\s*\n/', "\n\n", $content);
-        
+
         return trim($content);
     }
 

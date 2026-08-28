@@ -985,9 +985,16 @@ jQuery(document).ready(function($) {
     function renderRagContext(data, $container) {
         let html = '';
 
-        // Check if we have any source data
-        if (!data.top_matches || data.top_matches.length === 0) {
-            html += '<div class="mxch-no-results"><p>No document matches found for this response.</p></div>';
+        // 67fc92: "the KB was searched and nothing matched" and "nothing was
+        // recorded for this row" are different facts. Retrieval keys present
+        // means the search ran and was recorded (top_matches may be empty);
+        // no retrieval keys means there is simply no record (older rows, or
+        // turns that never consulted the knowledge base).
+        const retrievalRecorded = typeof data.total_documents_checked !== 'undefined'
+            || (data.top_matches && data.top_matches.length > 0);
+
+        if (!retrievalRecorded) {
+            html += '<div class="mxch-no-results"><p>No retrieval data was recorded for this response.</p></div>';
             $container.html(html);
             return;
         }
@@ -995,7 +1002,8 @@ jQuery(document).ready(function($) {
         // Hybrid keyword boost (38ffa1): rows carry matched_via + fused_rank
         // when hybrid retrieval was on for this response. Cosine % stays the
         // anchor; the chip explains WHY a low-% row ranked high.
-        const hybridOn = data.top_matches.some(function(m) { return m.matched_via; });
+        const topMatches = data.top_matches || [];
+        const hybridOn = topMatches.some(function(m) { return m.matched_via; });
 
         html += '<div class="mxch-rag-summary">';
         html += '<div class="mxch-rag-summary-item"><span class="mxch-rag-label">Knowledge Base:</span> <span class="mxch-rag-value">' + escapeHtml(data.knowledge_base_type || 'WordPress Database') + '</span></div>';
@@ -1005,6 +1013,12 @@ jQuery(document).ready(function($) {
             html += '<div class="mxch-rag-summary-item"><span class="mxch-rag-label">Retrieval:</span> <span class="mxch-rag-value">Hybrid</span></div>';
         }
         html += '</div>';
+
+        if (topMatches.length === 0) {
+            html += '<div class="mxch-no-results"><p>The knowledge base was searched &mdash; no documents matched this response.</p></div>';
+            $container.html(html);
+            return;
+        }
 
         const groupedByUrl = {};
 
@@ -1629,7 +1643,7 @@ jQuery(document).ready(function($) {
         const $tbody = $('#mxch-leads-tbody');
         if (!rows || rows.length === 0) {
             $tbody.html(`
-                <tr><td colspan="6" class="mxch-leads-empty">
+                <tr><td colspan="7" class="mxch-leads-empty">
                     <div class="mxch-leads-empty-wrap">
                         <svg xmlns="http://www.w3.org/2000/svg" width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="8" y1="12" x2="16" y2="12"/></svg>
                         <p>No leads match the current filters.</p>
@@ -1667,6 +1681,16 @@ jQuery(document).ready(function($) {
             const pageCell = r.top_page_url
                 ? `<a href="${escapeHtmlLeads(r.top_page_url)}" target="_blank" rel="noopener" class="mxch-leads-page-link" title="${escapeHtmlLeads(r.top_page_url)}">${escapeHtmlLeads(r.top_page_title || r.top_page_url)}</a>`
                 : '<span class="mxch-leads-muted">—</span>';
+            // Consent (b062c4): 'yes'/'no' are recorded decisions; '' means the
+            // capture predates the checkbox — "Not recorded", never "No".
+            let consentCell;
+            if (r.consent === 'yes' || r.consent === 'no') {
+                const consentTitle = (r.consent_at ? 'Recorded ' + r.consent_at : '') +
+                    (r.consent_label ? (r.consent_at ? ' — ' : '') + '"' + r.consent_label + '"' : '');
+                consentCell = `<span class="mxch-leads-pill${r.consent === 'yes' ? ' mxch-leads-pill-consent-yes' : ' mxch-leads-pill-consent-no'}" title="${escapeHtmlLeads(consentTitle)}">${r.consent === 'yes' ? 'Yes' : 'No'}</span>`;
+            } else {
+                consentCell = '<span class="mxch-leads-muted" title="Captured before the consent checkbox was enabled">Not recorded</span>';
+            }
             // View Convo only for active leads (orphans and chat_deleted have no viewable session).
             const viewBtn = (status === 'active' && r.latest_session_id)
                 ? `<button type="button" class="mxch-btn mxch-btn-ghost mxch-btn-sm mxch-leads-view" data-session-id="${escapeHtmlLeads(r.latest_session_id)}" title="View latest conversation">
@@ -1686,6 +1710,7 @@ jQuery(document).ready(function($) {
                     <td class="mxch-leads-col-count">${countCell}</td>
                     <td class="mxch-leads-col-last">${lastCell}</td>
                     <td class="mxch-leads-col-page">${pageCell}</td>
+                    <td class="mxch-leads-col-consent">${consentCell}</td>
                     <td class="mxch-leads-col-actions">${viewBtn}${deleteBtn}</td>
                 </tr>
             `;

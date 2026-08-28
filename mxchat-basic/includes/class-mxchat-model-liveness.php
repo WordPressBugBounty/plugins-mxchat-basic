@@ -224,7 +224,15 @@ class MxChat_Model_Liveness {
     }
 
     /**
-     * The chat model plus the content model when different, non-empty only.
+     * Every model actually in use: the chat model, the content model, plus
+     * whatever add-ons route chats through (plan 202df5 — mxchat-multi-bot's
+     * per-bot overrides were invisible here, so a dead per-bot model produced
+     * no signal anywhere until a customer reported the bot silent).
+     *
+     * The `mxchat_models_in_use` filter receives and must return a flat array
+     * of model-id strings. Contributions are sanitized here (strings only,
+     * trimmed, de-duplicated); a filter that returns garbage is ignored rather
+     * than allowed to break the check.
      */
     private static function configured_models($options) {
         $configured = array();
@@ -234,7 +242,19 @@ class MxChat_Model_Liveness {
                 $configured[$model] = true;
             }
         }
-        return array_keys($configured);
+        $models = array_keys($configured);
+
+        $filtered = apply_filters('mxchat_models_in_use', $models);
+        if (!is_array($filtered)) {
+            return $models; // fail open on a broken filter return
+        }
+        $clean = array();
+        foreach ($filtered as $model) {
+            if (is_string($model) && trim($model) !== '') {
+                $clean[trim($model)] = true;
+            }
+        }
+        return array_keys($clean);
     }
 
     /**
@@ -319,6 +339,18 @@ class MxChat_Model_Liveness {
     /* ---------------------------------------------------------------------
      * The notice
      * ------------------------------------------------------------------ */
+
+    /**
+     * Public accessor for add-ons that render their own warning surfaces
+     * (plan 202df5 — mxchat-multi-bot badges flagged models on its bot list,
+     * because MxChat's branded admin shell buries core admin_notices there).
+     * Returns the same map the core notices render from: model id => info
+     * (provider, first_missing_at, checked_at), restricted to models still in
+     * use. Empty array = nothing is flagged.
+     */
+    public static function flagged() {
+        return self::flagged_models();
+    }
 
     /**
      * The models currently flagged AND still configured. Empty array = nothing

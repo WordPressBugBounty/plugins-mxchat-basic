@@ -620,6 +620,24 @@ function disableChatInput(botId) {
     }
 }
 
+// Whether the input may grab focus after a completed reply (plan 03799f).
+// On coarse-pointer devices focusing a text input summons the on-screen
+// keyboard over the answer the visitor is trying to read, so 'auto' (the
+// default) focuses only on fine-pointer devices. The site-wide
+// mxchat_autofocus_after_reply PHP filter can force 'on'/'off'.
+// NOT used on widget open (:~3424) — that focus is a deliberate act and is
+// what makes the widget keyboard-accessible.
+function mxchatShouldAutofocusAfterReply() {
+    var pref = (typeof mxchatChat !== 'undefined' && mxchatChat.autofocus_after_reply) || 'auto';
+    if (pref === 'on') return true;
+    if (pref === 'off') return false;
+    try {
+        return !window.matchMedia('(pointer: coarse)').matches;
+    } catch (err) {
+        return true;
+    }
+}
+
 function enableChatInput(botId) {
     botId = botId || 'default';
     var chatInput = getElementDOM(botId, 'chat-input');
@@ -627,7 +645,9 @@ function enableChatInput(botId) {
     if (chatInput) {
         chatInput.disabled = false;
         chatInput.style.opacity = '1';
-        chatInput.focus();
+        if (mxchatShouldAutofocusAfterReply()) {
+            try { chatInput.focus({ preventScroll: true }); } catch (err) { chatInput.focus(); }
+        }
     }
     if (sendButton) {
         sendButton.disabled = false;
@@ -764,7 +784,9 @@ function sendMessage(botId) {
         // Check if streaming is enabled AND supported for this model
         if (shouldUseStreaming(currentModel)) {
             callMxChatStream(message, function(response) {
-                getElement(botId, 'chat-box').find('.bot-message.temporary-message').removeClass('temporary-message');
+                // Content is final: releasing aria-busy lets the live region
+                // announce the completed reply once (plan 67f126).
+                getElement(botId, 'chat-box').find('.bot-message.temporary-message').removeClass('temporary-message').attr('aria-busy', 'false');
             }, botId);
         } else {
             callMxChat(message, function(response) {
@@ -804,7 +826,8 @@ function sendMessageToChatbot(message, botId) {
     // Check if streaming is enabled AND supported for this model
     if (shouldUseStreaming(currentModel)) {
         callMxChatStream(message, function(response) {
-            getElement(botId, 'chat-box').find('.bot-message.temporary-message').removeClass('temporary-message');
+            // Final content — release aria-busy so the reply announces once (67f126).
+            getElement(botId, 'chat-box').find('.bot-message.temporary-message').removeClass('temporary-message').attr('aria-busy', 'false');
         }, botId);
     } else {
         callMxChat(message, function(response) {
@@ -979,7 +1002,8 @@ function callMxChat(message, callback, botId) {
                         var currentModel = mxchatChat.model || 'gpt-5.6-sol';
                         if (shouldUseStreaming(currentModel)) {
                             callMxChatStream(originalMessage, function(response) {
-                                getElement(botId, 'chat-box').find('.bot-message.temporary-message').removeClass('temporary-message');
+                                // Final content — release aria-busy so the reply announces once (67f126).
+                                getElement(botId, 'chat-box').find('.bot-message.temporary-message').removeClass('temporary-message').attr('aria-busy', 'false');
                             }, botId);
                         } else {
                             callMxChat(originalMessage, function(response) {
@@ -1351,6 +1375,15 @@ function callMxChatStream(message, callback, botId) {
                             else if (json.append_html) {
                                 pendingAppendHtml = json.append_html;
                             }
+                            // Server-side final pass changed the assembled text
+                            // (ffef6f: dead-link stripping) — swap the rendered
+                            // bubble for the validated version. Arrives at most
+                            // once, just before [DONE].
+                            else if (json.replace_content) {
+                                streamingStarted = true;
+                                accumulatedContent = json.replace_content;
+                                updateStreamingMessage(accumulatedContent, botId);
+                            }
                             // Handle complete response in stream (fallback response)
                             else if (json.text || json.message || json.html) {
                                 handleNonStreamResponse(json, callback, botId);
@@ -1589,6 +1622,13 @@ function updateStreamingMessage(content, botId) {
     const tempMessage = $chatBox.find('.bot-message.temporary-message').last();
 
     if (tempMessage.length) {
+        // aria-busy=true for the whole stream: the bubble is rewritten on
+        // every chunk, and without busy a polite live region announces those
+        // rewrites continuously. Flipped false once the reply is final, so
+        // assistive tech announces the completed message ONCE (plan 67f126).
+        if (tempMessage.attr('aria-busy') !== 'true') {
+            tempMessage.attr('aria-busy', 'true');
+        }
         // Update existing message
         tempMessage.html(formattedContent);
     } else {
@@ -2084,7 +2124,9 @@ function appendMessage(sender, messageText = '', messageHtml = '', images = [], 
         messageDiv.html(fullMessage);
 
         if (isTemporary) {
-            messageDiv.addClass('temporary-message');
+            // In-flight bubble: hold aria-busy so the live region stays quiet
+            // until the content is finalized (plan 67f126).
+            messageDiv.addClass('temporary-message').attr('aria-busy', 'true');
         }
 
         // Append to the correct chatbot instance's chat-box
@@ -2221,11 +2263,14 @@ function replaceLastMessage(sender, responseText, responseHtml = '', images = []
 
     if (lastMessageDiv.length) {
         // Replace content immediately to prevent visual gap between thinking dots and response
+        // aria-busy released AFTER the final content is set, so the live region
+        // announces the finished message once (plan 67f126).
         lastMessageDiv
             .html(fullMessage)
             .removeClass('bot-message user-message temporary-message')
             .addClass(messageClass)
-            .attr('dir', 'auto');
+            .attr('dir', 'auto')
+            .attr('aria-busy', 'false');
 
         // Only apply inline colors if AI theme is not active (let CSS handle it)
         var skipColors = mxchatChat.skip_inline_colors || shouldSkipInlineColors(botId);
@@ -2287,8 +2332,13 @@ function replaceLastMessage(sender, responseText, responseHtml = '', images = []
         var botMessageBgColor = mxchatChat.bot_message_bg_color;
 
         // Build thinking dots HTML - skip inline colors if AI theme is active
+        // The dots are decorative; the sr-only span is what the live region
+        // announces for the waiting state (plan 67f126). Server-localized
+        // string — safe to inject (esc_html__ output, no user content).
         var dotStyle = skipColors ? '' : ' style="background-color: ' + botMessageFontColor + ';"';
-        var thinkingHtml = '<div class="thinking-dots-container">' +
+        var srThinking = mxchatChat.thinking_announcement || 'Assistant is typing';
+        var thinkingHtml = '<span class="sr-only">' + srThinking + '</span>' +
+                           '<div class="thinking-dots-container" aria-hidden="true">' +
                            '<div class="thinking-dots">' +
                            '<span class="dot"' + dotStyle + '></span>' +
                            '<span class="dot"' + dotStyle + '></span>' +
@@ -2990,6 +3040,18 @@ function loadChatHistory(botId, onComplete) {
 
                         // Only process if there are actual messages
                         if (response.data.conversation.length > 0) {
+                            // Restored history must be SILENT to screen readers
+                            // (plan 67f126): these are DOM additions inside the
+                            // live region and would otherwise announce as if
+                            // they just arrived. Lift aria-live for the batch
+                            // repopulate, restore it after the browser has
+                            // processed the mutations.
+                            var mxLiveRegionEl = $chatBox.get(0);
+                            var mxSavedAriaLive = mxLiveRegionEl ? mxLiveRegionEl.getAttribute('aria-live') : null;
+                            if (mxLiveRegionEl) {
+                                mxLiveRegionEl.setAttribute('aria-live', 'off');
+                            }
+
                             // IMPORTANT: Clear existing messages before loading history
                             $chatBox.empty();
 
@@ -3032,11 +3094,14 @@ function loadChatHistory(botId, onComplete) {
                                 // Skip linkify for messages containing structured HTML
                                 // (forms, product cards, galleries, etc.) to avoid
                                 // markdown formatting corrupting HTML attributes
-                                // (e.g. underscores in name="field_name" becoming <em> tags)
-                                if (content.includes("mxchat-product-card") ||
-                                    content.includes("mxchat-image-gallery") ||
-                                    content.includes("mxchat-featured-products") ||
-                                    content.includes("mxchat-youtube-embed") ||
+                                // (e.g. underscores in name="field_name" becoming <em> tags).
+                                // One family check instead of a per-card literal list: any
+                                // element carrying an mxchat- prefixed class is MxChat-generated
+                                // structured markup and replays raw. The old list drifted every
+                                // time an add-on minted a new card class — the filtered-search
+                                // card ("mxchat-filtered-product-card") missed it and replayed
+                                // through linkify as visible markup.
+                                if (/<[a-z][^>]*class\s*=\s*["'][^"']*\bmxchat-/i.test(content) ||
                                     content.includes("<form") ||
                                     content.includes("<input") ||
                                     content.includes("<select") ||
@@ -3059,6 +3124,16 @@ function loadChatHistory(botId, onComplete) {
                             // Only append messages and scroll if we have content
                             $chatBox.append($fragment);
                             scrollToBottom(botId, true);
+
+                            // Re-attach live semantics AFTER the rehydration
+                            // mutations have been processed with the region off
+                            // (plan 67f126). Restoring later announces nothing
+                            // retroactively; new turns announce normally.
+                            if (mxLiveRegionEl) {
+                                setTimeout(function() {
+                                    mxLiveRegionEl.setAttribute('aria-live', mxSavedAriaLive || 'polite');
+                                }, 200);
+                            }
 
                             // Collapse quick questions if we have conversation history
                             // BUT skip auto-collapse for embedded bots (they should stay expanded)
@@ -3965,6 +4040,7 @@ if (mxchatChat && mxchatChat.email_collection_enabled === 'on') {
 
         var emailInput = getElementDOM(botId, 'user-email');
         var nameInput = getElementDOM(botId, 'user-name');
+        var consentInput = getElementDOM(botId, 'user-consent');
         var userEmail = emailInput ? emailInput.value.trim() : '';
         var userName = nameInput ? nameInput.value.trim() : '';
         var sessionId = MxChatInstances.ensureSession(botId);
@@ -3986,6 +4062,13 @@ if (mxchatChat && mxchatChat.email_collection_enabled === 'on') {
             return false;
         }
 
+        // Consent checkbox (b062c4): backstop behind the native required
+        // attribute; the server enforces this independently either way.
+        if (consentInput && consentInput.required && !consentInput.checked) {
+            showEmailError(botId, 'Please tick the consent box to continue.');
+            return false;
+        }
+
         clearEmailError(botId);
         setEmailSubmissionState(botId, true);
 
@@ -3999,6 +4082,12 @@ if (mxchatChat && mxchatChat.email_collection_enabled === 'on') {
 
         if (userName) {
             formData.append('name', userName);
+        }
+
+        // Ticked/unticked both travel when the checkbox is rendered, so an
+        // optional-consent "no" is recorded as a decision, not an absence.
+        if (consentInput) {
+            formData.append('consent', consentInput.checked ? '1' : '0');
         }
 
         fetch(mxchatChat.ajax_url, {

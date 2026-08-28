@@ -48,6 +48,7 @@ private function mxchat_init_hooks() {
     add_action('admin_post_mxchat_submit_content', array($this, 'mxchat_handle_content_submission'));
     add_action('admin_post_mxchat_submit_sitemap', array($this, 'mxchat_handle_sitemap_submission'));
     add_action('admin_post_mxchat_submit_pdf_file', array($this, 'mxchat_handle_pdf_file_submission'));
+    add_action('admin_post_mxchat_submit_document_file', array($this, 'mxchat_handle_document_file_submission'));
     add_action('admin_post_mxchat_submit_youtube', array($this, 'mxchat_handle_youtube_submission'));
     add_action('admin_post_mxchat_stop_processing', array($this, 'mxchat_stop_processing'));
     
@@ -657,6 +658,158 @@ public function mxchat_handle_pdf_file_submission() {
 }
 
 /**
+ * Handle direct document upload (.docx / .txt / .md) from the knowledge base
+ * page (plan 0485e5). Unlike PDF Upload there is no per-page queue: the text
+ * extracts in one pass and routes through submit_content_to_db, whose chunker
+ * takes over for long content. The uploaded file is read from the PHP temp
+ * file and never persisted — only its extracted text enters the KB.
+ *
+ * Source identity matches PDF Upload's scheme: upload://<filename>, stable
+ * across re-uploads so a re-import REPLACES (delete_chunks_for_url + upsert
+ * per identity) instead of duplicating.
+ */
+public function mxchat_handle_document_file_submission() {
+    if (!isset($_POST['submit_document_file']) || !current_user_can('manage_options')) {
+        wp_die(esc_html__('Unauthorized access', 'mxchat'));
+    }
+
+    check_admin_referer('mxchat_submit_document_file_action', 'mxchat_submit_document_file_nonce');
+
+    $redirect_url = admin_url('admin.php?page=mxchat-prompts');
+
+    if (empty($_FILES['document_file']) || $_FILES['document_file']['error'] !== UPLOAD_ERR_OK) {
+        $error_code = isset($_FILES['document_file']['error']) ? $_FILES['document_file']['error'] : UPLOAD_ERR_NO_FILE;
+        $error_messages = array(
+            UPLOAD_ERR_INI_SIZE   => __('The uploaded file exceeds the server upload_max_filesize limit.', 'mxchat'),
+            UPLOAD_ERR_FORM_SIZE  => __('The uploaded file exceeds the form MAX_FILE_SIZE limit.', 'mxchat'),
+            UPLOAD_ERR_PARTIAL    => __('The file was only partially uploaded.', 'mxchat'),
+            UPLOAD_ERR_NO_FILE    => __('No file was uploaded. Please select a document.', 'mxchat'),
+            UPLOAD_ERR_NO_TMP_DIR => __('Server missing temporary folder.', 'mxchat'),
+            UPLOAD_ERR_CANT_WRITE => __('Server failed to write file to disk.', 'mxchat'),
+        );
+        $error_msg = isset($error_messages[$error_code]) ? $error_messages[$error_code] : __('Unknown upload error.', 'mxchat');
+        set_transient('mxchat_admin_notice_error', $error_msg, 30);
+        wp_safe_redirect(esc_url($redirect_url));
+        exit;
+    }
+
+    $file = $_FILES['document_file'];
+    $ext  = strtolower(pathinfo($file['name'], PATHINFO_EXTENSION));
+
+    $finfo = finfo_open(FILEINFO_MIME_TYPE);
+    $mime_type = finfo_file($finfo, $file['tmp_name']);
+    finfo_close($finfo);
+
+    // Per-extension MIME expectations. finfo commonly reports .docx as
+    // application/zip (it IS a Zip container) and .md as plain text.
+    $mime_ok = false;
+    if ($ext === 'docx') {
+        $mime_ok = in_array($mime_type, array(
+            'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+            'application/zip',
+        ), true);
+    } elseif ($ext === 'txt' || $ext === 'md') {
+        $mime_ok = (strpos((string) $mime_type, 'text/') === 0);
+    }
+
+    if (!$mime_ok) {
+        set_transient('mxchat_admin_notice_error',
+            esc_html__('Invalid or unreadable document. Accepted types: .docx, .txt, .md.', 'mxchat'),
+            30
+        );
+        wp_safe_redirect(esc_url($redirect_url));
+        exit;
+    }
+
+    $bot_id = isset($_POST['bot_id']) ? sanitize_key($_POST['bot_id']) : 'default';
+    $original_filename = sanitize_file_name($file['name']);
+
+    // ---- Extract text (ONE extractor for .docx — the word handler's) ----
+    if ($ext === 'docx') {
+        $text = MXChat_Word_Handler::extract_docx_text($file['tmp_name']);
+        if ($text === false) {
+            set_transient('mxchat_admin_notice_error',
+                esc_html__('The .docx file could not be read. It may be corrupt, empty, or not a real Word document.', 'mxchat'),
+                30
+            );
+            wp_safe_redirect(esc_url($redirect_url));
+            exit;
+        }
+    } else {
+        // .txt / .md read as-is. Markdown keeps its syntax on purpose —
+        // headings are useful retrieval signal.
+        $text = (string) file_get_contents($file['tmp_name']);
+        $text = wp_check_invalid_utf8($text);
+        $text = trim($text);
+    }
+
+    if ($text === '') {
+        set_transient('mxchat_admin_notice_error',
+            esc_html__('The uploaded document contains no readable text.', 'mxchat'),
+            30
+        );
+        wp_safe_redirect(esc_url($redirect_url));
+        exit;
+    }
+
+    // Size cap — same pdf_max_pages setting the PDF/toolbar paths use, but
+    // estimated by CHARACTERS (~2500/page): the .docx cleaner collapses all
+    // newlines to spaces, so a paragraph count reads 1 for any Word file.
+    // Processing is synchronous — an unbounded document risks a timeout.
+    $options = get_option('mxchat_options', array());
+    $max_pages = isset($options['pdf_max_pages']) ? intval($options['pdf_max_pages']) : 69;
+    $estimated_pages = (int) ceil(strlen($text) / 2500);
+    if ($estimated_pages > $max_pages) {
+        set_transient('mxchat_admin_notice_error',
+            sprintf(
+                esc_html__('The document is too large (about %1$d pages; the limit is %2$d). Split it into smaller files, or raise the PDF max pages setting.', 'mxchat'),
+                $estimated_pages,
+                $max_pages
+            ),
+            30
+        );
+        wp_safe_redirect(esc_url($redirect_url));
+        exit;
+    }
+
+    // Embedding API key — bot-aware, same shape as the direct-content handler.
+    $api_key = '';
+    if ($bot_id !== 'default' && class_exists('MxChat_Multi_Bot_Manager')) {
+        $bot_options = apply_filters('mxchat_get_bot_options', array(), $bot_id);
+        $api_key = $bot_options['api_key'] ?? '';
+    }
+    if (empty($api_key)) {
+        $api_key = $options['api_key'] ?? '';
+    }
+
+    // Stable identity — PDF Upload's scheme. A re-upload of the same filename
+    // replaces: clear old chunks first (covers a doc shrinking below the chunk
+    // threshold, where the single-vector path would not clean them), then
+    // submit — the chunked path re-deletes harmlessly.
+    $source_label = 'upload://' . $original_filename;
+    MxChat_Utils::delete_chunks_for_url($source_label, $bot_id);
+    $result = MxChat_Utils::submit_content_to_db($text, $source_label, $api_key, null, $bot_id, 'document');
+
+    if (is_wp_error($result)) {
+        set_transient('mxchat_admin_notice_error',
+            esc_html__('Failed to import the document: ', 'mxchat') . esc_html($result->get_error_message()),
+            30
+        );
+    } else {
+        set_transient('mxchat_admin_notice_success',
+            sprintf(
+                esc_html__('Document "%s" imported into the knowledge base.', 'mxchat'),
+                esc_html($original_filename)
+            ),
+            30
+        );
+    }
+
+    wp_safe_redirect(esc_url($redirect_url));
+    exit;
+}
+
+/**
  *   Validate PDF and count pages with multiple parser attempts
  */
 private function mxchat_validate_and_count_pdf_pages($pdf_path) {
@@ -881,6 +1034,23 @@ public function mxchat_save_inline_prompt() {
  * AJAX: Get full content for editing — reassembles chunks if needed.
  * Works for both WordPress DB and Pinecone entries.
  */
+/**
+ * Sanitize a knowledge entry's source_url from an AJAX request WITHOUT destroying
+ * its identity. sanitize_text_field() strips percent-encoded octets (%20, %D7%A9…),
+ * so a percent-encoded URL — every non-ASCII permalink — would md5 to a DIFFERENT
+ * id than the one it was stored under: reads miss the entry and saves write an
+ * orphan copy while the original keeps its stale text. URLs get esc_url_raw
+ * (identity-preserving, matches what import stored); non-URL keys (mxchat://,
+ * _ungrouped_) keep the old sanitizer.
+ */
+private function sanitize_entry_source_url( $raw ) {
+    $raw = trim( (string) $raw );
+    if ( preg_match( '#^https?://#i', $raw ) ) {
+        return esc_url_raw( $raw );
+    }
+    return sanitize_text_field( $raw );
+}
+
 public function ajax_mxchat_get_entry_content() {
     check_ajax_referer('mxchat_edit_entry_nonce', 'nonce');
 
@@ -888,14 +1058,17 @@ public function ajax_mxchat_get_entry_content() {
         wp_send_json_error( array( 'message' => 'Permission denied.' ) );
     }
 
-    $source_url  = isset($_POST['source_url']) ? sanitize_text_field( wp_unslash($_POST['source_url']) ) : '';
+    $source_url  = $this->sanitize_entry_source_url( isset($_POST['source_url']) ? wp_unslash($_POST['source_url']) : '' );
     $entry_id    = isset($_POST['entry_id']) ? absint($_POST['entry_id']) : 0;
     $data_source = isset($_POST['data_source']) ? sanitize_key($_POST['data_source']) : 'wordpress';
     $bot_id      = isset($_POST['bot_id']) ? sanitize_key($_POST['bot_id']) : 'default';
 
     if ( $data_source === 'pinecone' ) {
+        // Pinecone ids are strings (md5 hashes, manual_* ids) — absint() would
+        // destroy them, so re-read the raw value for this branch only.
+        $vector_id = isset($_POST['entry_id']) ? sanitize_text_field( wp_unslash($_POST['entry_id']) ) : '';
         // Pinecone: fetch vectors by source_url, reassemble chunks
-        $content = $this->get_pinecone_entry_content( $source_url, $entry_id, $bot_id );
+        $content = $this->get_pinecone_entry_content( $source_url, $vector_id, $bot_id );
     } else {
         // WordPress DB
         $content = $this->get_wordpress_entry_content( $source_url, $entry_id );
@@ -996,29 +1169,36 @@ private function get_pinecone_entry_content( $source_url, $entry_id, $bot_id ) {
         return new WP_Error( 'pinecone_config', 'Pinecone not configured.' );
     }
 
-    // List vectors with the source_url prefix
-    $base_id = md5( $source_url );
-    $vector_ids = array( $base_id );
+    // Manual entries carry no source_url (their vector id is a minted manual_* string,
+    // not md5 of anything the row can hand us) — fetch the exact vector instead.
+    // '_ungrouped_' is the table view's synthetic display key for such rows.
+    if ( ( empty($source_url) || strpos($source_url, '_ungrouped_') === 0 ) && ! empty($entry_id) && is_string($entry_id) ) {
+        $vector_ids = array( $entry_id );
+    } else {
+        // List vectors with the source_url prefix
+        $base_id = md5( $source_url );
+        $vector_ids = array( $base_id );
 
-    // Find chunk vectors
-    // NOTE: Pinecone's /vectors/list is a GET endpoint with query parameters.
-    // A POST is answered 200-with-an-empty-body, which reads as "no vectors".
-    $list_url    = "https://{$host}/vectors/list";
-    $list_params = array( 'prefix' => $base_id . '_chunk_', 'limit' => 100 );
-    if ( ! empty($namespace) ) {
-        $list_params['namespace'] = $namespace;
-    }
+        // Find chunk vectors
+        // NOTE: Pinecone's /vectors/list is a GET endpoint with query parameters.
+        // A POST is answered 200-with-an-empty-body, which reads as "no vectors".
+        $list_url    = "https://{$host}/vectors/list";
+        $list_params = array( 'prefix' => $base_id . '_chunk_', 'limit' => 100 );
+        if ( ! empty($namespace) ) {
+            $list_params['namespace'] = $namespace;
+        }
 
-    $list_resp = wp_remote_get( $list_url . '?' . http_build_query( $list_params ), array(
-        'headers' => array( 'Api-Key' => $api_key, 'accept' => 'application/json' ),
-        'timeout' => 15,
-    ) );
+        $list_resp = wp_remote_get( $list_url . '?' . http_build_query( $list_params ), array(
+            'headers' => array( 'Api-Key' => $api_key, 'accept' => 'application/json' ),
+            'timeout' => 15,
+        ) );
 
-    if ( ! is_wp_error($list_resp) ) {
-        $list_data = json_decode( wp_remote_retrieve_body($list_resp), true );
-        if ( ! empty($list_data['vectors']) ) {
-            foreach ( $list_data['vectors'] as $v ) {
-                $vector_ids[] = $v['id'];
+        if ( ! is_wp_error($list_resp) ) {
+            $list_data = json_decode( wp_remote_retrieve_body($list_resp), true );
+            if ( ! empty($list_data['vectors']) ) {
+                foreach ( $list_data['vectors'] as $v ) {
+                    $vector_ids[] = $v['id'];
+                }
             }
         }
     }
@@ -1310,7 +1490,7 @@ public function ajax_mxchat_save_entry_content() {
         wp_send_json_error( array( 'message' => 'Permission denied.' ) );
     }
 
-    $source_url   = isset($_POST['source_url']) ? sanitize_text_field( wp_unslash($_POST['source_url']) ) : '';
+    $source_url   = $this->sanitize_entry_source_url( isset($_POST['source_url']) ? wp_unslash($_POST['source_url']) : '' );
     $entry_id     = isset($_POST['entry_id']) ? absint($_POST['entry_id']) : 0;
     $content      = isset($_POST['content']) ? wp_kses_post( wp_unslash($_POST['content']) ) : '';
     $data_source  = isset($_POST['data_source']) ? sanitize_key($_POST['data_source']) : 'wordpress';
@@ -1333,35 +1513,71 @@ public function ajax_mxchat_save_entry_content() {
         $api_key = $options['api_key'] ?? '';
     }
 
-    global $wpdb;
-    $table = $wpdb->prefix . 'mxchat_system_prompt_content';
+    if ( $data_source === 'pinecone' ) {
+        // Pinecone branch. The WP-DB manual-entry delete below must never run here:
+        // Pinecone ids are strings, and absint() on a digit-leading md5 hash would
+        // yield a real (unrelated) WP row id.
+        $raw_vector_id     = isset($_POST['entry_id']) ? sanitize_text_field( wp_unslash($_POST['entry_id']) ) : '';
+        $is_manual_single  = empty($source_url) || strpos($source_url, '_ungrouped_') === 0;
+        $is_manual_chunked = strpos($source_url, 'mxchat://') === 0;
 
-    // If source_url is empty but we have an entry_id, look it up
-    if ( empty($source_url) && $entry_id > 0 && $data_source === 'wordpress' ) {
-        $row = $wpdb->get_row( $wpdb->prepare( "SELECT source_url FROM {$table} WHERE id = %d", $entry_id ) );
-        if ( $row && ! empty($row->source_url) ) {
-            $source_url = $row->source_url;
+        if ( $is_manual_single || $is_manual_chunked ) {
+            // Manual content: remove the old vectors first, then store as fresh manual
+            // content — submit_content_to_db mints a new unique identity (manual_* id
+            // for a single vector, an mxchat:// chunk prefix if it now chunks).
+            if ( $is_manual_chunked ) {
+                // Minted identity: base + chunk vectors share the md5(mxchat://...) prefix.
+                MxChat_Utils::delete_chunks_for_url( $source_url, $bot_id );
+            } elseif ( ! empty($raw_vector_id) && class_exists('MxChat_Pinecone_Manager') ) {
+                $pinecone_manager = MxChat_Pinecone_Manager::get_instance();
+                $pinecone_options = $pinecone_manager->mxchat_get_bot_pinecone_options( $bot_id );
+                if ( ! empty($pinecone_options['mxchat_pinecone_api_key']) && ! empty($pinecone_options['mxchat_pinecone_host']) ) {
+                    $pinecone_manager->mxchat_delete_from_pinecone_by_vector_id(
+                        $raw_vector_id,
+                        $pinecone_options['mxchat_pinecone_api_key'],
+                        $pinecone_options['mxchat_pinecone_host'],
+                        $pinecone_options['mxchat_pinecone_namespace'] ?? ''
+                    );
+                }
+            }
+            $result = MxChat_Utils::submit_content_to_db( $content, '', $api_key, null, $bot_id, $content_type );
+        } else {
+            // URL-sourced entry: identity is md5(source_url). submit_content_to_db
+            // handles delete-old-chunks → re-chunk → re-embed → store, and sweeps
+            // stale chunk vectors when the content now fits in a single vector.
+            $result = MxChat_Utils::submit_content_to_db( $content, $source_url, $api_key, md5($source_url), $bot_id, $content_type );
         }
-    }
+    } else {
+        global $wpdb;
+        $table = $wpdb->prefix . 'mxchat_system_prompt_content';
 
-    // For manual entries (no source_url or mxchat:// prefix), delete the old entry by ID first
-    // so submit_content_to_db creates a replacement instead of a duplicate
-    // Also treat legacy mxchat.ai source URLs as manual — old bug assigned the site URL to manual entries
-    $is_legacy_manual = !empty($source_url) && strpos($source_url, 'mxchat.ai') !== false && strpos($source_url, 'mxchat://') !== 0;
-    if ( $entry_id > 0 && (empty($source_url) || strpos($source_url, 'mxchat://') === 0 || $is_legacy_manual) ) {
-        $wpdb->delete( $table, array( 'id' => $entry_id ), array( '%d' ) );
-        // Clear legacy URL so submit_content_to_db generates a unique mxchat:// identifier
-        // instead of reusing the shared URL (which would mass-delete other entries with the same URL)
-        if ( $is_legacy_manual ) {
-            $source_url = '';
+        // If source_url is empty but we have an entry_id, look it up
+        if ( empty($source_url) && $entry_id > 0 ) {
+            $row = $wpdb->get_row( $wpdb->prepare( "SELECT source_url FROM {$table} WHERE id = %d", $entry_id ) );
+            if ( $row && ! empty($row->source_url) ) {
+                $source_url = $row->source_url;
+            }
         }
+
+        // For manual entries (no source_url or mxchat:// prefix), delete the old entry by ID first
+        // so submit_content_to_db creates a replacement instead of a duplicate
+        // Also treat legacy mxchat.ai source URLs as manual — old bug assigned the site URL to manual entries
+        $is_legacy_manual = !empty($source_url) && strpos($source_url, 'mxchat.ai') !== false && strpos($source_url, 'mxchat://') !== 0;
+        if ( $entry_id > 0 && (empty($source_url) || strpos($source_url, 'mxchat://') === 0 || $is_legacy_manual) ) {
+            $wpdb->delete( $table, array( 'id' => $entry_id ), array( '%d' ) );
+            // Clear legacy URL so submit_content_to_db generates a unique mxchat:// identifier
+            // instead of reusing the shared URL (which would mass-delete other entries with the same URL)
+            if ( $is_legacy_manual ) {
+                $source_url = '';
+            }
+        }
+
+        // Use the existing submit_content_to_db which handles chunking, Pinecone, and WP DB
+        $vector_id = ! empty($source_url) ? md5($source_url) : md5('mxchat_manual_' . $entry_id);
+
+        // submit_content_to_db already handles: delete old chunks → re-chunk → re-embed → store
+        $result = MxChat_Utils::submit_content_to_db( $content, $source_url, $api_key, $vector_id, $bot_id, $content_type );
     }
-
-    // Use the existing submit_content_to_db which handles chunking, Pinecone, and WP DB
-    $vector_id = ! empty($source_url) ? md5($source_url) : md5('mxchat_manual_' . $entry_id);
-
-    // submit_content_to_db already handles: delete old chunks → re-chunk → re-embed → store
-    $result = MxChat_Utils::submit_content_to_db( $content, $source_url, $api_key, $vector_id, $bot_id, $content_type );
 
     if ( is_wp_error($result) ) {
         wp_send_json_error( array( 'message' => $result->get_error_message() ) );
@@ -1892,34 +2108,21 @@ public function mxchat_sanitize_content_for_api($content) {
     }, $content);
 
     // Remove emoji/symbol blocks only — not the whole supplementary plane, which
-    // also holds CJK Extension B ideographs used in real Chinese/Japanese names
-    $content = preg_replace('/[\x{1F000}-\x{1F0FF}\x{1F300}-\x{1FAFF}]/u', '', $content);
-    
-    // Replace any remaining potentially problematic characters with spaces
-    // BUT preserve newlines by temporarily replacing them
-    //
-    // \p{Sc} (Symbol, currency) is in the allowlist because every currency sign —
-    // $ € £ ¥ ₹ — is Sc, not Sm, and without it this pass silently replaced every
-    // one of them with a space. That hit far more than product prices: any indexed
-    // page quoting "$4.99" was embedded as " 4.99", leaving the model no way to know
-    // which currency (or that it was money at all). Found while verifying plan 7403ec.
-    //
-    // \p{M} (Mark) is in the allowlist because combining marks are not decoration —
-    // they are letters' other half. Arabic harakat, Hebrew niqqud, and above all the
-    // Devanagari vowel signs and virama (Mc/Mn) are mandatory in their scripts. Each
-    // one used to be replaced by a SPACE, which split one word into several fragments
-    // and turned Indic text into gibberish. Decomposed (NFD) Latin lost every accent
-    // the same way. Invisible in English, which is why it went unreported for so long.
-    //
-    // \p{So} (Symbol, other) covers ™ © ® ° ✓ — meaning-bearing marks that were also
-    // becoming spaces ("Brand® name" indexed as "Brand  name", "200°C" as "200  C").
-    // Emoji are ALSO So: they stay stripped by the emoji-block pass immediately above,
-    // which runs BEFORE this line. That ordering is load-bearing now — moving this
-    // line above the emoji strip would let emoji back into the index. Plan a19914.
-    $content = str_replace("\n", "NEWLINE_PLACEHOLDER", $content);
-    $content = preg_replace('/[^\p{L}\p{N}\p{P}\p{Z}\p{Sm}\p{Sc}\p{M}\p{So}]/u', ' ', $content);
-    $content = str_replace("NEWLINE_PLACEHOLDER", "\n", $content);
-    
+    // also holds CJK Extension B ideographs used in real Chinese/Japanese names.
+    // A ZWJ (U+200D) BETWEEN stripped pictographs is consumed with them, so a
+    // family sequence like 👨‍👩‍👧 leaves no invisible zero-width residue behind
+    // (the joiner between NON-emoji characters — Hindi conjuncts — is untouched).
+    $content = preg_replace('/[\x{1F000}-\x{1F0FF}\x{1F300}-\x{1FAFF}](?:\x{200D}[\x{1F000}-\x{1F0FF}\x{1F300}-\x{1FAFF}])*/u', '', $content);
+
+    // There is deliberately NO catch-all character allowlist here (plan 209e57;
+    // one existed until 3.2.20). Every genuinely dangerous byte is already gone:
+    // control characters, null bytes, invalid UTF-8 and the emoji blocks are all
+    // stripped above. The allowlist's only remaining effect was to damage scripts
+    // nobody thought to enumerate — Unicode Cf (Format) was missing, so it
+    // replaced the zero-width joiner/non-joiner with spaces and silently split
+    // Persian words (می‌روم → می روم) and broke Hindi conjuncts (क्‍ष → क् ष).
+    // Do not add one back; the failure mode of an allowlist is exactly this.
+
     // Limit to reasonable length if needed (byte limit — MySQL TEXT is byte-sized,
     // but cut on a character boundary so a multibyte char is never split mid-sequence)
     $max_length = 65000; // Just under MySQL TEXT field limit
@@ -2764,7 +2967,16 @@ public function ajax_mxchat_refresh_pinecone_entries() {
                         <?php endif; ?>
                     </td>
                     <td class="mxchat-actions-cell" style="padding: 12px 16px; white-space: nowrap;">
-                        <?php if ($data_source !== 'pinecone') : ?>
+                        <button type="button"
+                                class="mxch-btn mxch-btn-ghost mxch-btn-sm mxchat-inspect-entry-btn"
+                                data-source-url="<?php echo esc_attr($source_url); ?>"
+                                data-entry-id="<?php echo esc_attr($first_prompt->id); ?>"
+                                data-data-source="<?php echo esc_attr($data_source); ?>"
+                                data-bot-id="<?php echo esc_attr($current_bot_id); ?>"
+                                data-nonce="<?php echo wp_create_nonce('mxchat_inspect_entry_nonce'); ?>"
+                                title="<?php esc_attr_e('View indexed content', 'mxchat'); ?>">
+                            <span class="dashicons dashicons-visibility" style="font-size: 14px;"></span>
+                        </button>
                         <button type="button"
                                 class="mxch-btn mxch-btn-ghost mxch-btn-sm mxchat-edit-entry-btn"
                                 data-source-url="<?php echo esc_attr($source_url); ?>"
@@ -2775,7 +2987,6 @@ public function ajax_mxchat_refresh_pinecone_entries() {
                                 title="<?php esc_attr_e('Edit content', 'mxchat'); ?>">
                             <span class="dashicons dashicons-edit" style="font-size: 14px;"></span>
                         </button>
-                        <?php endif; ?>
                         <button type="button"
                                 class="mxch-btn mxch-btn-ghost mxch-btn-sm delete-button-group"
                                 data-source-url="<?php echo esc_attr($source_url); ?>"
@@ -2909,7 +3120,27 @@ public function ajax_mxchat_refresh_pinecone_entries() {
                             <span style="color: var(--mxch-text-muted);"><?php esc_html_e('Manual', 'mxchat'); ?></span>
                         <?php endif; ?>
                     </td>
-                    <td style="padding: 12px 16px;">
+                    <td style="padding: 12px 16px; white-space: nowrap;">
+                        <button type="button"
+                                class="mxch-btn mxch-btn-ghost mxch-btn-sm mxchat-inspect-entry-btn"
+                                data-source-url="<?php echo esc_attr($prompt->source_url ?? ''); ?>"
+                                data-entry-id="<?php echo esc_attr($prompt->id); ?>"
+                                data-data-source="<?php echo esc_attr($data_source); ?>"
+                                data-bot-id="<?php echo esc_attr($current_bot_id); ?>"
+                                data-nonce="<?php echo wp_create_nonce('mxchat_inspect_entry_nonce'); ?>"
+                                title="<?php esc_attr_e('View indexed content', 'mxchat'); ?>">
+                            <span class="dashicons dashicons-visibility" style="font-size: 14px;"></span>
+                        </button>
+                        <button type="button"
+                                class="mxch-btn mxch-btn-ghost mxch-btn-sm mxchat-edit-entry-btn"
+                                data-source-url="<?php echo esc_attr($prompt->source_url ?? ''); ?>"
+                                data-entry-id="<?php echo esc_attr($prompt->id); ?>"
+                                data-data-source="<?php echo esc_attr($data_source); ?>"
+                                data-bot-id="<?php echo esc_attr($current_bot_id); ?>"
+                                data-nonce="<?php echo wp_create_nonce('mxchat_edit_entry_nonce'); ?>"
+                                title="<?php esc_attr_e('Edit content', 'mxchat'); ?>">
+                            <span class="dashicons dashicons-edit" style="font-size: 14px;"></span>
+                        </button>
                         <button type="button" class="mxch-btn mxch-btn-ghost mxch-btn-sm delete-button-ajax" data-vector-id="<?php echo esc_attr($prompt->id); ?>" data-bot-id="<?php echo esc_attr($current_bot_id); ?>" data-nonce="<?php echo wp_create_nonce('mxchat_delete_pinecone_prompt_nonce'); ?>" style="color: var(--mxch-error);">
                             <span class="dashicons dashicons-trash" style="font-size: 14px;"></span>
                         </button>
@@ -4156,179 +4387,16 @@ public function ajax_mxchat_process_selected_content() {
         $post = get_post($post_id); // defend against a bad callback return
     }
 
-    // Get content including title, short description (for WooCommerce), and main content
-    // Entity decode at output time (single-pass, shared helper) — a stored
-    // `&amp;` embeds worse than `&` and gets quoted back to visitors (d2c92e).
-    $content = $this->mxchat_decode_entities_for_indexing($post->post_title) . "\n\n";
-
-    // Add short description if it exists (WooCommerce products use post_excerpt for short description)
-    // Strip FIRST, then test: an excerpt that is nothing but shortcodes strips to
-    // empty, and testing the raw value emitted a bare "Short Description: " label
-    // with no value after it. Matches mxchat_index_published_post.
-    // trim() only in the TEST — the emitted value is untouched, so a populated
-    // excerpt is byte-identical to before. A whitespace-only excerpt is an empty
-    // excerpt and must not produce a labelled line with nothing after it.
-    $clean_excerpt = $this->strip_shortcode_tags_preserve_content($post->post_excerpt);
-    if (trim($clean_excerpt) !== '') {
-        $content .= "Short Description: " . $this->mxchat_decode_entities_for_indexing(wp_strip_all_tags($clean_excerpt)) . "\n\n";
-    }
-
-    // Add main content - remove shortcode tags but preserve content inside them
-    $clean_content = $this->strip_shortcode_tags_preserve_content($post->post_content);
-    $content .= $this->mxchat_decode_entities_for_indexing(wp_strip_all_tags($clean_content));
-
-    // ADD WOOCOMMERCE PRODUCT DATA (pricing, stock, categories, custom tabs)
-    if (get_post_type($post_id) === 'product' && class_exists('WooCommerce')) {
-        $product = wc_get_product($post_id);
-
-        if ($product) {
-            $sku = $product->get_sku();
-
-            // Add pricing information (base-currency pinned — see mxchat_product_price_lines)
-            $content .= "\n";
-            $content .= $this->mxchat_product_price_lines($product);
-
-            if (!empty($sku)) {
-                $content .= "SKU: " . $sku . "\n";
-            }
-
-            // Get product categories
-            $categories = wp_get_post_terms($post_id, 'product_cat', array('fields' => 'names'));
-            if (!empty($categories) && !is_wp_error($categories)) {
-                $content .= "Categories: " . implode(', ', $categories) . "\n";
-            }
-        }
-
-        // Get Custom Product Tabs (supports "Custom Product Tabs for WooCommerce" by Code Parrots)
-        $custom_tabs = get_post_meta($post_id, 'yikes_woo_products_tabs', true);
-        if (!empty($custom_tabs) && is_array($custom_tabs)) {
-            foreach ($custom_tabs as $tab) {
-                $tab_title = isset($tab['title']) ? $tab['title'] : (isset($tab['tab_title']) ? $tab['tab_title'] : '');
-                $tab_content = isset($tab['content']) ? $tab['content'] : '';
-
-                if (!empty($tab_title) && !empty($tab_content)) {
-                    $content .= "\n" . $tab_title . ": " . wp_strip_all_tags($tab_content) . "\n";
-                }
-            }
-        }
-
-        // Also check for reusable/saved tabs applied to this product
-        $applied_saved_tabs = get_post_meta($post_id, 'yikes_woo_reusable_products_tabs_applied', true);
-        if (!empty($applied_saved_tabs) && is_array($applied_saved_tabs)) {
-            $saved_tabs = get_option('yikes_woo_reusable_products_tabs', array());
-            if (!empty($saved_tabs) && is_array($saved_tabs)) {
-                foreach ($applied_saved_tabs as $saved_tab_id) {
-                    if (isset($saved_tabs[$saved_tab_id])) {
-                        $tab = $saved_tabs[$saved_tab_id];
-                        $tab_title = isset($tab['title']) ? $tab['title'] : (isset($tab['tab_title']) ? $tab['tab_title'] : '');
-                        $tab_content = isset($tab['content']) ? $tab['content'] : '';
-
-                        if (!empty($tab_title) && !empty($tab_content)) {
-                            $content .= "\n" . $tab_title . ": " . wp_strip_all_tags($tab_content) . "\n";
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    // For custom post types like job_listing, include additional fields
-    // (verbatim parity with mxchat_index_published_post — a bulk import used to
-    // index the body alone, losing location/type/company that auto-sync captured)
-    if (get_post_type($post_id) === 'job_listing') {
-        // Add job-specific meta if available
-        $job_location = get_post_meta($post_id, '_job_location', true);
-        if (!empty($job_location)) {
-            $content .= "\n\nLocation: " . $job_location;
-        }
-
-        // Get job type terms
-        $job_types = get_the_terms($post_id, 'job_listing_type');
-        if (!empty($job_types) && !is_wp_error($job_types)) {
-            $types = array();
-            foreach ($job_types as $type) {
-                $types[] = $type->name;
-            }
-            $content .= "\n\nJob Type: " . implode(', ', $types);
-        }
-
-        // Get company name if available
-        $company_name = get_post_meta($post_id, '_company_name', true);
-        if (!empty($company_name)) {
-            $content .= "\n\nCompany: " . $company_name;
-        }
-    }
-
-    // ADD ACF FIELDS SUPPORT
-    $acf_fields = $this->mxchat_get_acf_fields_for_post($post_id);
-    $pdf_extracted_count = 0;
-    if (!empty($acf_fields)) {
-        $acf_content_parts = array();
-        $pdf_attachment_ids = array();
-
-        foreach ($acf_fields as $field_name => $field_value) {
-            $formatted_value = $this->mxchat_format_acf_field_value($field_value, $field_name, $post_id);
-
-            if (!empty($formatted_value)) {
-                // Both separators: a hyphenated ACF name should read as words, and
-                // this is what mxchat_index_published_post already does.
-                $field_label = ucwords(str_replace(['_', '-'], ' ', $field_name));
-                $acf_content_parts[] = $field_label . ": " . $formatted_value;
-            }
-
-            // Walk this field's value tree for any PDF attachment references and queue them for extraction.
-            // Only when the user opted into ACF→PDF extraction for this batch; otherwise the ACF text
-            // still lands in the KB but the heavier PDF parsing is skipped.
-            if ($extract_acf_pdfs) {
-                $this->mxchat_collect_pdf_attachment_ids_from_acf_value($field_value, $pdf_attachment_ids);
-            }
-        }
-
-        if (!empty($acf_content_parts)) {
-            $content .= "\n\n" . implode("\n", $acf_content_parts);
-        }
-
-        // Extract text from each unique PDF found in ACF fields and append as a labeled section
-        if ($extract_acf_pdfs && !empty($pdf_attachment_ids)) {
-            $pdf_attachment_ids = array_unique(array_filter(array_map('intval', $pdf_attachment_ids)));
-            $pdf_sections = array();
-            foreach ($pdf_attachment_ids as $att_id) {
-                $pdf_text = $this->mxchat_extract_pdf_text_by_attachment_id($att_id);
-                if (!empty($pdf_text)) {
-                    $pdf_title = get_the_title($att_id);
-                    $pdf_url = wp_get_attachment_url($att_id);
-                    $header = 'PDF Attachment';
-                    if (!empty($pdf_title)) {
-                        $header .= ': ' . $pdf_title;
-                    }
-                    if (!empty($pdf_url)) {
-                        $header .= ' (' . $pdf_url . ')';
-                    }
-                    $pdf_sections[] = $header . "\n" . $pdf_text;
-                    $pdf_extracted_count++;
-                }
-            }
-            if (!empty($pdf_sections)) {
-                $content .= "\n\nAttached PDFs:\n" . implode("\n\n", $pdf_sections);
-            }
-        }
-    }
-
-    // ADD CUSTOM POST META SUPPORT (whitelisted non-ACF meta fields)
-    $custom_meta = $this->mxchat_get_whitelisted_post_meta($post_id);
-    if (!empty($custom_meta)) {
-        $meta_content_parts = array();
-
-        foreach ($custom_meta as $meta_key => $meta_value) {
-            // Convert meta key to readable label
-            $meta_label = ucwords(str_replace(array('_', '-'), ' ', $meta_key));
-            $meta_content_parts[] = $meta_label . ": " . $meta_value;
-        }
-
-        if (!empty($meta_content_parts)) {
-            $content .= "\n\n" . implode("\n", $meta_content_parts);
-        }
-    }
+    // Assemble the indexable text via the shared post-kind assembler (a3d60c).
+    // Bulk import reads raw post fields, has always included product custom tabs,
+    // and passes the install-level ACF→PDF option.
+    $prepared = $this->mxchat_prepare_post_content_for_indexing($post_id, $post, array(
+        'read_display'         => false,
+        'extract_acf_pdfs'     => $extract_acf_pdfs,
+        'include_product_tabs' => true,
+    ));
+    $content             = $prepared['content'];
+    $pdf_extracted_count = $prepared['pdf_extracted_count'];
 
     // Debug logging for WordPress Import content
     //error_log('[MXCHAT-WP-IMPORT-DEBUG] Post ID: ' . $post_id . ' Title: ' . $post->post_title);
@@ -4421,9 +4489,9 @@ public function ajax_mxchat_process_selected_content() {
     $this->apply_role_restriction_to_post($post_id, $source_url);
 
     $operation_type = $is_update ? 'update' : 'new';
-    
+
     // Count ACF fields for debugging
-    $acf_field_count = count($acf_fields);
+    $acf_field_count = $prepared['acf_fields_found'];
     
     // Success response with minimal data
     wp_send_json_success(array(
@@ -4505,7 +4573,7 @@ private function apply_role_restriction_to_post($post_id, $source_url) {
     } else {
         // Update WordPress DB
         $table_name = $wpdb->prefix . 'mxchat_system_prompt_content';
-        
+
         $wpdb->update(
             $table_name,
             array('role_restriction' => $highest_role),
@@ -4513,6 +4581,13 @@ private function apply_role_restriction_to_post($post_id, $source_url) {
             array('%s'),
             array('%s')
         );
+    }
+
+    // The entry's restriction just changed — keep the OpenAI Vector Store
+    // mirror consistent: non-public pulls the file (file_search has no
+    // per-role filtering), public re-mirrors it (plan 15b5c6).
+    if (class_exists('MxChat_Vectorstore_Manager')) {
+        MxChat_Vectorstore_Manager::handle_role_change($source_url, 'default', $highest_role);
     }
 }
 
@@ -4586,62 +4661,61 @@ public function mxchat_get_pinecone_processed_content($pinecone_options) {
     return $pinecone_data;
 }
 public function mxchat_fetch_pinecone_vectors_by_ids($pinecone_options, $vector_ids) {
-    //error_log('=== DEBUG: Starting mxchat_fetch_pinecone_vectors_by_ids ===');
-    
     $api_key = $pinecone_options['mxchat_pinecone_api_key'] ?? '';
     $host = $pinecone_options['mxchat_pinecone_host'] ?? '';
+    $namespace = $pinecone_options['mxchat_pinecone_namespace'] ?? '';
 
     if (empty($api_key) || empty($host) || empty($vector_ids)) {
-        //error_log('DEBUG: Missing parameters for fetch by IDs');
         return array();
     }
 
     try {
-        $fetch_url = "https://{$host}/vectors/fetch";
-        //error_log('DEBUG: Fetch URL: ' . $fetch_url);
-        //error_log('DEBUG: Fetching ' . count($vector_ids) . ' vector IDs');
+        // NOTE (plan 793b82): /vectors/fetch is a GET endpoint with the ids
+        // repeated in the query string (ids=a&ids=b — http_build_query would
+        // emit ids[0]=a); the old POST here was answered 200-with-an-empty-body,
+        // which read as "nothing indexed". Chunked at 100 ids to stay well
+        // under the measured HTTP 414 URL-length boundary.
+        $vectors = array();
+        foreach (array_chunk(array_values($vector_ids), 100) as $chunk) {
+            $fetch_query = array();
+            foreach ($chunk as $fetch_vid) {
+                $fetch_query[] = 'ids=' . rawurlencode($fetch_vid);
+            }
+            if (!empty($namespace)) {
+                $fetch_query[] = 'namespace=' . rawurlencode($namespace);
+            }
 
-        // Pinecone fetch API allows fetching specific vectors by ID
-        $fetch_data = array(
-            'ids' => array_values($vector_ids)
-        );
+            $response = wp_remote_get("https://{$host}/vectors/fetch?" . implode('&', $fetch_query), array(
+                'headers' => array(
+                    'Api-Key' => $api_key,
+                    'accept' => 'application/json'
+                ),
+                'timeout' => 30
+            ));
 
-        $response = wp_remote_post($fetch_url, array(
-            'headers' => array(
-                'Api-Key' => $api_key,
-                'Content-Type' => 'application/json'
-            ),
-            'body' => json_encode($fetch_data),
-            'timeout' => 30
-        ));
+            if (is_wp_error($response)) {
+                error_log('MxChat Pinecone: mxchat_fetch_pinecone_vectors_by_ids GET failed: ' . $response->get_error_message());
+                continue;
+            }
 
-        if (is_wp_error($response)) {
-            //error_log('DEBUG: Fetch by IDs WP error: ' . $response->get_error_message());
-            return array();
+            if (wp_remote_retrieve_response_code($response) !== 200) {
+                error_log('MxChat Pinecone: mxchat_fetch_pinecone_vectors_by_ids GET returned HTTP ' . wp_remote_retrieve_response_code($response));
+                continue;
+            }
+
+            $data = json_decode(wp_remote_retrieve_body($response), true);
+            if (isset($data['vectors']) && is_array($data['vectors'])) {
+                $vectors += $data['vectors'];
+            }
         }
 
-        $response_code = wp_remote_retrieve_response_code($response);
-        //error_log('DEBUG: Fetch response code: ' . $response_code);
-        
-        if ($response_code !== 200) {
-            $error_body = wp_remote_retrieve_body($response);
-            //error_log('DEBUG: Fetch failed with body: ' . $error_body);
-            return array();
-        }
-
-        $body = wp_remote_retrieve_body($response);
-        $data = json_decode($body, true);
-        
-        //error_log('DEBUG: Fetch response structure: ' . print_r(array_keys($data), true));
-
-        if (!isset($data['vectors'])) {
-            //error_log('DEBUG: No vectors key in response');
+        if (empty($vectors)) {
             return array();
         }
 
         $processed_data = array();
 
-        foreach ($data['vectors'] as $vector_id => $vector_data) {
+        foreach ($vectors as $vector_id => $vector_data) {
             $metadata = $vector_data['metadata'] ?? array();
             $source_url = $metadata['source_url'] ?? '';
 
@@ -4714,6 +4788,9 @@ private function mxchat_get_embedding_dimensions() {
 public function mxchat_scan_pinecone_for_processed_content($pinecone_options) {
     $api_key = $pinecone_options['mxchat_pinecone_api_key'] ?? '';
     $host = $pinecone_options['mxchat_pinecone_host'] ?? '';
+    // plan 793b82: this scan was namespace-blind — on a namespaced setup it
+    // surveyed the default namespace and reported the wrong content as indexed.
+    $namespace = $pinecone_options['mxchat_pinecone_namespace'] ?? '';
 
     if (empty($api_key) || empty($host)) {
         return array();
@@ -4750,6 +4827,10 @@ public function mxchat_scan_pinecone_for_processed_content($pinecone_options) {
                 'vector' => $random_vector
             );
 
+            if (!empty($namespace)) {
+                $query_data['namespace'] = $namespace;
+            }
+
             $response = wp_remote_post($query_url, array(
                 'headers' => array(
                     'Api-Key' => $api_key,
@@ -4764,7 +4845,7 @@ public function mxchat_scan_pinecone_for_processed_content($pinecone_options) {
             }
 
             $response_code = wp_remote_retrieve_response_code($response);
-            
+
             if ($response_code !== 200) {
                 continue;
             }
@@ -5503,23 +5584,36 @@ private function mxchat_render_failed_urls_list($failed_urls_list) {
  * Get all ACF fields for a specific post, excluding any fields the user has disabled
  */
 public function mxchat_get_acf_fields_for_post($post_id) {
-    if (!function_exists('get_fields')) {
+    if (!function_exists('get_field_objects')) {
         return array();
     }
 
-    $fields = get_fields($post_id);
-    if (!$fields || !is_array($fields)) {
+    // Field OBJECTS, not get_fields(): exclusion matches on the field KEY
+    // (unique per field) rather than the name (shared across groups — plan
+    // 30e81f). ACF's own get_fields() is implemented as get_field_objects()
+    // reduced to name => value, so the un-excluded reduction below is the
+    // identical shape and order the previous get_fields() call produced.
+    $field_objects = get_field_objects($post_id);
+    if (!$field_objects || !is_array($field_objects)) {
         return array();
     }
 
-    // Get excluded fields from settings
     $excluded_fields = get_option('mxchat_acf_excluded_fields', array());
-    if (!empty($excluded_fields) && is_array($excluded_fields)) {
-        foreach ($excluded_fields as $excluded_field) {
-            if (isset($fields[$excluded_field])) {
-                unset($fields[$excluded_field]);
+    if (!is_array($excluded_fields)) {
+        $excluded_fields = array();
+    }
+
+    $fields = array();
+    foreach ($field_objects as $field_name => $field_object) {
+        if (!empty($excluded_fields)) {
+            $field_key = isset($field_object['key']) ? $field_object['key'] : '';
+            // Legacy name entries stay honored: a stored name whose group was
+            // inactive at migration time still excludes every field wearing it.
+            if (in_array($field_key, $excluded_fields, true) || in_array($field_name, $excluded_fields, true)) {
+                continue;
             }
         }
+        $fields[$field_name] = isset($field_object['value']) ? $field_object['value'] : null;
     }
 
     return $fields;
@@ -5533,6 +5627,9 @@ public function mxchat_get_all_acf_fields() {
         return array();
     }
 
+    // Keyed by GROUP KEY, not title (titles are not unique), and each field
+    // entry carries its ACF field key — the unique identifier every toggle,
+    // save, and index-time exclusion now runs on (plans 30e81f / bf57e0).
     $all_fields = array();
     $field_groups = acf_get_field_groups();
 
@@ -5540,14 +5637,19 @@ public function mxchat_get_all_acf_fields() {
         foreach ($field_groups as $group) {
             $group_fields = acf_get_fields($group['key']);
             if (!empty($group_fields)) {
-                $all_fields[$group['title']] = array();
+                $entry = array(
+                    'title'  => $group['title'],
+                    'fields' => array(),
+                );
                 foreach ($group_fields as $field) {
-                    $all_fields[$group['title']][] = array(
-                        'name' => $field['name'],
+                    $entry['fields'][] = array(
+                        'key'   => $field['key'],
+                        'name'  => $field['name'],
                         'label' => $field['label'],
-                        'type' => $field['type']
+                        'type'  => $field['type']
                     );
                 }
+                $all_fields[$group['key']] = $entry;
             }
         }
     }
@@ -6167,6 +6269,23 @@ public function mxchat_handle_post_update($post_id, $post, $update) {
 private function mxchat_index_published_post($post_id, $post) {
         $post_type = $post->post_type;
 
+        // WooCommerce products are owned by the WC-object assembler (plan a3d60c):
+        // whenever WooCommerce is active AND the integration is enabled, every
+        // product save also fires save_post_product, which queues
+        // mxchat_store_product_embedding on shutdown — and that writer runs LAST,
+        // overwriting the same md5(permalink) row this path would write. Assembling
+        // and embedding the product here was pure duplicate spend (measured: two
+        // embedding calls per product save, second one wins). Skip ONLY under the
+        // exact conditions the shutdown writer runs — same option read as its own
+        // gate — because with the integration off (or WooCommerce inactive) this
+        // path is the sole product indexer and must keep working.
+        if ($post_type === 'product'
+            && class_exists('WooCommerce')
+            && isset($this->options['enable_woocommerce_integration'])
+            && in_array($this->options['enable_woocommerce_integration'], ['1', 'on'])) {
+            return;
+        }
+
         // Get the source URL
         $source_url = get_permalink($post_id);
 
@@ -6200,151 +6319,21 @@ private function mxchat_index_published_post($post_id, $post) {
             $post = get_post($post_id); // defend against a bad callback return
         }
 
-        // Get content with proper formatting (matching ajax_mxchat_process_selected_content),
-        // reading from the FILTERED post object — not re-fetched by ID, which would discard it
-        // Raw post_title, NOT get_the_title(): the_title applies wptexturize +
-        // convert_chars (curly quotes and em-dashes become HTML entities in the
-        // embedded string) and prepends the "Protected:" / "Private:" display
-        // chrome. The knowledge base stores facts, not display strings — and the
-        // bulk-import path has always read the raw title, so this is also what
-        // makes the two paths agree.
-        $title = $this->mxchat_decode_entities_for_indexing($post->post_title);
-        $content = get_post_field('post_content', $post);
-        $excerpt = get_post_field('post_excerpt', $post);
-
-        // Remove shortcode tags but preserve content inside them
-        $content = $this->strip_shortcode_tags_preserve_content($content);
-        $excerpt = $this->strip_shortcode_tags_preserve_content($excerpt);
-
-        // Strip tags but preserve structure (don't use 'the_content' filter as it may re-add shortcodes)
-        // Entity decode at output time, matching the bulk-import path (d2c92e).
-        $content = $this->mxchat_decode_entities_for_indexing(wp_strip_all_tags($content));
-
-        // Combine title, short description (if exists), and content
-        $final_content = $title . "\n\n";
-
-        // Add short description if it exists (WooCommerce products use post_excerpt for short description)
-        // trim() only in the TEST — see the matching note on the bulk-import path.
-        if (trim($excerpt) !== '') {
-            $final_content .= "Short Description: " . $this->mxchat_decode_entities_for_indexing(wp_strip_all_tags($excerpt)) . "\n\n";
-        }
-
-        $final_content .= $content;
-
-        // For WooCommerce products, include pricing and product details
-        if ($post_type === 'product' && class_exists('WooCommerce')) {
-            $product = wc_get_product($post_id);
-
-            if ($product) {
-                $sku = $product->get_sku();
-
-                // Add pricing information (base-currency pinned — see mxchat_product_price_lines)
-                $final_content .= "\n";
-                $final_content .= $this->mxchat_product_price_lines($product);
-
-                if (!empty($sku)) {
-                    $final_content .= "SKU: " . $sku . "\n";
-                }
-
-                // Get product categories
-                $categories = wp_get_post_terms($post_id, 'product_cat', array('fields' => 'names'));
-                if (!empty($categories) && !is_wp_error($categories)) {
-                    $final_content .= "Categories: " . implode(', ', $categories) . "\n";
-                }
-            }
-        }
-
-        // For custom post types like job_listing, include additional fields
-        if ($post_type === 'job_listing') {
-            // Add job-specific meta if available
-            $job_location = get_post_meta($post_id, '_job_location', true);
-            if (!empty($job_location)) {
-                $final_content .= "\n\nLocation: " . $job_location;
-            }
-
-            // Get job type terms
-            $job_types = get_the_terms($post_id, 'job_listing_type');
-            if (!empty($job_types) && !is_wp_error($job_types)) {
-                $types = array();
-                foreach ($job_types as $type) {
-                    $types[] = $type->name;
-                }
-                $final_content .= "\n\nJob Type: " . implode(', ', $types);
-            }
-
-            // Get company name if available
-            $company_name = get_post_meta($post_id, '_company_name', true);
-            if (!empty($company_name)) {
-                $final_content .= "\n\nCompany: " . $company_name;
-            }
-        }
-
-        // ADD ACF FIELDS SUPPORT (matches ajax_mxchat_process_selected_content behavior)
-        $acf_fields = $this->mxchat_get_acf_fields_for_post($post_id);
-        if (!empty($acf_fields)) {
-            $acf_content_parts = array();
-            $pdf_attachment_ids = array();
-
-            foreach ($acf_fields as $field_name => $field_value) {
-                $formatted_value = $this->mxchat_format_acf_field_value($field_value, $field_name, $post_id);
-                if (!empty($formatted_value)) {
-                    // Convert field name to readable label
-                    $field_label = ucwords(str_replace(['_', '-'], ' ', $field_name));
-                    $acf_content_parts[] = $field_label . ": " . $formatted_value;
-                }
-
-                $this->mxchat_collect_pdf_attachment_ids_from_acf_value($field_value, $pdf_attachment_ids);
-            }
-
-            if (!empty($acf_content_parts)) {
-                $final_content .= "\n\n" . implode("\n", $acf_content_parts);
-            }
-
-            // Gate the auto-sync PDF-extraction loop behind an opt-in option.
-            // Mirrors the per-batch checkbox the manual content selector has; the
-            // 25 MB size cap lives in the shared extractor so it applies in both
-            // paths regardless. Default OFF — re-parsing every ACF PDF on every
-            // editor save is expensive and most sites don't want it.
-            $autosync_extract_acf_pdfs = get_option('mxchat_auto_sync_acf_pdfs', '0') === '1';
-            if ($autosync_extract_acf_pdfs && !empty($pdf_attachment_ids)) {
-                $pdf_attachment_ids = array_unique(array_filter(array_map('intval', $pdf_attachment_ids)));
-                $pdf_sections = array();
-                foreach ($pdf_attachment_ids as $att_id) {
-                    $pdf_text = $this->mxchat_extract_pdf_text_by_attachment_id($att_id);
-                    if (!empty($pdf_text)) {
-                        $pdf_title = get_the_title($att_id);
-                        $pdf_url = wp_get_attachment_url($att_id);
-                        $header = 'PDF Attachment';
-                        if (!empty($pdf_title)) {
-                            $header .= ': ' . $pdf_title;
-                        }
-                        if (!empty($pdf_url)) {
-                            $header .= ' (' . $pdf_url . ')';
-                        }
-                        $pdf_sections[] = $header . "\n" . $pdf_text;
-                    }
-                }
-                if (!empty($pdf_sections)) {
-                    $final_content .= "\n\nAttached PDFs:\n" . implode("\n\n", $pdf_sections);
-                }
-            }
-        }
-
-        // ADD CUSTOM POST META SUPPORT (whitelisted non-ACF meta fields)
-        $custom_meta = $this->mxchat_get_whitelisted_post_meta($post_id);
-        if (!empty($custom_meta)) {
-            $meta_content_parts = array();
-
-            foreach ($custom_meta as $meta_key => $meta_value) {
-                // Convert meta key to readable label
-                $meta_label = ucwords(str_replace(array('_', '-'), ' ', $meta_key));
-                $meta_content_parts[] = $meta_label . ": " . $meta_value;
-            }
-
-            if (!empty($meta_content_parts)) {
-                $final_content .= "\n\n" . implode("\n", $meta_content_parts);
-            }
-        }
+        // Assemble the indexable text via the shared post-kind assembler (a3d60c),
+        // reading from the FILTERED post object — not re-fetched by ID, which would
+        // discard it. Auto-sync reads content/excerpt in its historical
+        // get_post_field() display context, never appended product custom tabs
+        // (its product branch is reachable only with the WooCommerce integration
+        // off), and gates ACF→PDF extraction behind its own opt-in option —
+        // default OFF, because re-parsing every ACF PDF on every editor save is
+        // expensive and most sites don't want it (the 25 MB size cap lives in the
+        // shared extractor either way).
+        $prepared = $this->mxchat_prepare_post_content_for_indexing($post_id, $post, array(
+            'read_display'         => true,
+            'extract_acf_pdfs'     => get_option('mxchat_auto_sync_acf_pdfs', '0') === '1',
+            'include_product_tabs' => false,
+        ));
+        $final_content = $prepared['content'];
 
         // Embedding decision — custom-provider-aware. Gating on a cloud API key
         // here silently killed auto-sync on keyless custom-embeddings sites,
@@ -6368,6 +6357,276 @@ private function mxchat_index_published_post($post_id, $post) {
         if (!is_wp_error($result)) {
             $this->apply_role_restriction_to_post($post_id, $source_url);
         }
+}
+
+/**
+ * Shared post-fields content assembler (plan a3d60c) — the ONE body behind both
+ * post-kind ingestion paths: manual bulk import (ajax_mxchat_process_selected_content)
+ * and auto-sync (mxchat_index_published_post). Behavior-preserving extraction; the
+ * measured per-caller differences ride $args instead of living as drifting copies:
+ *
+ *   'read_display'         bool  Auto-sync historically reads content/excerpt via
+ *                                get_post_field() in its default 'display' context
+ *                                (the post_content / post_excerpt display filters
+ *                                fire); bulk import reads the raw properties. Inert
+ *                                on a stock install — preserved per-path, not converged.
+ *   'extract_acf_pdfs'     bool  Each caller passes its OWN option (bulk:
+ *                                mxchat_acf_pdf_extraction; auto-sync:
+ *                                mxchat_auto_sync_acf_pdfs) — the two-option design
+ *                                is deliberate (plan 11720c). Gates BOTH the PDF-id
+ *                                collection walk and the extraction loop; the ids are
+ *                                only ever read inside the extraction branch, so
+ *                                gating collection is output-identical on every install.
+ *   'include_product_tabs' bool  The bulk path has always appended yikes_woo custom
+ *                                tabs to product content; the auto-sync product branch
+ *                                (reachable only with the WooCommerce integration off)
+ *                                never did. Preserved per-path — converging it would be
+ *                                a behavior change, recorded on the plan instead.
+ *
+ * Returns array: 'content' (the assembled indexable text), 'acf_fields_found' and
+ * 'pdf_extracted_count' (the bulk path reports both in its AJAX response).
+ */
+private function mxchat_prepare_post_content_for_indexing($post_id, $post, $args) {
+    $read_display         = !empty($args['read_display']);
+    $extract_acf_pdfs     = !empty($args['extract_acf_pdfs']);
+    $include_product_tabs = !empty($args['include_product_tabs']);
+
+    // Raw post_title, NOT get_the_title(): the_title applies wptexturize +
+    // convert_chars and prepends the "Protected:" / "Private:" display chrome.
+    // The knowledge base stores facts, not display strings. Entity decode at
+    // output time (single-pass, shared helper) — a stored `&amp;` embeds worse
+    // than `&` and gets quoted back to visitors (d2c92e).
+    $content = $this->mxchat_decode_entities_for_indexing($post->post_title) . "\n\n";
+
+    $raw_excerpt = $read_display ? get_post_field('post_excerpt', $post) : $post->post_excerpt;
+    $raw_content = $read_display ? get_post_field('post_content', $post) : $post->post_content;
+
+    // Add short description if it exists (WooCommerce products use post_excerpt for short description)
+    // Strip FIRST, then test: an excerpt that is nothing but shortcodes strips to
+    // empty, and testing the raw value emitted a bare "Short Description: " label
+    // with no value after it. trim() only in the TEST — the emitted value is
+    // untouched, so a populated excerpt is byte-identical to before. A
+    // whitespace-only excerpt is an empty excerpt and must not produce a labelled
+    // line with nothing after it.
+    $clean_excerpt = $this->strip_shortcode_tags_preserve_content($raw_excerpt);
+    if (trim($clean_excerpt) !== '') {
+        $content .= "Short Description: " . $this->mxchat_decode_entities_for_indexing(wp_strip_all_tags($clean_excerpt)) . "\n\n";
+    }
+
+    // Main content — remove shortcode tags but preserve content inside them, then
+    // strip tags (don't use 'the_content' filter as it may re-add shortcodes).
+    $clean_content = $this->strip_shortcode_tags_preserve_content($raw_content);
+    $content .= $this->mxchat_decode_entities_for_indexing(wp_strip_all_tags($clean_content));
+
+    // WooCommerce product enrichment (post-fields kind). The WC-object assembler
+    // (mxchat_prepare_product_content_for_indexing) owns product rows whenever the
+    // integration is on; this branch serves the bulk import (all configurations)
+    // and auto-sync with the integration off.
+    if (get_post_type($post_id) === 'product' && class_exists('WooCommerce')) {
+        $product = wc_get_product($post_id);
+
+        if ($product) {
+            $content .= "\n";
+            $content .= $this->mxchat_woo_product_summary_lines($product);
+        }
+
+        if ($include_product_tabs) {
+            $content .= $this->mxchat_woo_custom_tabs_text($post_id);
+        }
+    }
+
+    // For custom post types like job_listing, include additional fields
+    if (get_post_type($post_id) === 'job_listing') {
+        // Add job-specific meta if available
+        $job_location = get_post_meta($post_id, '_job_location', true);
+        if (!empty($job_location)) {
+            $content .= "\n\nLocation: " . $job_location;
+        }
+
+        // Get job type terms
+        $job_types = get_the_terms($post_id, 'job_listing_type');
+        if (!empty($job_types) && !is_wp_error($job_types)) {
+            $types = array();
+            foreach ($job_types as $type) {
+                $types[] = $type->name;
+            }
+            $content .= "\n\nJob Type: " . implode(', ', $types);
+        }
+
+        // Get company name if available
+        $company_name = get_post_meta($post_id, '_company_name', true);
+        if (!empty($company_name)) {
+            $content .= "\n\nCompany: " . $company_name;
+        }
+    }
+
+    // ADD ACF FIELDS SUPPORT
+    $acf_fields = $this->mxchat_get_acf_fields_for_post($post_id);
+    $pdf_extracted_count = 0;
+    if (!empty($acf_fields)) {
+        $acf_content_parts = array();
+        $pdf_attachment_ids = array();
+
+        foreach ($acf_fields as $field_name => $field_value) {
+            $formatted_value = $this->mxchat_format_acf_field_value($field_value, $field_name, $post_id);
+
+            if (!empty($formatted_value)) {
+                // Both separators: a hyphenated ACF name should read as words.
+                $field_label = ucwords(str_replace(['_', '-'], ' ', $field_name));
+                $acf_content_parts[] = $field_label . ": " . $formatted_value;
+            }
+
+            // Walk this field's value tree for any PDF attachment references and
+            // queue them for extraction — only when this caller's PDF option is on.
+            if ($extract_acf_pdfs) {
+                $this->mxchat_collect_pdf_attachment_ids_from_acf_value($field_value, $pdf_attachment_ids);
+            }
+        }
+
+        if (!empty($acf_content_parts)) {
+            $content .= "\n\n" . implode("\n", $acf_content_parts);
+        }
+
+        // Extract text from each unique PDF found in ACF fields and append as a labeled section
+        if ($extract_acf_pdfs && !empty($pdf_attachment_ids)) {
+            $pdf_attachment_ids = array_unique(array_filter(array_map('intval', $pdf_attachment_ids)));
+            $pdf_sections = array();
+            foreach ($pdf_attachment_ids as $att_id) {
+                $pdf_text = $this->mxchat_extract_pdf_text_by_attachment_id($att_id);
+                if (!empty($pdf_text)) {
+                    $pdf_title = get_the_title($att_id);
+                    $pdf_url = wp_get_attachment_url($att_id);
+                    $header = 'PDF Attachment';
+                    if (!empty($pdf_title)) {
+                        $header .= ': ' . $pdf_title;
+                    }
+                    if (!empty($pdf_url)) {
+                        $header .= ' (' . $pdf_url . ')';
+                    }
+                    $pdf_sections[] = $header . "\n" . $pdf_text;
+                    $pdf_extracted_count++;
+                }
+            }
+            if (!empty($pdf_sections)) {
+                $content .= "\n\nAttached PDFs:\n" . implode("\n\n", $pdf_sections);
+            }
+        }
+    }
+
+    // ADD CUSTOM POST META SUPPORT (whitelisted non-ACF meta fields)
+    $custom_meta = $this->mxchat_get_whitelisted_post_meta($post_id);
+    if (!empty($custom_meta)) {
+        $meta_content_parts = array();
+
+        foreach ($custom_meta as $meta_key => $meta_value) {
+            // Convert meta key to readable label
+            $meta_label = ucwords(str_replace(array('_', '-'), ' ', $meta_key));
+            $meta_content_parts[] = $meta_label . ": " . $meta_value;
+        }
+
+        if (!empty($meta_content_parts)) {
+            $content .= "\n\n" . implode("\n", $meta_content_parts);
+        }
+    }
+
+    return array(
+        'content'             => $content,
+        'acf_fields_found'    => count($acf_fields),
+        'pdf_extracted_count' => $pdf_extracted_count,
+    );
+}
+
+/**
+ * Shared WC-object product assembler (plan a3d60c) — the ONE body behind the two
+ * WooCommerce-object ingestion paths: the auto-sync product writer
+ * (mxchat_store_product_embedding) and the URL/sitemap product import
+ * (mxchat_extract_woocommerce_product_content). Assembles from the WC_Product,
+ * the authoritative source for product rows (scope decision on the plan).
+ */
+private function mxchat_prepare_product_content_for_indexing($product) {
+    $title = $product->get_name();
+    $description = $product->get_description();
+    $short_description = $product->get_short_description();
+
+    // Format content consistently
+    $content = $title . "\n\n";
+
+    if (!empty($short_description)) {
+        $content .= "Short Description: " . wp_strip_all_tags($short_description) . "\n\n";
+    }
+
+    if (!empty($description)) {
+        $content .= wp_strip_all_tags($description) . "\n\n";
+    }
+
+    $content .= $this->mxchat_woo_product_summary_lines($product);
+    $content .= $this->mxchat_woo_custom_tabs_text($product->get_id());
+
+    return $content;
+}
+
+/**
+ * Pricing + SKU + categories lines for a product — shared by both assembler kinds
+ * (the post-fields product enrichment and the WC-object assembler).
+ */
+private function mxchat_woo_product_summary_lines($product) {
+    // Add pricing information (base-currency pinned — see mxchat_product_price_lines)
+    $lines = $this->mxchat_product_price_lines($product);
+
+    $sku = $product->get_sku();
+    if (!empty($sku)) {
+        $lines .= "SKU: " . $sku . "\n";
+    }
+
+    // Get product categories
+    $categories = wp_get_post_terms($product->get_id(), 'product_cat', array('fields' => 'names'));
+    if (!empty($categories) && !is_wp_error($categories)) {
+        $lines .= "Categories: " . implode(', ', $categories) . "\n";
+    }
+
+    return $lines;
+}
+
+/**
+ * Custom Product Tabs text (supports "Custom Product Tabs for WooCommerce" by
+ * Code Parrots) — direct tabs plus applied reusable/saved tabs. The ONE copy of
+ * the yikes_woo logic; three sites carried byte-identical clones before a3d60c.
+ */
+private function mxchat_woo_custom_tabs_text($product_id) {
+    $text = '';
+
+    $custom_tabs = get_post_meta($product_id, 'yikes_woo_products_tabs', true);
+    if (!empty($custom_tabs) && is_array($custom_tabs)) {
+        foreach ($custom_tabs as $tab) {
+            $tab_title = isset($tab['title']) ? $tab['title'] : (isset($tab['tab_title']) ? $tab['tab_title'] : '');
+            $tab_content = isset($tab['content']) ? $tab['content'] : '';
+
+            if (!empty($tab_title) && !empty($tab_content)) {
+                $text .= "\n" . $tab_title . ": " . wp_strip_all_tags($tab_content) . "\n";
+            }
+        }
+    }
+
+    // Also check for reusable/saved tabs applied to this product
+    $applied_saved_tabs = get_post_meta($product_id, 'yikes_woo_reusable_products_tabs_applied', true);
+    if (!empty($applied_saved_tabs) && is_array($applied_saved_tabs)) {
+        $saved_tabs = get_option('yikes_woo_reusable_products_tabs', array());
+        if (!empty($saved_tabs) && is_array($saved_tabs)) {
+            foreach ($applied_saved_tabs as $saved_tab_id) {
+                if (isset($saved_tabs[$saved_tab_id])) {
+                    $tab = $saved_tabs[$saved_tab_id];
+                    $tab_title = isset($tab['title']) ? $tab['title'] : (isset($tab['tab_title']) ? $tab['tab_title'] : '');
+                    $tab_content = isset($tab['content']) ? $tab['content'] : '';
+
+                    if (!empty($tab_title) && !empty($tab_content)) {
+                        $text .= "\n" . $tab_title . ": " . wp_strip_all_tags($tab_content) . "\n";
+                    }
+                }
+            }
+        }
+    }
+
+    return $text;
 }
 
 /**
@@ -6896,68 +7155,9 @@ private function mxchat_store_product_embedding($product) {
     $source_url = get_permalink($product->get_id());
     $product_id = $product->get_id();
 
-    // Build product content
-    $title = $product->get_name();
-    $description = $product->get_description();
-    $short_description = $product->get_short_description();
-    $sku = $product->get_sku();
-
-    // Format content consistently
-    $content = $title . "\n\n";
-
-    if (!empty($short_description)) {
-        $content .= "Short Description: " . wp_strip_all_tags($short_description) . "\n\n";
-    }
-
-    if (!empty($description)) {
-        $content .= wp_strip_all_tags($description) . "\n\n";
-    }
-
-    // Add pricing information (base-currency pinned — see mxchat_product_price_lines)
-    $content .= $this->mxchat_product_price_lines($product);
-
-    if (!empty($sku)) {
-        $content .= "SKU: " . $sku . "\n";
-    }
-
-    // Get product categories
-    $categories = wp_get_post_terms($product_id, 'product_cat', array('fields' => 'names'));
-    if (!empty($categories) && !is_wp_error($categories)) {
-        $content .= "Categories: " . implode(', ', $categories) . "\n";
-    }
-
-    // Get Custom Product Tabs (supports "Custom Product Tabs for WooCommerce" by Code Parrots)
-    $custom_tabs = get_post_meta($product_id, 'yikes_woo_products_tabs', true);
-    if (!empty($custom_tabs) && is_array($custom_tabs)) {
-        foreach ($custom_tabs as $tab) {
-            $tab_title = isset($tab['title']) ? $tab['title'] : (isset($tab['tab_title']) ? $tab['tab_title'] : '');
-            $tab_content = isset($tab['content']) ? $tab['content'] : '';
-
-            if (!empty($tab_title) && !empty($tab_content)) {
-                $content .= "\n" . $tab_title . ": " . wp_strip_all_tags($tab_content) . "\n";
-            }
-        }
-    }
-
-    // Also check for reusable/saved tabs applied to this product
-    $applied_saved_tabs = get_post_meta($product_id, 'yikes_woo_reusable_products_tabs_applied', true);
-    if (!empty($applied_saved_tabs) && is_array($applied_saved_tabs)) {
-        // Get the saved tabs option
-        $saved_tabs = get_option('yikes_woo_reusable_products_tabs', array());
-        if (!empty($saved_tabs) && is_array($saved_tabs)) {
-            foreach ($applied_saved_tabs as $saved_tab_id) {
-                if (isset($saved_tabs[$saved_tab_id])) {
-                    $tab = $saved_tabs[$saved_tab_id];
-                    $tab_title = isset($tab['title']) ? $tab['title'] : (isset($tab['tab_title']) ? $tab['tab_title'] : '');
-                    $tab_content = isset($tab['content']) ? $tab['content'] : '';
-
-                    if (!empty($tab_title) && !empty($tab_content)) {
-                        $content .= "\n" . $tab_title . ": " . wp_strip_all_tags($tab_content) . "\n";
-                    }
-                }
-            }
-        }
-    }
+    // Build product content via the shared WC-object assembler (a3d60c) — this
+    // writer owns product rows whenever the integration is on.
+    $content = $this->mxchat_prepare_product_content_for_indexing($product);
 
     // Embedding decision — custom-provider-aware (plan cbd5fd); silent-return
     // shape preserved.
@@ -7051,9 +7251,14 @@ public function mxchat_handle_pinecone_prompt_delete() {
     );
     
     if ($result['success']) {
+        // Mirror the removal to the OpenAI Vector Store mapping (plan 15b5c6);
+        // a chunk vector id reduces to its base entry there.
+        if (class_exists('MxChat_Vectorstore_Manager')) {
+            MxChat_Vectorstore_Manager::sync_delete_by_key($vector_id, 'default');
+        }
         // No cache clearing needed since we removed caching
-        set_transient('mxchat_admin_notice_success', 
-            esc_html__('Entry deleted successfully from Pinecone.', 'mxchat'), 
+        set_transient('mxchat_admin_notice_success',
+            esc_html__('Entry deleted successfully from Pinecone.', 'mxchat'),
             30
         );
     } else {
@@ -7109,6 +7314,10 @@ public function ajax_mxchat_delete_pinecone_prompt() {
     );
     
     if ($result['success']) {
+        // Mirror the removal to the OpenAI Vector Store mapping (plan 15b5c6)
+        if (class_exists('MxChat_Vectorstore_Manager')) {
+            MxChat_Vectorstore_Manager::sync_delete_by_key($vector_id, $bot_id);
+        }
         // No cache clearing needed since we removed caching
         wp_send_json_success(array(
             'message' => 'Entry deleted successfully from Pinecone',
@@ -7209,6 +7418,11 @@ public function ajax_mxchat_delete_chunks_by_url() {
         }
 
         if (empty($vectors_to_delete)) {
+            // Entry already gone from Pinecone — still clear any mirrored
+            // Vector Store file so it can't outlive the entry (plan 15b5c6).
+            if (class_exists('MxChat_Vectorstore_Manager')) {
+                MxChat_Vectorstore_Manager::sync_delete_entry($source_url, $bot_id);
+            }
             wp_send_json_success(array(
                 'message' => 'No vectors found to delete',
                 'source_url' => $source_url
@@ -7251,6 +7465,11 @@ public function ajax_mxchat_delete_chunks_by_url() {
             exit;
         }
 
+        // Mirror the removal to the OpenAI Vector Store (plan 15b5c6)
+        if (class_exists('MxChat_Vectorstore_Manager')) {
+            MxChat_Vectorstore_Manager::sync_delete_entry($source_url, $bot_id);
+        }
+
         wp_send_json_success(array(
             'message' => 'All chunks deleted successfully from Pinecone',
             'source_url' => $source_url,
@@ -7272,6 +7491,11 @@ public function ajax_mxchat_delete_chunks_by_url() {
             MxChat_Admin::mxchat_log_debug('database_error', 'Failed to delete from database: ' . $wpdb->last_error, array('source_url' => $source_url));
             wp_send_json_error('Failed to delete from database: ' . $wpdb->last_error);
             exit;
+        }
+
+        // Mirror the removal to the OpenAI Vector Store (plan 15b5c6)
+        if (class_exists('MxChat_Vectorstore_Manager')) {
+            MxChat_Vectorstore_Manager::sync_delete_entry($source_url, $bot_id);
         }
 
         wp_send_json_success(array(
@@ -7310,6 +7534,13 @@ public function ajax_mxchat_delete_wordpress_prompt() {
     global $wpdb;
     $table_name = $wpdb->prefix . 'mxchat_system_prompt_content';
 
+    // Capture the identity BEFORE the row disappears — needed to mirror the
+    // change into the Vector Store (plan 15b5c6).
+    $source_url = $wpdb->get_var($wpdb->prepare(
+        "SELECT source_url FROM {$table_name} WHERE id = %d",
+        $entry_id
+    ));
+
     // Clear cache for this entry
     wp_cache_delete('prompt_' . $entry_id, 'mxchat_prompts');
 
@@ -7321,6 +7552,21 @@ public function ajax_mxchat_delete_wordpress_prompt() {
     );
 
     if ($result !== false) {
+        // Mirror to the Vector Store: if sibling rows remain (this was one
+        // chunk of a larger entry) the entry's file is REFRESHED from what's
+        // left; if none remain, the file is removed.
+        if (!empty($source_url) && class_exists('MxChat_Vectorstore_Manager')) {
+            $remaining = (int) $wpdb->get_var($wpdb->prepare(
+                "SELECT COUNT(*) FROM {$table_name} WHERE source_url = %s",
+                $source_url
+            ));
+            if ($remaining > 0) {
+                MxChat_Vectorstore_Manager::sync_upsert_entry($source_url, '', 'default');
+            } else {
+                MxChat_Vectorstore_Manager::sync_delete_entry($source_url, 'default');
+            }
+        }
+
         wp_send_json_success(array(
             'message' => 'Entry deleted successfully',
             'entry_id' => $entry_id
@@ -7384,6 +7630,8 @@ public function ajax_mxchat_bulk_delete_knowledge() {
     $pinecone_entry_ids = array();  // entry IDs that are pinecone-sourced
     $wordpress_entries = array();   // entries for WordPress DB deletion
     $all_vector_ids = array();      // all pinecone vector IDs to delete in one batch
+    $vs_mirror_urls = array();      // Vector Store mirror: URLs to delete (plan 15b5c6)
+    $vs_mirror_keys = array();      // Vector Store mirror: bare vector ids to delete
 
     foreach ($entries as $entry) {
         $entry_id = sanitize_text_field($entry['id'] ?? '');
@@ -7434,6 +7682,12 @@ public function ajax_mxchat_bulk_delete_knowledge() {
             } else {
                 // Single entry: the entry_id IS the vector ID
                 $all_vector_ids[] = $entry_id;
+            }
+
+            if (!empty($source_url)) {
+                $vs_mirror_urls[] = $source_url;
+            } else {
+                $vs_mirror_keys[] = $entry_id;
             }
         } else {
             $wordpress_entries[] = $entry;
@@ -7486,6 +7740,16 @@ public function ajax_mxchat_bulk_delete_knowledge() {
                 $failed_ids[] = $eid;
             }
         }
+
+        // Mirror the removals to the OpenAI Vector Store (plan 15b5c6)
+        if ($pinecone_success && class_exists('MxChat_Vectorstore_Manager')) {
+            foreach (array_unique($vs_mirror_urls) as $vs_url) {
+                MxChat_Vectorstore_Manager::sync_delete_entry($vs_url, $bot_id);
+            }
+            foreach (array_unique($vs_mirror_keys) as $vs_key) {
+                MxChat_Vectorstore_Manager::sync_delete_by_key($vs_key, $bot_id);
+            }
+        }
     }
 
     // =============================================
@@ -7507,7 +7771,13 @@ public function ajax_mxchat_bulk_delete_knowledge() {
                     array('source_url' => $source_url),
                     array('%s')
                 );
+                $row_url = $source_url;
             } else {
+                // Identity captured pre-delete for the Vector Store mirror
+                $row_url = $wpdb->get_var($wpdb->prepare(
+                    "SELECT source_url FROM {$table_name} WHERE id = %d",
+                    intval($entry_id)
+                ));
                 wp_cache_delete('prompt_' . $entry_id, 'mxchat_prompts');
                 $result = $wpdb->delete(
                     $table_name,
@@ -7518,6 +7788,19 @@ public function ajax_mxchat_bulk_delete_knowledge() {
 
             if ($result !== false) {
                 $success_ids[] = $entry_id;
+                // Mirror to the Vector Store: refresh the entry's file when
+                // sibling chunk rows survive, remove it when none do.
+                if (!empty($row_url) && class_exists('MxChat_Vectorstore_Manager')) {
+                    $remaining = (int) $wpdb->get_var($wpdb->prepare(
+                        "SELECT COUNT(*) FROM {$table_name} WHERE source_url = %s",
+                        $row_url
+                    ));
+                    if ($remaining > 0) {
+                        MxChat_Vectorstore_Manager::sync_upsert_entry($row_url, '', $bot_id);
+                    } else {
+                        MxChat_Vectorstore_Manager::sync_delete_entry($row_url, $bot_id);
+                    }
+                }
             } else {
                 $failed_ids[] = $entry_id;
                 $errors[] = "Database error for entry: $entry_id";
@@ -7671,7 +7954,27 @@ public function ajax_mxchat_update_role_restriction() {
         wp_send_json_error('Database update failed: ' . $wpdb->last_error);
         exit;
     }
-    
+
+    // Keep the OpenAI Vector Store mirror consistent with the new restriction
+    // (plan 15b5c6): non-public pulls the mirrored file, public re-mirrors.
+    if (class_exists('MxChat_Vectorstore_Manager')) {
+        if ($data_source === 'pinecone') {
+            if ($role_restriction !== 'public') {
+                MxChat_Vectorstore_Manager::sync_delete_by_key($entry_id, 'default');
+            }
+            // Public again: Pinecone-mode content isn't held locally, so the
+            // entry re-mirrors on its next save/import rather than here.
+        } else {
+            $row_url = $wpdb->get_var($wpdb->prepare(
+                "SELECT source_url FROM {$wpdb->prefix}mxchat_system_prompt_content WHERE id = %d",
+                absint($entry_id)
+            ));
+            if (!empty($row_url)) {
+                MxChat_Vectorstore_Manager::handle_role_change($row_url, 'default', $role_restriction);
+            }
+        }
+    }
+
     wp_send_json_success(array(
         'message' => 'Role restriction updated successfully',
         'role_restriction' => $role_restriction,
@@ -8025,7 +8328,7 @@ public function handle_tag_change($object_id, $terms, $tt_ids, $taxonomy, $appen
     } else {
         // Update WordPress DB
         $table_name = $wpdb->prefix . 'mxchat_system_prompt_content';
-        
+
         $wpdb->update(
             $table_name,
             array('role_restriction' => $highest_role),
@@ -8033,6 +8336,13 @@ public function handle_tag_change($object_id, $terms, $tt_ids, $taxonomy, $appen
             array('%s'),
             array('%s')
         );
+    }
+
+    // The entry's restriction just changed — keep the OpenAI Vector Store
+    // mirror consistent: non-public pulls the file (file_search has no
+    // per-role filtering), public re-mirrors it (plan 15b5c6).
+    if (class_exists('MxChat_Vectorstore_Manager')) {
+        MxChat_Vectorstore_Manager::handle_role_change($source_url, 'default', $highest_role);
     }
 }
 
@@ -8104,7 +8414,7 @@ public function apply_role_restriction_after_storage($post_id, $source_url) {
     } else {
         // Update WordPress DB
         $table_name = $wpdb->prefix . 'mxchat_system_prompt_content';
-        
+
         $wpdb->update(
             $table_name,
             array('role_restriction' => $highest_role),
@@ -8112,6 +8422,13 @@ public function apply_role_restriction_after_storage($post_id, $source_url) {
             array('%s'),
             array('%s')
         );
+    }
+
+    // The entry's restriction just changed — keep the OpenAI Vector Store
+    // mirror consistent: non-public pulls the file (file_search has no
+    // per-role filtering), public re-mirrors it (plan 15b5c6).
+    if (class_exists('MxChat_Vectorstore_Manager')) {
+        MxChat_Vectorstore_Manager::handle_role_change($source_url, 'default', $highest_role);
     }
 }
 
@@ -8870,67 +9187,9 @@ private function mxchat_extract_woocommerce_product_content($url) {
         return false;
     }
 
-    // Build product content with pricing (similar to mxchat_store_product_embedding)
-    $title = $product->get_name();
-    $description = $product->get_description();
-    $short_description = $product->get_short_description();
-    $sku = $product->get_sku();
-
-    // Format content
-    $content = $title . "\n\n";
-
-    if (!empty($short_description)) {
-        $content .= "Short Description: " . wp_strip_all_tags($short_description) . "\n\n";
-    }
-
-    if (!empty($description)) {
-        $content .= wp_strip_all_tags($description) . "\n\n";
-    }
-
-    // Add pricing information (base-currency pinned — see mxchat_product_price_lines)
-    $content .= $this->mxchat_product_price_lines($product);
-
-    if (!empty($sku)) {
-        $content .= "SKU: " . $sku . "\n";
-    }
-
-    // Get product categories
-    $categories = wp_get_post_terms($product_id, 'product_cat', array('fields' => 'names'));
-    if (!empty($categories) && !is_wp_error($categories)) {
-        $content .= "Categories: " . implode(', ', $categories) . "\n";
-    }
-
-    // Get Custom Product Tabs (supports "Custom Product Tabs for WooCommerce" by Code Parrots)
-    $custom_tabs = get_post_meta($product_id, 'yikes_woo_products_tabs', true);
-    if (!empty($custom_tabs) && is_array($custom_tabs)) {
-        foreach ($custom_tabs as $tab) {
-            $tab_title = isset($tab['title']) ? $tab['title'] : (isset($tab['tab_title']) ? $tab['tab_title'] : '');
-            $tab_content = isset($tab['content']) ? $tab['content'] : '';
-
-            if (!empty($tab_title) && !empty($tab_content)) {
-                $content .= "\n" . $tab_title . ": " . wp_strip_all_tags($tab_content) . "\n";
-            }
-        }
-    }
-
-    // Also check for reusable/saved tabs applied to this product
-    $applied_saved_tabs = get_post_meta($product_id, 'yikes_woo_reusable_products_tabs_applied', true);
-    if (!empty($applied_saved_tabs) && is_array($applied_saved_tabs)) {
-        $saved_tabs = get_option('yikes_woo_reusable_products_tabs', array());
-        if (!empty($saved_tabs) && is_array($saved_tabs)) {
-            foreach ($applied_saved_tabs as $saved_tab_id) {
-                if (isset($saved_tabs[$saved_tab_id])) {
-                    $tab = $saved_tabs[$saved_tab_id];
-                    $tab_title = isset($tab['title']) ? $tab['title'] : (isset($tab['tab_title']) ? $tab['tab_title'] : '');
-                    $tab_content = isset($tab['content']) ? $tab['content'] : '';
-
-                    if (!empty($tab_title) && !empty($tab_content)) {
-                        $content .= "\n" . $tab_title . ": " . wp_strip_all_tags($tab_content) . "\n";
-                    }
-                }
-            }
-        }
-    }
+    // Build product content via the shared WC-object assembler (a3d60c) — same
+    // body as the auto-sync product writer, so the two paths can never drift.
+    $content = $this->mxchat_prepare_product_content_for_indexing($product);
 
     return $this->mxchat_sanitize_content_for_api($content);
 }

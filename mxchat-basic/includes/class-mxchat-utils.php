@@ -6,6 +6,15 @@ if (!defined('ABSPATH')) {
 class MxChat_Utils {
 
 /**
+ * True while a storage routine is re-writing an entry it is about to re-add
+ * (submit_chunked_content's clean-slate delete). delete_chunks_for_url() skips
+ * the Vector Store mirror-delete while set — an internal re-store is not an
+ * entry removal, and mirroring it would delete-then-reupload the entry's file
+ * on every chunked save (plan 15b5c6).
+ */
+private static $vectorstore_mirror_suspended = false;
+
+/**
  * Validate a client-supplied session id (plan-mxchat-20260731-d42bec).
  *
  * sanitize_text_field() — which every session_id read site used before this —
@@ -36,6 +45,45 @@ public static function sanitize_session_id($raw) {
         return '';
     }
     return preg_match('/\A[A-Za-z0-9_-]{1,128}\z/', $val) ? $val : '';
+}
+
+/**
+ * Sanitize the lead-capture consent-checkbox label (plan b062c4).
+ *
+ * The label is owner-supplied and renders inside the widget's email form, so
+ * this is a security boundary, not a formatting nicety. One explicit
+ * allowlist, used at BOTH save time (options.php sanitize + autosave AJAX)
+ * and render time (widget form, admin surfaces) so the two can never drift:
+ * an anchor — the whole point is "I agree to the <a>Privacy Policy</a>" —
+ * plus inline emphasis. No block tags, no images, no style attributes.
+ *
+ * The stored consent record keeps this exact sanitized string as "the text
+ * the visitor saw", so it must be deterministic: same input, same output,
+ * whichever path ran it.
+ *
+ * @param mixed $raw Owner-entered label.
+ * @return string Sanitized label, capped at 1000 chars.
+ */
+public static function sanitize_consent_label($raw) {
+    if (!is_scalar($raw)) {
+        return '';
+    }
+
+    $allowed = array(
+        'a'      => array(
+            'href'   => true,
+            'title'  => true,
+            'target' => true,
+            'rel'    => true,
+        ),
+        'strong' => array(),
+        'em'     => array(),
+        'br'     => array(),
+    );
+
+    $label = wp_kses(trim((string) $raw), $allowed);
+
+    return mb_substr($label, 0, 1000);
 }
 
 /**
@@ -425,8 +473,16 @@ public static function submit_content_to_db($content, $source_url, $api_key, $ve
     //error_log('[MXCHAT-DB] Starting database submission for URL: ' . $source_url . ' (Bot: ' . $bot_id . ', Type: ' . $content_type . ')');
     //error_log('[MXCHAT-DB] Content length: ' . strlen($content) . ' bytes');
 
-    // Sanitize the source URL
-    $source_url = esc_url_raw($source_url);
+    // Sanitize the source URL. Internal identities (mxchat:// manual docs,
+    // upload:// file uploads) are NOT web URLs — esc_url_raw EMPTIES them
+    // because its protocol list is statically cached and effectively
+    // unfilterable (measured, plan 945406 / 0485e5) — sanitize those as text
+    // so upserts stay keyed to a stable identity across re-imports.
+    if (preg_match('#^(mxchat|upload)://#i', $source_url)) {
+        $source_url = sanitize_text_field($source_url);
+    } else {
+        $source_url = esc_url_raw($source_url);
+    }
 
     // Sanitize content_type
     $content_type = sanitize_key($content_type);
@@ -443,7 +499,14 @@ public static function submit_content_to_db($content, $source_url, $api_key, $ve
     $chunker = MxChat_Chunker::from_settings();
     if ($chunker->should_chunk($safe_content)) {
         //error_log('[MXCHAT-DB] Content exceeds chunk threshold, using chunked submission');
-        return self::submit_chunked_content($safe_content, $source_url, $api_key, $bot_id, $content_type, $chunker);
+        $chunk_result = self::submit_chunked_content($safe_content, $source_url, $api_key, $bot_id, $content_type, $chunker);
+        // Vector Store mirror gets the entry WHOLE — one file per KB entry,
+        // OpenAI chunks server-side; local chunking is our own embedding
+        // concern and never reaches the store (plan 15b5c6).
+        if ($chunk_result === true && class_exists('MxChat_Vectorstore_Manager')) {
+            MxChat_Vectorstore_Manager::sync_upsert_entry($source_url, $safe_content, $bot_id, $content_type);
+        }
+        return $chunk_result;
     }
 
     // UPDATED: Generate the embedding using bot-specific configuration
@@ -463,12 +526,28 @@ public static function submit_content_to_db($content, $source_url, $api_key, $ve
     if (self::is_pinecone_enabled_for_bot($bot_id)) {
         //error_log('[MXCHAT-DB] Pinecone is enabled for bot ' . $bot_id . ' - using Pinecone storage');
         // Store in Pinecone only
-        return self::store_in_pinecone_only($embedding_vector, $content, $source_url, $vector_id, $bot_id, $content_type);
+        $result = self::store_in_pinecone_only($embedding_vector, $content, $source_url, $vector_id, $bot_id, $content_type);
+        // If this URL previously stored as CHUNKED content and the new content fits in a
+        // single vector, the upsert above only overwrote the base id — the old
+        // md5(url)_chunk_N vectors would keep serving the stale text. Sweep them.
+        // Only for a real source_url: chunk ids derive from it, and md5('') is shared
+        // by legacy URL-less entries so a blind sweep there could hit other entries.
+        if ($result === true && !empty($source_url)) {
+            self::cleanup_pinecone_chunk_stragglers($source_url, $bot_id);
+        }
+        if ($result === true && class_exists('MxChat_Vectorstore_Manager')) {
+            MxChat_Vectorstore_Manager::sync_upsert_entry($source_url, $safe_content, $bot_id, $content_type);
+        }
+        return $result;
     } else {
         //error_log('[MXCHAT-DB] Pinecone not enabled for bot ' . $bot_id . ' - using WordPress storage');
         // Store in WordPress database only
         $embedding_vector_serialized = maybe_serialize($embedding_vector);
-        return self::store_in_wordpress_db($safe_content, $source_url, $embedding_vector_serialized, $table_name, $content_type);
+        $result = self::store_in_wordpress_db($safe_content, $source_url, $embedding_vector_serialized, $table_name, $content_type);
+        if ($result === true && class_exists('MxChat_Vectorstore_Manager')) {
+            MxChat_Vectorstore_Manager::sync_upsert_entry($source_url, $safe_content, $bot_id, $content_type);
+        }
+        return $result;
     }
 }
 
@@ -586,9 +665,13 @@ private static function store_in_wordpress_db($safe_content, $source_url, $embed
     // filter_var(FILTER_VALIDATE_URL) rejects valid URLs with encoded chars, non-ASCII, fragments, etc.
     // Use a looser check: if it starts with http(s):// or has a scheme, it's a URL
     $has_url_scheme = !empty($source_url) && preg_match('#^https?://#i', $source_url);
+    // upload:// identities (admin document/PDF uploads, plan 0485e5) are stable
+    // and deduplicable — treat them like URLs so a re-upload UPDATES the row
+    // instead of minting a fresh manual identity (which would duplicate).
+    $has_stable_identity = $has_url_scheme || (!empty($source_url) && preg_match('#^upload://#i', $source_url));
     // Treat legacy mxchat.ai source URLs as manual — old bug assigned the site URL to manual entries
     $is_legacy_mxchat_url = $has_url_scheme && strpos($source_url, 'mxchat.ai') !== false;
-    $is_manual_content = empty($source_url) || $source_url === '' || !$has_url_scheme || $is_legacy_mxchat_url;
+    $is_manual_content = empty($source_url) || $source_url === '' || !$has_stable_identity || $is_legacy_mxchat_url;
 
     if ($is_manual_content) {
         // Generate unique identifier for manual content to prevent overwrites
@@ -714,8 +797,9 @@ private static function store_in_pinecone_main($embedding_vector, $content, $url
     if ($vector_id) {
         // Use provided vector ID
         //error_log('[MXCHAT-PINECONE-MAIN] Using provided vector ID: ' . $vector_id);
-    } elseif (!empty($url) && preg_match('#^https?://#i', $url)) {
-        // For URLs, use URL-based ID (existing behavior)
+    } elseif (!empty($url) && preg_match('#^(https?|upload)://#i', $url)) {
+        // For URLs — and stable upload:// identities (plan 0485e5) — use an
+        // identity-derived ID so a re-import upserts the same vector.
         $vector_id = md5($url);
         //error_log('[MXCHAT-PINECONE-MAIN] Generated vector ID from URL: ' . $vector_id);
     } else {
@@ -1248,8 +1332,24 @@ private static function submit_chunked_content($content, $source_url, $api_key, 
     //error_log('[MXCHAT-CHUNK-DEBUG] Starting chunked submission for: ' . $source_url);
     //error_log('[MXCHAT-CHUNK-DEBUG] Content length: ' . strlen($content) . ' chars');
 
-    // First, delete any existing chunks for this URL (clean slate)
+    // URL-less (manual) content needs a minted identity BEFORE chunk ids are derived:
+    // every chunk id is md5(source_url)_chunk_N, so with source_url = '' EVERY long
+    // manual document shared the md5('') prefix — and the clean-slate delete below
+    // wiped the PREVIOUS manual entry's chunks each time a new one was added. The
+    // single-vector paths already mint (mxchat:// in WP, manual_* in Pinecone); this
+    // was the one storage path that didn't. Keep an mxchat:// identity if the caller
+    // already carries one.
+    if (strpos($source_url, 'mxchat://') !== 0 && strpos($source_url, 'upload://') !== 0 && !preg_match('#^https?://#i', $source_url)) {
+        $source_url = 'mxchat://manual-content/' . time() . '-' . wp_generate_password(8, false);
+    }
+
+    // First, delete any existing chunks for this URL (clean slate).
+    // Mirror-suspended: this is a re-store, not an entry removal — the Vector
+    // Store file is replaced (or kept, on hash match) by the caller's
+    // sync_upsert_entry after storage succeeds.
+    self::$vectorstore_mirror_suspended = true;
     $delete_result = self::delete_chunks_for_url($source_url, $bot_id);
+    self::$vectorstore_mirror_suspended = false;
     if (is_wp_error($delete_result)) {
         //error_log('[MXCHAT-CHUNK-DEBUG] Warning: Failed to delete existing chunks: ' . $delete_result->get_error_message());
         // Continue anyway - we'll overwrite with upsert
@@ -1515,6 +1615,12 @@ private static function store_chunk_in_wordpress_db($content_with_metadata, $sou
 public static function delete_chunks_for_url($source_url, $bot_id = 'default') {
     //error_log('[MXCHAT-CHUNK-DELETE] Deleting chunks for URL: ' . $source_url);
 
+    // Entry removal — mirror it to the Vector Store (unless a storage routine
+    // is mid-re-store, see $vectorstore_mirror_suspended).
+    if (!self::$vectorstore_mirror_suspended && class_exists('MxChat_Vectorstore_Manager')) {
+        MxChat_Vectorstore_Manager::sync_delete_entry($source_url, $bot_id);
+    }
+
     if (self::is_pinecone_enabled_for_bot($bot_id)) {
         return self::delete_pinecone_chunks_by_url($source_url, $bot_id);
     } else {
@@ -1525,6 +1631,107 @@ public static function delete_chunks_for_url($source_url, $bot_id = 'default') {
 /**
  * Delete all chunks for a URL from Pinecone
  */
+/**
+ * Delete leftover md5(url)_chunk_N vectors after a URL's content was re-stored
+ * as a SINGLE vector (content shrank below the chunk threshold on edit/re-import).
+ * Unlike delete_pinecone_chunks_by_url this leaves the base id alone — the caller
+ * just upserted the new content there. Failure is logged, not fatal: the save
+ * itself succeeded, and the next save retries the sweep.
+ */
+private static function cleanup_pinecone_chunk_stragglers($source_url, $bot_id) {
+    if ($bot_id === 'default' || !class_exists('MxChat_Multi_Bot_Manager')) {
+        $pinecone_options = get_option('mxchat_pinecone_addon_options');
+        $api_key = $pinecone_options['mxchat_pinecone_api_key'] ?? '';
+        $host = $pinecone_options['mxchat_pinecone_host'] ?? '';
+        $namespace = $pinecone_options['mxchat_pinecone_namespace'] ?? '';
+    } else {
+        $bot_pinecone_config = apply_filters('mxchat_get_bot_pinecone_config', array(), $bot_id);
+        if (empty($bot_pinecone_config)) {
+            $pinecone_options = get_option('mxchat_pinecone_addon_options');
+            $api_key = $pinecone_options['mxchat_pinecone_api_key'] ?? '';
+            $host = $pinecone_options['mxchat_pinecone_host'] ?? '';
+            $namespace = $pinecone_options['mxchat_pinecone_namespace'] ?? '';
+        } else {
+            $api_key = $bot_pinecone_config['api_key'] ?? '';
+            $host = $bot_pinecone_config['host'] ?? '';
+            $namespace = $bot_pinecone_config['namespace'] ?? '';
+        }
+    }
+
+    if (empty($host) || empty($api_key)) {
+        return;
+    }
+
+    $stragglers = array();
+
+    // Pinecone /vectors/list is a GET endpoint with query-string parameters (a POST
+    // answers 200-with-an-empty-body, which reads as "no stragglers").
+    $query_params = array(
+        'prefix' => md5($source_url) . '_chunk_',
+        'limit' => 100,
+    );
+    if (!empty($namespace)) {
+        $query_params['namespace'] = $namespace;
+    }
+
+    $list_url = "https://{$host}/vectors/list?" . http_build_query($query_params);
+
+    do {
+        $list_response = wp_remote_get($list_url, array(
+            'headers' => array(
+                'Api-Key' => $api_key,
+                'accept' => 'application/json',
+            ),
+            'timeout' => 30,
+        ));
+
+        if (is_wp_error($list_response) || wp_remote_retrieve_response_code($list_response) !== 200) {
+            break;
+        }
+
+        $list_data = json_decode(wp_remote_retrieve_body($list_response), true);
+        if (!empty($list_data['vectors'])) {
+            foreach ($list_data['vectors'] as $vector) {
+                if (isset($vector['id'])) {
+                    $stragglers[] = $vector['id'];
+                }
+            }
+        }
+
+        $next_token = $list_data['pagination']['next'] ?? '';
+        if (empty($next_token)) {
+            break;
+        }
+
+        $query_params['paginationToken'] = $next_token;
+        $list_url = "https://{$host}/vectors/list?" . http_build_query($query_params);
+    } while (true);
+
+    if (empty($stragglers)) {
+        return;
+    }
+
+    $delete_body = array('ids' => $stragglers);
+    if (!empty($namespace)) {
+        $delete_body['namespace'] = $namespace;
+    }
+
+    $delete_response = wp_remote_post("https://{$host}/vectors/delete", array(
+        'headers' => array(
+            'Api-Key' => $api_key,
+            'accept' => 'application/json',
+            'content-type' => 'application/json'
+        ),
+        'body' => wp_json_encode($delete_body),
+        'timeout' => 30
+    ));
+
+    if ((is_wp_error($delete_response) || wp_remote_retrieve_response_code($delete_response) !== 200)
+        && class_exists('MxChat_Admin') && method_exists('MxChat_Admin', 'mxchat_log_debug')) {
+        MxChat_Admin::mxchat_log_debug('pinecone_error', 'Failed to sweep stale chunk vectors after single-vector re-store', array('source_url' => $source_url, 'bot_id' => $bot_id, 'count' => count($stragglers)));
+    }
+}
+
 private static function delete_pinecone_chunks_by_url($source_url, $bot_id) {
     // Get Pinecone configuration
     if ($bot_id === 'default' || !class_exists('MxChat_Multi_Bot_Manager')) {

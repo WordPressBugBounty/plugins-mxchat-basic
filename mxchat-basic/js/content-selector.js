@@ -51,7 +51,7 @@ $('.mxchat-import-box').on('click', function() {
     $box.addClass('active');
 
     // Hide all input areas
-    $('#mxchat-url-input-area, #mxchat-content-input-area, #mxchat-pdf-upload-area, #mxchat-youtube-input-area').hide();
+    $('#mxchat-url-input-area, #mxchat-content-input-area, #mxchat-pdf-upload-area, #mxchat-document-upload-area, #mxchat-youtube-input-area').hide();
 
     // Hide sitemap-specific sections (but NOT for sitemap option - let detection logic handle it)
     if (option !== 'sitemap') {
@@ -107,6 +107,14 @@ $('.mxchat-import-box').on('click', function() {
 
             // Add or update bot_id hidden field for PDF upload form
             updateBotIdInForm('#mxchat-pdf-upload-form');
+            break;
+
+        case 'document-upload':
+            // Show document (.docx/.txt/.md) upload area
+            $('#mxchat-document-upload-area').show();
+
+            // Add or update bot_id hidden field for the document upload form
+            updateBotIdInForm('#mxchat-document-upload-form');
             break;
 
         case 'youtube':

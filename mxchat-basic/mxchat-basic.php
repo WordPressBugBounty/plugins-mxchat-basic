@@ -3,7 +3,7 @@
  * Plugin Name: MxChat
  * Plugin URI: https://mxchat.ai/
  * Description: AI chatbot for WordPress with OpenAI, Claude, xAI, DeepSeek, live agent, PDF uploads, WooCommerce, and training on website data.
- * Version: 3.2.19
+ * Version: 3.2.20
  * Author: MxChat
  * Author URI: https://mxchat.ai
  * License: GPLv2 or later
@@ -46,6 +46,53 @@ if (!defined('MXCHAT_VERSION')) {
  */
 if (!defined('MXCHAT_VIDEO_EMBED_THRESHOLD_DEFAULT')) {
     define('MXCHAT_VIDEO_EMBED_THRESHOLD_DEFAULT', 55);
+}
+
+/**
+ * One-time install stamp: records the plain version this site first ran, so
+ * behavior defaults can differ between fresh installs and upgrades without
+ * touching anyone's stored settings. Mirrors mxchat-mcp's 1.0.7 stamp shape
+ * (plan 7b578e); first consumer is the "Strip unapproved links" default
+ * (plan 58f8b4). Runs at init priority 1 — BEFORE initialize_default_options
+ * (init 20) writes mxchat_options on a fresh site's first request, because
+ * that option's pre-existing presence is how an upgrade is recognized.
+ */
+function mxchat_stamp_install_version() {
+    if (get_option('mxchat_installed_at_version', '') !== '') {
+        return;
+    }
+    $existing = get_option('mxchat_options', false) !== false;
+    $version = defined('MXCHAT_BASE_VERSION') ? MXCHAT_BASE_VERSION : '0.0.0';
+    update_option('mxchat_installed_at_version', $existing ? 'legacy' : $version, false);
+}
+add_action('init', 'mxchat_stamp_install_version', 1);
+
+/**
+ * Stamp-derived default for the "Strip unapproved links" toggle (plan 58f8b4,
+ * option-c split of the old Citation Links conflation): 'on' only for installs
+ * born at 3.2.20+. A missing or 'legacy' stamp means the site predates the
+ * setting — keep 'off' so no existing site's links start vanishing on update.
+ */
+function mxchat_strip_unapproved_links_default() {
+    $stamp = get_option('mxchat_installed_at_version', '');
+    if ($stamp === '' || $stamp === 'legacy') {
+        return 'off';
+    }
+    return version_compare($stamp, '3.2.20', '>=') ? 'on' : 'off';
+}
+
+/**
+ * Effective state of "Strip unapproved links": an explicitly saved option
+ * always wins; until one exists the install-stamp default governs. Read via
+ * a fresh get_option on purpose — the response URL guard runs late in the
+ * request and must see a value saved moments earlier.
+ */
+function mxchat_strip_unapproved_links_enabled() {
+    $opts = get_option('mxchat_options', array());
+    if (is_array($opts) && isset($opts['strip_unapproved_links_toggle'])) {
+        return $opts['strip_unapproved_links_toggle'] === 'on';
+    }
+    return mxchat_strip_unapproved_links_default() === 'on';
 }
 
 /**
@@ -428,6 +475,8 @@ function mxchat_include_classes() {
         'includes/class-mxchat-integrator.php',
         'includes/class-mxchat-admin.php',
         'includes/class-mxchat-public.php',
+        'includes/class-mxchat-block.php',
+        'includes/class-mxchat-elementor.php',
         'includes/class-mxchat-utils.php',
         'includes/class-mxchat-user.php',
         'includes/class-mxchat-privacy.php',
@@ -440,7 +489,8 @@ function mxchat_include_classes() {
         'includes/class-rest-api.php',
         'admin/class-ajax-handler.php',
         'admin/class-pinecone-manager.php',
-        'admin/class-knowledge-manager.php'
+        'admin/class-knowledge-manager.php',
+        'admin/class-vectorstore-manager.php'
     );
 
     foreach ($class_files as $file) {
@@ -475,11 +525,32 @@ function mxchat_include_classes() {
         MxChat_Model_Liveness::init();
     }
 
+    // Gutenberg chatbot block (plan-95dd1e): a click-to-place wrapper over the
+    // [mxchat_chatbot] shortcode. Registers on init; no-op below WP 5.0.
+    if (class_exists('MxChat_Block')) {
+        MxChat_Block::init();
+    }
+
+    // Elementor chatbot widget (plan-95dd1e part 2): registered ONLY inside
+    // elementor/widgets/register (Elementor >= 3.5) — with Elementor absent or
+    // older, the hook never fires and nothing further loads.
+    if (class_exists('MxChat_Elementor')) {
+        MxChat_Elementor::init();
+    }
+
     // Editor Assistant — free, OFF-by-default block-editor AI actions (plan-8cb0cb).
     // init() wires REST + streaming AJAX + sidebar enqueue ONLY when the
     // mxchat_editor_assistant_enabled option is 'on'; otherwise zero footprint.
     if (class_exists('MxChat_Editor_Assistant')) {
         MxChat_Editor_Assistant::init();
+    }
+
+    // OpenAI Vector Store write path (plan-15b5c6): import/sync AJAX, the
+    // import cron tick, the pending-delete sweeper, and the WP-CLI command
+    // all register in the constructor. The sync itself only runs when the
+    // sync toggle + store ID + OpenAI key are all present.
+    if (class_exists('MxChat_Vectorstore_Manager')) {
+        MxChat_Vectorstore_Manager::get_instance();
     }
 
     // Admin pages that aren't classes (procedural include).
@@ -875,6 +946,64 @@ function mxchat_backfill_active_embedding_model() {
 }
 
 /**
+ * 3.2.20: One-time backfill of the caee10 catalog usage-hint defaults
+ * (plan 64c1ad). persist() writes usage_hint for EVERY shown tool on every
+ * autosave — as '' when the box is untouched — and resolve_tool_setting()
+ * seeds a catalog default_hint ONLY onto an ABSENT key. So any install that
+ * saved the AI Tools screen before 3.2.20 holds '' everywhere and the shipped
+ * defaults can never reach it. On an upgrade from < 3.2.20 an empty stored
+ * hint cannot be a deliberate clear of a rendered default (those builds never
+ * rendered one), so seeding is safe. From 3.2.20 on, empty means the owner
+ * cleared a visible default and is respected — this never runs again (version
+ * gate + its own marker, deliberately not caee10's flag).
+ *
+ * Never touched: entries with owner text, legacy bare-bool entries and
+ * absent-key entries (both already resolve to the default at read time), and
+ * tools whose catalog entry ships no default_hint.
+ */
+function mxchat_backfill_tool_hint_defaults() {
+    if (get_option('mxchat_tool_hint_backfill_64c1ad') === '1') {
+        return;
+    }
+
+    if (class_exists('MxChat_Tool_Registry')) {
+        $map = get_option('mxchat_function_calling_tools', array());
+        if (is_array($map) && !empty($map)) {
+            $defaults = array();
+            foreach (MxChat_Tool_Registry::core_tool_catalog() as $fn => $meta) {
+                if (!empty($meta['default_hint'])) {
+                    $defaults[$fn] = (string) $meta['default_hint'];
+                }
+            }
+
+            $changed = false;
+            foreach ($map as $fn => $entry) {
+                if (!isset($defaults[$fn])) {
+                    continue; // no catalog default — nothing to seed
+                }
+                if (!is_array($entry)) {
+                    continue; // legacy bare bool: key absent, resolves to the default already
+                }
+                if (!array_key_exists('usage_hint', $entry)) {
+                    continue; // absent key gets the default at read time — must stay absent
+                }
+                if (trim((string) $entry['usage_hint']) !== '') {
+                    continue; // owner text — never touch
+                }
+                $map[$fn]['usage_hint'] = $defaults[$fn];
+                $changed = true;
+            }
+
+            if ($changed) {
+                update_option('mxchat_function_calling_tools', $map);
+            }
+        }
+    }
+
+    update_option('mxchat_tool_hint_backfill_64c1ad', '1', false);
+}
+
+/**
  * 2.5.2: Create queue processing tables for reliable background processing
  */
 function mxchat_create_queue_tables() {
@@ -974,6 +1103,39 @@ function mxchat_create_session_ratings_table() {
 }
 
 /**
+ * Create the OpenAI Vector Store file-mapping table (v3.2.20, plan 15b5c6).
+ * One row per mirrored KB entry: which store, which bot, which OpenAI file id,
+ * and a hash of the uploaded body for change detection. Vector store files are
+ * not patchable in place — without this mapping an update cannot find its
+ * predecessor, and the store silently accumulates stale duplicates.
+ * status: 'live' (serving) or 'pending_delete' (condemned, swept later).
+ */
+function mxchat_create_vectorstore_files_table() {
+    global $wpdb;
+    $charset_collate = $wpdb->get_charset_collate();
+
+    $table_name = $wpdb->prefix . 'mxchat_vectorstore_files';
+    $sql = "CREATE TABLE $table_name (
+        id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
+        store_id varchar(64) NOT NULL,
+        bot_id varchar(64) NOT NULL DEFAULT 'default',
+        entry_key char(32) NOT NULL,
+        source_url text,
+        file_id varchar(64) NOT NULL,
+        content_hash char(32) NOT NULL DEFAULT '',
+        status varchar(20) NOT NULL DEFAULT 'live',
+        last_error text,
+        updated_at datetime DEFAULT NULL,
+        PRIMARY KEY  (id),
+        KEY store_entry (store_id, bot_id, entry_key, status),
+        KEY status (status)
+    ) $charset_collate;";
+
+    require_once(ABSPATH . 'wp-admin/includes/upgrade.php');
+    dbDelta($sql);
+}
+
+/**
  * 2.5.2: Fix URL column size to support long URLs (especially with UTF-8 encoding)
  * This fixes "url, source_url. The supplied values may be too long" errors
  */
@@ -1019,106 +1181,43 @@ function mxchat_migrate_deprecated_models() {
         return;
     }
 
+    // The retired-id → replacement mapping lives in ONE place:
+    // MxChat_Model_Catalog::retired_model_map() (plan 202df5). This function
+    // and every add-on that stores model ids consume that map — do not add a
+    // deprecation list here again.
+    if (!class_exists('MxChat_Model_Catalog') || !method_exists('MxChat_Model_Catalog', 'retired_model_map')) {
+        return; // catalog not loaded (defensive) — the next admin load retries
+    }
+    $map = MxChat_Model_Catalog::retired_model_map();
+
     $current_model = $options['model'];
-
-    // Migrate deprecated/retired Claude models BY TIER so a rescued site lands on
-    // the current generation, not an older intermediate (plan dc91bd — the previous
-    // single target, claude-opus-4-6, is now two Opus generations behind).
-    $deprecated_claude_opus = array(
-        'claude-3-opus-20240229',      // Retired Jan 5, 2026
-        'claude-opus-4-20250514',      // Deprecated
-        'claude-opus-4-1-20250805',    // Retired Aug 5, 2026 (first-party API)
-    );
-    $deprecated_claude_sonnet = array(
-        'claude-3-5-sonnet-20240620',  // Retired Oct 28, 2025
-        'claude-3-5-sonnet-20241022',  // Retired Oct 28, 2025
-        'claude-3-7-sonnet-20250219',  // Retired Feb 19, 2026
-        'claude-3-sonnet-20240229',    // Legacy
-        'claude-sonnet-4-20250514',    // Deprecated
-    );
-    $deprecated_claude_haiku = array(
-        'claude-3-haiku-20240307',     // Legacy
-        'claude-3-5-haiku-20241022',   // Deprecated
-    );
-    if (in_array($current_model, $deprecated_claude_opus, true)) {
-        $options['model'] = 'claude-opus-5';
+    if (isset($map[$current_model])) {
+        $entry = $map[$current_model];
+        $options['model'] = $entry['to'];
         $migrated = true;
         $migration_message = sprintf(
-            'Your chatbot model has been automatically updated from %s to Claude Opus 5 because Anthropic retired the older Claude model.',
-            $current_model
-        );
-    } elseif (in_array($current_model, $deprecated_claude_sonnet, true)) {
-        $options['model'] = 'claude-sonnet-5';
-        $migrated = true;
-        $migration_message = sprintf(
-            'Your chatbot model has been automatically updated from %s to Claude Sonnet 5 because Anthropic retired the older Claude model.',
-            $current_model
-        );
-    } elseif (in_array($current_model, $deprecated_claude_haiku, true)) {
-        $options['model'] = 'claude-haiku-4-5-20251001';
-        $migrated = true;
-        $migration_message = sprintf(
-            'Your chatbot model has been automatically updated from %s to Claude Haiku 4.5 because Anthropic retired the older Claude model.',
-            $current_model
+            'Your chatbot model has been automatically updated from %s to %s %s.',
+            $current_model,
+            $entry['label'],
+            $entry['reason']
         );
     }
 
-    // Migrate deprecated GPT-4 series and GPT-3.5 Turbo to GPT-5.6 Sol.
-    // (Previous target gpt-5.1-chat-latest itself retires 2026-08-10 — never
-    // migrate onto a model that is already on a deprecation list.)
-    if (in_array($current_model, array('gpt-4o', 'gpt-4.1-2025-04-14', 'gpt-4-turbo', 'gpt-4', 'gpt-3.5-turbo'), true)) {
-        $options['model'] = 'gpt-5.6-sol';
-        $migrated = true;
-        $migration_message = sprintf(
-            'Your chatbot model has been automatically updated from %s to GPT-5.6 Sol due to OpenAI deprecating older models.',
-            $current_model
-        );
-    }
-
-    // Migrate the gpt-5.x-chat-latest aliases OpenAI retires on August 10, 2026.
-    // Replacement per OpenAI's deprecations page: gpt-5.6-sol (plan e46b8f).
-    if (in_array($current_model, array('gpt-5.1-chat-latest', 'gpt-5.3-chat-latest'), true)) {
-        $options['model'] = 'gpt-5.6-sol';
-        $migrated = true;
-        $migration_message = sprintf(
-            'Your chatbot model has been automatically updated from %s to GPT-5.6 Sol because OpenAI retires the GPT-5.x Chat Latest models on August 10, 2026.',
-            $current_model
-        );
-    }
-
-    // The content generator has its own model option — same retirement applies.
-    if (isset($options['content_model'])
-        && in_array($options['content_model'], array('gpt-5.1-chat-latest', 'gpt-5.3-chat-latest'), true)) {
+    // The content generator has its own model option — the same map applies.
+    // (Pre-202df5 this branch covered only the two gpt-5.x-chat-latest aliases;
+    // it now covers every retired id, so e.g. a content model stranded on a
+    // retired Claude id is rescued the same way the chat model is.)
+    if (isset($options['content_model']) && isset($map[$options['content_model']])) {
         $old_content_model = $options['content_model'];
-        $options['content_model'] = 'gpt-5.6-sol';
+        $entry = $map[$old_content_model];
+        $options['content_model'] = $entry['to'];
         $migrated = true;
         $migration_message = trim($migration_message . ' ' . sprintf(
-            'Your content generation model has also been updated from %s to GPT-5.6 Sol for the same OpenAI retirement.',
-            $old_content_model
+            'Your content generation model has also been automatically updated from %s to %s %s.',
+            $old_content_model,
+            $entry['label'],
+            $entry['reason']
         ));
-    }
-
-    // Migrate deprecated GPT-4o Mini and GPT-4.1 Mini to GPT-5 Mini
-    if (in_array($current_model, array('gpt-4o-mini', 'gpt-4.1-mini'), true)) {
-        $options['model'] = 'gpt-5-mini';
-        $migrated = true;
-        $migration_message = sprintf(
-            'Your chatbot model has been automatically updated from %s to GPT-5 Mini due to OpenAI deprecating GPT-4 series models.',
-            $current_model
-        );
-    }
-
-    // Migrate retired DeepSeek ids to DeepSeek V4 Flash — the vendor removed
-    // deepseek-chat and deepseek-reasoner on 2026-07-24 (hard cutoff, every
-    // request 400s). V4 Flash is DeepSeek's designated successor for the
-    // legacy deepseek-chat alias.
-    if (in_array($current_model, array('deepseek-chat', 'deepseek-reasoner'), true)) {
-        $options['model'] = 'deepseek-v4-flash';
-        $migrated = true;
-        $migration_message = sprintf(
-            'Your chatbot model has been automatically updated from %s to DeepSeek V4 Flash because DeepSeek retired its older API models on July 24, 2026.',
-            $current_model
-        );
     }
 
     if ($migrated) {
@@ -1146,6 +1245,60 @@ function mxchat_show_migration_notice() {
         delete_option('mxchat_model_migration_message');
     }
 }
+
+/**
+ * One-time recommendation on EXISTING installs (stamp 'legacy') that the new
+ * "Strip unapproved links" guard exists and is worth turning on (plan 58f8b4).
+ * Fresh 3.2.20+ installs default it on and never see this. Shown only on
+ * MxChat admin pages, gone for good once dismissed or once the site saves an
+ * explicit value for the toggle either way.
+ */
+function mxchat_show_strip_links_notice() {
+    if (!current_user_can('manage_options')) {
+        return;
+    }
+    $page = isset($_GET['page']) ? sanitize_key($_GET['page']) : '';
+    if (strpos($page, 'mxchat') !== 0) {
+        return;
+    }
+    if (get_option('mxchat_strip_links_notice_dismissed', '') === '1') {
+        return;
+    }
+    if (get_option('mxchat_installed_at_version', '') !== 'legacy') {
+        return;
+    }
+    $opts = get_option('mxchat_options', array());
+    if (is_array($opts) && isset($opts['strip_unapproved_links_toggle'])) {
+        return; // The site already made its choice — stop recommending.
+    }
+    $dismiss_url = wp_nonce_url(
+        admin_url('admin-post.php?action=mxchat_dismiss_strip_links_notice'),
+        'mxchat_dismiss_strip_links_notice'
+    );
+    ?>
+    <div class="notice notice-info">
+        <p>
+            <strong><?php esc_html_e('MxChat: new link protection available', 'mxchat'); ?></strong><br>
+            <?php esc_html_e('The new "Strip Unapproved Links" setting removes links the AI invents from its answers even when Citation Links is off — links to real pages on your site and links your integrations return are always kept. It is off on existing sites so nothing changes without you; we recommend turning it on under MxChat → Settings → Chatbot Behavior.', 'mxchat'); ?>
+            <a href="<?php echo esc_url($dismiss_url); ?>"><?php esc_html_e('Dismiss', 'mxchat'); ?></a>
+        </p>
+    </div>
+    <?php
+}
+add_action('admin_notices', 'mxchat_show_strip_links_notice');
+
+/** Dismiss handler for the strip-links recommendation notice (plan 58f8b4). */
+function mxchat_dismiss_strip_links_notice() {
+    if (!current_user_can('manage_options')) {
+        wp_die(esc_html__('Insufficient permissions.', 'mxchat'), '', array('response' => 403));
+    }
+    check_admin_referer('mxchat_dismiss_strip_links_notice');
+    update_option('mxchat_strip_links_notice_dismissed', '1', false);
+    $referer = wp_get_referer();
+    wp_safe_redirect($referer ? $referer : admin_url('admin.php?page=mxchat-max'));
+    exit;
+}
+add_action('admin_post_mxchat_dismiss_strip_links_notice', 'mxchat_dismiss_strip_links_notice');
 
 /**
  * Persistent admin notice when the provider rejected the configured model
@@ -1260,6 +1413,9 @@ function mxchat_activate() {
 
     // Create per-session satisfaction ratings table (v3.2.6)
     mxchat_create_session_ratings_table();
+
+    // Create Vector Store file-mapping table (v3.2.20, plan 15b5c6)
+    mxchat_create_vectorstore_files_table();
 
     // Ensure additional columns in system prompt table
     $existing_system_columns = $wpdb->get_results("SHOW COLUMNS FROM $system_prompt_table");
@@ -1545,6 +1701,19 @@ function mxchat_check_for_update() {
                 mxchat_migrate_deprecated_models();
             }
 
+            // 3.2.20: Seed the caee10 usage-hint defaults onto tool entries a
+            // pre-3.2.20 autosave stamped with '' (plan 64c1ad). The gate value
+            // equals the version this block ships in (a5a598 rule); the
+            // function carries its own one-time marker on top.
+            // Also re-run the deprecated-models migration: 202df5 widened it to
+            // rescue a content_model stranded on ANY retired id (previously
+            // only the two gpt-5.x-chat-latest aliases). Idempotent — only
+            // rewrites models on the catalog's retired_model_map().
+            if (version_compare($current_version, '3.2.20', '<')) {
+                mxchat_backfill_tool_hint_defaults();
+                mxchat_migrate_deprecated_models();
+            }
+
             // Run full activation to ensure everything is up to date
             mxchat_activate();
             
@@ -1625,6 +1794,109 @@ function mxchat_migrate_acf_pdf_extraction_option() {
         update_option('mxchat_options', $mxchat_options);
     }
 }
+
+/**
+ * One-time migration of mxchat_acf_excluded_fields from field NAMES to field
+ * KEYS (plan 30e81f). Names are not unique across ACF groups, so two fields
+ * named the same in different groups shared one toggle, one saved state, and
+ * one exclusion — and the save-on-exit beacon could revert a save through the
+ * twin. Keys are unique; everything now runs on them.
+ *
+ * MIGRATION DIRECTION IS DELIBERATE: one stored name can match several keys —
+ * exclude EVERY one of them. The UI describes these as "sensitive or
+ * irrelevant fields"; an under-migration would silently start feeding a
+ * previously-excluded sensitive field into embeddings sent to a third-party
+ * provider. Over-excluding is visible in the UI and costs some retrieval
+ * quality; under-excluding is a silent privacy regression.
+ *
+ * Self-arming on acf/init (NOT the version-gated upgrade block): resolving
+ * names needs ACF fully booted with local JSON/PHP groups registered, and if
+ * ACF is deactivated at upgrade time the migration simply waits for the next
+ * load with ACF active. Until it runs, stored names keep working — every
+ * exclusion read site honors legacy name entries alongside keys. A name that
+ * matches no current key is KEPT (its group may be temporarily inactive), and
+ * the per-field include path lazily converts it if it ever resolves again.
+ */
+function mxchat_migrate_acf_exclusions_to_keys() {
+    if (get_option('mxchat_acf_exclusions_migrated', '') === '1') {
+        return;
+    }
+    $stored = get_option('mxchat_acf_excluded_fields', array());
+    if (!is_array($stored) || empty($stored)) {
+        update_option('mxchat_acf_exclusions_migrated', '1', false);
+        return;
+    }
+    if (!function_exists('acf_get_field_groups') || !function_exists('acf_get_fields')) {
+        return; // acf/init fired without the API? Bail; retry next load.
+    }
+
+    // Map every current top-level field: name => [keys], and the set of keys.
+    $name_to_keys = array();
+    $current_keys = array();
+    foreach (acf_get_field_groups() as $group) {
+        $group_fields = acf_get_fields($group['key']);
+        if (empty($group_fields)) {
+            continue;
+        }
+        foreach ($group_fields as $field) {
+            if (empty($field['key']) || !isset($field['name'])) {
+                continue;
+            }
+            $current_keys[$field['key']] = true;
+            $name_to_keys[$field['name']][] = $field['key'];
+        }
+    }
+
+    $migrated = array();
+    $converted = 0;
+    foreach ($stored as $entry) {
+        if (!is_string($entry) || $entry === '') {
+            continue;
+        }
+        if (isset($current_keys[$entry])) {
+            $migrated[] = $entry; // already a live key
+        } elseif (isset($name_to_keys[$entry])) {
+            foreach ($name_to_keys[$entry] as $key) {
+                $migrated[] = $key; // every key wearing this name — fail toward more exclusion
+            }
+            $converted++;
+        } else {
+            $migrated[] = $entry; // unresolved — keep; still honored by name everywhere
+        }
+    }
+    $migrated = array_values(array_unique($migrated));
+
+    update_option('mxchat_acf_excluded_fields', $migrated);
+    update_option('mxchat_acf_exclusions_migrated', '1', false);
+    if ($converted > 0) {
+        update_option('mxchat_acf_exclusions_migrated_notice', '1', false);
+    }
+}
+add_action('acf/init', 'mxchat_migrate_acf_exclusions_to_keys', 20);
+
+/**
+ * One-time notice after the ACF exclusion migration actually converted
+ * name entries — the settings are worth a review, especially where one name
+ * fanned out to several fields (every match is now excluded, on purpose).
+ */
+function mxchat_show_acf_exclusions_migrated_notice() {
+    if (!current_user_can('manage_options')) {
+        return;
+    }
+    if (get_option('mxchat_acf_exclusions_migrated_notice', '') !== '1') {
+        return;
+    }
+    ?>
+    <div class="notice notice-info is-dismissible">
+        <p>
+            <strong><?php esc_html_e('MxChat: ACF field exclusions updated', 'mxchat'); ?></strong><br>
+            <?php esc_html_e('Your ACF field exclusion settings were migrated to identify fields precisely, so same-named fields in different groups no longer share one toggle. Where a saved exclusion matched several fields, all of them are now excluded — please review the toggles under MxChat → Knowledge → ACF Field Settings.', 'mxchat'); ?>
+        </p>
+    </div>
+    <?php
+    delete_option('mxchat_acf_exclusions_migrated_notice');
+}
+add_action('admin_notices', 'mxchat_show_acf_exclusions_migrated_notice');
 
 /**
  * Ensure tables exist on every admin load for fresh installations

@@ -52,9 +52,10 @@ class MxChat_Live_Agent_Schedule {
      */
     const OPTION = 'mxchat_live_agent_schedule';
 
-    /** Per-channel standalone options (plan 99d7a4). */
+    /** Per-channel standalone options (plan 99d7a4; webhook added by d88e22). */
     const OPTION_SLACK    = 'mxchat_live_agent_schedule_slack';
     const OPTION_TELEGRAM = 'mxchat_live_agent_schedule_telegram';
+    const OPTION_WEBHOOK  = 'mxchat_live_agent_schedule_webhook';
 
     /* ------------------------------------------------------------------ *
      *  Channels
@@ -62,7 +63,7 @@ class MxChat_Live_Agent_Schedule {
 
     /** The channels that carry a schedule. Key = channel id used across the API. */
     public static function channels() {
-        return array('slack', 'telegram');
+        return array('slack', 'telegram', 'webhook');
     }
 
     /**
@@ -71,7 +72,13 @@ class MxChat_Live_Agent_Schedule {
      * routing feature.
      */
     private static function option_name($channel) {
-        return ($channel === 'telegram') ? self::OPTION_TELEGRAM : self::OPTION_SLACK;
+        if ($channel === 'telegram') {
+            return self::OPTION_TELEGRAM;
+        }
+        if ($channel === 'webhook') {
+            return self::OPTION_WEBHOOK;
+        }
+        return self::OPTION_SLACK;
     }
 
     /**
@@ -93,6 +100,8 @@ class MxChat_Live_Agent_Schedule {
             return;
         }
         $seed = self::normalize($legacy);
+        // Webhook (d88e22) is deliberately NOT seeded: the legacy shared option
+        // predates the webhook channel, so it never expressed intent about it.
         foreach (array(self::OPTION_SLACK, self::OPTION_TELEGRAM) as $opt) {
             if (!is_array(get_option($opt, null))) {
                 update_option($opt, $seed);

@@ -514,57 +514,37 @@ function mxchat_render_content_page($admin_instance) {
                                 <select id="mxch-content-model" data-field="content_model" class="mxch-cg-select">
                                     <?php
                                     $content_model = $options['content_model'] ?? ($options['model'] ?? 'gpt-5.6-sol');
-                                    // gpt-5.1-chat-latest removed 2026-08-02: OpenAI retires
-                                    // it 2026-08-10 (plan e46b8f); saved values migrate via
-                                    // mxchat_migrate_deprecated_models().
-                                    $models = array(
-                                        'OpenAI' => array(
-                                            'gpt-5.6-sol'          => 'GPT-5.6 Sol',
-                                            'gpt-5.6-terra'        => 'GPT-5.6 Terra',
-                                            'gpt-5.6-luna'         => 'GPT-5.6 Luna',
-                                            'gpt-5.5'              => 'GPT-5.5',
-                                            'gpt-5.4'              => 'GPT-5.4',
-                                            'gpt-5.2'              => 'GPT-5.2',
-                                            'gpt-5'                => 'GPT-5',
-                                        ),
-                                        'Anthropic' => array(
-                                            'claude-fable-5'               => 'Claude Fable 5',
-                                            'claude-opus-5'                => 'Claude Opus 5',
-                                            'claude-opus-4-8'              => 'Claude Opus 4.8',
-                                            'claude-opus-4-7'              => 'Claude Opus 4.7',
-                                            'claude-opus-4-6'              => 'Claude Opus 4.6',
-                                            'claude-sonnet-5'              => 'Claude Sonnet 5',
-                                            'claude-sonnet-4-6'            => 'Claude Sonnet 4.6',
-                                            'claude-haiku-4-5-20251001'    => 'Claude Haiku 4.5',
-                                        ),
-                                        'Google' => array(
-                                            'gemini-3.5-flash'              => 'Gemini 3.5 Flash',
-                                            'gemini-3.1-pro-preview'        => 'Gemini 3.1 Pro',
-                                            'gemini-3-flash-preview'        => 'Gemini 3 Flash',
-                                            'gemini-3.1-flash-lite'         => 'Gemini 3.1 Flash-Lite',
-                                            'gemini-3.1-flash-lite-preview' => 'Gemini 3.1 Flash-Lite (Preview)',
-                                            'gemini-2.5-pro'                => 'Gemini 2.5 Pro',
-                                            'gemini-2.5-flash'              => 'Gemini 2.5 Flash',
-                                            'gemini-2.5-flash-lite'         => 'Gemini 2.5 Flash-Lite',
-                                        ),
-                                        // xAI lineup refreshed 2026-08-14 (plan e1aa4a) against a
-                                        // live /v1/models pull: none of the three ids previously
-                                        // here appear in xAI's listing any more. The old ids are
-                                        // KEPT below the current generation because xAI still
-                                        // serves them and deleting one would blank the selection
-                                        // of an install saved on it.
-                                        'xAI' => array(
-                                            'grok-4.6'                     => 'Grok 4.6',
-                                            'grok-4.5'                     => 'Grok 4.5',
-                                            'grok-4.3'                     => 'Grok 4.3',
-                                            'grok-4.20-0309-reasoning'     => 'Grok 4.20 (Reasoning)',
-                                            'grok-4.20-0309-non-reasoning' => 'Grok 4.20 (Non-Reasoning)',
-                                            'grok-4-0709'                  => 'Grok 4 (previous generation)',
-                                            'grok-4-1-fast-non-reasoning'  => 'Grok 4.1 Fast (previous generation)',
-                                            'grok-code-fast-1'             => 'Grok Code Fast',
-                                        ),
+                                    // Catalog-derived (plan ccb751): this select was the seventh
+                                    // hand-maintained model map and had drifted (it still offered
+                                    // a code model for content generation). It now renders from
+                                    // MxChat_Model_Catalog, restricted to the providers the
+                                    // generator can actually dispatch to — see
+                                    // MxChat_Content_Generator::supported_content_providers().
+                                    $model_groups = MxChat_Model_Catalog::settings_dropdown_groups(
+                                        $content_model,
+                                        MxChat_Content_Generator::supported_content_providers()
                                     );
-                                    foreach ($models as $group => $group_models) {
+                                    // Round-trip guard: an install saved on an id the catalog no
+                                    // longer lists (e.g. grok-code-fast-1) keeps its selection
+                                    // rendered instead of silently snapping to the first option
+                                    // on the next save.
+                                    $mxch_cg_model_in_groups = false;
+                                    foreach ($model_groups as $group_models) {
+                                        if (array_key_exists($content_model, $group_models)) {
+                                            $mxch_cg_model_in_groups = true;
+                                            break;
+                                        }
+                                    }
+                                    if (!$mxch_cg_model_in_groups && $content_model !== '') {
+                                        $model_groups[__('Currently saved', 'mxchat')] = array(
+                                            /* translators: %s: model id */
+                                            $content_model => sprintf(__('%s — no longer offered, choose a replacement', 'mxchat'), $content_model),
+                                        );
+                                    }
+                                    foreach ($model_groups as $group => $group_models) {
+                                        if (empty($group_models)) {
+                                            continue;
+                                        }
                                         echo '<optgroup label="' . esc_attr($group) . '">';
                                         foreach ($group_models as $value => $label) {
                                             $selected = selected($content_model, $value, false);

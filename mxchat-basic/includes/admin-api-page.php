@@ -470,24 +470,9 @@ function mxchat_render_api_admin_page() {
             font-size: 13px;
             color: var(--mxch-text-primary, #1d2327);
         }
-        .mxch-status-pill {
-            display: inline-flex;
-            align-items: center;
-            gap: 6px;
-            padding: 4px 10px;
-            border-radius: 999px;
-            font-size: 12px;
-            font-weight: 600;
-        }
-        .mxch-status-pill .mxch-status-dot {
-            width: 8px;
-            height: 8px;
-            border-radius: 50%;
-        }
-        .mxch-status-pill-active { background: #e6f4ea; color: #1d7a3a; }
-        .mxch-status-pill-active .mxch-status-dot { background: #1d7a3a; }
-        .mxch-status-pill-disabled { background: #fef3e2; color: #a04a00; }
-        .mxch-status-pill-disabled .mxch-status-dot { background: #a04a00; }
+        /* mxch-status-pill rules moved to css/admin-sidebar.css (plan b6e4d4)
+           — it is a documented shell component and every admin page loads
+           that sheet, so it must not live in one page's inline block. */
 
         .mxch-api-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 16px; }
         .mxch-api-form { display: inline; margin: 0; }

@@ -172,6 +172,7 @@ class MxChat_Tool_Registry {
             'mxchat_handle_order_history',
             // disruptive handoff / data-collection flows
             'mxchat_live_agent_handover', 'mxchat_telegram_live_agent_handover',
+            'mxchat_webhook_live_agent_handover',
             'mxchat_handle_email_capture', 'mxchat_handle_form_collection',
         ));
     }
@@ -254,6 +255,14 @@ class MxChat_Tool_Registry {
             'mxchat_telegram_live_agent_handover' => array(
                 'label'        => __('Hand Off to Live Agent (Telegram)', 'mxchat'),
                 'description'  => __('Transfer the conversation to a human support agent on Telegram.', 'mxchat'),
+                'default_hint' => __('Use this when the visitor has asked something you cannot answer from the knowledge base, or has asked twice about the same unresolved problem.', 'mxchat'),
+            ),
+            // Webhook destination (plan d88e22): outbound-only — the handoff is
+            // POSTed to the owner's configured URL and the conversation stays in
+            // AI mode; the receiving system follows up out-of-band.
+            'mxchat_webhook_live_agent_handover' => array(
+                'label'        => __('Hand Off to Live Agent (Webhook)', 'mxchat'),
+                'description'  => __('Notify the site\'s human support team about this conversation via the configured webhook. The team follows up separately; you keep assisting meanwhile.', 'mxchat'),
                 'default_hint' => __('Use this when the visitor has asked something you cannot answer from the knowledge base, or has asked twice about the same unresolved problem.', 'mxchat'),
             ),
         ));
@@ -443,10 +452,11 @@ class MxChat_Tool_Registry {
 
     /**
      * Withhold each live-agent handover tool outside ITS channel's availability
-     * schedule (plans 8ccaa2 + 99d7a4). Slack and Telegram carry independent
-     * schedules: if Slack is off-hours but Telegram is staffed, the Telegram
-     * handoff stays offered and only the Slack one is withheld — and vice
-     * versa. Off-hours the bot must not DANGLE a human it cannot reach, so the
+     * schedule (plans 8ccaa2 + 99d7a4; webhook added by d88e22). Slack,
+     * Telegram, and the webhook destination carry independent schedules: if
+     * Slack is off-hours but Telegram is staffed, the Telegram handoff stays
+     * offered and only the Slack one is withheld — and likewise for each other
+     * pair. Off-hours the bot must not DANGLE a human it cannot reach, so the
      * tool never reaches the model in the first place.
      *
      * Applied HERE and deliberately NOT in available_tools(): that function
@@ -472,6 +482,9 @@ class MxChat_Tool_Registry {
         }
         if (!MxChat_Live_Agent_Schedule::is_within_hours('telegram')) {
             $withhold[] = 'mxchat_telegram_live_agent_handover';
+        }
+        if (!MxChat_Live_Agent_Schedule::is_within_hours('webhook')) {
+            $withhold[] = 'mxchat_webhook_live_agent_handover';
         }
         if (empty($withhold)) {
             return $tools;

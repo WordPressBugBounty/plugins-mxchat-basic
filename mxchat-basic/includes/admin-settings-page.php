@@ -87,6 +87,7 @@ function mxchat_render_settings_page($admin_instance) {
                         <button class="mxch-mobile-nav-sub-link" data-target="integrations-brave"><?php esc_html_e('Brave Search', 'mxchat'); ?></button>
                         <button class="mxch-mobile-nav-sub-link" data-target="integrations-slack"><?php esc_html_e('Slack', 'mxchat'); ?></button>
                         <button class="mxch-mobile-nav-sub-link" data-target="integrations-telegram"><?php esc_html_e('Telegram', 'mxchat'); ?></button>
+                        <button class="mxch-mobile-nav-sub-link" data-target="integrations-webhook"><?php esc_html_e('Webhook', 'mxchat'); ?></button>
                     </div>
                 </div>
                 <!-- Resources Section -->
@@ -189,6 +190,7 @@ function mxchat_render_settings_page($admin_instance) {
                             <button class="mxch-nav-sub-link" data-target="integrations-brave"><?php esc_html_e('Brave Search', 'mxchat'); ?></button>
                             <button class="mxch-nav-sub-link" data-target="integrations-slack"><?php esc_html_e('Slack', 'mxchat'); ?></button>
                             <button class="mxch-nav-sub-link" data-target="integrations-telegram"><?php esc_html_e('Telegram', 'mxchat'); ?></button>
+                            <button class="mxch-nav-sub-link" data-target="integrations-webhook"><?php esc_html_e('Webhook', 'mxchat'); ?></button>
                         </div>
                     </div>
                 </div>
@@ -336,6 +338,12 @@ function mxchat_render_settings_page($admin_instance) {
                         mxchat_render_field_wrapper('citation_links', __('Citation Links', 'mxchat'), function() use ($admin_instance) {
                             $admin_instance->mxchat_citation_links_toggle_callback();
                         }, __('Allow the AI to include citation links from your knowledge database in responses. If disabled, ensure your AI Behavior settings do not mention links or the AI may fabricate URLs.', 'mxchat'));
+
+                        // Strip Unapproved Links (plan 58f8b4) — enforcement is now
+                        // its own control instead of riding Citation Links.
+                        mxchat_render_field_wrapper('strip_unapproved_links', __('Strip Unapproved Links', 'mxchat'), function() use ($admin_instance) {
+                            $admin_instance->mxchat_strip_unapproved_links_toggle_callback();
+                        }, __('Remove links the AI invents from its answers, even when Citation Links is off. Approved citations, real pages on this site, and links returned by your integrations (e.g. WooCommerce products) are always kept. On by default for new installs; existing sites keep their current behavior until enabled.', 'mxchat'));
 
                         // Satisfaction Rating Prompt
                         // The toggle callback inline-renders the 5 customization
@@ -490,6 +498,21 @@ function mxchat_render_settings_page($admin_instance) {
                         mxchat_render_field_wrapper('name_placeholder', __('Name Field Placeholder', 'mxchat'), function() use ($admin_instance) {
                             $admin_instance->name_field_placeholder_callback();
                         }, __('Placeholder text for the name input field.', 'mxchat'));
+
+                        // Consent Checkbox (b062c4)
+                        mxchat_render_field_wrapper('enable_consent_checkbox', __('Consent Checkbox', 'mxchat'), function() use ($admin_instance) {
+                            $admin_instance->enable_consent_checkbox_callback();
+                        }, __('Show a consent checkbox on the email form. The decision, time, and exact label shown are stored with the lead.', 'mxchat'));
+
+                        // Consent Label
+                        mxchat_render_field_wrapper('consent_checkbox_label', __('Consent Label', 'mxchat'), function() use ($admin_instance) {
+                            $admin_instance->consent_checkbox_label_callback();
+                        }, __('Text shown beside the checkbox. Anchor tags are allowed so you can link your Privacy Policy; other HTML is stripped.', 'mxchat'));
+
+                        // Consent Required
+                        mxchat_render_field_wrapper('consent_checkbox_required', __('Require Consent to Submit', 'mxchat'), function() use ($admin_instance) {
+                            $admin_instance->consent_checkbox_required_callback();
+                        }, __('Block form submission until the box is ticked. Off means the checkbox is optional (a soft opt-in).', 'mxchat'));
                         ?>
                     </div>
                 </div>
@@ -1093,6 +1116,67 @@ function mxchat_render_settings_page($admin_instance) {
                                 <?php esc_html_e('Enter your Bot Token above and save to generate the registration URL.', 'mxchat'); ?>
                             </p>
                         <?php endif; ?>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ========================================
+                 INTEGRATIONS - WEBHOOK HANDOFF (plan d88e22)
+                 ======================================== -->
+            <div id="integrations-webhook" class="mxch-section">
+                <div class="mxch-content-header">
+                    <h1 class="mxch-content-title"><?php esc_html_e('Webhook', 'mxchat'); ?></h1>
+                    <p class="mxch-content-subtitle"><?php esc_html_e('Route live-agent handoffs to any URL you choose — your helpdesk, an automation flow, a CRM.', 'mxchat'); ?></p>
+                </div>
+
+                <div class="mxch-notice mxch-notice-info" style="margin-bottom: 24px;">
+                    <svg class="mxch-notice-icon" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+                    <div>
+                        <?php esc_html_e('This destination is outbound-only: MxChat delivers the handoff to your URL and the chatbot keeps assisting the visitor. Your team follows up separately — by email, phone, or your own support tool.', 'mxchat'); ?>
+                    </div>
+                </div>
+
+                <div class="mxch-card">
+                    <div class="mxch-card-body mxchat-autosave-section">
+                        <table class="form-table">
+                            <?php do_settings_fields('mxchat-embed', 'mxchat_webhook_handoff_section'); ?>
+                        </table>
+                    </div>
+                </div>
+
+                <div class="mxch-card" style="margin-top: 24px;">
+                    <div class="mxch-card-header">
+                        <h3 class="mxch-card-title">
+                            <svg class="mxch-card-title-icon" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
+                            <?php esc_html_e('Payload Reference', 'mxchat'); ?>
+                        </h3>
+                    </div>
+                    <div class="mxch-card-body">
+                        <p class="mxch-field-description" style="margin-bottom: 12px;">
+                            <?php esc_html_e('Each handoff arrives at your URL as an HTTPS POST with Content-Type application/json:', 'mxchat'); ?>
+                        </p>
+                        <pre style="background: #f8f9fa; padding: 16px; border-radius: 8px; font-size: 12px; overflow-x: auto; margin: 0 0 16px;"><?php echo esc_html('{
+  "event": "live_agent_handoff",
+  "site": { "name": "Your Site", "url": "https://your-site.com" },
+  "session_id": "mxchat_chat_…",
+  "user_id": 0,
+  "visitor": { "name": "Ada", "email": "ada@example.com" },
+  "current_message": "I need to talk to a human",
+  "recent_messages": [
+    { "role": "user", "content": "…", "timestamp": 1755900000 },
+    { "role": "assistant", "content": "…", "timestamp": 1755900012 }
+  ],
+  "requested_at": "2026-08-22T14:30:00+00:00"
+}'); ?></pre>
+                        <p class="mxch-field-description" style="margin-bottom: 12px;">
+                            <?php esc_html_e('When a Signing Secret is set, each request also carries this header so your endpoint can verify the sender — compute the HMAC of the raw request body with your secret and compare:', 'mxchat'); ?>
+                        </p>
+                        <div class="mxch-webhook-url-display" style="margin-bottom: 16px;">
+                            <code>X-MxChat-Signature: sha256=&lt;hex hmac-sha256 of the raw body&gt;</code>
+                        </div>
+                        <p class="mxch-field-description">
+                            <?php esc_html_e('Answer with any 2xx status. Delivery uses a 5-second timeout with one retry on transport errors and 5xx responses; redirects are not followed. The last failed delivery is shown under the Webhook URL field above.', 'mxchat'); ?>
+                        </p>
                     </div>
                 </div>
             </div>

@@ -70,6 +70,9 @@ class MxChat_Privacy {
         'mxchat_lead_del_email_',
         'mxchat_lead_del_name_',
         'mxchat_lead_del_ts_',
+        'mxchat_lead_del_consent_',
+        'mxchat_lead_del_consent_label_',
+        'mxchat_lead_del_consent_at_',
         // NOTE: mxchat_session_owner_ (b64b77) and mxchat_email_ /
         // mxchat_name_ / mxchat_agent_name_ (5658f2) moved out of wp_options
         // into the mxchat_sessions table. The eraser calls
@@ -224,6 +227,24 @@ class MxChat_Privacy {
             }
             if (!empty($identifiers)) {
                 $data[] = array('name' => __('Visitor identifier', 'mxchat'), 'value' => implode(', ', array_keys($identifiers)));
+            }
+
+            // Lead-capture consent record (b062c4). If we hold a consent
+            // decision about the subject, the export must show it — same
+            // Article 15 parity rule as the click rows below.
+            if (class_exists('MxChat_Session_Store')) {
+                $consent_state = MxChat_Session_Store::get($sid, 'consent', '');
+                if ($consent_state !== '' && $consent_state !== false) {
+                    $data[] = array('name' => __('Lead-capture consent', 'mxchat'), 'value' => (string) $consent_state);
+                    $consent_at = MxChat_Session_Store::get($sid, 'consent_at', '');
+                    if (!empty($consent_at)) {
+                        $data[] = array('name' => __('Consent recorded', 'mxchat'), 'value' => (string) $consent_at);
+                    }
+                    $consent_label = MxChat_Session_Store::get($sid, 'consent_label', '');
+                    if (!empty($consent_label)) {
+                        $data[] = array('name' => __('Consent text shown', 'mxchat'), 'value' => wp_strip_all_tags((string) $consent_label));
+                    }
+                }
             }
 
             foreach ($rows as $row) {
@@ -452,6 +473,9 @@ class MxChat_Privacy {
                 delete_option('mxchat_lead_del_email_' . $sid);
                 delete_option('mxchat_lead_del_name_' . $sid);
                 delete_option('mxchat_lead_del_ts_' . $sid);
+                delete_option('mxchat_lead_del_consent_' . $sid);
+                delete_option('mxchat_lead_del_consent_label_' . $sid);
+                delete_option('mxchat_lead_del_consent_at_' . $sid);
             } else {
                 $sid = substr($opt->option_name, strlen('mxchat_email_'));
                 delete_option('mxchat_email_' . $sid);

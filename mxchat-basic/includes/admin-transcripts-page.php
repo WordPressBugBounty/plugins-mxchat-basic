@@ -755,11 +755,12 @@ function mxchat_render_transcripts_page($admin_instance, $page_data) {
                                     <th class="mxch-leads-col-count"><?php esc_html_e('Conversations', 'mxchat'); ?></th>
                                     <th class="mxch-leads-col-last"><?php esc_html_e('Last seen', 'mxchat'); ?></th>
                                     <th class="mxch-leads-col-page"><?php esc_html_e('Top page', 'mxchat'); ?></th>
+                                    <th class="mxch-leads-col-consent"><?php esc_html_e('Consent', 'mxchat'); ?></th>
                                     <th class="mxch-leads-col-actions"></th>
                                 </tr>
                             </thead>
                             <tbody id="mxch-leads-tbody">
-                                <tr><td colspan="6" class="mxch-leads-loading"><span class="spinner is-active"></span></td></tr>
+                                <tr><td colspan="7" class="mxch-leads-loading"><span class="spinner is-active"></span></td></tr>
                             </tbody>
                         </table>
                     </div>
@@ -913,6 +914,7 @@ function mxchat_render_transcripts_page($admin_instance, $page_data) {
                         <div class="mxch-card-body">
                             <?php
                             $auto_delete = isset($options['mxchat_auto_delete_transcripts']) ? $options['mxchat_auto_delete_transcripts'] : 'never';
+                            $mxch_custom_retention = isset($options['mxchat_retention_days']) ? (int) $options['mxchat_retention_days'] : 0;
                             ?>
                             <div class="mxch-field">
                                 <label class="mxch-field-label"><?php esc_html_e('Auto-Delete Old Transcripts', 'mxchat'); ?></label>
@@ -925,6 +927,17 @@ function mxchat_render_transcripts_page($admin_instance, $page_data) {
                                     <option value="1month" <?php selected($auto_delete, '1month'); ?>><?php esc_html_e('After 1 Month', 'mxchat'); ?></option>
                                 </select>
                                 <p class="mxch-field-description"><?php esc_html_e('Automatically delete old chat transcripts to manage database size and privacy.', 'mxchat'); ?></p>
+                                <?php if ($mxch_custom_retention > 0) : ?>
+                                    <p class="mxch-field-description" id="mxchat-retention-override-note">
+                                        <strong><?php
+                                        printf(
+                                            /* translators: %d: the custom retention value in days */
+                                            esc_html__('Overridden by Custom Retention below: transcripts are deleted after %d days.', 'mxchat'),
+                                            $mxch_custom_retention
+                                        );
+                                        ?></strong>
+                                    </p>
+                                <?php endif; ?>
                                 <?php
                                 // Surface the cron's real state next to the setting that
                                 // depends on it (plan-bc08a6): a configured retention whose
@@ -947,6 +960,20 @@ function mxchat_render_transcripts_page($admin_instance, $page_data) {
                                         ?>
                                     </p>
                                 <?php endif; ?>
+                            </div>
+
+                            <div class="mxch-field">
+                                <label class="mxch-field-label" for="mxchat_retention_days"><?php esc_html_e('Custom Retention (Days)', 'mxchat'); ?></label>
+                                <input type="number"
+                                       id="mxchat_retention_days"
+                                       name="mxchat_transcripts_options[mxchat_retention_days]"
+                                       class="mxch-input mxchat-autosave-field"
+                                       value="<?php echo esc_attr($mxch_custom_retention); ?>"
+                                       min="0"
+                                       max="3650"
+                                       step="1"
+                                       data-nonce="<?php echo wp_create_nonce('mxchat_autosave_nonce'); ?>">
+                                <p class="mxch-field-description"><?php esc_html_e('Delete transcripts older than this many days (1&ndash;3650). When greater than 0 this overrides the dropdown above; set 0 to use the dropdown. Developers can adjust the final value with the mxchat_transcript_retention_days filter.', 'mxchat'); ?></p>
                             </div>
                         </div>
                     </div>

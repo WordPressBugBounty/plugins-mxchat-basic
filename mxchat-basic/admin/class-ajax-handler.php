@@ -28,6 +28,7 @@ private function mxchat_init_ajax_hooks() {
     // Settings AJAX
     add_action('wp_ajax_mxchat_save_setting', array($this, 'mxchat_save_setting_callback'));
     add_action('wp_ajax_mxchat_save_prompts_setting', array($this, 'mxchat_save_prompts_setting_callback'));
+    add_action('wp_ajax_mxchat_acf_toggle_group', array($this, 'mxchat_acf_toggle_group_callback'));
     add_action('wp_ajax_migrate_pinecone_settings', array($this, 'ajax_migrate_pinecone_settings'));
     
     // License AJAX 
@@ -466,6 +467,7 @@ public function mxchat_save_setting_callback() {
         // channels" as one, so its save writes both.
         case 'live_agent_schedule_slack':
         case 'live_agent_schedule_telegram':
+        case 'live_agent_schedule_webhook':
         case 'live_agent_schedule':
             if (!class_exists('MxChat_Live_Agent_Schedule')) {
                 wp_send_json_error(['message' => esc_html__('Schedule unavailable', 'mxchat')]);
@@ -579,6 +581,11 @@ public function mxchat_save_setting_callback() {
             //error_log('MXChat Save: Processing name_field_placeholder');
             $options[$field_name] = sanitize_text_field($value);
             break;
+        case 'consent_checkbox_label':
+            // b062c4 — same allowlist as the options.php save path and the
+            // widget render, so the stored label always equals the shown label.
+            $options[$field_name] = MxChat_Utils::sanitize_consent_label($value);
+            break;
         case 'similarity_threshold':
             //error_log('MXChat Save: Processing similarity_threshold');
             // Validate and save - enforce min 20, max 85
@@ -606,6 +613,26 @@ public function mxchat_save_setting_callback() {
             //error_log('MXChat Save: Processing live_agent_status');
             // Set the new value
             $options[$field_name] = ($value === 'on') ? 'on' : 'off';
+            break;
+        // Webhook handoff destination (plan d88e22). Status normalized like the
+        // other channel toggles; the URL is refused outright when it isn't
+        // https so the admin hears about it at save time instead of the
+        // handoff silently never firing.
+        case 'webhook_handoff_status':
+            $options[$field_name] = ($value === 'on') ? 'on' : 'off';
+            break;
+        case 'webhook_handoff_url':
+            $wh_url = trim((string) $value);
+            if ($wh_url === '') {
+                $options[$field_name] = '';
+                break;
+            }
+            $wh_clean = esc_url_raw($wh_url, array('https'));
+            if ($wh_clean === '' || stripos($wh_clean, 'https://') !== 0) {
+                wp_send_json_error(['message' => esc_html__('Webhook URL must start with https://', 'mxchat')]);
+                return;
+            }
+            $options[$field_name] = $wh_clean;
             break;
         case 'enable_web_search':
             //error_log('MXChat Save: Processing enable_web_search');
@@ -656,7 +683,14 @@ public function mxchat_save_setting_callback() {
                     }
 
                     // Handle checkbox values (convert 'on'/'off' to 1/0)
-                    if ($value === 'on' || $value === '1') {
+                    if ($field_name === 'mxchat_retention_days') {
+                        // Number field, NOT a checkbox — without this branch a
+                        // value of '1' would hit the 'on'/'1' coercion below
+                        // (harmlessly) but nothing would clamp: this direct-DB
+                        // path bypasses the registered sanitiser and its
+                        // 0-3650 clamp entirely (plan-3c3338).
+                        $transcripts_options[$field_name] = max(0, min(3650, (int) $value));
+                    } else if ($value === 'on' || $value === '1') {
                         $transcripts_options[$field_name] = 1;
                     } else if ($value === 'off' || $value === '0' || $value === '') {
                         $transcripts_options[$field_name] = 0;
@@ -853,6 +887,8 @@ public function mxchat_save_setting_callback() {
                 'citation_links_toggle',
                 'enable_email_block',
                 'enable_name_field',
+                'enable_consent_checkbox',
+                'consent_checkbox_required',
                 'custom_provider_for_embeddings',
                 'custom_provider_for_images',
                 'print_button_enabled',
@@ -1000,6 +1036,12 @@ if (strpos($name, 'mxchat_pinecone_addon_options') !== false) {
                 if ($field_name === 'mxchat_pinecone_host') {
                     $new_value = str_replace(['https://', 'http://'], '', $new_value);
                 }
+                break;
+            case 'mxchat_pinecone_top_k':
+                // d0cae1: out-of-range and junk normalize to the default 50 —
+                // same clamp the read site applies.
+                $top_k = absint($value);
+                $new_value = (string) (($top_k >= 1 && $top_k <= 1000) ? $top_k : 50);
                 break;
             default:
                 wp_send_json_error(['message' => esc_html__('Unknown Pinecone field', 'mxchat')]);
@@ -1159,8 +1201,16 @@ if (strpos($name, 'mxchat_pinecone_addon_options') !== false) {
 
          // Handle ACF field exclusion toggles
          if (strpos($name, 'mxchat_acf_field_') === 0) {
-             // Extract field name from the input name (e.g., mxchat_acf_field_private_notes -> private_notes)
-             $field_name = str_replace('mxchat_acf_field_', '', $name);
+             // The identifier after the prefix is the ACF field KEY (unique per
+             // field), not the field name — names are shared across groups and
+             // collide (plan 30e81f). Reject anything that isn't key-shaped so a
+             // stale pre-3.2.20 page (or its exit beacon) posting a bare name
+             // can't write junk into the key-based list.
+             $field_key = str_replace('mxchat_acf_field_', '', $name);
+             if (!preg_match('/^field_[A-Za-z0-9_\-]+$/', $field_key)) {
+                 wp_send_json_error(['message' => esc_html__('Invalid ACF field identifier', 'mxchat')]);
+                 return;
+             }
              $is_enabled = ($value === 'on' || $value === '1');
 
              // Get current excluded fields
@@ -1171,11 +1221,17 @@ if (strpos($name, 'mxchat_pinecone_addon_options') !== false) {
 
              if ($is_enabled) {
                  // Remove from exclusion list (field should be included)
-                 $excluded_fields = array_values(array_diff($excluded_fields, array($field_name)));
+                 $excluded_fields = array_values(array_diff($excluded_fields, array($field_key)));
+                 // Lazy legacy-name conversion: if this field's NAME is still
+                 // stored (its group was inactive when the 30e81f migration
+                 // ran), including this one field must not silently include
+                 // its same-named twins — swap the name entry for the keys of
+                 // every OTHER field currently wearing that name.
+                 $excluded_fields = $this->mxchat_expand_legacy_acf_name_entry($excluded_fields, $field_key);
              } else {
                  // Add to exclusion list (field should be excluded)
-                 if (!in_array($field_name, $excluded_fields)) {
-                     $excluded_fields[] = $field_name;
+                 if (!in_array($field_key, $excluded_fields, true)) {
+                     $excluded_fields[] = $field_key;
                  }
              }
 
@@ -1184,8 +1240,8 @@ if (strpos($name, 'mxchat_pinecone_addon_options') !== false) {
              if ($updated || true) { // Always report success since the state may already be correct
                  wp_send_json_success([
                      'message' => $is_enabled
-                         ? sprintf(esc_html__('Field "%s" will be included in imports', 'mxchat'), $field_name)
-                         : sprintf(esc_html__('Field "%s" will be excluded from imports', 'mxchat'), $field_name)
+                         ? esc_html__('Field will be included in imports', 'mxchat')
+                         : esc_html__('Field will be excluded from imports', 'mxchat')
                  ]);
              } else {
                  wp_send_json_error(['message' => esc_html__('Failed to save ACF field setting', 'mxchat')]);
@@ -1219,6 +1275,126 @@ if (strpos($name, 'mxchat_pinecone_addon_options') !== false) {
          }
      }
 
+    /**
+     * If the field behind $included_key still has its NAME stored in the
+     * exclusion list (a legacy entry the 30e81f migration could not resolve
+     * because the group was inactive), replace that name with the keys of
+     * every OTHER current field wearing it. Including one field must never
+     * silently include its same-named twins — that would be the original
+     * collision bug in reverse, in the unsafe (privacy-losing) direction.
+     */
+    private function mxchat_expand_legacy_acf_name_entry($excluded_fields, $included_key) {
+        if (!function_exists('acf_get_field')) {
+            return $excluded_fields;
+        }
+        $field = acf_get_field($included_key);
+        if (!$field || empty($field['name'])) {
+            return $excluded_fields;
+        }
+        $field_name = $field['name'];
+        if (!in_array($field_name, $excluded_fields, true)) {
+            return $excluded_fields;
+        }
+        $excluded_fields = array_values(array_diff($excluded_fields, array($field_name)));
+        foreach ($this->mxchat_acf_keys_for_name($field_name) as $twin_key) {
+            if ($twin_key !== $included_key && !in_array($twin_key, $excluded_fields, true)) {
+                $excluded_fields[] = $twin_key;
+            }
+        }
+        return $excluded_fields;
+    }
+
+    /**
+     * Keys of every currently-registered top-level ACF field with this name.
+     */
+    private function mxchat_acf_keys_for_name($field_name) {
+        $keys = array();
+        if (!function_exists('acf_get_field_groups') || !function_exists('acf_get_fields')) {
+            return $keys;
+        }
+        foreach (acf_get_field_groups() as $group) {
+            $group_fields = acf_get_fields($group['key']);
+            if (empty($group_fields)) {
+                continue;
+            }
+            foreach ($group_fields as $field) {
+                if (isset($field['name'], $field['key']) && $field['name'] === $field_name) {
+                    $keys[] = $field['key'];
+                }
+            }
+        }
+        return $keys;
+    }
+
+    /**
+     * Group-level ACF toggle (plan bf57e0): sets every field in one ACF field
+     * group included or excluded in a SINGLE option write. The client must
+     * never loop the per-field endpoint for this — get_option → modify →
+     * update_option once per field from twenty concurrent requests is a
+     * lost-update race that silently drops most of the group.
+     */
+    public function mxchat_acf_toggle_group_callback() {
+        check_ajax_referer('mxchat_prompts_setting_nonce');
+
+        if (!current_user_can('manage_options')) {
+            wp_send_json_error(['message' => esc_html__('Insufficient permissions', 'mxchat')], 403);
+            return;
+        }
+
+        if (!function_exists('acf_get_fields')) {
+            wp_send_json_error(['message' => esc_html__('ACF is not active', 'mxchat')]);
+            return;
+        }
+
+        $group_key = isset($_POST['group_key']) ? sanitize_text_field(wp_unslash($_POST['group_key'])) : '';
+        if (!preg_match('/^group_[A-Za-z0-9_\-]+$/', $group_key)) {
+            wp_send_json_error(['message' => esc_html__('Invalid ACF group identifier', 'mxchat')]);
+            return;
+        }
+        $state = isset($_POST['state']) ? sanitize_text_field(wp_unslash($_POST['state'])) : '';
+        $include = ($state === 'on' || $state === '1');
+
+        // Resolve the group's fields SERVER-side — a client-supplied key list
+        // is not trusted. This is the same call the settings UI lists from,
+        // so the toggle covers exactly the rendered set (top-level fields).
+        $group_fields = acf_get_fields($group_key);
+        if (empty($group_fields)) {
+            wp_send_json_error(['message' => esc_html__('No fields found for this group', 'mxchat')]);
+            return;
+        }
+
+        $excluded_fields = get_option('mxchat_acf_excluded_fields', array());
+        if (!is_array($excluded_fields)) {
+            $excluded_fields = array();
+        }
+
+        $touched = array();
+        foreach ($group_fields as $field) {
+            if (empty($field['key'])) {
+                continue;
+            }
+            if ($include) {
+                $excluded_fields = array_values(array_diff($excluded_fields, array($field['key'])));
+                $excluded_fields = $this->mxchat_expand_legacy_acf_name_entry($excluded_fields, $field['key']);
+            } elseif (!in_array($field['key'], $excluded_fields, true)) {
+                $excluded_fields[] = $field['key'];
+            }
+            $touched[] = array(
+                'name'  => 'mxchat_acf_field_' . $field['key'],
+                'value' => $include ? 'on' : 'off',
+            );
+        }
+
+        // The one write — the whole point of this endpoint.
+        update_option('mxchat_acf_excluded_fields', array_values($excluded_fields));
+
+        wp_send_json_success([
+            'message' => $include
+                ? esc_html__('All fields in this group will be included in imports', 'mxchat')
+                : esc_html__('All fields in this group will be excluded from imports', 'mxchat'),
+            'fields'  => $touched,
+        ]);
+    }
 
     /**
      * Handles AJAX request for Pinecone settings migration

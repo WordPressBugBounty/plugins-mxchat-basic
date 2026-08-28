@@ -2947,3 +2947,28 @@ body.rtl .mxch-nav-link.active {
     font-weight: 600;
     color: var(--mxch-text-primary, #1a1a2e);
 }
+
+/* ------------------------------------------------------------------
+ * Status pill — documented shell component (CLAUDE.md design table).
+ * Moved here from admin-api-page.php's inline <style> (plan b6e4d4) so
+ * every admin page renders it, not just the API page. Rules are
+ * byte-identical to the inline originals.
+ * ------------------------------------------------------------------ */
+.mxch-status-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px;
+    border-radius: 999px;
+    font-size: 12px;
+    font-weight: 600;
+}
+.mxch-status-pill .mxch-status-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+}
+.mxch-status-pill-active { background: #e6f4ea; color: #1d7a3a; }
+.mxch-status-pill-active .mxch-status-dot { background: #1d7a3a; }
+.mxch-status-pill-disabled { background: #fef3e2; color: #a04a00; }
+.mxch-status-pill-disabled .mxch-status-dot { background: #a04a00; }

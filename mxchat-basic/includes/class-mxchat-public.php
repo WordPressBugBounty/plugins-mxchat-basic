@@ -6,6 +6,12 @@ if (!defined('ABSPATH')) {
 class MxChat_Public {
     private $options;
 
+    // True once any FLOATING instance has rendered on this request via the
+    // shortcode (or the block wrapping it) — append_chatbot_to_body() then
+    // yields, so an explicit floating placement never doubles up with the
+    // Auto-Display instance (plan 95dd1e).
+    private static $floating_instance_rendered = false;
+
     public function __construct() {
         // Simply get the options without defining duplicated defaults
         $this->options = get_option('mxchat_options', array());
@@ -57,7 +63,16 @@ public function append_chatbot_to_body() {
     if ($this->should_hide_chatbot('auto')) {
         return; // Don't show auto-appended chatbot
     }
-    
+
+    // An explicit floating placement (shortcode or the 95dd1e block) already
+    // rendered during content — appending the auto instance would put two
+    // floating widgets on the page with colliding element ids. The explicit
+    // placement wins; content renders before wp_footer, so the flag is set
+    // by the time this runs.
+    if (self::$floating_instance_rendered) {
+        return;
+    }
+
     // Get the bot that should be displayed using new logic
     $bot_to_show = $this->get_display_bot();
     
@@ -120,18 +135,14 @@ public function render_chatbot_shortcode($atts) {
     // Determine which bot to use
     $bot_id = $this->determine_bot_for_shortcode($attributes['bot_id']);
     
-    // UPDATED: Only check hiding for floating shortcodes that could conflict with auto-append
-    // Non-floating shortcodes should always work
+    // A floating shortcode always renders; what it does is suppress the LATER
+    // auto-append instance (see append_chatbot_to_body), so a page never gets
+    // two floating widgets. This replaced a dead empty branch here that
+    // documented the intent but never suppressed anything (plan 95dd1e).
     if ($attributes['floating'] === 'yes') {
-        // For floating shortcodes, check if auto-append is hidden
-        // This prevents duplicate floating chatbots
-        if ($this->should_hide_chatbot('auto') && $this->is_auto_append_enabled()) {
-            // If auto-append is enabled but hidden on this page,
-            // allow the floating shortcode to work (user is overriding)
-            // But if auto-append is disabled globally, also allow shortcode
-        }
+        self::$floating_instance_rendered = true;
     }
-    
+
     // Non-floating shortcodes (floating="no") should NEVER be blocked by the hide setting
     // This allows embedded chatbots even when floating is hidden
     
@@ -216,11 +227,25 @@ public function render_chatbot_shortcode($atts) {
         ($current_options['enable_email_block'] === '1' || $current_options['enable_email_block'] === 'on');
 
     // Add name field variables
-    $enable_name_field = isset($current_options['enable_name_field']) && 
+    $enable_name_field = isset($current_options['enable_name_field']) &&
         ($current_options['enable_name_field'] === '1' || $current_options['enable_name_field'] === 'on');
-    $name_field_placeholder = isset($current_options['name_field_placeholder']) ? 
-        esc_attr($current_options['name_field_placeholder']) : 
+    $name_field_placeholder = isset($current_options['name_field_placeholder']) ?
+        esc_attr($current_options['name_field_placeholder']) :
         esc_attr__('Enter your name', 'mxchat');
+
+    // Consent checkbox (b062c4). Default OFF — with the toggle off this block
+    // renders nothing and the form markup is byte-identical to before.
+    $enable_consent_checkbox = isset($current_options['enable_consent_checkbox']) &&
+        ($current_options['enable_consent_checkbox'] === '1' || $current_options['enable_consent_checkbox'] === 'on');
+    $consent_checkbox_required = isset($current_options['consent_checkbox_required']) &&
+        ($current_options['consent_checkbox_required'] === '1' || $current_options['consent_checkbox_required'] === 'on');
+    // Owner content, kses'd through the shared allowlist at render time as well
+    // as save time — the render is the security boundary the spec names.
+    $consent_checkbox_label = MxChat_Utils::sanitize_consent_label(
+        isset($current_options['consent_checkbox_label']) && $current_options['consent_checkbox_label'] !== ''
+            ? $current_options['consent_checkbox_label']
+            : __('I agree to the Privacy Policy.', 'mxchat')
+    );
 
     ob_start();
 
@@ -291,6 +316,18 @@ public function render_chatbot_shortcode($atts) {
 
                 echo '        <label for="user-email-' . esc_attr($bot_id) . '" class="sr-only">' . esc_html__('Email Address', 'mxchat') . '</label>';
                 echo '        <input type="email" id="user-email-' . esc_attr($bot_id) . '" name="user_email" class="mxchat-email-input" required placeholder="' . esc_attr__('Enter your email address', 'mxchat') . '" />';
+
+                // Consent checkbox row (b062c4). The native required attribute
+                // is UX only — the save endpoint re-enforces it server-side.
+                // Clicking an anchor inside the label activates the link, not
+                // the checkbox (interactive descendants skip label activation).
+                if ($enable_consent_checkbox) {
+                    echo '        <div class="mxchat-consent-row">';
+                    echo '            <input type="checkbox" id="user-consent-' . esc_attr($bot_id) . '" name="user_consent" value="1" class="mxchat-consent-checkbox"' . ($consent_checkbox_required ? ' required' : '') . ' />';
+                    echo '            <label for="user-consent-' . esc_attr($bot_id) . '" class="mxchat-consent-label">' . $consent_checkbox_label . '</label>';
+                    echo '        </div>';
+                }
+
                 echo '<button type="submit" id="email-submit-button-' . esc_attr($bot_id) . '" class="email-submit-button">';
                     $button_text = isset($current_options['email_blocker_button_text'])
                         ? $current_options['email_blocker_button_text']
@@ -308,7 +345,13 @@ public function render_chatbot_shortcode($atts) {
             echo '      </div>';
 
             echo '      <div id="chat-container-' . esc_attr($bot_id) . '" class="chat-container" style="' . ($enable_email_block && $show_email_form ? 'display: none;' : '') . '">';
-            echo '          <div id="chat-box-' . esc_attr($bot_id) . '" class="chat-box">';
+            // role="log" + polite live region: new messages are announced to
+            // screen readers explicitly, so the arrival signal no longer rides
+            // the post-reply input autofocus (suppressed on touch — plan 03799f).
+            // additions-only + non-atomic, with aria-busy held on the streaming
+            // bubble until [DONE] (chat-script.js) so a streamed reply is
+            // announced once, complete — not per token (WCAG 4.1.3, plan 67f126).
+            echo '          <div id="chat-box-' . esc_attr($bot_id) . '" class="chat-box" role="log" aria-live="polite" aria-atomic="false" aria-relevant="additions text" aria-label="' . esc_attr__('Chat messages', 'mxchat') . '">';
             echo '              <div class="bot-message"' . ($skip_inline_colors ? '' : ' style="background: ' . esc_attr($bot_message_bg_color) . ';"') . '>';
             echo '                  <div dir="auto"' . ($skip_inline_colors ? '' : ' style="color: ' . esc_attr($bot_message_font_color) . ';"') . '>';
             echo                        wp_kses_post($intro_message);
@@ -361,6 +404,10 @@ public function render_chatbot_shortcode($atts) {
             // Hard-caps typing/paste client-side; the chat handler enforces it server-side too.
             $mxchat_max_input_length = isset($this->options['max_input_length']) ? intval($this->options['max_input_length']) : 0;
             $mxchat_maxlength_attr = $mxchat_max_input_length > 0 ? ' maxlength="' . esc_attr($mxchat_max_input_length) . '"' : '';
+            // Visually-hidden label = the input's accessible name (WCAG 3.3.2,
+            // plan 67f126). The placeholder stays as visible prompt copy but
+            // cannot be the name — it vanishes on the first keystroke.
+            echo '              <label for="chat-input-' . esc_attr($bot_id) . '" class="sr-only">' . esc_html__('Type your message', 'mxchat') . '</label>';
             echo '              <textarea id="chat-input-' . esc_attr($bot_id) . '" class="chat-input" dir="auto"' . $mxchat_maxlength_attr . ' placeholder="' . esc_attr($input_copy) . '"' . ($skip_inline_colors ? '' : ' style="color: ' . esc_attr($chat_input_font_color) . ';"') . '></textarea>';
             // Language-neutral character counter (plan 7091a2). Numbers only — no
             // translatable strings — so it reads correctly on every-language install.
@@ -582,6 +629,21 @@ private function get_display_bot() {
  * instance would double-append the widget.
  */
 public static function compute_display_bot() {
+    // The Elementor builder canvas is not a chat surface (plan 95dd1e part 2):
+    // its preview iframe is a real front-end page load, so without this guard
+    // the Auto-Display instance renders LIVE inside the canvas — front-end
+    // chat scripts firing in the editor, able to start a session for the
+    // person editing. Returning false here suppresses both the wp_footer
+    // auto-append and the asset enqueue gate for preview requests only; the
+    // placement widget's own canvas rendering is a static placeholder anyway.
+    if (did_action('elementor/loaded')
+        && class_exists('\Elementor\Plugin')
+        && isset(\Elementor\Plugin::$instance->preview)
+        && \Elementor\Plugin::$instance->preview
+        && \Elementor\Plugin::$instance->preview->is_preview_mode()) {
+        return false;
+    }
+
     $options = get_option('mxchat_options', array());
     if (!is_array($options)) {
         $options = array();
@@ -665,6 +727,14 @@ public static function should_load_assets() {
     if ($display_bot === false && is_singular()) {
         $post = get_post();
         if ($post && has_shortcode((string) $post->post_content, 'mxchat_chatbot')) {
+            $has_shortcode = true;
+        }
+        // The mxchat/chatbot block (plan-95dd1e) stores a block comment, not
+        // shortcode text, so has_shortcode can't see it — first-chance detect
+        // it here for the same no-FOUC reason. The render-time safety net in
+        // render_chatbot_shortcode() still covers template/widget placements.
+        if ($post && !$has_shortcode && function_exists('has_block')
+            && has_block('mxchat/chatbot', $post)) {
             $has_shortcode = true;
         }
     }

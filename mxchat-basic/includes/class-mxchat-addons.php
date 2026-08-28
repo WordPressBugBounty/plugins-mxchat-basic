@@ -545,6 +545,43 @@ class MxChat_Addons {
                 ),
             ),
 
+            'mxchat-migration-tool' => array(
+                'title' => __('MxChat Migration Tool', 'mxchat'),
+                'description' => __('Move your knowledge base safely between embedding models and vector databases. Re-embed existing content when switching models, migrate between WordPress and Pinecone storage, and export your knowledge base for backup.', 'mxchat'),
+                'key_benefits' => array(
+                    __('Re-embed when switching models', 'mxchat'),
+                    __('WordPress ↔ Pinecone migration', 'mxchat'),
+                    __('Knowledge base export', 'mxchat')
+                ),
+                'license' => 'MxChat PRO',
+                'accent' => '#fa73e6',
+                'url' => 'https://mxchat.ai/add-ons/mxchat-migration-tool/',
+                'plugin_file' => 'mxchat-migration-tool/mxchat-migration-tool.php',
+                'config_page' => 'mxchat-migration',
+                'hero_features' => array(
+                    array(
+                        'icon' => '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 3 21 3 21 8"/><line x1="4" y1="20" x2="21" y2="3"/><polyline points="21 16 21 21 16 21"/><line x1="15" y1="15" x2="21" y2="21"/><line x1="4" y1="4" x2="9" y2="9"/></svg>',
+                        'title' => __('Model Migration', 'mxchat'),
+                        'desc' => __('Re-embed for a new model', 'mxchat'),
+                    ),
+                    array(
+                        'icon' => '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>',
+                        'title' => __('Database Moves', 'mxchat'),
+                        'desc' => __('WordPress ↔ Pinecone', 'mxchat'),
+                    ),
+                    array(
+                        'icon' => '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>',
+                        'title' => __('KB Export', 'mxchat'),
+                        'desc' => __('Back up as JSON or text', 'mxchat'),
+                    ),
+                    array(
+                        'icon' => '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 16 12 14 15 10 9 8 12 2 12"/></svg>',
+                        'title' => __('Progress Tracking', 'mxchat'),
+                        'desc' => __('Batched with live status', 'mxchat'),
+                    ),
+                ),
+            ),
+
         );
     }
 

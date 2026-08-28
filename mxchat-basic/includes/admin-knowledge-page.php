@@ -557,6 +557,17 @@ function mxchat_render_import_options_section($admin_instance, $knowledge_manage
                         </div>
                     </button>
 
+                    <!-- Document File Upload Option (plan 0485e5) -->
+                    <button type="button" class="mxchat-import-box" data-option="document-upload" data-type="document-upload">
+                        <div class="mxchat-import-icon">
+                            <span class="dashicons dashicons-media-text"></span>
+                        </div>
+                        <div class="mxchat-import-content">
+                            <h4><?php esc_html_e('Document Upload', 'mxchat'); ?></h4>
+                            <p><?php esc_html_e('Upload a Word document, text, or Markdown file (.docx, .txt, .md).', 'mxchat'); ?></p>
+                        </div>
+                    </button>
+
                     <!-- YouTube Video Import Option -->
                     <button type="button" class="mxchat-import-box" data-option="youtube" data-type="youtube">
                         <div class="mxchat-import-icon">
@@ -667,6 +678,24 @@ function mxchat_render_import_options_section($admin_instance, $knowledge_manage
                         </p>
                         <button type="submit" name="submit_pdf_file" class="mxch-btn mxch-btn-primary">
                             <?php esc_html_e('Import PDF', 'mxchat'); ?>
+                        </button>
+                    </form>
+                </div>
+
+                <div class="mxchat-import-input-area" id="mxchat-document-upload-area" style="display: none; margin-top: 20px;">
+                    <form id="mxchat-document-upload-form" method="post" action="<?php echo esc_url(admin_url('admin-post.php?action=mxchat_submit_document_file')); ?>" enctype="multipart/form-data">
+                        <?php wp_nonce_field('mxchat_submit_document_file_action', 'mxchat_submit_document_file_nonce'); ?>
+                        <?php if ($multibot_active && $current_bot_id !== 'default') : ?>
+                            <input type="hidden" name="bot_id" value="<?php echo esc_attr($current_bot_id); ?>">
+                        <?php endif; ?>
+                        <div class="mxch-field">
+                            <input type="file" name="document_file" id="mxchat-document-file-input" accept=".docx,.txt,.md" required>
+                        </div>
+                        <p class="mxch-field-description">
+                            <?php esc_html_e('Select a .docx, .txt, or .md file to import into the knowledge base. The text is extracted and indexed; the file itself is not stored. Re-uploading a file with the same name replaces its previous content.', 'mxchat'); ?>
+                        </p>
+                        <button type="submit" name="submit_document_file" class="mxch-btn mxch-btn-primary">
+                            <?php esc_html_e('Import Document', 'mxchat'); ?>
                         </button>
                     </form>
                 </div>
@@ -1060,7 +1089,6 @@ function mxchat_render_knowledge_base_section($admin_instance, $knowledge_manage
                                                         title="<?php esc_attr_e('View indexed content', 'mxchat'); ?>">
                                                     <span class="dashicons dashicons-visibility" style="font-size: 14px;"></span>
                                                 </button>
-                                                <?php if ($data_source !== 'pinecone') : ?>
                                                 <button type="button"
                                                         class="mxch-btn mxch-btn-ghost mxch-btn-sm mxchat-edit-entry-btn"
                                                         data-source-url="<?php echo esc_attr($source_url); ?>"
@@ -1071,7 +1099,6 @@ function mxchat_render_knowledge_base_section($admin_instance, $knowledge_manage
                                                         title="<?php esc_attr_e('Edit content', 'mxchat'); ?>">
                                                     <span class="dashicons dashicons-edit" style="font-size: 14px;"></span>
                                                 </button>
-                                                <?php endif; ?>
                                                 <button type="button"
                                                         class="mxch-btn mxch-btn-ghost mxch-btn-sm delete-button-group"
                                                         data-source-url="<?php echo esc_attr($source_url); ?>"
@@ -1220,7 +1247,6 @@ function mxchat_render_knowledge_base_section($admin_instance, $knowledge_manage
                                                     title="<?php esc_attr_e('View indexed content', 'mxchat'); ?>">
                                                 <span class="dashicons dashicons-visibility" style="font-size: 14px;"></span>
                                             </button>
-                                            <?php if ($data_source !== 'pinecone') : ?>
                                             <button type="button"
                                                     class="mxch-btn mxch-btn-ghost mxch-btn-sm mxchat-edit-entry-btn"
                                                     data-source-url="<?php echo esc_attr($prompt->source_url ?? ''); ?>"
@@ -1231,7 +1257,6 @@ function mxchat_render_knowledge_base_section($admin_instance, $knowledge_manage
                                                     title="<?php esc_attr_e('Edit content', 'mxchat'); ?>">
                                                 <span class="dashicons dashicons-edit" style="font-size: 14px;"></span>
                                             </button>
-                                            <?php endif; ?>
                                             <?php if ($data_source === 'pinecone') : ?>
                                                 <button type="button" class="mxch-btn mxch-btn-ghost mxch-btn-sm delete-button-ajax" data-vector-id="<?php echo esc_attr($prompt->id); ?>" data-bot-id="<?php echo esc_attr($current_bot_id); ?>" data-nonce="<?php echo wp_create_nonce('mxchat_delete_pinecone_prompt_nonce'); ?>" style="color: var(--mxch-error);">
                                                     <span class="dashicons dashicons-trash" style="font-size: 14px;"></span>
@@ -1473,7 +1498,16 @@ function mxchat_render_chunking_section() {
 
                 <div class="mxch-field" id="mxchat-video-embed-threshold-field" style="<?php echo $video_embed_enabled ? '' : 'display: none;'; ?>">
                     <label class="mxch-field-label" for="mxchat_video_embed_threshold"><?php esc_html_e('Video Card Match Threshold (%)', 'mxchat'); ?></label>
-                    <input type="number" name="mxchat_video_embed_threshold" id="mxchat_video_embed_threshold" class="mxch-input mxchat-autosave-field" value="<?php echo esc_attr($video_embed_threshold); ?>" min="20" max="95" step="1" style="max-width: 200px;">
+                    <?php // Slider matching the site-wide Similarity Threshold exactly
+                          // (plan 7afd54): same .slider-container / .range-slider /
+                          // .range-value markup; the shared admin JS live-updates the
+                          // <id>_value span on input and autosaves on change (once per
+                          // drag release, so no request storm). Range/default/clamp
+                          // unchanged — presentation only. ?>
+                    <div class="slider-container">
+                        <input type="range" name="mxchat_video_embed_threshold" id="mxchat_video_embed_threshold" class="range-slider mxchat-autosave-field" value="<?php echo esc_attr($video_embed_threshold); ?>" min="20" max="95" step="1">
+                        <span id="mxchat_video_embed_threshold_value" class="range-value"><?php echo esc_html((int) $video_embed_threshold); ?></span>
+                    </div>
                     <p class="mxch-field-description"><?php
                         /* translators: %d is the site-wide Similarity Threshold percentage. */
                         printf(esc_html__('How closely the video must match the question before its card is shown. Higher means fewer, more relevant cards. This is separate from the site-wide Similarity Threshold (currently %d%%), which decides what the AI reads — a video is worth reading from at a lower score than it is worth putting on screen.', 'mxchat'), (int) $site_threshold);
@@ -1614,28 +1648,53 @@ function mxchat_render_acf_fields_section($knowledge_manager) {
                     <?php else: ?>
                         <div class="mxch-notice mxch-notice-info" style="margin-bottom: 20px;">
                             <svg class="mxch-notice-icon" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
-                            <span><?php esc_html_e('Toggle fields ON to include them in knowledge base embeddings. Toggle OFF to exclude sensitive or irrelevant fields.', 'mxchat'); ?></span>
+                            <span><?php esc_html_e('Toggle fields ON to include them in knowledge base embeddings. Toggle OFF to exclude sensitive or irrelevant fields. Exclusions apply everywhere a field appears — ACF location rules (post types, templates) do not scope this list.', 'mxchat'); ?></span>
                         </div>
 
-                        <?php foreach ($all_acf_fields as $group_title => $fields): ?>
-                            <div class="mxchat-acf-field-group" style="margin-bottom: 24px;">
-                                <h4 style="margin: 0 0 12px 0; color: var(--mxch-text-primary); font-weight: 600;">
-                                    <?php echo esc_html($group_title); ?>
-                                </h4>
+                        <?php foreach ($all_acf_fields as $group_key => $group):
+                            $fields = $group['fields'];
+                            // Group toggle state derives from the per-field state —
+                            // never stored on its own (plan bf57e0).
+                            $excluded_count = 0;
+                            foreach ($fields as $field) {
+                                if (in_array($field['key'], $excluded_fields, true) || in_array($field['name'], $excluded_fields, true)) {
+                                    $excluded_count++;
+                                }
+                            }
+                            $group_all_included = ($excluded_count === 0);
+                            $group_partial = ($excluded_count > 0 && $excluded_count < count($fields));
+                        ?>
+                            <div class="mxchat-acf-field-group" style="margin-bottom: 24px;" data-mxchat-acf-group="<?php echo esc_attr($group_key); ?>">
+                                <div style="display: flex; align-items: center; justify-content: space-between; margin: 0 0 12px 0;">
+                                    <h4 style="margin: 0; color: var(--mxch-text-primary); font-weight: 600;">
+                                        <?php echo esc_html($group['title']); ?>
+                                    </h4>
+                                    <label class="mxchat-toggle-switch" title="<?php esc_attr_e('Include or exclude every field in this group', 'mxchat'); ?>">
+                                        <input type="checkbox"
+                                               class="mxchat-acf-group-toggle"
+                                               data-group-key="<?php echo esc_attr($group_key); ?>"
+                                               data-nonce="<?php echo wp_create_nonce('mxchat_prompts_setting_nonce'); ?>"
+                                               <?php if ($group_partial): ?>data-indeterminate="1"<?php endif; ?>
+                                               <?php checked($group_all_included, true); ?>>
+                                        <span class="mxchat-toggle-slider"></span>
+                                    </label>
+                                </div>
                                 <div style="background: #f8fafc; border-radius: var(--mxch-radius-md); padding: 16px;">
                                     <?php foreach ($fields as $field):
-                                        $field_name = $field['name'];
-                                        $is_enabled = !in_array($field_name, $excluded_fields);
+                                        // Toggles identify fields by ACF field KEY — names are shared
+                                        // across groups and collide (plan 30e81f). Legacy name entries
+                                        // (group inactive at migration time) still count as excluded.
+                                        $is_enabled = !in_array($field['key'], $excluded_fields, true) && !in_array($field['name'], $excluded_fields, true);
                                     ?>
                                         <div style="display: flex; align-items: center; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #e2e8f0;">
                                             <div>
                                                 <span style="font-weight: 500;"><?php echo esc_html($field['label']); ?></span>
-                                                <span style="color: var(--mxch-text-muted); font-size: 12px; margin-left: 8px;">(<?php echo esc_html($field_name); ?>)</span>
+                                                <span style="color: var(--mxch-text-muted); font-size: 12px; margin-left: 8px;">(<?php echo esc_html($field['name']); ?>)</span>
                                                 <span style="color: var(--mxch-text-muted); font-size: 11px; margin-left: 8px; background: #e2e8f0; padding: 2px 6px; border-radius: 4px;"><?php echo esc_html($field['type']); ?></span>
                                             </div>
                                             <label class="mxchat-toggle-switch">
                                                 <input type="checkbox"
-                                                       name="mxchat_acf_field_<?php echo esc_attr($field_name); ?>"
+                                                       name="mxchat_acf_field_<?php echo esc_attr($field['key']); ?>"
                                                        class="mxchat-autosave-field"
                                                        value="on"
                                                        data-nonce="<?php echo wp_create_nonce('mxchat_prompts_setting_nonce'); ?>"
@@ -1800,6 +1859,14 @@ function mxchat_render_pinecone_section() {
                             <input type="text" id="mxchat_pinecone_host" name="mxchat_pinecone_addon_options[mxchat_pinecone_host]" value="<?php echo esc_attr($pinecone_options['mxchat_pinecone_host'] ?? ''); ?>" class="mxch-input" placeholder="e.g., my-index-xyz123.svc.pinecone.io">
                             <p class="mxch-field-description"><?php esc_html_e('The hostname from your Pinecone index URL (exclude https://). Found in index details.', 'mxchat'); ?></p>
                         </div>
+
+                        <div class="mxch-field">
+                            <label class="mxch-field-label" for="mxchat_pinecone_top_k">
+                                <?php esc_html_e('Results Per Query (topK)', 'mxchat'); ?>
+                            </label>
+                            <input type="number" id="mxchat_pinecone_top_k" name="mxchat_pinecone_addon_options[mxchat_pinecone_top_k]" value="<?php echo esc_attr($pinecone_options['mxchat_pinecone_top_k'] ?? '50'); ?>" class="mxch-input" min="1" max="1000" step="1" placeholder="50">
+                            <p class="mxch-field-description"><?php esc_html_e('How many candidate matches each Pinecone query requests (1-1000, default 50). Higher values improve grouping of chunked content at the cost of slightly larger responses.', 'mxchat'); ?></p>
+                        </div>
                     </div>
 
                     <?php submit_button(__('Save Pinecone Settings', 'mxchat'), 'primary', 'submit', true, array('class' => 'mxch-btn mxch-btn-primary')); ?>
@@ -1818,6 +1885,10 @@ function mxchat_render_openai_vectorstore_section() {
     $use_vectorstore = $vectorstore_options['mxchat_use_openai_vectorstore'] ?? '0';
     $vectorstore_ids = $vectorstore_options['mxchat_vectorstore_ids'] ?? '';
     $max_results = $vectorstore_options['mxchat_vectorstore_max_results'] ?? 5;
+    $sync_enabled = $vectorstore_options['mxchat_vectorstore_sync_enabled'] ?? '0';
+    $sync_store_id = $vectorstore_options['mxchat_vectorstore_sync_store_id'] ?? '';
+    $sync_config = class_exists('MxChat_Vectorstore_Manager') ? MxChat_Vectorstore_Manager::get_sync_config('default') : array('enabled' => false, 'store_id' => '');
+    $mapped_count = class_exists('MxChat_Vectorstore_Manager') ? MxChat_Vectorstore_Manager::mapped_file_count() : 0;
 
     // Get current chat model to check compatibility
     $mxchat_options = get_option('mxchat_options', array());
@@ -1889,8 +1960,141 @@ function mxchat_render_openai_vectorstore_section() {
                         </div>
                     </div>
 
+                    <div class="mxch-field" style="border-top: 1px solid var(--mxch-border, #e2e4e7); padding-top: 20px; margin-top: 4px;">
+                        <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 8px;">
+                            <label class="mxchat-toggle-switch">
+                                <input type="checkbox" name="mxchat_openai_vectorstore_options[mxchat_vectorstore_sync_enabled]" value="1" <?php checked($sync_enabled, '1'); ?> id="mxchat_vectorstore_sync_enabled">
+                                <span class="mxchat-toggle-slider"></span>
+                            </label>
+                            <span style="font-weight: 500;"><?php esc_html_e('Sync Knowledge Base to Vector Store', 'mxchat'); ?></span>
+                        </div>
+                        <p class="mxch-field-description" style="margin-bottom: 16px;">
+                            <?php esc_html_e('Keeps your Vector Store up to date automatically: knowledge base additions, edits, and deletions are mirrored to the store (one file per entry, replaced on change). Without this, the store is frozen at whatever you uploaded manually. Role-restricted entries are never uploaded — OpenAI file search cannot filter by user role.', 'mxchat'); ?>
+                        </p>
+
+                        <label class="mxch-field-label" for="mxchat_vectorstore_sync_store_id">
+                            <?php esc_html_e('Sync Target Vector Store ID', 'mxchat'); ?>
+                        </label>
+                        <input type="text" id="mxchat_vectorstore_sync_store_id" name="mxchat_openai_vectorstore_options[mxchat_vectorstore_sync_store_id]" value="<?php echo esc_attr($sync_store_id); ?>" class="mxch-input" placeholder="<?php echo esc_attr($sync_config['store_id'] ?: 'vs_abc123xyz'); ?>">
+                        <p class="mxch-field-description">
+                            <?php esc_html_e('Leave blank to use the first Vector Store ID above. Syncing writes to exactly one store.', 'mxchat'); ?>
+                        </p>
+                    </div>
+
                     <?php submit_button(__('Save Vector Store Settings', 'mxchat'), 'primary', 'submit', true, array('class' => 'mxch-btn mxch-btn-primary')); ?>
                 </form>
+
+                <?php if ($sync_config['enabled']): ?>
+                <div class="mxch-field" id="mxchat-vs-import" style="border-top: 1px solid var(--mxch-border, #e2e4e7); padding-top: 20px;"
+                     data-nonce="<?php echo esc_attr(wp_create_nonce('mxchat_admin_nonce')); ?>">
+                    <label class="mxch-field-label"><?php esc_html_e('Import Existing Knowledge Base', 'mxchat'); ?></label>
+                    <p class="mxch-field-description">
+                        <?php printf(esc_html__('One-time (re-runnable) import of every knowledge base entry into the sync target store. Runs in the background via WP-Cron; safe to interrupt and resume — already-imported, unchanged entries are skipped. Currently mirrored: %s files.', 'mxchat'), '<strong id="mxchat-vs-mapped">' . esc_html(number_format_i18n($mapped_count)) . '</strong>'); ?>
+                    </p>
+                    <div style="display: flex; align-items: center; gap: 8px; margin: 10px 0;">
+                        <button type="button" class="mxch-btn mxch-btn-secondary" id="mxchat-vs-import-start"><?php esc_html_e('Import Knowledge Base to Vector Store', 'mxchat'); ?></button>
+                        <button type="button" class="mxch-btn" id="mxchat-vs-import-resume" style="display:none;"><?php esc_html_e('Resume Import', 'mxchat'); ?></button>
+                        <button type="button" class="mxch-btn" id="mxchat-vs-import-cancel" style="display:none;"><?php esc_html_e('Cancel', 'mxchat'); ?></button>
+                    </div>
+                    <div id="mxchat-vs-import-bar" style="display:none; height: 8px; background: var(--mxch-border, #e2e4e7); border-radius: 4px; overflow: hidden; max-width: 420px;">
+                        <div id="mxchat-vs-import-fill" style="height: 100%; width: 0%; background: #2271b1; transition: width .4s;"></div>
+                    </div>
+                    <p class="mxch-field-description" id="mxchat-vs-import-status" style="margin-top: 8px;"></p>
+                </div>
+
+                <script>
+                (function() {
+                    var wrap = document.getElementById('mxchat-vs-import');
+                    if (!wrap) { return; }
+                    var nonce = wrap.getAttribute('data-nonce');
+                    var startBtn = document.getElementById('mxchat-vs-import-start');
+                    var resumeBtn = document.getElementById('mxchat-vs-import-resume');
+                    var cancelBtn = document.getElementById('mxchat-vs-import-cancel');
+                    var bar = document.getElementById('mxchat-vs-import-bar');
+                    var fill = document.getElementById('mxchat-vs-import-fill');
+                    var statusEl = document.getElementById('mxchat-vs-import-status');
+                    var mappedEl = document.getElementById('mxchat-vs-mapped');
+                    var pollTimer = null;
+
+                    function post(action, done) {
+                        var body = 'action=' + encodeURIComponent(action) + '&nonce=' + encodeURIComponent(nonce);
+                        fetch(ajaxurl, {
+                            method: 'POST',
+                            credentials: 'same-origin',
+                            headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+                            body: body
+                        }).then(function(r) { return r.json(); }).then(done).catch(function() {
+                            statusEl.textContent = '<?php echo esc_js(__('Request failed — check the browser console.', 'mxchat')); ?>';
+                        });
+                    }
+
+                    function render(state, mapped) {
+                        if (typeof mapped === 'number' && mappedEl) { mappedEl.textContent = mapped.toLocaleString(); }
+                        var running = state.status === 'running';
+                        startBtn.style.display = running ? 'none' : '';
+                        cancelBtn.style.display = running ? '' : 'none';
+                        resumeBtn.style.display = (running && state.stalled) ? '' : 'none';
+                        bar.style.display = (running || state.status === 'done') ? '' : 'none';
+                        var pct = state.total > 0 ? Math.min(100, Math.round(state.processed / state.total * 100)) : 0;
+                        if (state.status === 'done') { pct = 100; }
+                        fill.style.width = pct + '%';
+
+                        var bits = [];
+                        if (state.status === 'running') { bits.push(state.stalled ? '<?php echo esc_js(__('Import stalled (cron missed) — click Resume.', 'mxchat')); ?>' : '<?php echo esc_js(__('Importing…', 'mxchat')); ?>'); }
+                        if (state.status === 'done') { bits.push('<?php echo esc_js(__('Import complete.', 'mxchat')); ?>'); }
+                        if (state.status === 'cancelled') { bits.push('<?php echo esc_js(__('Import cancelled.', 'mxchat')); ?>'); }
+                        if (state.status === 'error') { bits.push('<?php echo esc_js(__('Import error:', 'mxchat')); ?> ' + state.last_error); }
+                        if (state.status !== 'idle') {
+                            bits.push(state.processed + '/' + state.total
+                                + ' — ' + state.imported + ' <?php echo esc_js(__('uploaded', 'mxchat')); ?>'
+                                + ', ' + state.unchanged + ' <?php echo esc_js(__('unchanged', 'mxchat')); ?>'
+                                + ', ' + state.skipped_restricted + ' <?php echo esc_js(__('skipped (role-restricted)', 'mxchat')); ?>'
+                                + ', ' + state.failed + ' <?php echo esc_js(__('failed', 'mxchat')); ?>');
+                            if (state.failed > 0 && state.last_error && state.status !== 'error') {
+                                bits.push('<?php echo esc_js(__('Last error:', 'mxchat')); ?> ' + state.last_error);
+                            }
+                        }
+                        statusEl.textContent = bits.join(' ');
+
+                        if (running && !pollTimer) {
+                            pollTimer = setInterval(function() {
+                                post('mxchat_vectorstore_import_status', function(res) {
+                                    if (res && res.success) { render(res.data.state, res.data.mapped); }
+                                });
+                            }, 3000);
+                        } else if (!running && pollTimer) {
+                            clearInterval(pollTimer);
+                            pollTimer = null;
+                        }
+                    }
+
+                    startBtn.addEventListener('click', function() {
+                        startBtn.disabled = true;
+                        statusEl.textContent = '<?php echo esc_js(__('Starting…', 'mxchat')); ?>';
+                        post('mxchat_vectorstore_import_start', function(res) {
+                            startBtn.disabled = false;
+                            if (res && res.success) { render(res.data.state); }
+                            else { statusEl.textContent = (res && res.data && res.data.message) ? res.data.message : '<?php echo esc_js(__('Could not start the import.', 'mxchat')); ?>'; }
+                        });
+                    });
+                    resumeBtn.addEventListener('click', function() {
+                        post('mxchat_vectorstore_import_resume', function(res) {
+                            if (res && res.success) { render(res.data.state); }
+                        });
+                    });
+                    cancelBtn.addEventListener('click', function() {
+                        post('mxchat_vectorstore_import_cancel', function(res) {
+                            if (res && res.success) { render(res.data.state); }
+                        });
+                    });
+
+                    // Pick up an import already in flight when the page loads.
+                    post('mxchat_vectorstore_import_status', function(res) {
+                        if (res && res.success && res.data.state.status !== 'idle') { render(res.data.state, res.data.mapped); }
+                    });
+                })();
+                </script>
+                <?php endif; ?>
             </div>
         </div>
     </div>
@@ -2492,11 +2696,21 @@ function mxchat_render_knowledge_page_scripts() {
                         saveBtn.disabled = false;
 
                         if (resp.success) {
-                            showNotice('Saved successfully!', 'success');
-                            setTimeout(function() {
-                                closeModal();
-                                window.location.reload();
-                            }, 1000);
+                            if (currentEntry.dataSource === 'pinecone') {
+                                // Pinecone list reads are eventually consistent — the reloaded
+                                // table may show the old text for up to ~60 seconds.
+                                showNotice('Saved! Pinecone changes may take up to 60 seconds to appear — use "Refresh Entries" if the list still shows the old text.', 'success');
+                                setTimeout(function() {
+                                    closeModal();
+                                    window.location.reload();
+                                }, 2500);
+                            } else {
+                                showNotice('Saved successfully!', 'success');
+                                setTimeout(function() {
+                                    closeModal();
+                                    window.location.reload();
+                                }, 1000);
+                            }
                         } else {
                             showNotice((resp.data && resp.data.message) || 'Save failed.', 'error');
                         }

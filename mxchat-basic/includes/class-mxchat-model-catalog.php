@@ -203,6 +203,62 @@ class MxChat_Model_Catalog {
     }
 
     /**
+     * Canonical retired-model map: every chat model id a provider has retired
+     * (or hard-deprecated) that stored settings may still carry, mapped to its
+     * current replacement (plan-mxchat-20260822-202df5).
+     *
+     * THE ONLY PLACE THIS MAPPING LIVES. mxchat_migrate_deprecated_models()
+     * consumes it for the main chat + content models, and add-ons that store
+     * their own model ids (mxchat-multi-bot's per-bot overrides) consume it for
+     * theirs — a second hardcoded list in any consumer is how a stranded-model
+     * bug recurs, so route every new retirement through this map.
+     *
+     * Claude ids map BY TIER so a rescued site lands on the current generation,
+     * not an older intermediate (plan dc91bd). Never map onto a model that is
+     * itself on a deprecation list (the e46b8f rule).
+     *
+     * Entry shape: retired_id => array(
+     *   'to'     => replacement model id (must be current, never itself retired),
+     *   'label'  => replacement display name for user-facing notices,
+     *   'reason' => notice clause explaining the retirement; deliberately NOT
+     *               translated — migration messages are stored in an option and
+     *               rendered later, matching the existing migration notices.
+     * )
+     */
+    public static function retired_model_map() {
+        return array(
+            // Anthropic Claude — Opus tier.
+            'claude-3-opus-20240229'     => array('to' => 'claude-opus-5',            'label' => 'Claude Opus 5',    'reason' => 'because Anthropic retired the older Claude model'), // Retired Jan 5, 2026
+            'claude-opus-4-20250514'     => array('to' => 'claude-opus-5',            'label' => 'Claude Opus 5',    'reason' => 'because Anthropic retired the older Claude model'), // Deprecated
+            'claude-opus-4-1-20250805'   => array('to' => 'claude-opus-5',            'label' => 'Claude Opus 5',    'reason' => 'because Anthropic retired the older Claude model'), // Retired Aug 5, 2026 (first-party API)
+            // Anthropic Claude — Sonnet tier.
+            'claude-3-5-sonnet-20240620' => array('to' => 'claude-sonnet-5',          'label' => 'Claude Sonnet 5',  'reason' => 'because Anthropic retired the older Claude model'), // Retired Oct 28, 2025
+            'claude-3-5-sonnet-20241022' => array('to' => 'claude-sonnet-5',          'label' => 'Claude Sonnet 5',  'reason' => 'because Anthropic retired the older Claude model'), // Retired Oct 28, 2025
+            'claude-3-7-sonnet-20250219' => array('to' => 'claude-sonnet-5',          'label' => 'Claude Sonnet 5',  'reason' => 'because Anthropic retired the older Claude model'), // Retired Feb 19, 2026
+            'claude-3-sonnet-20240229'   => array('to' => 'claude-sonnet-5',          'label' => 'Claude Sonnet 5',  'reason' => 'because Anthropic retired the older Claude model'), // Legacy
+            'claude-sonnet-4-20250514'   => array('to' => 'claude-sonnet-5',          'label' => 'Claude Sonnet 5',  'reason' => 'because Anthropic retired the older Claude model'), // Deprecated
+            // Anthropic Claude — Haiku tier.
+            'claude-3-haiku-20240307'    => array('to' => 'claude-haiku-4-5-20251001', 'label' => 'Claude Haiku 4.5', 'reason' => 'because Anthropic retired the older Claude model'), // Legacy
+            'claude-3-5-haiku-20241022'  => array('to' => 'claude-haiku-4-5-20251001', 'label' => 'Claude Haiku 4.5', 'reason' => 'because Anthropic retired the older Claude model'), // Deprecated
+            // OpenAI — GPT-4 series + GPT-3.5 Turbo (deprecated 2026-02-17).
+            'gpt-4o'                     => array('to' => 'gpt-5.6-sol',              'label' => 'GPT-5.6 Sol',      'reason' => 'due to OpenAI deprecating older models'),
+            'gpt-4.1-2025-04-14'         => array('to' => 'gpt-5.6-sol',              'label' => 'GPT-5.6 Sol',      'reason' => 'due to OpenAI deprecating older models'),
+            'gpt-4-turbo'                => array('to' => 'gpt-5.6-sol',              'label' => 'GPT-5.6 Sol',      'reason' => 'due to OpenAI deprecating older models'),
+            'gpt-4'                      => array('to' => 'gpt-5.6-sol',              'label' => 'GPT-5.6 Sol',      'reason' => 'due to OpenAI deprecating older models'),
+            'gpt-3.5-turbo'              => array('to' => 'gpt-5.6-sol',              'label' => 'GPT-5.6 Sol',      'reason' => 'due to OpenAI deprecating older models'),
+            // OpenAI — the gpt-5.x-chat-latest aliases retired 2026-08-10 (e46b8f).
+            'gpt-5.1-chat-latest'        => array('to' => 'gpt-5.6-sol',              'label' => 'GPT-5.6 Sol',      'reason' => 'because OpenAI retires the GPT-5.x Chat Latest models on August 10, 2026'),
+            'gpt-5.3-chat-latest'        => array('to' => 'gpt-5.6-sol',              'label' => 'GPT-5.6 Sol',      'reason' => 'because OpenAI retires the GPT-5.x Chat Latest models on August 10, 2026'),
+            // OpenAI — mini tier.
+            'gpt-4o-mini'                => array('to' => 'gpt-5-mini',               'label' => 'GPT-5 Mini',       'reason' => 'due to OpenAI deprecating GPT-4 series models'),
+            'gpt-4.1-mini'               => array('to' => 'gpt-5-mini',               'label' => 'GPT-5 Mini',       'reason' => 'due to OpenAI deprecating GPT-4 series models'),
+            // DeepSeek — removed at the vendor 2026-07-24 (hard cutoff, every request 400s).
+            'deepseek-chat'              => array('to' => 'deepseek-v4-flash',        'label' => 'DeepSeek V4 Flash', 'reason' => 'because DeepSeek retired its older API models on July 24, 2026'),
+            'deepseek-reasoner'          => array('to' => 'deepseek-v4-flash',        'label' => 'DeepSeek V4 Flash', 'reason' => 'because DeepSeek retired its older API models on July 24, 2026'),
+        );
+    }
+
+    /**
      * Returns the display label for the given chat-or-embedding provider slug.
      * Chat providers checked first; embedding-only providers fall through.
      */
@@ -424,11 +480,20 @@ class MxChat_Model_Catalog {
      * currently saved model, which is re-injected with a "retired" marker so
      * the settings screen never renders a blank select (plan e46b8f).
      *
-     * @param string $current_model Optionally, the install's saved model id.
+     * @param string     $current_model  Optionally, the install's saved model id.
+     * @param array|null $provider_slugs Optional allowlist of provider slugs
+     *                                   (catalog keys, e.g. 'openai', 'claude').
+     *                                   null = every provider. Lets a consumer
+     *                                   that can only dispatch to some providers
+     *                                   (the content generator — plan ccb751)
+     *                                   derive its picker from the same catalog.
      */
-    public static function settings_dropdown_groups($current_model = '') {
+    public static function settings_dropdown_groups($current_model = '', $provider_slugs = null) {
         $out = array();
         foreach (self::chat_models() as $provider_slug => $provider) {
+            if (is_array($provider_slugs) && !in_array($provider_slug, $provider_slugs, true)) {
+                continue;
+            }
             $out[$provider['label']] = array();
             foreach ($provider['models'] as $id => $entry) {
                 $label = self::picker_label($entry);
