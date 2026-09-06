@@ -31,7 +31,6 @@ class MxChat_Addons {
                 'license' => 'MxChat PRO',
                 'accent' => '#0ea5e9',
                 'url' => 'https://mxchat.ai/add-ons/mxchat-search/',
-                'download_url' => 'https://mxchat.ai/add-ons/mxchat-search/',
                 'plugin_file' => 'mxchat-search/mxchat-search.php',
                 'config_page' => 'mxchat-search',
                 'hero_features' => array(
@@ -70,7 +69,6 @@ class MxChat_Addons {
                 'license' => 'MxChat PRO',
                 'accent' => '#7873f5',
                 'url' => 'https://mxchat.ai/add-ons/mxchat-mcp/',
-                'download_url' => 'https://mxchat.ai/add-ons/mxchat-mcp/',
                 'plugin_file' => 'mxchat-mcp/mxchat-mcp.php',
                 'config_page' => 'mxchat-mcp',
                 'hero_features' => array(
@@ -109,7 +107,6 @@ class MxChat_Addons {
                 'license' => 'MxChat PRO',
                 'accent' => '#6366f1',
                 'url' => 'https://mxchat.ai/add-ons/mxchat-advanced-content/',
-                'download_url' => 'https://mxchat.ai/add-ons/mxchat-advanced-content/',
                 'plugin_file' => 'mxchat-advanced-content/mxchat-advanced-content.php',
                 'config_page' => 'mxchat-content',
                 'hero_features' => array(
@@ -407,7 +404,6 @@ class MxChat_Addons {
                 'license' => 'MxChat PRO',
                 'accent' => '#10b981',
                 'url' => 'https://mxchat.ai/add-ons/mxchat-embed/',
-                'download_url' => 'https://mxchat.ai/add-ons/mxchat-embed/',
                 'plugin_file' => 'mxchat-embed/mxchat-embed.php',
                 'config_page' => 'mxchat-embed',
                 'hero_features' => array(

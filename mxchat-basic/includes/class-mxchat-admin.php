@@ -144,14 +144,58 @@ class MxChat_Admin {
         $options = get_option('mxchat_options', array());
         $has_token   = !empty($options['telegram_bot_token']);
         $has_secret  = !empty($options['telegram_webhook_secret']);
-        if (!$has_token || $has_secret) {
+        if (!$has_token) {
             return;
         }
-        if (get_option('mxchat_dismissed_telegram_secret_notice', '') === '1') {
-            return;
+
+        // Inbound rejections recorded by verify_telegram_request() (plan 30398e).
+        // When the webhook is actually being rejected this stops being a hardening
+        // suggestion and becomes an outage report: it shows even when a secret IS
+        // set (a wrong or unregistered secret rejects just as hard as none), and it
+        // ignores the dismissal flag, because a nudge someone dismissed in July
+        // must not silence live breakage. It self-clears on the first accepted
+        // request, so a fixed install stops nagging without anyone touching it.
+        $rejects      = get_option('mxchat_telegram_webhook_rejects', array());
+        $reject_count = (is_array($rejects) && !empty($rejects['count'])) ? (int) $rejects['count'] : 0;
+
+        if ($reject_count < 1) {
+            // Nothing is failing — the original advisory, unchanged.
+            if ($has_secret) {
+                return;
+            }
+            if (get_option('mxchat_dismissed_telegram_secret_notice', '') === '1') {
+                return;
+            }
         }
-        $settings_url = admin_url('admin.php?page=mxchat-max');
+
+        $settings_url = admin_url('admin.php?page=mxchat-settings#integrations-telegram');
         ?>
+        <?php if ($reject_count > 0) : ?>
+        <div class="notice notice-error mxchat-telegram-reject-notice">
+            <p><strong><?php esc_html_e('MxChat: Telegram is sending replies your site is rejecting', 'mxchat'); ?></strong></p>
+            <p>
+                <?php
+                echo esc_html(sprintf(
+                    /* translators: 1: number of rejected webhook requests, 2: local date and time of the most recent one */
+                    _n(
+                        '%1$s incoming webhook request has been rejected (most recently %2$s), so agent replies from Telegram are not reaching your visitors.',
+                        '%1$s incoming webhook requests have been rejected (most recently %2$s), so agent replies from Telegram are not reaching your visitors.',
+                        $reject_count,
+                        'mxchat'
+                    ),
+                    number_format_i18n($reject_count),
+                    !empty($rejects['last_ts'])
+                        ? wp_date(get_option('date_format') . ' ' . get_option('time_format'), (int) $rejects['last_ts'])
+                        : __('unknown time', 'mxchat')
+                ));
+                ?>
+            </p>
+            <p><?php echo esc_html($this->mxchat_telegram_reject_advice($rejects['last_reason'] ?? '')); ?></p>
+            <p>
+                <a href="<?php echo esc_url($settings_url); ?>" class="button button-primary"><?php esc_html_e('Open Telegram settings', 'mxchat'); ?></a>
+            </p>
+        </div>
+        <?php else : ?>
         <div class="notice notice-warning is-dismissible mxchat-telegram-secret-notice">
             <p><strong><?php esc_html_e('MxChat: Telegram webhook is running without a secret token', 'mxchat'); ?></strong></p>
             <p>
@@ -161,6 +205,7 @@ class MxChat_Admin {
                 <a href="<?php echo esc_url($settings_url); ?>" class="button button-primary"><?php esc_html_e('Open Telegram settings', 'mxchat'); ?></a>
             </p>
         </div>
+        <?php endif; ?>
         <script>
         (function(){
             var n = document.querySelector('.mxchat-telegram-secret-notice');
@@ -176,6 +221,29 @@ class MxChat_Admin {
         })();
         </script>
         <?php
+    }
+
+    /**
+     * Turn a webhook rejection reason code into the sentence that tells the site
+     * owner what to actually do (plan 30398e). The three reasons map to three
+     * different fixes, and saying which one applies is most of the value; shared
+     * by the admin notice and the Telegram settings readout so there is one
+     * wording, not two.
+     *
+     * @param string $reason Reason code recorded by verify_telegram_request().
+     * @return string
+     */
+    public function mxchat_telegram_reject_advice($reason) {
+        switch ((string) $reason) {
+            case 'no_secret_ip_mismatch':
+                return __('Requests are arriving from an address outside Telegram\'s published ranges, which is normal behind Cloudflare or a reverse proxy. Set a webhook secret in the Telegram settings and re-register your webhook.', 'mxchat');
+            case 'missing_header':
+                return __('Your webhook was registered without the secret. Open the Register Webhook URL link on the Telegram settings tab again — it now includes the secret token.', 'mxchat');
+            case 'secret_mismatch':
+                return __('The secret Telegram is sending does not match the one saved here. Save your settings, then re-register the webhook using the link on the Telegram settings tab.', 'mxchat');
+            default:
+                return __('Re-register your webhook from the Telegram settings tab.', 'mxchat');
+        }
     }
 
     /**
@@ -9432,6 +9500,18 @@ public function mxchat_live_agent_shared_channel_callback() {
                 $shared_error['error']
             )) . '</p>';
     }
+
+    // Private-channel warning (plan 1a2666), recorded by the privacy probe at
+    // configuration time or when the channel id first resolves. Posting INTO
+    // a private channel works once the bot is a member, so everything looks
+    // configured — but Slack delivers inbound replies from private channels
+    // as message.groups events, which the documented app setup never
+    // subscribes to, and agent replies silently never reach the visitor.
+    $shared_privacy = get_option('mxchat_slack_shared_channel_privacy');
+    if (!empty($shared_privacy['is_private']) && trim((string) $value) !== '' && ($shared_privacy['configured'] ?? '') === trim((string) $value)) {
+        echo '<p class="description"><strong>' . esc_html__('⚠ This is a private channel', 'mxchat') . '</strong> — '
+            . esc_html__('Slack sends replies from private channels as message.groups events. In your Slack app, add the groups:history scope and subscribe to the message.groups bot event (alongside message.channels), then reinstall the app — otherwise agent replies posted here never reach your visitors.', 'mxchat') . '</p>';
+    }
 }
 
 public function mxchat_live_agent_archive_on_end_callback() {
@@ -9506,6 +9586,48 @@ public function mxchat_telegram_group_id_callback() {
         isset($this->options['telegram_group_id']) ? esc_attr($this->options['telegram_group_id']) : ''
     );
     echo '<p class="description">' . esc_html__('Your Telegram supergroup ID (starts with -100). The group must have forum topics enabled.', 'mxchat') . '</p>';
+
+    // Surface the last failed Telegram API call right where it gets fixed
+    // (plan 1aeee3). Before this existed every Telegram response was
+    // discarded — a wrong group id, a closed topic, or an oversized handoff
+    // all failed with no trace anywhere. Kept until the next failure
+    // overwrites it; the timestamp shows how stale it is.
+    $tg_error = get_option('mxchat_telegram_last_error');
+    if (!empty($tg_error['error'])) {
+        echo '<p class="description"><strong>' . esc_html__('⚠ Last Telegram API failure', 'mxchat') . '</strong> — '
+            . esc_html(sprintf(
+                /* translators: 1: Telegram API method name, 2: Telegram's error description, 3: local date and time of the failure */
+                __('%1$s failed with "%2$s" (%3$s). If live agent chat is working now, this may be from an earlier misconfiguration.', 'mxchat'),
+                $tg_error['method'] ?? 'sendMessage',
+                $tg_error['error'],
+                !empty($tg_error['time']) ? wp_date(get_option('date_format') . ' ' . get_option('time_format'), (int) $tg_error['time']) : __('unknown time', 'mxchat')
+            )) . '</p>';
+    }
+
+    // The inbound counterpart of the line above (plan 30398e): outbound tells you
+    // MxChat could not reach Telegram, this one tells you Telegram reached MxChat
+    // and was turned away. That failure previously left nothing behind but a
+    // single error_log() line, so a Cloudflare-fronted install with no secret set
+    // dropped every agent reply with no admin-side trace at all. Cleared
+    // automatically by the first accepted request.
+    $tg_rejects = get_option('mxchat_telegram_webhook_rejects');
+    if (is_array($tg_rejects) && !empty($tg_rejects['count'])) {
+        $reject_count = (int) $tg_rejects['count'];
+        echo '<p class="description" style="color:#b32d2e;"><strong>' . esc_html__('⚠ Incoming Telegram webhook requests are being rejected', 'mxchat') . '</strong> — '
+            . esc_html(sprintf(
+                /* translators: 1: number of rejected requests, 2: local date and time of the most recent rejection */
+                _n(
+                    '%1$s request rejected, most recently %2$s. Agent replies are not reaching visitors.',
+                    '%1$s requests rejected, most recently %2$s. Agent replies are not reaching visitors.',
+                    $reject_count,
+                    'mxchat'
+                ),
+                number_format_i18n($reject_count),
+                !empty($tg_rejects['last_ts']) ? wp_date(get_option('date_format') . ' ' . get_option('time_format'), (int) $tg_rejects['last_ts']) : __('unknown time', 'mxchat')
+            ))
+            . ' ' . esc_html($this->mxchat_telegram_reject_advice($tg_rejects['last_reason'] ?? ''))
+            . '</p>';
+    }
 }
 
 public function mxchat_telegram_webhook_secret_callback() {

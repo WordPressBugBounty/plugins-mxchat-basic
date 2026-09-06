@@ -349,10 +349,9 @@ function mxchat_render_pro_page($admin_instance, $addons_config) {
                                     <?php esc_html_e('Activate Extension', 'mxchat'); ?>
                                 </a>
                             <?php elseif ($is_activated): ?>
-                                <!-- Has Pro license but extension not installed - Download -->
-                                <?php $download_link = !empty($addon['download_url']) ? $addon['download_url'] : $addon['url']; ?>
-                                <a href="<?php echo esc_url($download_link); ?>" target="_blank" class="mxch-btn mxch-btn-primary mxch-btn-lg">
-                                    <?php esc_html_e('Download Add-on', 'mxchat'); ?>
+                                <!-- Has Pro license but extension not installed - the installable ZIPs live on My Account > Downloads -->
+                                <a href="https://mxchat.ai/my-account/downloads/" target="_blank" class="mxch-btn mxch-btn-primary mxch-btn-lg">
+                                    <?php esc_html_e('Get the ZIP from My Account', 'mxchat'); ?>
                                 </a>
                             <?php else: ?>
                                 <!-- No Pro license - Purchase -->

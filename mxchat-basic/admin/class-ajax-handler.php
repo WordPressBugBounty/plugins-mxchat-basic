@@ -614,6 +614,27 @@ public function mxchat_save_setting_callback() {
             // Set the new value
             $options[$field_name] = ($value === 'on') ? 'on' : 'off';
             break;
+        // Shared handoff channel (plan 1a2666): re-probe the channel's privacy
+        // at configuration time so the settings screen can warn about private
+        // channels (their inbound events arrive as message.groups, which the
+        // documented app setup never subscribes to). Only id-shaped values can
+        // be checked before the first handoff resolves a #name — the handoff
+        // path probes those when it caches the resolved id.
+        case 'live_agent_shared_channel':
+            $options[$field_name] = sanitize_text_field($value);
+            delete_option('mxchat_slack_shared_channel_privacy');
+            $shared_channel_target = ltrim(trim((string) $options[$field_name]), '#');
+            if ($shared_channel_target !== '' && preg_match('/^[CG][A-Z0-9]{6,}$/', $shared_channel_target)) {
+                if (!class_exists('MxChat_Integrator')) {
+                    require_once plugin_dir_path(dirname(__FILE__)) . 'includes/class-mxchat-integrator.php';
+                }
+                MxChat_Integrator::mxchat_probe_slack_channel_privacy(
+                    $options['live_agent_bot_token'] ?? '',
+                    $shared_channel_target,
+                    trim((string) $options[$field_name])
+                );
+            }
+            break;
         // Webhook handoff destination (plan d88e22). Status normalized like the
         // other channel toggles; the URL is refused outright when it isn't
         // https so the admin hears about it at save time instead of the

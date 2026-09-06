@@ -352,7 +352,13 @@ public function render_chatbot_shortcode($atts) {
             // bubble until [DONE] (chat-script.js) so a streamed reply is
             // announced once, complete — not per token (WCAG 4.1.3, plan 67f126).
             echo '          <div id="chat-box-' . esc_attr($bot_id) . '" class="chat-box" role="log" aria-live="polite" aria-atomic="false" aria-relevant="additions text" aria-label="' . esc_attr__('Chat messages', 'mxchat') . '">';
-            echo '              <div class="bot-message"' . ($skip_inline_colors ? '' : ' style="background: ' . esc_attr($bot_message_bg_color) . ';"') . '>';
+            // mxchat-intro-message marks the greeting bubble so nothing has to
+            // infer it from position (plan a1a79b). Only this element ever
+            // carries the class — reset and the {visitor_name} substitution
+            // both key off it, and both used to assume the greeting was still
+            // the first .bot-message in the box, which stops being true the
+            // moment chat persistence rehydrates the transcript.
+            echo '              <div class="bot-message mxchat-intro-message"' . ($skip_inline_colors ? '' : ' style="background: ' . esc_attr($bot_message_bg_color) . ';"') . '>';
             echo '                  <div dir="auto"' . ($skip_inline_colors ? '' : ' style="color: ' . esc_attr($bot_message_font_color) . ';"') . '>';
             echo                        wp_kses_post($intro_message);
             echo '                  </div>';

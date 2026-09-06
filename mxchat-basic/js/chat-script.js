@@ -285,7 +285,18 @@ jQuery(document).ready(function($) {
             this.setChatSession(botId, newSessionId);
             var $chatBox = getElement(botId, 'chat-box');
             if ($chatBox.length) {
-                $chatBox.find('.user-message, .bot-message:not(:first), .agent-message').remove();
+                // Keep the greeting, drop everything else. Identify the greeting
+                // by its marker class, NOT by position (plan a1a79b): after a
+                // chat-persistence restore the first .bot-message is a real
+                // reply, so ":not(:first)" left a stale answer sitting at the
+                // top of an otherwise empty box. The positional fallback only
+                // runs when the marker is absent — a page served from HTML cache
+                // that predates this release — and behaves exactly as before.
+                if ($chatBox.find('.mxchat-intro-message').length) {
+                    $chatBox.find('.user-message, .bot-message:not(.mxchat-intro-message), .agent-message').remove();
+                } else {
+                    $chatBox.find('.user-message, .bot-message:not(:first), .agent-message').remove();
+                }
             }
             if (this.instances[botId]) {
                 this.instances[botId].chatHistoryLoaded = false;
@@ -3052,7 +3063,16 @@ function loadChatHistory(botId, onComplete) {
                                 mxLiveRegionEl.setAttribute('aria-live', 'off');
                             }
 
-                            // IMPORTANT: Clear existing messages before loading history
+                            // IMPORTANT: Clear existing messages before loading history.
+                            // Detach the greeting first and put it back below —
+                            // it is server-rendered and never stored in the
+                            // transcript, so the old unconditional .empty()
+                            // deleted it for the rest of the page life (plan
+                            // a1a79b). Detach rather than rebuild: intro_message
+                            // is not localized to JS, and this node already
+                            // carries the per-bot inline colors and any
+                            // {visitor_name} substitution already applied to it.
+                            var $mxIntro = $chatBox.find('.mxchat-intro-message').first().detach();
                             $chatBox.empty();
 
                             $.each(response.data.conversation, function(index, message) {
@@ -3121,7 +3141,14 @@ function loadChatHistory(botId, onComplete) {
                                 }
                             });
 
-                            // Only append messages and scroll if we have content
+                            // Only append messages and scroll if we have content.
+                            // Greeting goes back FIRST, above the restored
+                            // history: "Hello — [earlier conversation]" is the
+                            // natural reading and matches the order a fresh
+                            // visitor sees (plan a1a79b).
+                            if ($mxIntro && $mxIntro.length) {
+                                $chatBox.append($mxIntro);
+                            }
                             $chatBox.append($fragment);
                             scrollToBottom(botId, true);
 
@@ -3865,8 +3892,11 @@ if (mxchatChat && mxchatChat.email_collection_enabled === 'on') {
         var chatBox = getElementDOM(botId, 'chat-box');
         if (!chatBox) return;
 
-        // Find the first bot message (intro message)
-        var introMessage = chatBox.querySelector('.bot-message');
+        // Find the greeting by its marker, not by position (plan a1a79b) —
+        // after a persistence restore the first .bot-message is a restored
+        // reply, and {visitor_name} was being substituted into that instead.
+        // Positional fallback for HTML cached before this release only.
+        var introMessage = chatBox.querySelector('.mxchat-intro-message') || chatBox.querySelector('.bot-message');
         if (!introMessage) return;
 
         var messageContent = introMessage.querySelector('div[dir="auto"]');

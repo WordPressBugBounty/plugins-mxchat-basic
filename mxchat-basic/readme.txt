@@ -5,7 +5,7 @@ Tags: ai chatbot, chatgpt, woocommerce, customer support, content generation
 Requires at least: 5.0
 Tested up to: 7.0
 Requires PHP: 7.2
-Stable tag: 3.2.20
+Stable tag: 3.2.21
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -321,6 +321,18 @@ Please ensure compliance with applicable terms and data privacy laws.
 
 
 
+
+= 3.2.21 - September 6, 2026 =
+* Fixed: Ending a Telegram live agent conversation, from MxChat or from Telegram itself, now retires its topic and returns the visitor to the AI. The visitor's next request used to post into the closed topic, where agents could not reply.
+* Fixed: The conversation history shared with Telegram agents now always arrives, sent in parts within Telegram's message limit as readable text. A long conversation could previously drop the entire handoff card without a trace.
+* Fixed: Slack agents who reply in a thread on a handoff message now reach the visitor. Those threaded replies were silently discarded in the default per-conversation mode.
+* Fixed: With Chat Persistence on, Start new chat now leaves only your greeting, and a restored conversation keeps the greeting above it. A returning visitor was previously left with one old reply and no greeting.
+* Fixed: The Open Telegram settings button on the webhook security notice now opens the Telegram settings tab instead of the onboarding screen.
+* Improved: Telegram handoffs share the last 10 messages, labeled with the count, and any Telegram delivery failure is shown on the Telegram settings screen with Telegram's own explanation. Failures used to leave no trace anywhere.
+* Improved: When your site rejects Telegram's incoming requests, the Telegram settings screen and a dashboard notice now say how many, when, why, and how to fix it. Sites behind Cloudflare with no webhook secret previously dropped every reply in silence.
+* Improved: When a Slack message cannot be relayed to the visitor, such as an edit or a file upload, the agent now sees a short note in the channel explaining how to get it through. Dropped replies are logged when debug mode is on.
+* Improved: If your shared Slack handoff channel is private, the Slack settings screen now warns that your Slack app needs the message.groups event subscription. Without it, handoffs post but agent replies never reach the visitor.
+* Improved: On the Pro and Extensions page, the button for an add-on you have not installed is now Get the ZIP from My Account and opens your account Downloads page. It used to open the same page as the Documentation button.
 
 = 3.2.20 - August 28, 2026 =
 * New: The knowledge base can now populate and maintain your OpenAI Vector Store — every addition, edit and deletion is mirrored automatically, and an Import Existing Knowledge Base button (or the wp mxchat vectorstore-import command) uploads what you already have in resumable batches; role-restricted entries are never uploaded.
@@ -681,6 +693,9 @@ Older releases are archived in the plugin's full version history on WordPress.or
 
 
 
+
+= 3.2.21 =
+Live agent chat is more reliable on both channels: Telegram conversations can be ended and restarted cleanly, conversation history always arrives, and both Telegram delivery failures and rejected incoming requests now show on the settings screen. Slack agents can reply in thread and are told when a message could not be relayed. Start new chat now works correctly with Chat Persistence on.
 
 = 3.2.20 =
 The knowledge base can now populate and maintain your OpenAI Vector Store — every change is mirrored automatically and a resumable import uploads what you already have, where before the store was read-only. Chat answers can no longer link to pages that do not exist, a new Webhook destination routes live-agent handoffs to your own helpdesk or automation flow, and the chatbot is placeable as a Gutenberg block or an Elementor widget. Also adds a consent checkbox for the pre-chat form, completes screen reader support for the conversation, and fixes Pinecone reads on serverless indexes. Re-import Persian, Hindi and other Indic-script content to repair entries indexed earlier.

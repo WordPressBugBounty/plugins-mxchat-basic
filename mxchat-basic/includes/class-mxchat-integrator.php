@@ -830,6 +830,8 @@ public function verify_telegram_request($request) {
     //error_log('[MxChat Telegram DEBUG] verify_telegram_request called');
     //error_log('[MxChat Telegram DEBUG] Stored secret: ' . (empty($secret_token) ? 'EMPTY' : substr($secret_token, 0, 10) . '...'));
 
+    $peer = isset($_SERVER['REMOTE_ADDR']) ? (string) $_SERVER['REMOTE_ADDR'] : '';
+
     if (empty($secret_token)) {
         // No secret configured (legacy setup). Do NOT fail open to the whole
         // internet — that lets an unauthenticated caller write agent-branded
@@ -838,12 +840,13 @@ public function verify_telegram_request($request) {
         // keep working while an arbitrary-internet caller is blocked. Setting a
         // real secret (see the admin notice) is the recommended path.
         // (plan-0c17b5)
-        $peer = isset($_SERVER['REMOTE_ADDR']) ? (string) $_SERVER['REMOTE_ADDR'] : '';
         if ($this->mxchat_ip_in_telegram_ranges($peer)) {
+            $this->mxchat_clear_telegram_webhook_rejects();
             return true;
         }
         error_log('MxChat: Telegram webhook has no secret configured and the request '
             . 'is not from a Telegram IP range; rejected. Set a webhook secret to secure it.');
+        $this->mxchat_record_telegram_webhook_reject('no_secret_ip_mismatch', $peer);
         return false;
     }
 
@@ -854,13 +857,82 @@ public function verify_telegram_request($request) {
 
     if (empty($request_token)) {
         //error_log('[MxChat Telegram DEBUG] Request rejected: No token in header');
+        $this->mxchat_record_telegram_webhook_reject('missing_header', $peer);
         return false;
     }
 
     // Timing-safe comparison
     $result = hash_equals($secret_token, $request_token);
     //error_log('[MxChat Telegram DEBUG] Token comparison result: ' . ($result ? 'MATCH' : 'MISMATCH'));
+    if ($result) {
+        $this->mxchat_clear_telegram_webhook_rejects();
+    } else {
+        $this->mxchat_record_telegram_webhook_reject('secret_mismatch', $peer);
+    }
     return $result;
+}
+
+/**
+ * Record an inbound Telegram webhook rejection so wp-admin can say something is
+ * wrong (plan 30398e). Before this, a rejected webhook produced at most one
+ * error_log() line: on a Cloudflare-fronted install with no secret set the IP
+ * check can never match, so every agent reply was dropped permanently and
+ * invisibly. Stored not-autoloaded; read only by the settings screen and the
+ * admin notice.
+ *
+ * @param string $reason One of no_secret_ip_mismatch|missing_header|secret_mismatch.
+ * @param string $peer   Raw REMOTE_ADDR; stored anonymised.
+ * @return void
+ */
+private function mxchat_record_telegram_webhook_reject($reason, $peer = '') {
+    $state = get_option('mxchat_telegram_webhook_rejects', array());
+    if (!is_array($state)) {
+        $state = array();
+    }
+    update_option('mxchat_telegram_webhook_rejects', array(
+        'count'        => isset($state['count']) ? ((int) $state['count']) + 1 : 1,
+        'last_ts'      => time(),
+        'last_reason'  => (string) $reason,
+        'last_peer_ip' => $this->mxchat_anonymize_peer_ip($peer),
+    ), false);
+}
+
+/**
+ * Clear the inbound-rejection counter. Called on every ACCEPTED webhook request
+ * so an install that gets fixed stops warning on its own (plan 30398e). The
+ * get_option() guard keeps the steady state read-only — no write per message.
+ *
+ * @return void
+ */
+private function mxchat_clear_telegram_webhook_rejects() {
+    if (get_option('mxchat_telegram_webhook_rejects', false) !== false) {
+        delete_option('mxchat_telegram_webhook_rejects');
+    }
+}
+
+/**
+ * Drop the host part of a peer address before storing it. The reason code is the
+ * load-bearing part of a rejection record; the exact address is not worth keeping
+ * in wp_options. IPv4 loses its last octet, IPv6 keeps its first four groups.
+ *
+ * @param string $ip
+ * @return string
+ */
+private function mxchat_anonymize_peer_ip($ip) {
+    $ip = is_string($ip) ? trim($ip) : '';
+    if ($ip === '') {
+        return '';
+    }
+    if (filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4) !== false) {
+        $parts = explode('.', $ip);
+        $parts[3] = 'x';
+        return implode('.', $parts);
+    }
+    if (filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6) !== false) {
+        $groups = explode(':', $ip);
+        return implode(':', array_slice($groups, 0, 4)) . ':x';
+    }
+    return '';
 }
 
 /**
@@ -5060,12 +5132,60 @@ private function mxchat_post_shared_handoff($session_id, $text, $thread_ts = '')
             'configured' => $configured,
             'id'         => $data['channel'],
         ), false);
+
+        // Probe the channel's privacy once per resolved id (plan 1a2666): a
+        // private shared channel delivers inbound agent replies as
+        // message.groups events, which the documented Slack app setup never
+        // subscribes to — outbound handoffs look fine while replies silently
+        // never arrive. The settings page warns from the recorded result.
+        $privacy = get_option('mxchat_slack_shared_channel_privacy', array());
+        if (!is_array($privacy) || ($privacy['id'] ?? '') !== $data['channel'] || ($privacy['configured'] ?? '') !== $configured) {
+            self::mxchat_probe_slack_channel_privacy($slack_bot_token, $data['channel'], $configured);
+        }
     }
     if ($thread_ts === '' && !empty($data['ts'])) {
         update_option("mxchat_thread_{$session_id}", $data['ts'], 'no');
     }
 
     return true;
+}
+
+/**
+ * Record whether the shared handoff channel is private (plan 1a2666). The
+ * result lands in mxchat_slack_shared_channel_privacy and the Slack settings
+ * screen warns from it, naming the message.groups subscription the app needs
+ * for inbound events from private channels. Static so the admin autosave
+ * path can probe at configuration time; the handoff path covers channels
+ * configured by #name once their id resolves.
+ *
+ * @param string $slack_bot_token Bot token to call conversations.info with.
+ * @param string $channel_id      Resolved channel id (C…/G…).
+ * @param string $configured      The setting value this verdict belongs to.
+ */
+public static function mxchat_probe_slack_channel_privacy($slack_bot_token, $channel_id, $configured) {
+    if (empty($slack_bot_token) || $channel_id === '') {
+        return;
+    }
+    $response = wp_remote_get('https://slack.com/api/conversations.info?channel=' . rawurlencode($channel_id), [
+        'headers' => ['Authorization' => 'Bearer ' . $slack_bot_token],
+        'timeout' => 10,
+    ]);
+    if (is_wp_error($response)) {
+        return; // Transport blip — keep whatever verdict was recorded before.
+    }
+    $data = json_decode(wp_remote_retrieve_body($response), true);
+    if (empty($data['ok']) || empty($data['channel'])) {
+        // Undeterminable (missing scope, unknown channel) — clear any stale
+        // verdict rather than warning from old data.
+        delete_option('mxchat_slack_shared_channel_privacy');
+        return;
+    }
+    update_option('mxchat_slack_shared_channel_privacy', array(
+        'configured' => $configured,
+        'id'         => $data['channel']['id'] ?? $channel_id,
+        'is_private' => !empty($data['channel']['is_private']) || !empty($data['channel']['is_group']),
+        'time'       => time(),
+    ), false);
 }
 
 /**
@@ -5078,6 +5198,15 @@ private function mxchat_post_shared_handoff($session_id, $text, $thread_ts = '')
  * @return array Last $count messages of the session history.
  */
 private function mxchat_recent_handoff_history($session_id, $count = 5) {
+    /**
+     * How many trailing messages a live-agent handoff carries. One filter for
+     * all three destinations; Telegram passes 10 (its payload is chunked),
+     * Slack and the webhook keep the default 5 (plan 1aeee3).
+     *
+     * @param int    $count      Messages to include.
+     * @param string $session_id Session being handed off.
+     */
+    $count = max(1, (int) apply_filters('mxchat_handoff_history_count', $count, $session_id));
     $history = MxChat_Utils::get_session_history($session_id);
     return array_slice($history, -$count);
 }
@@ -5429,87 +5558,82 @@ public function mxchat_telegram_live_agent_handover($message, $user_id, $session
 
     // Check if topic already exists for this session
     $topic_id = get_option("mxchat_telegram_topic_{$session_id}", '');
+    $had_existing_topic = ($topic_id !== '');
 
     if (empty($topic_id)) {
-        // Generate topic name
-        $topic_name = $this->generate_telegram_topic_name($session_id);
-
-        // Random icon color (Telegram forum topic colors)
-        $icon_colors = [0x6FB9F0, 0xFFD67E, 0xCB86DB, 0x8EEE98, 0xFF93B2, 0xFB6F5F];
-        $icon_color = $icon_colors[array_rand($icon_colors)];
-
-        // Create forum topic
-        $response = wp_remote_post("https://api.telegram.org/bot{$telegram_bot_token}/createForumTopic", [
-            'headers' => ['Content-Type' => 'application/json'],
-            'body' => json_encode([
-                'chat_id' => $telegram_group_id,
-                'name' => $topic_name,
-                'icon_color' => $icon_color
-            ])
-        ]);
-
-        if (!is_wp_error($response)) {
-            $response_body = wp_remote_retrieve_body($response);
-            $response_data = json_decode($response_body, true);
-
-            if (isset($response_data['ok']) && $response_data['ok']) {
-                $topic_id = $response_data['result']['message_thread_id'];
-                update_option("mxchat_telegram_topic_{$session_id}", $topic_id);
-                update_option("mxchat_telegram_group_{$session_id}", $telegram_group_id);
-            }
-        }
-
+        $topic_id = $this->mxchat_create_telegram_topic($session_id, $telegram_group_id);
         if (empty($topic_id)) {
-            return false; // Failed to create topic
+            return false; // Failed to create topic — the checked helper recorded why.
         }
     }
 
-    // Get recent chat history (shared slice — plan d88e22)
-    $recent_history = $this->mxchat_recent_handoff_history($session_id);
-
-    // Format conversation context for Telegram (HTML format)
-    $conversation_context = "";
-    if (!empty($recent_history)) {
-        $conversation_context = "<b>Recent Conversation:</b>\n";
-        foreach ($recent_history as $hist_message) {
-            $role_display = $hist_message['role'] === 'user' ? '👤 User' : '🤖 AI';
-            $escaped_content = htmlspecialchars($hist_message['content'], ENT_QUOTES, 'UTF-8');
-            $conversation_context .= "{$role_display}: {$escaped_content}\n";
-        }
-        $conversation_context .= "\n";
-    }
+    // Get recent chat history (shared slice — plan d88e22). Telegram carries a
+    // deeper slice than Slack's 5 because its payload is chunked below (plan
+    // 1aeee3); the context block is labelled with the real count.
+    $recent_history = $this->mxchat_recent_handoff_history($session_id, 10);
 
     // Get user info
     $user_email = MxChat_Session_Store::get($session_id, 'email', 'Not provided');
     $user_name = MxChat_Session_Store::get($session_id, 'name', 'Anonymous');
 
-    // Update session mode
-    MxChat_Session_Store::set($session_id, 'mode', 'agent');
-
-    // Send initial message to topic
-    $escaped_message = htmlspecialchars($message, ENT_QUOTES, 'UTF-8');
+    // Header card FIRST, conversation context as separate follow-ups (plan
+    // 1aeee3). The old single message ran header + history + footer into
+    // Telegram's hard 4096-char sendMessage limit, and one oversized card
+    // dropped the entire handoff — history, session id and current message
+    // together, with no trace.
+    $escaped_message = $this->mxchat_telegram_plain_text($message);
     $topic_message = "🔔 <b>New Live Agent Request</b>\n\n";
     $topic_message .= "<b>Session ID:</b> <code>{$session_id}</code>\n";
-    $topic_message .= "<b>User:</b> {$user_name}\n";
-    $topic_message .= "<b>Email:</b> {$user_email}\n\n";
-
-    if (!empty($conversation_context)) {
-        $topic_message .= $conversation_context;
-    }
-
+    $topic_message .= "<b>User:</b> " . $this->mxchat_telegram_plain_text($user_name) . "\n";
+    $topic_message .= "<b>Email:</b> " . $this->mxchat_telegram_plain_text($user_email) . "\n\n";
     $topic_message .= "<b>Current Message:</b>\n{$escaped_message}\n\n";
     $topic_message .= "<i>Reply in this topic - messages will be sent to the user</i>\n";
     $topic_message .= "<i>Type #close, #end, #disconnect, or #done to end the session</i>";
 
-    wp_remote_post("https://api.telegram.org/bot{$telegram_bot_token}/sendMessage", [
-        'headers' => ['Content-Type' => 'application/json'],
-        'body' => json_encode([
+    $header_args = [
+        'chat_id' => $telegram_group_id,
+        'message_thread_id' => $topic_id,
+        'text' => $topic_message,
+        'parse_mode' => 'HTML'
+    ];
+    $header_sent = $this->mxchat_telegram_api('sendMessage', $header_args);
+
+    // Stale-mapping recovery (plan 1aeee3): installs in the wild carry topic
+    // ids for topics an agent already closed or deleted — the mapping was
+    // never cleaned up before this plan. One retry through a fresh topic,
+    // never a loop.
+    if (is_wp_error($header_sent) && $had_existing_topic
+        && $this->mxchat_is_stale_topic_error($header_sent)) {
+        $this->mxchat_clear_telegram_topic_mapping($session_id);
+        $topic_id = $this->mxchat_create_telegram_topic($session_id, $telegram_group_id);
+        if (!empty($topic_id)) {
+            $header_args['message_thread_id'] = $topic_id;
+            $header_sent = $this->mxchat_telegram_api('sendMessage', $header_args);
+        }
+    }
+
+    if (empty($topic_id) || is_wp_error($header_sent)) {
+        // The agent side never saw this request — do NOT flip the session to
+        // agent mode or tell the visitor a human was notified (same honesty
+        // rule as the webhook destination on delivery failure). The failure
+        // is recorded in mxchat_telegram_last_error for the Telegram tab.
+        return false;
+    }
+
+    // Update session mode — the request provably reached Telegram.
+    MxChat_Session_Store::set($session_id, 'mode', 'agent');
+
+    // Conversation context, each chunk under the 4096 limit with headroom,
+    // split on message boundaries. A failed context chunk is recorded by the
+    // helper but never takes the already-delivered header with it.
+    foreach ($this->mxchat_telegram_history_chunks($recent_history) as $context_chunk) {
+        $this->mxchat_telegram_api('sendMessage', [
             'chat_id' => $telegram_group_id,
             'message_thread_id' => $topic_id,
-            'text' => $topic_message,
+            'text' => $context_chunk,
             'parse_mode' => 'HTML'
-        ])
-    ]);
+        ]);
+    }
 
     $success_message = $this->options['telegram_notification_message'] ?? "I've notified a support agent. Please allow a moment for them to respond.";
     $this->mxchat_save_chat_message($session_id, 'bot', $success_message);
@@ -5582,6 +5706,205 @@ private function generate_telegram_topic_name($session_id) {
 }
 
 /**
+ * One checked door to the Telegram Bot API (plan 1aeee3). Every call in the
+ * integration goes through here: the body is decoded, ok is verified, and a
+ * failure is recorded in mxchat_telegram_last_error (surfaced on the Telegram
+ * Integrations tab) — before this existed every response was discarded, so a
+ * closed topic, a wrong group id, or an oversized message failed with no
+ * trace anywhere. Content Telegram's HTML parser refuses is retried ONCE
+ * without parse_mode so it still lands as plain text; the original failure
+ * stays recorded.
+ *
+ * @param string $method Telegram Bot API method, e.g. 'sendMessage'.
+ * @param array  $args   JSON body for the call.
+ * @param bool   $allow_parse_retry Internal recursion guard.
+ * @return array|true|WP_Error The response's result member on success.
+ */
+private function mxchat_telegram_api($method, $args, $allow_parse_retry = true) {
+    $telegram_bot_token = $this->options['telegram_bot_token'] ?? '';
+    if (empty($telegram_bot_token)) {
+        return new WP_Error('mxchat_telegram_no_token', 'No Telegram bot token configured');
+    }
+
+    $response = wp_remote_post("https://api.telegram.org/bot{$telegram_bot_token}/{$method}", [
+        'headers' => ['Content-Type' => 'application/json'],
+        'body' => json_encode($args),
+        'timeout' => 15
+    ]);
+
+    if (is_wp_error($response)) {
+        $this->mxchat_record_telegram_error($method, $response->get_error_message());
+        return $response;
+    }
+
+    $data = json_decode(wp_remote_retrieve_body($response), true);
+    if (empty($data['ok'])) {
+        $description = isset($data['description']) && $data['description'] !== ''
+            ? (string) $data['description']
+            : 'unknown_error (HTTP ' . wp_remote_retrieve_response_code($response) . ')';
+        $this->mxchat_record_telegram_error($method, $description);
+
+        if ($allow_parse_retry && isset($args['parse_mode'])
+            && stripos($description, "can't parse entities") !== false) {
+            unset($args['parse_mode']);
+            return $this->mxchat_telegram_api($method, $args, false);
+        }
+
+        return new WP_Error('mxchat_telegram_api_error', $description, ['method' => $method]);
+    }
+
+    return isset($data['result']) ? $data['result'] : true;
+}
+
+/**
+ * Record the last failed Telegram API call. Shape mirrors
+ * mxchat_slack_shared_channel_error; kept until the next failure overwrites
+ * it (the settings page shows the timestamp, so staleness is visible).
+ */
+private function mxchat_record_telegram_error($method, $description) {
+    update_option('mxchat_telegram_last_error', array(
+        'error'  => (string) $description,
+        'method' => (string) $method,
+        'time'   => time(),
+    ), false);
+}
+
+/**
+ * Does this WP_Error mean the target forum topic no longer accepts messages?
+ * (Closed from Telegram's UI, deleted, or its thread gone.)
+ */
+private function mxchat_is_stale_topic_error($error) {
+    if (!is_wp_error($error)) {
+        return false;
+    }
+    $msg = strtolower($error->get_error_message());
+    return strpos($msg, 'topic_closed') !== false
+        || strpos($msg, 'topic_deleted') !== false
+        || strpos($msg, 'thread not found') !== false;
+}
+
+/**
+ * Create a fresh forum topic for a session and store its mapping. Used by the
+ * normal handoff path and by the stale-mapping recovery (plan 1aeee3).
+ *
+ * @return string message_thread_id, or '' on failure (already recorded).
+ */
+private function mxchat_create_telegram_topic($session_id, $telegram_group_id) {
+    $topic_name = $this->generate_telegram_topic_name($session_id);
+
+    // Random icon color (Telegram forum topic colors)
+    $icon_colors = [0x6FB9F0, 0xFFD67E, 0xCB86DB, 0x8EEE98, 0xFF93B2, 0xFB6F5F];
+
+    $result = $this->mxchat_telegram_api('createForumTopic', [
+        'chat_id' => $telegram_group_id,
+        'name' => $topic_name,
+        'icon_color' => $icon_colors[array_rand($icon_colors)]
+    ]);
+
+    if (is_wp_error($result) || empty($result['message_thread_id'])) {
+        return '';
+    }
+
+    $topic_id = $result['message_thread_id'];
+    update_option("mxchat_telegram_topic_{$session_id}", $topic_id);
+    update_option("mxchat_telegram_group_{$session_id}", $telegram_group_id);
+    return $topic_id;
+}
+
+/**
+ * Drop a session's topic mapping so the next handoff creates a fresh topic.
+ * A closed topic is never reused — a new request resurrecting a closed thread
+ * left agents with no composer (plan 1aeee3).
+ */
+private function mxchat_clear_telegram_topic_mapping($session_id) {
+    delete_option("mxchat_telegram_topic_{$session_id}");
+    delete_option("mxchat_telegram_group_{$session_id}");
+    delete_transient('mxchat_telegram_messages_' . $session_id);
+}
+
+/**
+ * Reverse-lookup the session owning a forum topic. Shared by the text path,
+ * the service-message path, and anything else that starts from a
+ * message_thread_id.
+ */
+private function mxchat_find_session_by_telegram_topic($topic_id) {
+    global $wpdb;
+    $session_option = $wpdb->get_var(
+        $wpdb->prepare(
+            "SELECT option_name FROM {$wpdb->options}
+             WHERE option_name LIKE %s
+             AND option_value = %s",
+            'mxchat_telegram_topic_%',
+            strval($topic_id)
+        )
+    );
+    return $session_option ? str_replace('mxchat_telegram_topic_', '', $session_option) : '';
+}
+
+/**
+ * Stored bot messages are HTML; escaping that markup raw made agents read
+ * &lt;a href=…&gt; — and ENT_QUOTES emitted numeric entities (&#039;) that
+ * Telegram's HTML parser refuses outright, failing the whole message (plan
+ * 1aeee3). Convert to readable plain text: strip tags, decode entities, then
+ * escape only the < > & that parse_mode HTML requires.
+ */
+private function mxchat_telegram_plain_text($content) {
+    $text = html_entity_decode(wp_strip_all_tags((string) $content), ENT_QUOTES, 'UTF-8');
+    return htmlspecialchars($text, ENT_NOQUOTES, 'UTF-8');
+}
+
+/**
+ * Chunk the handoff's conversation context under Telegram's 4096-char cap
+ * with headroom, splitting on message boundaries; only a single message that
+ * is itself oversized is hard-split, marked truncated. The header card is a
+ * separate message and can never be the thing an oversized history drops.
+ *
+ * @param array $recent_history From mxchat_recent_handoff_history().
+ * @return array HTML-parse-mode strings ready to send, possibly empty.
+ */
+private function mxchat_telegram_history_chunks($recent_history) {
+    if (empty($recent_history)) {
+        return array();
+    }
+
+    // Headroom under the hard 4096 limit — headings, prefixes and escaped
+    // entities all count against it.
+    $cap = 3500;
+
+    $lines = array();
+    foreach ($recent_history as $hist_message) {
+        $role_display = (($hist_message['role'] ?? '') === 'user') ? '👤 User' : '🤖 AI';
+        $line = $role_display . ': ' . $this->mxchat_telegram_plain_text($hist_message['content'] ?? '');
+        if (mb_strlen($line, 'UTF-8') > $cap) {
+            $line = mb_substr($line, 0, $cap - 30, 'UTF-8') . '… <i>(truncated)</i>';
+        }
+        $lines[] = $line;
+    }
+
+    /* translators: %d: number of chat messages included in the handoff context */
+    $first_heading = '<b>' . sprintf(__('Recent Conversation (last %d messages):', 'mxchat'), count($recent_history)) . "</b>\n";
+    $cont_heading = '<b>' . __('Recent Conversation (continued):', 'mxchat') . "</b>\n";
+
+    $chunks = array();
+    $current = $first_heading;
+    $current_has_lines = false;
+    foreach ($lines as $line) {
+        if ($current_has_lines && mb_strlen($current . $line . "\n", 'UTF-8') > $cap) {
+            $chunks[] = rtrim($current);
+            $current = $cont_heading;
+            $current_has_lines = false;
+        }
+        $current .= $line . "\n";
+        $current_has_lines = true;
+    }
+    if ($current_has_lines) {
+        $chunks[] = rtrim($current);
+    }
+
+    return $chunks;
+}
+
+/**
  * Send user message to Telegram agent
  */
 public function mxchat_send_user_message_to_telegram_agent($message, $user_id, $session_id) {
@@ -5593,20 +5916,31 @@ public function mxchat_send_user_message_to_telegram_agent($message, $user_id, $
         return false;
     }
 
-    $escaped_message = htmlspecialchars($message, ENT_QUOTES, 'UTF-8');
-    $user_message = "👤 <b>User:</b> {$escaped_message}";
+    $user_message = "👤 <b>User:</b> " . $this->mxchat_telegram_plain_text($message);
 
-    $response = wp_remote_post("https://api.telegram.org/bot{$telegram_bot_token}/sendMessage", [
-        'headers' => ['Content-Type' => 'application/json'],
-        'body' => json_encode([
-            'chat_id' => $group_id,
-            'message_thread_id' => $topic_id,
-            'text' => $user_message,
-            'parse_mode' => 'HTML'
-        ])
+    $result = $this->mxchat_telegram_api('sendMessage', [
+        'chat_id' => $group_id,
+        'message_thread_id' => $topic_id,
+        'text' => $user_message,
+        'parse_mode' => 'HTML'
     ]);
 
-    return !is_wp_error($response);
+    if (is_wp_error($result)) {
+        // A closed/deleted topic means the agent side of this conversation is
+        // gone — e.g. closed from Telegram's own UI while the service update
+        // never reached us. The old code returned true here (the HTTP call
+        // succeeded) and the visitor was told "sent to live agent" forever.
+        // Stop relaying into the void: end agent mode, tell the visitor, and
+        // clear the mapping so the next handoff starts fresh (plan 1aeee3).
+        if ($this->mxchat_is_stale_topic_error($result)) {
+            $this->mxchat_clear_telegram_topic_mapping($session_id);
+            MxChat_Session_Store::set($session_id, 'mode', 'ai');
+            $this->mxchat_save_chat_message($session_id, 'bot', "Live agent session ended. You're now chatting with the AI assistant.");
+        }
+        return false;
+    }
+
+    return true;
 }
 
 /**
@@ -5646,29 +5980,36 @@ public function handle_telegram_webhook(WP_REST_Request $request) {
 
         //error_log("[MxChat Telegram DEBUG] Parsed: chat_id={$chat_id}, topic_id={$topic_id}, agent={$agent_name}, text={$message_text}");
 
+        // Service messages carry no text and used to die at the empty-text
+        // guard below — including the one that says an agent closed the topic
+        // from Telegram's own UI. Handle that close so the session doesn't
+        // stay in agent mode relaying messages into a topic nobody can reply
+        // in (plan 1aeee3). forum_topic_reopened is deliberately a no-op:
+        // reopening does not resume the session — the next handoff creates a
+        // fresh topic.
+        if (isset($message_data['forum_topic_closed'])) {
+            $service_session_id = $this->mxchat_find_session_by_telegram_topic($topic_id);
+            if ($service_session_id !== '') {
+                $stored_group_id = get_option("mxchat_telegram_group_{$service_session_id}", '');
+                if (strval($stored_group_id) == strval($chat_id)) {
+                    MxChat_Session_Store::set($service_session_id, 'mode', 'ai');
+                    $this->mxchat_save_chat_message($service_session_id, 'bot', "Live agent session ended. You're now chatting with the AI assistant.");
+                    $this->mxchat_clear_telegram_topic_mapping($service_session_id);
+                }
+            }
+            return new WP_REST_Response(['ok' => true]);
+        }
+
         // Skip empty messages
         if (empty($message_text)) {
             //error_log('[MxChat Telegram DEBUG] Skipped: Empty message text');
             return new WP_REST_Response(['ok' => true]);
         }
 
-        // Find session ID by topic ID - cast to string for comparison
-        global $wpdb;
-        $topic_id_str = strval($topic_id);
-        $session_option = $wpdb->get_var(
-            $wpdb->prepare(
-                "SELECT option_name FROM {$wpdb->options}
-                 WHERE option_name LIKE %s
-                 AND option_value = %s",
-                'mxchat_telegram_topic_%',
-                $topic_id_str
-            )
-        );
+        // Find session ID by topic ID (shared reverse lookup)
+        $session_id = $this->mxchat_find_session_by_telegram_topic($topic_id);
 
-        //error_log("[MxChat Telegram DEBUG] Looking for topic_id={$topic_id_str} in options, found: " . ($session_option ?: 'NULL'));
-
-        if ($session_option) {
-            $session_id = str_replace('mxchat_telegram_topic_', '', $session_option);
+        if ($session_id !== '') {
             //error_log("[MxChat Telegram DEBUG] Session ID: {$session_id}");
 
             // Verify the group ID matches
@@ -5691,28 +6032,25 @@ public function handle_telegram_webhook(WP_REST_Request $request) {
                 $disconnect_message = "Live agent session ended. You're now chatting with the AI assistant.";
                 $this->mxchat_save_chat_message($session_id, 'bot', $disconnect_message);
 
-                // Notify in Telegram
-                $telegram_bot_token = $this->options['telegram_bot_token'] ?? '';
-                if (!empty($telegram_bot_token)) {
-                    wp_remote_post("https://api.telegram.org/bot{$telegram_bot_token}/sendMessage", [
-                        'headers' => ['Content-Type' => 'application/json'],
-                        'body' => json_encode([
-                            'chat_id' => $chat_id,
-                            'message_thread_id' => $topic_id,
-                            'text' => "✅ Session closed. User returned to AI chatbot.",
-                            'parse_mode' => 'HTML'
-                        ])
-                    ]);
+                // Notify in Telegram, then close the topic
+                $this->mxchat_telegram_api('sendMessage', [
+                    'chat_id' => $chat_id,
+                    'message_thread_id' => $topic_id,
+                    'text' => "✅ Session closed. User returned to AI chatbot.",
+                    'parse_mode' => 'HTML'
+                ]);
+                $this->mxchat_telegram_api('closeForumTopic', [
+                    'chat_id' => $chat_id,
+                    'message_thread_id' => $topic_id
+                ]);
 
-                    // Optionally close the topic
-                    wp_remote_post("https://api.telegram.org/bot{$telegram_bot_token}/closeForumTopic", [
-                        'headers' => ['Content-Type' => 'application/json'],
-                        'body' => json_encode([
-                            'chat_id' => $chat_id,
-                            'message_thread_id' => $topic_id
-                        ])
-                    ]);
-                }
+                // The closed topic is never reused: drop the session→topic
+                // mapping (and its dedupe transient) so the next handoff for
+                // this session creates a fresh topic through the normal path
+                // instead of posting into a topic with no composer (plan
+                // 1aeee3 — before this, the stale id was found on the next
+                // handoff and createForumTopic was skipped entirely).
+                $this->mxchat_clear_telegram_topic_mapping($session_id);
 
                 return new WP_REST_Response(['ok' => true]);
             }
@@ -5744,25 +6082,27 @@ public function handle_telegram_webhook(WP_REST_Request $request) {
             //error_log("[MxChat Telegram DEBUG] History after save - count: " . count($history) . ", last message role: " . ($last_message['role'] ?? 'none'));
 
             // Send confirmation back to Telegram
-            $telegram_bot_token = $this->options['telegram_bot_token'] ?? '';
-            if (!empty($telegram_bot_token)) {
-                $confirm_key = 'mxchat_telegram_confirm_' . $message_key;
-                if (!get_transient($confirm_key)) {
-                    wp_remote_post("https://api.telegram.org/bot{$telegram_bot_token}/sendMessage", [
-                        'headers' => ['Content-Type' => 'application/json'],
-                        'body' => json_encode([
-                            'chat_id' => $chat_id,
-                            'message_thread_id' => $topic_id,
-                            'text' => "✅ <i>Message sent to user</i>",
-                            'parse_mode' => 'HTML',
-                            'reply_to_message_id' => $message_id
-                        ])
-                    ]);
-                    set_transient($confirm_key, true, 300);
-                }
+            $confirm_key = 'mxchat_telegram_confirm_' . $message_key;
+            if (!get_transient($confirm_key)) {
+                $this->mxchat_telegram_api('sendMessage', [
+                    'chat_id' => $chat_id,
+                    'message_thread_id' => $topic_id,
+                    'text' => "✅ <i>Message sent to user</i>",
+                    'parse_mode' => 'HTML',
+                    'reply_to_message_id' => $message_id
+                ]);
+                set_transient($confirm_key, true, 300);
             }
         } else {
-            //error_log("[MxChat Telegram DEBUG] No session found for topic_id={$topic_id}");
+            // An agent typed into a topic no session owns (cleaned up, or
+            // never ours) — their reply reaches nobody. Debug-gated trace
+            // (plan 1a2666's sibling gap on this channel).
+            if (class_exists('MxChat_Admin') && method_exists('MxChat_Admin', 'mxchat_log_debug')) {
+                MxChat_Admin::mxchat_log_debug('telegram_drop', 'Agent reply dropped: no session for topic', array(
+                    'chat_id'  => $chat_id,
+                    'topic_id' => $topic_id,
+                ));
+            }
         }
     } else {
         //error_log('[MxChat Telegram DEBUG] No message in webhook data');
@@ -6089,18 +6429,33 @@ public function handle_slack_messages(WP_REST_Request $request) {
     if (isset($data['event']) && $data['event']['type'] === 'message') {
         $event = $data['event'];
         
-        // Skip bot messages and messages with subtypes (like bot_message)
-        if (isset($event['bot_id']) || isset($event['subtype'])) {
+        // Skip the bot's own messages — relaying them back would loop.
+        if (isset($event['bot_id'])) {
             return new WP_REST_Response(['ok' => true]);
         }
-        
+
+        // Subtype-carrying messages (edits, file/snippet uploads…) are not
+        // relayed. That used to be completely silent — an agent sending a
+        // screenshot watched nothing happen (plan 1a2666). Now the drop is
+        // logged behind the debug flag, and when the message clearly carried
+        // agent content into a live conversation, a rate-limited note in the
+        // channel tells the agent how to get it through.
+        if (isset($event['subtype'])) {
+            $this->mxchat_note_slack_subtype_drop($event);
+            return new WP_REST_Response(['ok' => true]);
+        }
+
         // Threaded replies: in shared-channel mode every conversation lives in
         // a thread rooted at its handoff message — route those to their session
-        // by thread root (plan 9f7756). Any other threaded reply (e.g. under a
-        // per-conversation channel's confirmation message) finds no session and
-        // is skipped, exactly as before.
+        // by thread root (plan 9f7756). A thread no session owns falls through
+        // (null) to the channel routing below, so an agent's "reply in thread"
+        // inside a per-conversation channel reaches the visitor instead of
+        // being dropped (plan 1a2666).
         if (isset($event['thread_ts']) && $event['thread_ts'] !== $event['ts']) {
-            return $this->mxchat_route_shared_thread_reply($event);
+            $thread_routed = $this->mxchat_route_shared_thread_reply($event);
+            if (null !== $thread_routed) {
+                return $thread_routed;
+            }
         }
         
         $channel_id = $event['channel'];
@@ -6204,16 +6559,31 @@ public function handle_slack_messages(WP_REST_Request $request) {
                         'body' => json_encode([
                             'channel' => $channel_id,
                             'text' => "✅ _Message sent to user_",
-                            'thread_ts' => $event['ts'] // Reply in thread
+                            // Confirm inside the reply's own thread when the
+                            // agent wrote in one (the 1a2666 fall-through),
+                            // else start a thread under their channel-level
+                            // message as before.
+                            'thread_ts' => $event['thread_ts'] ?? $event['ts']
                         ])
                     ]);
                     // Set transient to prevent duplicate confirmations
                     set_transient($confirm_key, true, 300); // 5 minutes
                 }
             }
+        } else {
+            // No conversation owns this channel (or thread) — the agent's
+            // reply reaches nobody. Silent before plan 1a2666; now visible in
+            // the debug log with the ids needed to diagnose it.
+            if (class_exists('MxChat_Admin') && method_exists('MxChat_Admin', 'mxchat_log_debug')) {
+                MxChat_Admin::mxchat_log_debug('slack_drop', 'Agent reply dropped: no session for channel', array(
+                    'channel'   => $channel_id,
+                    'thread_ts' => $event['thread_ts'] ?? '',
+                    'ts'        => $message_ts,
+                ));
+            }
         }
     }
-    
+
     return new WP_REST_Response(['ok' => true]);
 }
 
@@ -6221,10 +6591,14 @@ public function handle_slack_messages(WP_REST_Request $request) {
  * Route an agent's threaded Slack reply to the session whose shared-channel
  * conversation is rooted at that thread (plan 9f7756). Sessions are keyed by
  * the thread root ts stored in mxchat_thread_{session}, so two visitors in
- * the same shared channel can never cross-wire. Unknown threads are ignored.
+ * the same shared channel can never cross-wire. A thread no session owns
+ * returns null so the caller falls through to channel routing (plan 1a2666)
+ * — in per-conversation mode the channel maps to exactly one session, which
+ * makes a threaded reply there unambiguous without consulting the root.
  *
  * @param array $event Slack message event (has thread_ts !== ts).
- * @return WP_REST_Response
+ * @return WP_REST_Response|null Response when handled here; null to fall
+ *                               through to the caller's channel routing.
  */
 private function mxchat_route_shared_thread_reply($event) {
     $thread_root = $event['thread_ts'] ?? '';
@@ -6233,7 +6607,7 @@ private function mxchat_route_shared_thread_reply($event) {
     $channel_id = $event['channel'] ?? '';
 
     if ($thread_root === '') {
-        return new WP_REST_Response(['ok' => true]);
+        return null;
     }
 
     // Find the session owning this thread root (same reverse-lookup shape as
@@ -6250,8 +6624,11 @@ private function mxchat_route_shared_thread_reply($event) {
 
     if (!$session_option) {
         // Not a shared-channel conversation thread (e.g. a reply under a
-        // per-conversation confirmation) — ignore, as before.
-        return new WP_REST_Response(['ok' => true]);
+        // per-conversation channel's confirmation message). Fall through to
+        // channel routing instead of dropping it — the exact reply the plan's
+        // reporter lost (plan 1a2666). If the channel owns no session either,
+        // the caller logs the drop.
+        return null;
     }
 
     $session_id = str_replace('mxchat_thread_', '', $session_option);
@@ -6321,6 +6698,102 @@ private function mxchat_route_shared_thread_reply($event) {
     }
 
     return new WP_REST_Response(['ok' => true]);
+}
+
+/**
+ * A subtype-carrying Slack message was dropped (plan 1a2666). Log it behind
+ * the debug flag, and — only when it was clearly an agent trying to put
+ * content into a live conversation — post a rate-limited note in the channel
+ * so the agent learns the visitor never saw it and fixes it in ten seconds
+ * instead of assuming it worked. Join/leave/topic-change and other
+ * housekeeping subtypes never trigger the note, and channels no session owns
+ * never hear from us.
+ *
+ * @param array $event Slack message event carrying a subtype.
+ */
+private function mxchat_note_slack_subtype_drop($event) {
+    $subtype    = $event['subtype'] ?? '';
+    $channel_id = $event['channel'] ?? '';
+
+    // message_changed nests the actual message; anchor threading on it.
+    $source = ($subtype === 'message_changed' && isset($event['message']) && is_array($event['message']))
+        ? $event['message']
+        : $event;
+    $thread_anchor = $source['thread_ts'] ?? ($source['ts'] ?? '');
+
+    if (class_exists('MxChat_Admin') && method_exists('MxChat_Admin', 'mxchat_log_debug')) {
+        MxChat_Admin::mxchat_log_debug('slack_drop', 'Message with subtype not relayed', array(
+            'subtype'   => $subtype,
+            'channel'   => $channel_id,
+            'thread_ts' => $thread_anchor,
+        ));
+    }
+
+    // Subtypes that carry agent content; everything else is housekeeping.
+    if ($channel_id === '' || !in_array($subtype, array('file_share', 'message_changed', 'thread_broadcast'), true)) {
+        return;
+    }
+
+    // Only speak up inside a mapped conversation — the bot may sit in
+    // channels that have nothing to do with MxChat.
+    $session_id = MxChat_Session_Store::find_by_channel($channel_id);
+    if ($session_id === '') {
+        global $wpdb;
+        $legacy_option = $wpdb->get_var($wpdb->prepare(
+            "SELECT option_name FROM {$wpdb->options}
+             WHERE option_name LIKE 'mxchat_channel_%'
+             AND option_value = %s",
+            $channel_id
+        ));
+        if ($legacy_option) {
+            $session_id = str_replace('mxchat_channel_', '', $legacy_option);
+        }
+    }
+    if ($session_id === '' && $thread_anchor !== '') {
+        // Shared-channel mode: the conversation is keyed by its thread root.
+        global $wpdb;
+        $thread_option = $wpdb->get_var($wpdb->prepare(
+            "SELECT option_name FROM {$wpdb->options}
+             WHERE option_name LIKE 'mxchat_thread_%'
+             AND option_value = %s",
+            $thread_anchor
+        ));
+        if ($thread_option) {
+            $session_id = str_replace('mxchat_thread_', '', $thread_option);
+        }
+    }
+    if ($session_id === '') {
+        return;
+    }
+
+    // One note per channel per 5 minutes — a busy misconfigured workspace
+    // should get a hint, not a flood.
+    $note_key = 'mxchat_slack_drop_note_' . $channel_id;
+    if (get_transient($note_key)) {
+        return;
+    }
+    set_transient($note_key, 1, 5 * MINUTE_IN_SECONDS);
+
+    $slack_bot_token = $this->options['live_agent_bot_token'] ?? '';
+    if (empty($slack_bot_token)) {
+        return;
+    }
+
+    $note_body = array(
+        'channel' => $channel_id,
+        'text'    => "⚠ That message was not delivered to the visitor. Edits, file uploads, and other special message types aren't relayed — please send it as a new plain-text message.",
+        'mrkdwn'  => true,
+    );
+    if ($thread_anchor !== '') {
+        $note_body['thread_ts'] = $thread_anchor;
+    }
+    wp_remote_post('https://slack.com/api/chat.postMessage', [
+        'headers' => [
+            'Content-Type'  => 'application/json',
+            'Authorization' => 'Bearer ' . $slack_bot_token
+        ],
+        'body' => json_encode($note_body)
+    ]);
 }
 
 // For the word upload handler
