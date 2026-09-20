@@ -90,6 +90,18 @@ private function mxchat_init_hooks() {
     // post_status directly and calling wp_transition_post_status themselves).
     add_action('transition_post_status', array($this, 'mxchat_handle_status_transition'), 10, 3);
 
+    // Media-library attachments (plan 01010a). Attachments never reach the post
+    // hooks above in a usable state — post_updated fires but post_status is
+    // 'inherit', not 'publish', so the indexing branch always returns early — and
+    // wp_delete_attachment() fires ONLY 'delete_attachment' (wp_delete_post()
+    // delegates to it before its own before_delete_post), so the post-delete
+    // handler never sees one. Both paths therefore need their own hook, and both
+    // are gated on the SAME 'mxchat_auto_sync_attachment' toggle the Advanced
+    // Custom Post Sync Settings list already renders for Media.
+    add_action('add_attachment', array($this, 'mxchat_handle_attachment_change'));
+    add_action('edit_attachment', array($this, 'mxchat_handle_attachment_change'));
+    add_action('delete_attachment', array($this, 'mxchat_handle_attachment_delete'));
+
     // ACF hook - fires AFTER ACF fields are saved, ensuring ACF data is available
     // Priority 20 to run after ACF's own save (which runs at priority 10)
     add_action('acf/save_post', array($this, 'mxchat_handle_acf_save'), 20);
@@ -1169,6 +1181,35 @@ private function get_pinecone_entry_content( $source_url, $entry_id, $bot_id ) {
         return new WP_Error( 'pinecone_config', 'Pinecone not configured.' );
     }
 
+    // Document index (plan 362c31): same ids, read through the documents API.
+    if ( class_exists('MxChat_Pinecone_Documents') && MxChat_Pinecone_Documents::is_document_index( $bot_id ) ) {
+        $docs_cfg = array( 'api_key' => $api_key, 'host' => $host, 'namespace' => $namespace );
+        if ( ( empty($source_url) || strpos($source_url, '_ungrouped_') === 0 ) && ! empty($entry_id) && is_string($entry_id) ) {
+            $doc_ids = array( $entry_id );
+        } else {
+            $doc_ids = array_merge( array( md5( $source_url ) ), MxChat_Pinecone_Documents::list_ids( md5( $source_url ) . '_chunk_', $docs_cfg ) );
+        }
+        $docs = MxChat_Pinecone_Documents::fetch( $doc_ids, $docs_cfg, array( 'text', 'chunk_index', 'type' ) );
+        if ( empty($docs) ) {
+            return new WP_Error( 'not_found', 'Entry not found in Pinecone.' );
+        }
+        $doc_chunks = array();
+        $doc_type   = 'content';
+        foreach ( $docs as $doc ) {
+            $doc_meta = $doc['metadata'] ?? array();
+            $doc_chunks[ intval( $doc_meta['chunk_index'] ?? 0 ) ] = $doc_meta['text'] ?? '';
+            $doc_type = $doc_meta['type'] ?? 'content';
+        }
+        ksort( $doc_chunks );
+        return array(
+            'content'      => implode( "\n\n", $doc_chunks ),
+            'source_url'   => $source_url,
+            'is_chunked'   => count($doc_chunks) > 1,
+            'chunk_count'  => count($doc_chunks),
+            'content_type' => $doc_type,
+        );
+    }
+
     // Manual entries carry no source_url (their vector id is a minted manual_* string,
     // not md5 of anything the row can hand us) — fetch the exact vector instead.
     // '_ungrouped_' is the table view's synthetic display key for such rows.
@@ -1382,6 +1423,16 @@ private function inspect_pinecone_entry( $source_url, $entry_id, $bot_id ) {
         return new WP_Error( 'pinecone_config', esc_html__('Pinecone not configured.', 'mxchat') );
     }
 
+    // Document index (plan 362c31): the documents API hands back the same
+    // id => {metadata} map the classic fetch does, so the inspection below is shared.
+    if ( class_exists('MxChat_Pinecone_Documents') && MxChat_Pinecone_Documents::is_document_index( $bot_id ) ) {
+        $docs_cfg   = array( 'api_key' => $api_key, 'host' => $host, 'namespace' => $namespace );
+        $vector_ids = array_merge( array( md5( $source_url ) ), MxChat_Pinecone_Documents::list_ids( md5( $source_url ) . '_chunk_', $docs_cfg ) );
+        $vectors    = MxChat_Pinecone_Documents::fetch( $vector_ids, $docs_cfg );
+        if ( empty($vectors) ) {
+            return new WP_Error( 'not_found', esc_html__('Entry not found in Pinecone.', 'mxchat') );
+        }
+    } else {
     $base_id    = md5( $source_url );
     $vector_ids = array( $base_id );
 
@@ -1433,6 +1484,7 @@ private function inspect_pinecone_entry( $source_url, $entry_id, $bot_id ) {
     if ( empty($vectors) ) {
         return new WP_Error( 'not_found', esc_html__('Entry not found in Pinecone.', 'mxchat') );
     }
+    } // end classic (vector index) read
 
     // Whitelisted metadata fields the spec calls out — shown so devs can confirm
     // what is (and is NOT) stored per vector.
@@ -2687,10 +2739,12 @@ public function ajax_mxchat_get_recent_entries() {
 
         // For Pinecone, we don't return individual entries during polling
         // (entries are already displayed on page load via mxchat_fetch_pinecone_records)
-        // We just return the updated count
+        // We just return the updated count. Over 500 vectors that is the live
+        // index / namespace vector count climbing during an import (plan dd6e10).
         wp_send_json_success(array(
             'entries' => array(),
             'total_count' => absint($total_count),
+            'count_unit' => $records['count_unit'] ?? '',
             'max_id' => $last_id,
             'data_source' => 'pinecone'
         ));
@@ -2782,6 +2836,11 @@ private function mxchat_get_pinecone_count_from_stats($pinecone_options) {
 
     if (empty($api_key) || empty($host)) {
         return 0;
+    }
+
+    // Document index (plan 362c31).
+    if (class_exists('MxChat_Pinecone_Documents') && MxChat_Pinecone_Documents::is_document_options($pinecone_options)) {
+        return MxChat_Pinecone_Documents::count(MxChat_Pinecone_Documents::cfg_from_options($pinecone_options));
     }
 
     try {
@@ -3154,8 +3213,14 @@ public function ajax_mxchat_refresh_pinecone_entries() {
 
     // Generate pagination HTML for Pinecone
     $total_pages = ceil($total_records / $per_page);
+    $count_unit = $records['count_unit'] ?? '';
+    $cursor_pagination = !empty($records['cursor_pagination']);
+    $has_next = !empty($records['has_next']);
     $pagination_html = '';
-    if ($total_pages > 1) {
+    if ($cursor_pagination) {
+        // Plan dd6e10: cursor path — Previous / Next only, no numbered pages.
+        $pagination_html = self::mxchat_cursor_pagination_html($page, $has_next, $search_query, $content_type_filter);
+    } elseif ($total_pages > 1) {
         $pagination_html = '<div class="mxchat-ajax-pagination" data-current-page="' . esc_attr($page) . '" data-total-pages="' . esc_attr($total_pages) . '" data-search="' . esc_attr($search_query) . '" data-content-type="' . esc_attr($content_type_filter) . '">';
 
         // Previous button
@@ -3201,11 +3266,37 @@ public function ajax_mxchat_refresh_pinecone_entries() {
         'html' => $html,
         'pagination_html' => $pagination_html,
         'total_count' => $total_records,
+        'count_unit' => $count_unit,
         'total_pages' => $total_pages,
         'page' => $page,
         'per_page' => $per_page,
         'data_source' => 'pinecone'
     ));
+}
+
+/**
+ * Previous / Next markup for the Pinecone cursor path (plan dd6e10).
+ *
+ * Pinecone's /vectors/list has no random access, so numbered pages would be a
+ * fiction; the page number here is only the cursor step, which the manager
+ * maps to a stored paginationToken. Used by the page template on first render
+ * and by the AJAX paginator, so the two can never drift.
+ */
+public static function mxchat_cursor_pagination_html($page, $has_next, $search_query = '', $content_type_filter = '') {
+    $page = max(1, absint($page));
+    if ($page <= 1 && !$has_next) {
+        return '';
+    }
+    $html  = '<div class="mxchat-ajax-pagination mxchat-cursor-pagination" data-current-page="' . esc_attr($page) . '" data-total-pages="" data-search="' . esc_attr($search_query) . '" data-content-type="' . esc_attr($content_type_filter) . '">';
+    if ($page > 1) {
+        $html .= '<a href="#" class="mxchat-page-link" data-page="' . ($page - 1) . '">' . esc_html__('&laquo; Previous', 'mxchat') . '</a> ';
+    }
+    $html .= '<span class="mxchat-page-current">' . esc_html($page) . '</span> ';
+    if ($has_next) {
+        $html .= '<a href="#" class="mxchat-page-link" data-page="' . ($page + 1) . '">' . esc_html__('Next &raquo;', 'mxchat') . '</a>';
+    }
+    $html .= '</div>';
+    return $html;
 }
 
 /**
@@ -3979,9 +4070,24 @@ public function ajax_mxchat_get_content_list() {
         'order' => 'DESC',
     );
     
+    // Supported media types, and the one-shot WHERE filter that scopes the MIME gate
+    // to attachment rows when this query spans several post types (plan 01010a).
+    $attachment_mimes = self::mxchat_supported_attachment_mime_types();
+    $attachment_where = null;
+
     // Handle post types - IMPROVED VERSION
     if ($post_type !== 'all') {
         $args['post_type'] = $post_type;
+
+        // Media is offered by the dropdown above (attachment is a public post type)
+        // but could never return a row: attachments are stored with post_status
+        // 'inherit' and this query asks for publish/draft/pending, so the list was
+        // empty by construction. Force the status attachments actually use, and
+        // offer only the file types we can extract text from (plan 01010a).
+        if ($post_type === 'attachment') {
+            $args['post_status']    = 'inherit';
+            $args['post_mime_type'] = $attachment_mimes;
+        }
     } else {
         // Get all available post types that might contain content
         $all_post_types = array();
@@ -4014,8 +4120,43 @@ public function ajax_mxchat_get_content_list() {
             $all_post_types = array('post', 'page');
         }
         
+        // Attachments in the "All Content Types" view (plan 01010a). Two things have
+        // to happen at once and neither can ride $args on its own:
+        //
+        //  - 'inherit' has to join the status list, because WP_Query takes ONE status
+        //    set for the whole query. Only attachments and revisions use it, and
+        //    revisions are not in $all_post_types, so nothing else widens.
+        //  - the MIME gate CANNOT be $args['post_mime_type'] here — that clause is
+        //    applied to every row, and an ordinary post has an empty post_mime_type,
+        //    so it would empty the entire listing rather than filter the media half.
+        //    A scoped WHERE is the only shape that filters attachments alone.
+        //
+        // Media joins this view under the default Published filter and under All
+        // Statuses; picking Drafts deliberately drops it, because a file has no draft
+        // state and answering a draft filter with published media is a wrong answer.
+        $wants_attachments = in_array('attachment', $all_post_types, true)
+            && ($post_status === 'publish' || $post_status === 'all');
+
+        if ($wants_attachments) {
+            $statuses = array_values(array_unique(array_merge((array) $args['post_status'], array('inherit'))));
+            $args['post_status'] = $statuses;
+
+            global $wpdb;
+            $mime_placeholders = implode(', ', array_fill(0, count($attachment_mimes), '%s'));
+            $mime_clause = $wpdb->prepare(
+                " AND ({$wpdb->posts}.post_type <> 'attachment' OR {$wpdb->posts}.post_mime_type IN ($mime_placeholders))",
+                $attachment_mimes
+            );
+            $attachment_where = function ($where) use ($mime_clause) {
+                return $where . $mime_clause;
+            };
+            add_filter('posts_where', $attachment_where);
+        } else {
+            $all_post_types = array_values(array_diff($all_post_types, array('attachment')));
+        }
+
         $args['post_type'] = $all_post_types;
-        
+
         // Debug logging to see what post types are being queried
         //error_log('MxChat Debug: Querying post types: ' . implode(', ', $all_post_types));
     }
@@ -4092,8 +4233,15 @@ public function ajax_mxchat_get_content_list() {
     
     // Run the query
     $query = new WP_Query($args);
+
+    // Scoped to this one query — leaving it attached would MIME-filter every later
+    // WP_Query in the request.
+    if ($attachment_where) {
+        remove_filter('posts_where', $attachment_where);
+    }
+
     $content_items = array();
-    
+
     if ($query->have_posts()) {
         while ($query->have_posts()) {
             $query->the_post();
@@ -4129,12 +4277,39 @@ public function ajax_mxchat_get_content_list() {
                 $chunk_count = intval($processed_data[$id]['chunk_count']);
             }
 
+            // Media rows describe themselves differently (plan 01010a): the link has
+            // to be the FILE, not the attachment page nobody wants; "attachment" and
+            // "0 words" tell the user nothing, so the row carries the file type and
+            // its size instead. Word count is deliberately NOT computed — that would
+            // mean parsing every PDF in the library just to render a list.
+            $permalink  = get_permalink();
+            $type_label = get_post_type();
+            $size_label = '';
+
+            if (get_post_type() === 'attachment') {
+                $file_url   = wp_get_attachment_url($id);
+                $permalink  = $file_url ? $file_url : $permalink;
+                $type_label = self::mxchat_attachment_type_label(get_post_mime_type($id));
+
+                $file_path = get_attached_file($id);
+                $file_size = ($file_path && file_exists($file_path)) ? @filesize($file_path) : false;
+                if ($file_size !== false) {
+                    $size_label = size_format($file_size, 0);
+                }
+
+                if ($excerpt === '') {
+                    $excerpt = $file_url ? wp_basename($file_url) : '';
+                }
+            }
+
             $content_items[] = array(
                 'id' => $id,
                 'title' => get_the_title(),
-                'permalink' => get_permalink(),
+                'permalink' => $permalink,
                 'date' => $post_date,
                 'type' => get_post_type(),
+                'type_label' => $type_label,
+                'size_label' => $size_label,
                 'status' => get_post_status(),
                 'excerpt' => $excerpt,
                 'word_count' => $word_count,
@@ -4167,11 +4342,23 @@ public function ajax_mxchat_get_content_list() {
 private function mxchat_url_to_post_id_improved($url) {
     // First try the standard WordPress function
     $post_id = url_to_postid($url);
-    
+
     if ($post_id > 0) {
         return $post_id;
     }
-    
+
+    // Media entries are stored under the FILE url (…/wp-content/uploads/…), which is
+    // not a permalink — url_to_postid() never resolves one, and every slug fallback
+    // below excludes 'attachment' explicitly. Without this, an imported media file
+    // renders as "Not In Knowledge Base" forever and re-imports as new every time
+    // (plan 01010a). attachment_url_to_postid() matches on _wp_attached_file and
+    // returns 0 for anything outside the uploads directory, so post permalinks are
+    // unaffected.
+    $attachment_id = (int) attachment_url_to_postid($url);
+    if ($attachment_id > 0) {
+        return $attachment_id;
+    }
+
     // If that fails, try more aggressive URL matching
     // Remove trailing slashes and query parameters for better matching
     $clean_url = rtrim($url, '/');
@@ -4372,6 +4559,14 @@ public function ajax_mxchat_process_selected_content() {
         exit;
     }
 
+    // Media-library attachments take their own route (plan 01010a) — different source
+    // URL (the file, not the attachment page), different body (an extractor, not
+    // post_content), and a file that yields no text is refused with a reason instead
+    // of stored empty. Sends its own response and exits.
+    if ($post->post_type === 'attachment') {
+        $this->mxchat_import_attachment($post, $bot_id);
+    }
+
     /**
      * Allow developers to modify post data before processing into the knowledge base.
      * Applied on BOTH content-preparation paths (this manual bulk import and the
@@ -4509,46 +4704,34 @@ public function ajax_mxchat_process_selected_content() {
 }
 
 private function apply_role_restriction_to_post($post_id, $source_url) {
-    // Get tag-role mappings
-    $mappings = get_option('mxchat_tag_role_mappings', array());
-    
-    if (empty($mappings)) {
-        return; // No mappings, leave as public
-    }
-    
-    // Get all tags for the post
-    $post_tags = wp_get_post_tags($post_id, array('fields' => 'slugs'));
-    
-    if (empty($post_tags)) {
-        return; // No tags, leave as public
-    }
-    
-    // Determine the highest role restriction based on tags
     $highest_role = 'public';
-    $role_hierarchy = array(
-        'public' => 0,
-        'logged_in' => 1,
-        'subscriber' => 2,
-        'contributor' => 3,
-        'author' => 4,
-        'editor' => 5,
-        'administrator' => 6
-    );
-    
-    foreach ($post_tags as $tag_slug) {
-        if (isset($mappings[$tag_slug])) {
-            $role = $mappings[$tag_slug];
-            if (isset($role_hierarchy[$role]) && $role_hierarchy[$role] > $role_hierarchy[$highest_role]) {
-                $highest_role = $role;
+
+    // Tag-derived restriction. Tags only exist on posts, which is why pages
+    // could never be restricted from the Role Restrictions screen (plan 6ab002).
+    $mappings = get_option('mxchat_tag_role_mappings', array());
+    if (!empty($mappings)) {
+        $post_tags = wp_get_post_tags($post_id, array('fields' => 'slugs'));
+        if (!empty($post_tags)) {
+            foreach ($post_tags as $tag_slug) {
+                if (isset($mappings[$tag_slug])) {
+                    $highest_role = self::mxchat_stricter_role($highest_role, $mappings[$tag_slug]);
+                }
             }
         }
     }
-    
-    // If no restricted tags found, return (leave as public)
-    if ($highest_role === 'public') {
+
+    // Per-entry restriction set on the post itself, which works for pages and
+    // every other public post type. The stricter of the two wins.
+    $meta_role = get_post_meta($post_id, '_mxchat_kb_role_restriction', true);
+    if (is_string($meta_role) && $meta_role !== '') {
+        $highest_role = self::mxchat_stricter_role($highest_role, $meta_role);
+    }
+
+    // Nothing restricts this entry — leave it public.
+    if ($highest_role === 'public' || $highest_role === '') {
         return;
     }
-    
+
     // Update the role restriction in the database
     global $wpdb;
     
@@ -4676,6 +4859,10 @@ public function mxchat_fetch_pinecone_vectors_by_ids($pinecone_options, $vector_
         // which read as "nothing indexed". Chunked at 100 ids to stay well
         // under the measured HTTP 414 URL-length boundary.
         $vectors = array();
+        // Document index (plan 362c31): documents/fetch instead of the GET loop (same id => vector shape).
+        if (class_exists('MxChat_Pinecone_Documents') && MxChat_Pinecone_Documents::is_document_options($pinecone_options)) {
+            $vectors = MxChat_Pinecone_Documents::fetch(array_values($vector_ids), MxChat_Pinecone_Documents::cfg_from_options($pinecone_options), array('source_url', 'created_at'));
+        } else
         foreach (array_chunk(array_values($vector_ids), 100) as $chunk) {
             $fetch_query = array();
             foreach ($chunk as $fetch_vid) {
@@ -4721,6 +4908,13 @@ public function mxchat_fetch_pinecone_vectors_by_ids($pinecone_options, $vector_
 
             if (!empty($source_url)) {
                 $post_id = url_to_postid($source_url);
+                // A media entry is stored under its FILE url, which url_to_postid() cannot
+                // resolve — without this the Pinecone read reports every imported
+                // attachment as unprocessed while the WordPress-DB read (which goes
+                // through mxchat_url_to_post_id_improved) reports it correctly (plan 01010a).
+                if (!$post_id) {
+                    $post_id = (int) attachment_url_to_postid($source_url);
+                }
                 if ($post_id) {
                     $created_at = $metadata['created_at'] ?? '';
                     $processed_date = 'Recently';
@@ -4831,6 +5025,19 @@ public function mxchat_scan_pinecone_for_processed_content($pinecone_options) {
                 $query_data['namespace'] = $namespace;
             }
 
+            // Document index (plan 362c31): same random-vector sweep through documents/search.
+            if (class_exists('MxChat_Pinecone_Documents') && MxChat_Pinecone_Documents::is_document_options($pinecone_options)) {
+                $doc_hits = MxChat_Pinecone_Documents::search_dense($random_vector, 10000, null, MxChat_Pinecone_Documents::cfg_from_options($pinecone_options), array('source_url', 'created_at'));
+                foreach ((is_wp_error($doc_hits) ? array() : $doc_hits) as $match) {
+                    $match_id = $match['id'] ?? '';
+                    if (!empty($match_id) && !isset($seen_ids[$match_id])) {
+                        $all_matches[] = $match;
+                        $seen_ids[$match_id] = true;
+                    }
+                }
+                continue;
+            }
+
             $response = wp_remote_post($query_url, array(
                 'headers' => array(
                     'Api-Key' => $api_key,
@@ -4875,6 +5082,13 @@ public function mxchat_scan_pinecone_for_processed_content($pinecone_options) {
 
             if (!empty($source_url) && !empty($match_id)) {
                 $post_id = url_to_postid($source_url);
+                // A media entry is stored under its FILE url, which url_to_postid() cannot
+                // resolve — without this the Pinecone read reports every imported
+                // attachment as unprocessed while the WordPress-DB read (which goes
+                // through mxchat_url_to_post_id_improved) reports it correctly (plan 01010a).
+                if (!$post_id) {
+                    $post_id = (int) attachment_url_to_postid($source_url);
+                }
                 if ($post_id) {
                     // Count chunks per post_id
                     if (!isset($url_chunk_counts[$post_id])) {
@@ -6082,6 +6296,423 @@ private function mxchat_extract_pdf_text_by_attachment_id($attachment_id) {
     ));
 
     return $text;
+}
+
+/**
+ * The media-library MIME types the knowledge base can actually read (plan 01010a).
+ *
+ * The importer's post-type dropdown is built from get_post_types(['public' => true]),
+ * and 'attachment' is public — so Media has always been OFFERED as a source. What it
+ * could never do is return anything, and the fix is deliberately narrower than the
+ * offer: only files one of the THREE extractors already shipping in this plugin can
+ * turn into text belong on that list. Images, audio and video are not listed at all
+ * rather than listed and greyed out, because "nothing to import here" is a clearer
+ * answer than a row you cannot select.
+ *
+ * text/markdown has no entry in WordPress's default wp_get_mime_types(), so a .md
+ * file is only ever in the library on a site that added the mapping itself; it stays
+ * on the list for those sites and costs nothing on the rest.
+ *
+ * @return array MIME type strings.
+ */
+public static function mxchat_supported_attachment_mime_types() {
+    /**
+     * Filter the attachment MIME types offered by the WordPress Content importer.
+     *
+     * Adding a type here makes it listable and importable — mxchat_extract_attachment_text()
+     * reads anything text/* as plain text, so a text-shaped MIME works out of the box.
+     * A binary format needs its own extractor.
+     *
+     * @param array $mime_types Supported MIME types.
+     */
+    return (array) apply_filters('mxchat_kb_attachment_mime_types', array(
+        'application/pdf',
+        'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        'text/plain',
+        'text/markdown',
+    ));
+}
+
+/**
+ * Short human label for a supported attachment MIME type ("PDF", "Word", ...).
+ * Used in the importer list, where "attachment" as a type and "0 words" as a size
+ * would tell the user nothing about what they are about to import.
+ */
+public static function mxchat_attachment_type_label($mime_type) {
+    $labels = array(
+        'application/pdf' => __('PDF', 'mxchat'),
+        'application/vnd.openxmlformats-officedocument.wordprocessingml.document' => __('Word', 'mxchat'),
+        'text/plain'      => __('Text', 'mxchat'),
+        'text/markdown'   => __('Markdown', 'mxchat'),
+    );
+
+    return isset($labels[$mime_type]) ? $labels[$mime_type] : __('Document', 'mxchat');
+}
+
+/**
+ * Extract indexable text from a media-library attachment (plan 01010a).
+ *
+ * Wiring, not parsing: every extractor here already ships and is already used
+ * elsewhere — the Smalot path via mxchat_extract_pdf_text_by_attachment_id() (ACF
+ * PDFs), MXChat_Word_Handler::extract_docx_text() and the plain-text read (both from
+ * Document Upload, which is also where the character-estimated page cap comes from).
+ * No new parser was added for this.
+ *
+ * Returns a reason instead of an empty string on failure so the caller can say WHY a
+ * file was skipped; an attachment that yields no text must never be stored as an
+ * empty entry.
+ *
+ * @param int $attachment_id
+ * @return array{text: string, reason: string} reason is '' on success.
+ */
+private function mxchat_extract_attachment_text($attachment_id) {
+    $attachment_id = (int) $attachment_id;
+    $mime_type     = get_post_mime_type($attachment_id);
+
+    if (!in_array($mime_type, self::mxchat_supported_attachment_mime_types(), true)) {
+        return array(
+            'text'   => '',
+            'reason' => __('Unsupported file type — only PDF, Word, text and Markdown files can be imported.', 'mxchat'),
+        );
+    }
+
+    // PDF: the shared extractor owns its own size cap (25 MB raw, filterable), its
+    // 50,000-character output cap, the RTL normaliser and the mtime-keyed cache, so
+    // re-importing the same PDF does not re-parse it.
+    if ($mime_type === 'application/pdf') {
+        $text = $this->mxchat_extract_pdf_text_by_attachment_id($attachment_id);
+        $text = trim((string) $text);
+
+        if ($text === '') {
+            return array(
+                'text'   => '',
+                'reason' => __('No extractable text — the PDF is empty, scanned images only, or larger than the size limit.', 'mxchat'),
+            );
+        }
+
+        return array('text' => $text, 'reason' => '');
+    }
+
+    $file_path = get_attached_file($attachment_id);
+    if (empty($file_path) || !file_exists($file_path) || !is_readable($file_path)) {
+        return array(
+            'text'   => '',
+            'reason' => __('The file could not be read from disk.', 'mxchat'),
+        );
+    }
+
+    if ($mime_type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') {
+        $text = MXChat_Word_Handler::extract_docx_text($file_path);
+        if ($text === false) {
+            return array(
+                'text'   => '',
+                'reason' => __('The Word file could not be read. It may be corrupt, empty, or not a real Word document.', 'mxchat'),
+            );
+        }
+        $text = trim((string) $text);
+    } else {
+        // .txt / .md read as-is, the same way Document Upload reads them —
+        // Markdown deliberately keeps its syntax, because headings are useful
+        // retrieval signal.
+        $text = (string) file_get_contents($file_path);
+        $text = wp_check_invalid_utf8($text);
+        $text = trim($text);
+    }
+
+    if ($text === '') {
+        return array(
+            'text'   => '',
+            'reason' => __('The file contains no readable text.', 'mxchat'),
+        );
+    }
+
+    // Same cap Document Upload applies to the same three formats: the pdf_max_pages
+    // setting, estimated by CHARACTERS (~2500/page) because the .docx cleaner
+    // collapses newlines and a paragraph count reads 1 for any Word file. Importing
+    // is synchronous, so an unbounded document risks a timeout.
+    $options   = get_option('mxchat_options', array());
+    $max_pages = isset($options['pdf_max_pages']) ? intval($options['pdf_max_pages']) : 69;
+    $estimated_pages = (int) ceil(strlen($text) / 2500);
+    if ($max_pages > 0 && $estimated_pages > $max_pages) {
+        return array(
+            'text'   => '',
+            'reason' => sprintf(
+                /* translators: 1: estimated page count, 2: configured page limit */
+                __('Too large (about %1$d pages; the limit is %2$d). Split the file, or raise the PDF max pages setting.', 'mxchat'),
+                $estimated_pages,
+                $max_pages
+            ),
+        );
+    }
+
+    return array('text' => $text, 'reason' => '');
+}
+
+/**
+ * Assemble the stored text for an attachment: title first, then the extracted body.
+ * Mirrors the post assembler's shape (title on its own line, blank line, content) so
+ * a media entry retrieves on its filename/title the same way a post does.
+ */
+private function mxchat_build_attachment_content($post, $extracted_text) {
+    $title = $this->mxchat_decode_entities_for_indexing($post->post_title);
+    $parts = array($title);
+
+    // The media modal's Caption and Description fields are real, editable metadata
+    // and are frequently the only human-written context a file has.
+    $caption = trim(wp_strip_all_tags((string) $post->post_excerpt));
+    if ($caption !== '') {
+        $parts[] = $this->mxchat_decode_entities_for_indexing($caption);
+    }
+
+    $description = trim(wp_strip_all_tags((string) $post->post_content));
+    if ($description !== '') {
+        $parts[] = $this->mxchat_decode_entities_for_indexing($description);
+    }
+
+    $parts[] = $extracted_text;
+
+    return implode("\n\n", array_filter($parts, function ($part) {
+        return $part !== '';
+    }));
+}
+
+/**
+ * Import one media-library attachment into the knowledge base — the attachment
+ * branch of ajax_mxchat_process_selected_content (plan 01010a).
+ *
+ * Separate from the post path rather than folded into it because almost every step
+ * differs: the source URL is the FILE url (get_permalink() on an attachment returns
+ * its attachment page, which is not what anyone means by "where this document
+ * lives"), the body comes from an extractor instead of post_content, and a file that
+ * yields no text has to be refused with a reason rather than stored empty.
+ *
+ * Sends its own JSON response and exits, exactly like its caller.
+ */
+private function mxchat_import_attachment($post, $bot_id) {
+    $post_id = (int) $post->ID;
+
+    $extracted = $this->mxchat_extract_attachment_text($post_id);
+    if ($extracted['text'] === '') {
+        wp_send_json_error(sprintf(
+            /* translators: 1: attachment title, 2: reason the file was skipped */
+            __('Skipped "%1$s": %2$s', 'mxchat'),
+            $post->post_title,
+            $extracted['reason']
+        ));
+        exit;
+    }
+
+    $bot_options = $this->get_bot_options($bot_id);
+    $options     = !empty($bot_options) ? $bot_options : get_option('mxchat_options');
+
+    $preflight = MxChat_Utils::embedding_preflight($options);
+    if (!$preflight['ok']) {
+        MxChat_Admin::mxchat_log_debug('api_error', $preflight['reason'] . ' (attachment import)');
+        wp_send_json_error($preflight['reason']);
+        exit;
+    }
+
+    $source_url = wp_get_attachment_url($post_id);
+    if (empty($source_url)) {
+        wp_send_json_error(__('The file has no URL — it may be missing from the uploads folder.', 'mxchat'));
+        exit;
+    }
+
+    $vector_id = md5($source_url);
+    $content   = $this->mxchat_build_attachment_content($post, $extracted['text']);
+
+    // "Already imported" read, same two-backend split the post path uses.
+    $is_update           = false;
+    $bot_pinecone_config = $this->get_bot_pinecone_config($bot_id);
+    $use_pinecone        = !empty($bot_pinecone_config) && ($bot_pinecone_config['use_pinecone'] ?? false);
+
+    if ($use_pinecone && !empty($bot_pinecone_config['api_key'])) {
+        $pinecone_data = $this->mxchat_get_pinecone_processed_content($bot_pinecone_config);
+        if (isset($pinecone_data[$post_id])) {
+            $is_update = true;
+        }
+    } else {
+        global $wpdb;
+        $table_name = $wpdb->prefix . 'mxchat_system_prompt_content';
+        $existing_record = $wpdb->get_row($wpdb->prepare(
+            "SELECT id FROM $table_name WHERE source_url = %s",
+            $source_url
+        ));
+        if ($existing_record) {
+            $is_update = true;
+        }
+    }
+
+    // content_type 'attachment' — NOT 'document'. The Knowledge screen's type filter
+    // is built from public post types, so 'attachment' is exactly what its "Media"
+    // option filters on; 'document' (Document Upload's label) would file these under
+    // an option that dropdown does not offer.
+    $result = MxChat_Utils::submit_content_to_db(
+        $content,
+        $source_url,
+        $preflight['api_key'],
+        $vector_id,
+        $bot_id,
+        'attachment'
+    );
+
+    if (is_wp_error($result)) {
+        MxChat_Admin::mxchat_log_debug('storage_error', 'Attachment storage failed: ' . $result->get_error_message(), array('source_url' => $source_url));
+        wp_send_json_error('Storage failed: ' . $result->get_error_message());
+        exit;
+    }
+
+    // Attachments carry no tags, so the tag half of this is always a no-op — the
+    // per-entry dropdown and the MxChat meta box on the attachment's own edit screen
+    // are what restrict a media entry (plan 6ab002).
+    $this->apply_role_restriction_to_post($post_id, $source_url);
+
+    $this->mxchat_remember_attachment_signature($post_id, $source_url, $content);
+
+    wp_send_json_success(array(
+        'message'             => $is_update ? 'Content updated successfully' : 'Content processed successfully',
+        'post_id'             => $post_id,
+        'title'               => $post->post_title,
+        'operation_type'      => $is_update ? 'update' : 'new',
+        'vector_id'           => $vector_id,
+        'acf_fields_found'    => 0,
+        'pdf_extracted_count' => (get_post_mime_type($post_id) === 'application/pdf') ? 1 : 0,
+        'content_preview'     => substr($content, 0, 100) . '...',
+        'bot_id'              => $bot_id
+    ));
+    exit;
+}
+
+/**
+ * Is media auto-sync switched on? The toggle is the generic per-post-type one the
+ * Advanced Custom Post Sync Settings list already renders for Media (attachment is a
+ * public post type), so there is no new setting and no new UI for it.
+ */
+private function mxchat_attachment_auto_sync_enabled() {
+    return get_option('mxchat_auto_sync_attachment') === '1';
+}
+
+/**
+ * Record what we last indexed for an attachment: the URL it was stored under and a
+ * hash of the stored text.
+ *
+ * This exists because 'edit_attachment' is noisy — it fires on every metadata touch,
+ * including ones that change nothing we index (alt text, regenerating thumbnails).
+ * Without a signature, each of those would pay for a fresh embedding call. The stored
+ * URL is also what lets a file REPLACEMENT clean up after itself: the old URL's
+ * vectors are deleted before the new ones are written, instead of being orphaned.
+ */
+private function mxchat_remember_attachment_signature($attachment_id, $source_url, $content) {
+    update_post_meta((int) $attachment_id, '_mxchat_kb_attachment_sig', array(
+        'url'  => (string) $source_url,
+        'hash' => md5((string) $content),
+    ));
+}
+
+/**
+ * Auto-sync an attachment on upload or edit (add_attachment / edit_attachment).
+ *
+ * Silent by design, like the post auto-sync path: a media upload is not a knowledge
+ * base action from the user's point of view, so a file we cannot read is skipped
+ * without an admin notice. The manual importer is where a skip gets a visible reason.
+ */
+public function mxchat_handle_attachment_change($attachment_id) {
+    $attachment_id = (int) $attachment_id;
+
+    if (!$this->mxchat_attachment_auto_sync_enabled()) {
+        return;
+    }
+
+    $post = get_post($attachment_id);
+    if (!$post || $post->post_type !== 'attachment') {
+        return;
+    }
+
+    if (!in_array(get_post_mime_type($attachment_id), self::mxchat_supported_attachment_mime_types(), true)) {
+        return;
+    }
+
+    $source_url = wp_get_attachment_url($attachment_id);
+    if (empty($source_url)) {
+        return;
+    }
+
+    $extracted = $this->mxchat_extract_attachment_text($attachment_id);
+    if ($extracted['text'] === '') {
+        return;
+    }
+
+    $content   = $this->mxchat_build_attachment_content($post, $extracted['text']);
+    $signature = get_post_meta($attachment_id, '_mxchat_kb_attachment_sig', true);
+
+    if (is_array($signature) && isset($signature['url'], $signature['hash'])) {
+        // Nothing we index changed — don't pay for another embedding.
+        if ($signature['url'] === $source_url && $signature['hash'] === md5($content)) {
+            return;
+        }
+        // The file was replaced under a new URL. md5(old_url) vectors would survive
+        // as an entry citing a file that no longer exists there, so clear them first.
+        if ($signature['url'] !== $source_url && $signature['url'] !== '') {
+            MxChat_Utils::delete_chunks_for_url($signature['url'], 'default');
+        }
+    }
+
+    $preflight = MxChat_Utils::embedding_preflight(get_option('mxchat_options'));
+    if (!$preflight['ok']) {
+        return;
+    }
+
+    $result = MxChat_Utils::submit_content_to_db(
+        $content,
+        $source_url,
+        $preflight['api_key'],
+        md5($source_url),
+        'default',
+        'attachment'
+    );
+
+    if (is_wp_error($result)) {
+        return;
+    }
+
+    $this->apply_role_restriction_to_post($attachment_id, $source_url);
+    $this->mxchat_remember_attachment_signature($attachment_id, $source_url, $content);
+}
+
+/**
+ * Remove an attachment's knowledge entry when the file is deleted.
+ *
+ * Fires on 'delete_attachment', which is the ONLY delete hook an attachment gets —
+ * wp_delete_post() hands attachments to wp_delete_attachment() before firing
+ * before_delete_post, so mxchat_handle_post_delete never runs for one.
+ *
+ * Gated on the same auto-sync toggle as the post delete path, for the same reason it
+ * is there: with auto-sync off, MxChat does not act on content changes by itself.
+ */
+public function mxchat_handle_attachment_delete($attachment_id) {
+    $attachment_id = (int) $attachment_id;
+
+    if (!$this->mxchat_attachment_auto_sync_enabled()) {
+        return;
+    }
+
+    // Still resolvable — this hook fires before the row and the file are removed.
+    $source_url = wp_get_attachment_url($attachment_id);
+    $signature  = get_post_meta($attachment_id, '_mxchat_kb_attachment_sig', true);
+
+    $urls = array();
+    if (!empty($source_url)) {
+        $urls[] = $source_url;
+    }
+    // A replaced-then-deleted file can still have vectors under the URL it was
+    // last indexed at, if that differs from where it lives now.
+    if (is_array($signature) && !empty($signature['url'])) {
+        $urls[] = $signature['url'];
+    }
+
+    foreach (array_unique($urls) as $url) {
+        MxChat_Utils::delete_chunks_for_url($url, 'default');
+    }
 }
 
 /**
@@ -7376,6 +8007,27 @@ public function ajax_mxchat_delete_chunks_by_url() {
         $host = $pinecone_options['mxchat_pinecone_host'];
         $namespace = $pinecone_options['mxchat_pinecone_namespace'] ?? '';
 
+        // Document index (plan 362c31): base id + chunk ids through the documents API.
+        if (class_exists('MxChat_Pinecone_Documents') && MxChat_Pinecone_Documents::is_document_options($pinecone_options)) {
+            $docs_cfg = MxChat_Pinecone_Documents::cfg_from_options($pinecone_options);
+            $doc_ids  = array_merge(array($base_vector_id), MxChat_Pinecone_Documents::list_ids($base_vector_id . '_chunk_', $docs_cfg));
+            $doc_result = MxChat_Pinecone_Documents::delete_ids($doc_ids, $docs_cfg);
+            if (is_wp_error($doc_result)) {
+                MxChat_Admin::mxchat_log_debug('pinecone_error', 'Failed to delete documents from Pinecone: ' . $doc_result->get_error_message(), array('source_url' => $source_url));
+                wp_send_json_error('Failed to delete from Pinecone: ' . $doc_result->get_error_message());
+                exit;
+            }
+            if (class_exists('MxChat_Vectorstore_Manager')) {
+                MxChat_Vectorstore_Manager::sync_delete_entry($source_url, $bot_id);
+            }
+            wp_send_json_success(array(
+                'message' => 'All chunks deleted successfully from Pinecone',
+                'source_url' => $source_url,
+                'deleted_count' => count($doc_ids)
+            ));
+            exit;
+        }
+
         // Collect all vector IDs to delete
         $vectors_to_delete = array();
 
@@ -7622,6 +8274,9 @@ public function ajax_mxchat_bulk_delete_knowledge() {
     $api_key = $pinecone_options['mxchat_pinecone_api_key'] ?? '';
     $host = $pinecone_options['mxchat_pinecone_host'] ?? '';
     $namespace = $pinecone_options['mxchat_pinecone_namespace'] ?? '';
+    // Document index (plan 362c31): list + delete go through the documents API below.
+    $bulk_docs = class_exists('MxChat_Pinecone_Documents') && MxChat_Pinecone_Documents::is_document_options($pinecone_options);
+    $bulk_docs_cfg = $bulk_docs ? MxChat_Pinecone_Documents::cfg_from_options($pinecone_options) : array();
 
     // =============================================
     // PHASE 1: Collect all Pinecone vector IDs
@@ -7657,6 +8312,9 @@ public function ajax_mxchat_bulk_delete_knowledge() {
                 $base_vector_id = md5($source_url);
                 $all_vector_ids[] = $base_vector_id;
 
+                if ($bulk_docs) {
+                    $all_vector_ids = array_merge($all_vector_ids, MxChat_Pinecone_Documents::list_ids($base_vector_id . '_chunk_', $bulk_docs_cfg));
+                } else {
                 $list_url = 'https://' . $host . '/vectors/list?prefix=' . urlencode($base_vector_id . '_chunk_') . '&limit=100';
                 if (!empty($namespace)) {
                     $list_url .= '&namespace=' . rawurlencode($namespace);
@@ -7679,6 +8337,7 @@ public function ajax_mxchat_bulk_delete_knowledge() {
                         }
                     }
                 }
+                } // end classic (vector index) list
             } else {
                 // Single entry: the entry_id IS the vector ID
                 $all_vector_ids[] = $entry_id;
@@ -7702,6 +8361,15 @@ public function ajax_mxchat_bulk_delete_knowledge() {
         $pinecone_success = true;
         $batches = array_chunk($all_vector_ids, 100);
 
+        // Document index (plan 362c31): one documents/delete call for every id.
+        if ($bulk_docs) {
+            $doc_result = MxChat_Pinecone_Documents::delete_ids($all_vector_ids, $bulk_docs_cfg);
+            if (is_wp_error($doc_result)) {
+                $pinecone_success = false;
+                $errors[] = 'Pinecone batch deletion failed: ' . $doc_result->get_error_message();
+                MxChat_Admin::mxchat_log_debug('pinecone_error', 'Bulk delete (document index) failed: ' . $doc_result->get_error_message());
+            }
+        } else
         foreach ($batches as $batch) {
             $delete_body = array('ids' => $batch);
             if (!empty($namespace)) {
@@ -7822,67 +8490,243 @@ public function ajax_mxchat_bulk_delete_knowledge() {
 }
 
 /**
- *   Get hierarchical roles for dropdown
+ *   Get the roles offered for a knowledge-entry restriction.
+ *
+ *   Built from the site's ACTUAL roles (wp_roles()->get_names()) rather than a
+ *   hardcoded five, so roles added by User Role Editor / Members / a membership
+ *   plugin can be restricted to. The two virtual levels stay first, and the
+ *   built-in five keep their existing keys AND their existing labels, so
+ *   restrictions already stored on entries continue to mean what they meant.
  */
 public function mxchat_get_role_options() {
-    return array(
-        'public' => __('Public (Everyone)', 'mxchat'),
-        'logged_in' => __('Logged In Users', 'mxchat'),
-        'subscriber' => __('Subscribers & Above', 'mxchat'),
-        'contributor' => __('Contributors & Above', 'mxchat'),
-        'author' => __('Authors & Above', 'mxchat'),
-        'editor' => __('Editors & Above', 'mxchat'),
-        'administrator' => __('Administrators Only', 'mxchat')
-    );
+    return self::mxchat_role_options();
 }
 
 /**
- *   Check if user has access to content based on role restriction
+ *   The same list, callable without an instance.
+ *
+ *   The constructor registers hooks, so anything outside this class that needs
+ *   the role list (the post meta box) must not instantiate one just to read it.
+ */
+public static function mxchat_role_options() {
+    // Existing labels, in the existing order. A built-in that a site has
+    // removed is simply not offered.
+    $builtin_labels = array(
+        'subscriber'    => __('Subscribers & Above', 'mxchat'),
+        'contributor'   => __('Contributors & Above', 'mxchat'),
+        'author'        => __('Authors & Above', 'mxchat'),
+        'editor'        => __('Editors & Above', 'mxchat'),
+        'administrator' => __('Administrators Only', 'mxchat'),
+    );
+
+    $options = array(
+        'public'    => __('Public (Everyone)', 'mxchat'),
+        'logged_in' => __('Logged In Users', 'mxchat'),
+    );
+
+    $site_roles = function_exists('wp_roles') ? wp_roles()->get_names() : array();
+    if (empty($site_roles) || !is_array($site_roles)) {
+        // No roles readable (very early boot): fall back to the built-in set so
+        // the dropdown is never empty.
+        return array_merge($options, $builtin_labels);
+    }
+
+    foreach ($builtin_labels as $slug => $label) {
+        if (isset($site_roles[$slug])) {
+            $options[$slug] = $label;
+        }
+    }
+
+    // Everything else the site defines, alphabetical by display name.
+    $custom = array();
+    foreach ($site_roles as $slug => $name) {
+        if (!isset($builtin_labels[$slug])) {
+            $custom[$slug] = translate_user_role($name);
+        }
+    }
+    asort($custom);
+
+    return array_merge($options, $custom);
+}
+
+/**
+ *   Check if the current user may see content carrying a role restriction.
+ *
+ *   Access is granted when the user holds the required role outright, or holds
+ *   a role whose capabilities are a superset of the required role's. That keeps
+ *   the built-in "& Above" ladder exactly as it was — administrator's caps
+ *   cover editor's, editor's cover author's, and so on down to subscriber —
+ *   while working for any custom role, which a hardcoded five-name hierarchy
+ *   could not.
+ *
+ *   The old hierarchy scored an unknown role 0, so restricting an entry TO a
+ *   custom role silently granted it to every logged-in user. Fails closed now.
  */
 public function mxchat_user_has_content_access($role_restriction) {
     // Public content is always accessible
     if ($role_restriction === 'public' || empty($role_restriction)) {
         return true;
     }
-    
+
     // Check if user is logged in for logged_in restriction
     if ($role_restriction === 'logged_in') {
         return is_user_logged_in();
     }
-    
+
     // If not logged in, no access to role-restricted content
     if (!is_user_logged_in()) {
         return false;
     }
-    
+
     $user = wp_get_current_user();
-    $user_roles = $user->roles;
-    
+    $user_roles = (array) $user->roles;
+
     if (empty($user_roles)) {
         return false;
     }
-    
-    // Define role hierarchy (higher number = higher access)
-    $hierarchy = array(
-        'subscriber' => 1,
-        'contributor' => 2,
-        'author' => 3,
-        'editor' => 4,
-        'administrator' => 5
-    );
-    
-    // Get required level
-    $required_level = isset($hierarchy[$role_restriction]) ? $hierarchy[$role_restriction] : 0;
-    
-    // Check if user has required level or higher
+
+    // Holding the required role is always enough.
+    if (in_array($role_restriction, $user_roles, true)) {
+        return true;
+    }
+
+    // Site administrators keep the blanket access the old level-5 ladder gave
+    // them. This also stops a restriction naming a since-deleted role from
+    // locking the owner out of their own content.
+    if (current_user_can('manage_options')) {
+        return true;
+    }
+
     foreach ($user_roles as $user_role) {
-        $user_level = isset($hierarchy[$user_role]) ? $hierarchy[$user_role] : 0;
-        if ($user_level >= $required_level) {
+        if (self::mxchat_role_covers($user_role, $role_restriction)) {
             return true;
         }
     }
-    
+
     return false;
+}
+
+/**
+ *   Does $candidate_role grant everything $required_role grants?
+ *
+ *   Compared on capabilities, not names. Memoised per request because this runs
+ *   once per retrieved knowledge row.
+ *
+ *   A required role that does not exist, or that grants nothing at all, is NOT
+ *   treated as covered by anything — an empty capability set is a superset of
+ *   itself for every role on the site, which would quietly make the restriction
+ *   meaningless. Those cases fall back to the exact-role check in the caller.
+ *
+ *   @param  string $candidate_role Role slug the user holds.
+ *   @param  string $required_role  Role slug the entry is restricted to.
+ *   @return bool
+ */
+private static function mxchat_role_covers($candidate_role, $required_role) {
+    static $cache = array();
+
+    $key = $candidate_role . '|' . $required_role;
+    if (isset($cache[$key])) {
+        return $cache[$key];
+    }
+
+    $cache[$key] = false;
+
+    if (!function_exists('wp_roles')) {
+        return false;
+    }
+
+    $roles     = wp_roles();
+    $candidate = $roles->get_role($candidate_role);
+    $required  = $roles->get_role($required_role);
+
+    if (!$candidate || !$required) {
+        return false;
+    }
+
+    $required_caps  = self::mxchat_real_caps($required);
+    $candidate_caps = self::mxchat_real_caps($candidate);
+
+    if (empty($required_caps)) {
+        return false;
+    }
+
+    foreach (array_keys($required_caps) as $cap) {
+        if (empty($candidate_caps[$cap])) {
+            return false;
+        }
+    }
+
+    $cache[$key] = true;
+    return true;
+}
+
+/**
+ *   A role's granted capabilities, minus the vestigial user-level ones.
+ *
+ *   WordPress still stamps level_0 ... level_10 onto its built-in roles for
+ *   back-compat with user levels, deprecated since 3.0. They carry no meaning
+ *   and a hand-built custom role usually has none of them — so comparing them
+ *   makes a role that genuinely does more than a subscriber fail to cover
+ *   subscriber, purely because it lacks level_0. Measured on this box: a
+ *   Teacher role with read/edit_posts/delete_posts/upload_files was denied
+ *   subscriber-restricted content for exactly that reason.
+ *
+ *   @param  WP_Role $role
+ *   @return array Capability name => true, for granted non-level capabilities.
+ */
+/**
+ *   Of two role restrictions, the one that admits FEWER people.
+ *
+ *   'public' loses to everything; 'logged_in' loses to any real role. Between
+ *   two real roles the comparison is the same capability-superset test the
+ *   access check uses: if A's capabilities cover B's, then everyone who
+ *   satisfies A also satisfies B, so A is the stricter requirement.
+ *
+ *   Two unrelated custom roles are genuinely incomparable — neither covers the
+ *   other. In that case $b wins, because callers pass the per-entry choice as
+ *   $b: an owner who set the dropdown on the page itself meant it.
+ *
+ *   @param  string $a Current winner (may be 'public').
+ *   @param  string $b Challenger.
+ *   @return string
+ */
+private static function mxchat_stricter_role($a, $b) {
+    $rank = array('public' => 0, 'logged_in' => 1);
+
+    if ($b === '' || $b === null) { return $a; }
+    if ($a === '' || $a === null) { return $b; }
+    if ($a === $b) { return $a; }
+
+    $a_virtual = isset($rank[$a]);
+    $b_virtual = isset($rank[$b]);
+
+    if ($a_virtual && $b_virtual) {
+        return $rank[$b] > $rank[$a] ? $b : $a;
+    }
+    // A real role always outranks 'public' and 'logged_in'.
+    if ($a_virtual) { return $b; }
+    if ($b_virtual) { return $a; }
+
+    // Both are real roles: whichever covers the other is the stricter one.
+    if (self::mxchat_role_covers($a, $b)) { return $a; }
+    if (self::mxchat_role_covers($b, $a)) { return $b; }
+
+    // Incomparable — the explicit per-entry choice wins.
+    return $b;
+}
+
+private static function mxchat_real_caps($role) {
+    $caps = array();
+    foreach ((array) $role->capabilities as $cap => $granted) {
+        if (!$granted) {
+            continue;
+        }
+        if (preg_match('/^level_\d+$/', $cap)) {
+            continue;
+        }
+        $caps[$cap] = true;
+    }
+    return $caps;
 }
 
 /**

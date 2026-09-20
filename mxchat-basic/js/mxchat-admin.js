@@ -1089,7 +1089,7 @@ function setupMxChatModelSelector() {
                 { value: 'openrouter', label: 'OpenRouter', description: 'Access 100+ models from multiple providers (add API key to browse)' }
             ],
             gemini: [
-                { value: 'gemini-3.5-flash', label: 'Gemini 3.5 Flash', description: 'Stable — newest Flash generation, recommended default' },
+                { value: 'gemini-3.8-flash', label: 'Gemini 3.8 Flash', description: 'Stable — newest Flash generation, recommended default' },
             ],
             openai: [
                 { value: 'gpt-5.6-sol', label: 'GPT-5.6 Sol', description: 'Recommended — newest OpenAI flagship for reasoning, coding and chat' },

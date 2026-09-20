@@ -35,6 +35,15 @@ public function mxchat_fetch_pinecone_records($pinecone_options, $search_query =
         return array('data' => array(), 'total' => 0, 'total_in_database' => 0, 'showing_recent_only' => false);
     }
 
+    // Document index (plan 362c31): cursor-paged listing + BM25 search through the documents API.
+    if (class_exists('MxChat_Pinecone_Documents') && MxChat_Pinecone_Documents::is_document_options($pinecone_options)) {
+        $doc_result = MxChat_Pinecone_Documents::fetch_records($pinecone_options, $search_query, $page, $per_page, $bot_id, $content_type);
+        if (!empty($doc_result['data'])) {
+            $this->mxchat_batch_fetch_role_restrictions($doc_result['data'], $bot_id);
+        }
+        return $doc_result;
+    }
+
     try {
         // Get total count for the banner message (bot-specific) - lightweight call
         $total_in_database = $this->mxchat_get_pinecone_total_count($pinecone_options, $bot_id);
@@ -45,6 +54,21 @@ public function mxchat_fetch_pinecone_records($pinecone_options, $search_query =
             $result = $this->mxchat_fetch_pinecone_page_optimized($pinecone_options, $search_query, $page, $per_page, $bot_id, $content_type);
             $result['total_in_database'] = $total_in_database;
             $result['showing_recent_only'] = true; // Always show banner when we're limiting results
+
+            // Plan dd6e10: the list path used to report the size of its one page
+            // fetch (per_page * 2 = 50) as 'total', so every index over 500
+            // vectors read "Knowledge Entries (50)" and paginated to two pages.
+            // The only honest number on this path is the one we already fetched
+            // above — the index / namespace vector count — so return that,
+            // say it is vectors (a long entry is several of them), and flag
+            // that pages come from a cursor, not from a total. Semantic search
+            // keeps its own total: that is a real count of what matched.
+            if (empty($search_query)) {
+                $result['total'] = $total_in_database;
+                $result['count_unit'] = 'vectors';
+                $result['cursor_pagination'] = true;
+                $result['has_next'] = !empty($result['has_next']);
+            }
             return $result;
         }
 
@@ -501,8 +525,12 @@ private function mxchat_list_pinecone_records($pinecone_options, $page = 1, $per
     $list_url = "https://{$host}/vectors/list";
 
     // Calculate pagination token from page number
-    // Pinecone uses cursor-based pagination, so we need to handle this differently
-    $limit = $per_page * 2; // Fetch extra to account for filtering
+    // Pinecone uses cursor-based pagination, so we need to handle this differently.
+    // Plan dd6e10: when browsing unfiltered, one cursor step must be exactly one
+    // page — the old per_page * 2 over-fetch was sliced back to per_page, so the
+    // next cursor started 25 ids past what the visitor had seen. The over-fetch
+    // only earns its keep when a content-type filter will discard some of the ids.
+    $limit = !empty($content_type) ? $per_page * 2 : $per_page;
 
     $list_params = array(
         'limit' => $limit
@@ -542,7 +570,8 @@ private function mxchat_list_pinecone_records($pinecone_options, $page = 1, $per
     $data = json_decode($body, true);
 
     // Store pagination token for next page
-    if (!empty($data['pagination']['next'])) {
+    $has_next = !empty($data['pagination']['next']);
+    if ($has_next) {
         $stored_tokens = get_transient($pagination_key) ?: array();
         $stored_tokens[$page + 1] = $data['pagination']['next'];
         set_transient($pagination_key, $stored_tokens, 300); // 5 minute cache
@@ -559,7 +588,7 @@ private function mxchat_list_pinecone_records($pinecone_options, $page = 1, $per
     // not the failure signature it was under POST — return the empty listing
     // rather than routing into the fallback and masking a broken primary.
     if (empty($vector_ids)) {
-        return array('data' => array(), 'total' => 0);
+        return array('data' => array(), 'total' => 0, 'has_next' => false);
     }
 
     // Fetch metadata for these vector IDs
@@ -572,6 +601,7 @@ private function mxchat_list_pinecone_records($pinecone_options, $page = 1, $per
         return $this->mxchat_query_based_list($pinecone_options, $page, $per_page, $bot_id, $content_type);
     }
 
+    $fetched['has_next'] = $has_next;
     return $fetched;
 }
 
@@ -665,7 +695,8 @@ private function mxchat_query_based_list($pinecone_options, $page, $per_page, $b
 
     return array(
         'data' => $paged_records,
-        'total' => $total
+        'total' => $total,
+        'has_next' => ($offset + $per_page) < $total // offset-paged, but the cursor UI still asks (plan dd6e10)
     );
 }
 
@@ -1135,6 +1166,17 @@ public function mxchat_scan_pinecone_for_processed_content($pinecone_options, $p
         $chunks = array_chunk($all_vector_ids, 100);
         $processed_data = array();
 
+        // Document index (plan 362c31): one documents/fetch instead of the GET loop.
+        if (class_exists('MxChat_Pinecone_Documents') && MxChat_Pinecone_Documents::is_document_options($pinecone_options)) {
+            $chunks = array();
+            $doc_vectors = MxChat_Pinecone_Documents::fetch($all_vector_ids, MxChat_Pinecone_Documents::cfg_from_options($pinecone_options), array('source_url', 'created_at'));
+            foreach ($doc_vectors as $vector_id => $vector_data) {
+                if (isset($vector_id_map[$vector_id])) {
+                    $processed_data[$vector_id_map[$vector_id]['post_id']] = MxChat_Pinecone_Documents::processed_row($vector_id, $vector_id_map[$vector_id]['url'], $vector_data['metadata'] ?? array());
+                }
+            }
+        }
+
         foreach ($chunks as $chunk) {
             $fetch_query = array();
             foreach ($chunk as $fetch_vid) {
@@ -1218,6 +1260,11 @@ private function mxchat_get_pinecone_total_count($pinecone_options, $bot_id = 'd
         return 0;
     }
 
+    // Document index (plan 362c31): same stats call, version-headed, namespace mapped.
+    if (class_exists('MxChat_Pinecone_Documents') && MxChat_Pinecone_Documents::is_document_options($pinecone_options)) {
+        return MxChat_Pinecone_Documents::count(MxChat_Pinecone_Documents::cfg_from_options($pinecone_options));
+    }
+
     try {
         $stats_url = "https://{$host}/describe_index_stats";
 
@@ -1237,10 +1284,15 @@ private function mxchat_get_pinecone_total_count($pinecone_options, $bot_id = 'd
 
             // If namespace is specified, get count from that specific namespace
             // Pinecone stats response format: { namespaces: { "ns": { vectorCount: N } }, totalVectorCount: N }
-            if (!empty($namespace) && isset($stats_data['namespaces'][$namespace]['vectorCount'])) {
-                $namespace_count = intval($stats_data['namespaces'][$namespace]['vectorCount']);
-                //error_log('DEBUG: Got namespace-specific count: ' . $namespace_count . ' for namespace: ' . $namespace);
-                return $namespace_count;
+            if (!empty($namespace)) {
+                // Plan dd6e10: a configured namespace (including a Multi-Bot
+                // per-bot namespace, which arrives through the same option key)
+                // is counted on its own. Pinecone omits empty namespaces from
+                // the stats, so "not listed" means 0 here — falling through to
+                // totalVectorCount would show a bot the whole index's number.
+                return isset($stats_data['namespaces'][$namespace]['vectorCount'])
+                    ? intval($stats_data['namespaces'][$namespace]['vectorCount'])
+                    : 0;
             }
 
             // If no namespace specified or namespace not found in response, use total
@@ -1287,7 +1339,10 @@ public function mxchat_get_bot_pinecone_options($bot_id = 'default') {
             'mxchat_pinecone_host' => $bot_config['host'] ?? '',
             'mxchat_pinecone_namespace' => $bot_config['namespace'] ?? '',
             'mxchat_pinecone_environment' => '',
-            'mxchat_pinecone_index' => ''
+            'mxchat_pinecone_index' => '',
+            // Plan 362c31: a bot's own index may be a document index (the Multi-Bot
+            // add-on supplies 'index_type' when it learns the choice; default vector).
+            'mxchat_pinecone_index_type' => (($bot_config['index_type'] ?? 'vector') === 'document') ? 'document' : 'vector'
         );
         
         //error_log('DEBUG: Returning bot-specific Pinecone options for bot: ' . $bot_id);
@@ -1356,6 +1411,10 @@ public function fetch_pinecone_vectors_by_ids($pinecone_options, $vector_ids) {
         // 200-with-an-empty-body. Chunked at 100 ids to stay well under the
         // measured HTTP 414 URL-length boundary.
         $vectors = array();
+        // Document index (plan 362c31): documents/fetch instead of the GET loop (same id => vector shape).
+        if (class_exists('MxChat_Pinecone_Documents') && MxChat_Pinecone_Documents::is_document_options($pinecone_options)) {
+            $vectors = MxChat_Pinecone_Documents::fetch(array_values($vector_ids), MxChat_Pinecone_Documents::cfg_from_options($pinecone_options), array('source_url', 'created_at'));
+        } else
         foreach (array_chunk(array_values($vector_ids), 100) as $chunk) {
             $fetch_query = array();
             foreach ($chunk as $fetch_vid) {
@@ -1449,6 +1508,16 @@ public function mxchat_delete_all_from_pinecone($pinecone_options, $content_type
         );
     }
 
+    // Document index (plan 362c31): one delete_all (or one filtered delete) call.
+    if (class_exists('MxChat_Pinecone_Documents') && MxChat_Pinecone_Documents::is_document_options($pinecone_options)) {
+        $doc_filter = !empty($content_type_filter) ? array('type' => array('$eq' => (string) $content_type_filter)) : null;
+        $doc_result = MxChat_Pinecone_Documents::delete_all(MxChat_Pinecone_Documents::cfg_from_options($pinecone_options), $doc_filter);
+        if (is_wp_error($doc_result)) {
+            return array('success' => false, 'message' => $doc_result->get_error_message());
+        }
+        return array('success' => true, 'message' => $doc_filter ? 'Deleted all matching documents from the Pinecone document index' : 'Deleted all documents from the Pinecone document index');
+    }
+
     try {
         $total_deleted = 0;
         $failed_batches = 0;
@@ -1531,6 +1600,16 @@ public function mxchat_delete_all_from_pinecone($pinecone_options, $content_type
      * Deletes batch of vectors from Pinecone database
      */
      public function mxchat_delete_pinecone_batch($vector_ids, $api_key, $host, $namespace = '') {
+         // Document index (plan 362c31): documents/delete by ids.
+         if (class_exists('MxChat_Pinecone_Documents') && MxChat_Pinecone_Documents::is_document_host($host)) {
+             $doc_result = MxChat_Pinecone_Documents::delete_ids((array) $vector_ids, array('api_key' => $api_key, 'host' => $host, 'namespace' => $namespace));
+             if (is_wp_error($doc_result)) {
+                 MxChat_Admin::mxchat_log_debug('pinecone_error', 'Pinecone document batch deletion failed: ' . $doc_result->get_error_message());
+                 return array('success' => false, 'message' => $doc_result->get_error_message());
+             }
+             return array('success' => true, 'message' => 'Batch deleted successfully from Pinecone');
+         }
+
          // Build the API endpoint
          $api_endpoint = "https://{$host}/vectors/delete";
 
@@ -1598,6 +1677,15 @@ public function mxchat_delete_from_pinecone_by_vector_id($vector_id, $api_key, $
     //error_log('Host: ' . $host);
     //error_log('API Key: ' . (empty($api_key) ? 'EMPTY' : 'SET'));
     
+    // Document index (plan 362c31): documents/delete by id.
+    if (class_exists('MxChat_Pinecone_Documents') && MxChat_Pinecone_Documents::is_document_host($host)) {
+        $doc_result = MxChat_Pinecone_Documents::delete_ids(array($vector_id), array('api_key' => $api_key, 'host' => $host, 'namespace' => $namespace));
+        if (is_wp_error($doc_result)) {
+            return array('success' => false, 'message' => $doc_result->get_error_message());
+        }
+        return array('success' => true, 'message' => 'Vector deleted successfully from Pinecone');
+    }
+
     // First, let's verify the vector exists before trying to delete
     $fetch_url = "https://{$host}/vectors/fetch";
     
@@ -1740,6 +1828,15 @@ public function mxchat_delete_from_pinecone_by_vector_id($vector_id, $api_key, $
                  'success' => false,
                  'message' => 'Pinecone host is not configured. Please set the host in your settings.'
              );
+         }
+
+         // Document index (plan 362c31): documents/delete by the same md5(url) ids.
+         if (class_exists('MxChat_Pinecone_Documents') && MxChat_Pinecone_Documents::is_document_options($options)) {
+             $doc_result = MxChat_Pinecone_Documents::delete_ids(array_map('md5', (array) $urls), MxChat_Pinecone_Documents::cfg_from_options($options));
+             if (is_wp_error($doc_result)) {
+                 return array('success' => false, 'message' => $doc_result->get_error_message());
+             }
+             return array('success' => true, 'message' => sprintf('Successfully deleted %d vectors from Pinecone', count((array) $urls)));
          }
 
          // Build API endpoint using the configured host

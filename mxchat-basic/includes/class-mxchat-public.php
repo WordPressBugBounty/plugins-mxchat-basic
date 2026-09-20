@@ -233,6 +233,27 @@ public function render_chatbot_shortcode($atts) {
         esc_attr($current_options['name_field_placeholder']) :
         esc_attr__('Enter your name', 'mxchat');
 
+    // Require Email Address (c0cfaf). Default ON — absent key means required,
+    // so existing installs render the same markup they always have.
+    $require_email_field = ($current_options['lead_capture_require_email_toggle'] ?? 'on') === 'on';
+
+    // Pre-fill the form from the profile when a signed-in visitor is being
+    // shown it (c0cfaf). Emitted ONLY for a logged-in request, so the markup a
+    // guest gets — the copy a page cache actually stores and re-serves — never
+    // carries anyone's address. WordPress already marks logged-in responses
+    // uncacheable, and such a page carries per-user data from other plugins
+    // regardless.
+    $prefill_email_attr = '';
+    $prefill_name_attr  = '';
+    if (is_user_logged_in()) {
+        if ($user_email !== '') {
+            $prefill_email_attr = ' value="' . esc_attr($user_email) . '"';
+        }
+        if ($user_name !== '') {
+            $prefill_name_attr = ' value="' . esc_attr($user_name) . '"';
+        }
+    }
+
     // Consent checkbox (b062c4). Default OFF — with the toggle off this block
     // renders nothing and the form markup is byte-identical to before.
     $enable_consent_checkbox = isset($current_options['enable_consent_checkbox']) &&
@@ -311,11 +332,15 @@ public function render_chatbot_shortcode($atts) {
                 //   Add name field if enabled
                 if ($enable_name_field) {
                     echo '        <label for="user-name-' . esc_attr($bot_id) . '" class="sr-only mxchat-name-label">' . esc_html__('Name', 'mxchat') . '</label>';
-                    echo '        <input type="text" id="user-name-' . esc_attr($bot_id) . '" name="user_name" class="mxchat-name-input" required placeholder="' . $name_field_placeholder . '" />';
+                    echo '        <input type="text" id="user-name-' . esc_attr($bot_id) . '" name="user_name" class="mxchat-name-input" required' . $prefill_name_attr . ' placeholder="' . $name_field_placeholder . '" />';
                 }
 
+                // The email field drops its required attribute when the owner
+                // has made it optional (c0cfaf). Like the consent checkbox,
+                // the attribute is UX only — the save endpoint re-enforces the
+                // rule server-side, so a direct POST cannot bypass it.
                 echo '        <label for="user-email-' . esc_attr($bot_id) . '" class="sr-only">' . esc_html__('Email Address', 'mxchat') . '</label>';
-                echo '        <input type="email" id="user-email-' . esc_attr($bot_id) . '" name="user_email" class="mxchat-email-input" required placeholder="' . esc_attr__('Enter your email address', 'mxchat') . '" />';
+                echo '        <input type="email" id="user-email-' . esc_attr($bot_id) . '" name="user_email" class="mxchat-email-input"' . ($require_email_field ? ' required' : '') . $prefill_email_attr . ' placeholder="' . ($require_email_field ? esc_attr__('Enter your email address', 'mxchat') : esc_attr__('Enter your email address (optional)', 'mxchat')) . '" />';
 
                 // Consent checkbox row (b062c4). The native required attribute
                 // is UX only — the save endpoint re-enforces it server-side.
@@ -501,12 +526,20 @@ public function render_chatbot_shortcode($atts) {
             echo '                      <circle cx="12" cy="13" r="3" style="fill: none !important;"/>';
             echo '                  </svg>';
             echo '              </button>';
-            
-            
+
+            // Toolbar items API (plan 65c9b6). Add-ons put their buttons here
+            // through the mxchat_chat_toolbar_items filter instead of polling
+            // the DOM after load. Only asked for when the toolbar is on: an item
+            // nobody can see is work nobody should do (the Woo cart badge used
+            // to fetch a count for a hidden toolbar on every page view).
+            if (isset($this->options['chat_toolbar_toggle']) && $this->options['chat_toolbar_toggle'] === 'on') {
+                echo self::render_toolbar_items($bot_id);
+            }
+
             echo '          </div>';
-            
+
             echo '          <div class="chatbot-footer">';
-    
+
                     // Output the privacy notice if enabled
                     if ($privacy_toggle && !empty($privacy_text)) {
                         echo '<p class="privacy-notice">' . $privacy_text . '</p>';
@@ -554,8 +587,114 @@ public function render_chatbot_shortcode($atts) {
         } 
     
     /**
+     * Render the add-on items of the chat toolbar (plan-mxchat-20260916-65c9b6).
+     *
+     * `mxchat_chat_toolbar_items` receives an empty array and the bot id and
+     * returns items shaped ['id' => 'woo-cart', 'html' => '<button …>…</button>',
+     * 'order' => 10]. Items are sorted by order (ties keep filter order), keyed
+     * by id so a later callback can replace an earlier one, and the html is run
+     * through wp_kses with the post allow-list plus the SVG shapes a toolbar
+     * icon needs (filterable via mxchat_chat_toolbar_items_allowed_html).
+     * Add-ons must not add the dropdowns / panels their button opens here —
+     * the toolbar sits inside an overflow-hidden widget; append those to body
+     * from JS on first use, the way the Woo cart does.
+     *
+     * @param string $bot_id
+     * @return string HTML, empty when no add-on contributed anything
+     */
+    public static function render_toolbar_items($bot_id) {
+        $items = apply_filters('mxchat_chat_toolbar_items', array(), $bot_id);
+        if (!is_array($items) || empty($items)) {
+            return '';
+        }
+
+        $clean = array();
+        $seq   = 0;
+        foreach ($items as $key => $item) {
+            if (!is_array($item) || empty($item['html']) || !is_string($item['html'])) {
+                continue;
+            }
+            $id = isset($item['id']) ? sanitize_key($item['id']) : (is_string($key) ? sanitize_key($key) : '');
+            if ($id === '') {
+                continue;
+            }
+            $clean[$id] = array(
+                'html'  => $item['html'],
+                'order' => isset($item['order']) ? (int) $item['order'] : 10,
+                'seq'   => $seq++,
+            );
+        }
+        if (empty($clean)) {
+            return '';
+        }
+
+        uasort($clean, function ($a, $b) {
+            if ($a['order'] === $b['order']) {
+                return $a['seq'] <=> $b['seq'];
+            }
+            return $a['order'] <=> $b['order'];
+        });
+
+        $allowed = self::toolbar_items_allowed_html();
+        $out     = '';
+        foreach ($clean as $id => $item) {
+            $html = trim(wp_kses($item['html'], $allowed));
+            if ($html === '') {
+                continue;
+            }
+            $out .= '              <!-- toolbar item: ' . esc_html($id) . ' -->' . "\n";
+            $out .= '              ' . $html . "\n";
+        }
+        return $out;
+    }
+
+    /**
+     * Allow-list for toolbar item markup: everything wp_kses_post allows (button,
+     * span, div, aria-* and data-* are in there) plus inline SVG icon shapes.
+     */
+    private static function toolbar_items_allowed_html() {
+        $allowed = wp_kses_allowed_html('post');
+        $shape   = array(
+            'fill'            => true,
+            'stroke'          => true,
+            'stroke-width'    => true,
+            'stroke-linecap'  => true,
+            'stroke-linejoin' => true,
+            'transform'       => true,
+            'style'           => true,
+            'class'           => true,
+        );
+        $allowed['svg'] = array_merge($shape, array(
+            'xmlns'       => true,
+            'viewbox'     => true,
+            'width'       => true,
+            'height'      => true,
+            'aria-hidden' => true,
+            'focusable'   => true,
+            'role'        => true,
+        ));
+        $allowed['path']     = array_merge($shape, array('d' => true));
+        $allowed['circle']   = array_merge($shape, array('cx' => true, 'cy' => true, 'r' => true));
+        $allowed['line']     = array_merge($shape, array('x1' => true, 'y1' => true, 'x2' => true, 'y2' => true));
+        $allowed['polyline'] = array_merge($shape, array('points' => true));
+        $allowed['polygon']  = array_merge($shape, array('points' => true));
+        $allowed['rect']     = array_merge($shape, array('x' => true, 'y' => true, 'width' => true, 'height' => true, 'rx' => true, 'ry' => true));
+        $allowed['g']        = $shape;
+        if (!isset($allowed['button'])) {
+            $allowed['button'] = array();
+        }
+        $allowed['button'] = array_merge($allowed['button'], array(
+            'type'          => true,
+            'disabled'      => true,
+            'aria-haspopup' => true,
+            'aria-pressed'  => true,
+        ));
+        return apply_filters('mxchat_chat_toolbar_items_allowed_html', $allowed);
+    }
+
+    /**
      * Get bot-specific options for multi-bot functionality
-     * Falls back to default options if bot_id is 'default' or multi-bot add-on is not active
+* Falls back to default options if bot_id is 'default' or multi-bot add-on is not active
      */
     private function get_bot_options($bot_id = 'default') {
         // If default bot or multi-bot add-on not active, return empty (use default options)
@@ -593,11 +732,25 @@ public function render_chatbot_shortcode($atts) {
     
         
     private function determine_email_collection_state() {
-    // Logged-in users skip the email form
+    // Logged-in users skip the email form, UNLESS the owner has turned on
+    // "Also Show for Logged-In Users" (c0cfaf). On a membership or LMS site
+    // every visitor is signed in, so the short-circuit meant lead capture —
+    // and the consent checkbox — never appeared at all.
+    //
+    // Deliberately no PII in this decision: the returned profile values are
+    // NOT rendered into the markup, because this page HTML is cacheable and
+    // a cached form carrying one user's address would serve it to the next
+    // visitor. Pre-fill travels on the nocache'd AJAX check instead
+    // (mxchat_check_email_provided). Both logged-in and guest requests render
+    // the same empty form, so the cached copy is correct for either.
     if (is_user_logged_in()) {
+        $options = get_option('mxchat_options', array());
+        $show_for_logged_in = isset($options['lead_capture_logged_in_toggle'])
+            && $options['lead_capture_logged_in_toggle'] === 'on';
+
         $current_user = wp_get_current_user();
         return [
-            'show_email_form' => false,
+            'show_email_form' => $show_for_logged_in,
             'user_email' => $current_user->user_email,
             'user_name' => $current_user->display_name ?: $current_user->first_name ?: ''
         ];

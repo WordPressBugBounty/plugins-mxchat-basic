@@ -447,6 +447,10 @@ public function initialize_default_options() {
         'enable_consent_checkbox' => 'off', // b062c4 — default OFF: changes an existing form on every install
         'consent_checkbox_label' => __('I agree to the Privacy Policy.', 'mxchat'),
         'consent_checkbox_required' => 'off',
+        // Lead capture options (c0cfaf). Both default to today's behaviour:
+        // the form is hidden from logged-in visitors, and email is required.
+        'lead_capture_logged_in_toggle' => 'off',
+        'lead_capture_require_email_toggle' => 'on',
         'top_bar_title' => esc_html__('MxChat', 'mxchat'),
         'intro_message' => __('Hello! How can I assist you today?', 'mxchat'),
         'ai_agent_text' => esc_html__('AI Agent', 'mxchat'),
@@ -991,6 +995,38 @@ public function sanitize_pinecone_settings($input) {
 
     // Remove https:// from host if present
     $sanitized['mxchat_pinecone_host'] = str_replace(['https://', 'http://'], '', $sanitized['mxchat_pinecone_host']);
+
+    // Index type (plan 362c31). The document index is opt-in, and its host
+    // must have passed Check index (or come from Create index for me) before
+    // the choice sticks — a classic host routed through the documents API
+    // answers 400 on every query. The verified host is carried from the
+    // stored option; only the AJAX handlers set it, never the form.
+    $existing = get_option('mxchat_pinecone_addon_options', array());
+    $existing = is_array($existing) ? $existing : array();
+    $verified_host = (string) ($existing['mxchat_pinecone_docs_verified_host'] ?? '');
+    $index_type = (($input['mxchat_pinecone_index_type'] ?? 'vector') === 'document') ? 'document' : 'vector';
+    $host_for_check = strtolower(trim($sanitized['mxchat_pinecone_host'], '/'));
+    if ($index_type === 'document' && ($host_for_check === '' || $host_for_check !== strtolower($verified_host))) {
+        $index_type = 'vector';
+        if (function_exists('add_settings_error')) {
+            add_settings_error('mxchat_pinecone_addon_options', 'mxchat_pinecone_docs_unverified', __('The document index host has not been checked, so the index type stayed on Vector index. Click Check index (or Create index for me) and save again.', 'mxchat'));
+        }
+    }
+    $sanitized['mxchat_pinecone_index_type'] = $index_type;
+    $sanitized['mxchat_pinecone_docs_verified_host'] = $verified_host;
+    $vector_host = str_replace(['https://', 'http://'], '', sanitize_text_field($input['mxchat_pinecone_vector_host'] ?? ($existing['mxchat_pinecone_vector_host'] ?? '')));
+    $sanitized['mxchat_pinecone_vector_host'] = trim($vector_host, '/');
+    $sanitized['mxchat_pinecone_vector_index'] = sanitize_text_field($input['mxchat_pinecone_vector_index'] ?? ($existing['mxchat_pinecone_vector_index'] ?? ''));
+    $docs_cloud = sanitize_key($input['mxchat_pinecone_docs_cloud'] ?? ($existing['mxchat_pinecone_docs_cloud'] ?? 'aws'));
+    $sanitized['mxchat_pinecone_docs_cloud'] = in_array($docs_cloud, array('aws', 'gcp', 'azure'), true) ? $docs_cloud : 'aws';
+    $docs_region = sanitize_text_field($input['mxchat_pinecone_docs_region'] ?? ($existing['mxchat_pinecone_docs_region'] ?? 'us-east-1'));
+    $sanitized['mxchat_pinecone_docs_region'] = $docs_region !== '' ? $docs_region : 'us-east-1';
+    $docs_language = sanitize_key($input['mxchat_pinecone_docs_language'] ?? ($existing['mxchat_pinecone_docs_language'] ?? 'en'));
+    $sanitized['mxchat_pinecone_docs_language'] = (class_exists('MxChat_Pinecone_Documents') && array_key_exists($docs_language, MxChat_Pinecone_Documents::languages())) ? $docs_language : 'en';
+    // The namespace has no form field; carry the stored value so a form save cannot drop it.
+    if (isset($existing['mxchat_pinecone_namespace'])) {
+        $sanitized['mxchat_pinecone_namespace'] = sanitize_text_field($existing['mxchat_pinecone_namespace']);
+    }
 
     return $sanitized;
 }
@@ -2139,24 +2175,68 @@ public function mxchat_fetch_leads() {
         wp_die();
     }
 
+    $date_range = isset($_POST['date_range']) ? sanitize_key($_POST['date_range']) : 'all';
+
+    wp_send_json(self::mxchat_collect_leads([
+        'page'        => isset($_POST['page']) ? max(1, absint($_POST['page'])) : 1,
+        'per_page'    => isset($_POST['per_page']) ? min(100, max(10, absint($_POST['per_page']))) : 25,
+        'search'      => isset($_POST['search']) ? sanitize_text_field(wp_unslash($_POST['search'])) : '',
+        'date_cutoff' => self::mxchat_leads_date_cutoff($date_range),
+        'status'      => isset($_POST['status']) ? sanitize_key($_POST['status']) : 'all',
+        'page_url'    => isset($_POST['page_url']) ? esc_url_raw(wp_unslash($_POST['page_url'])) : '',
+        'sort'        => isset($_POST['sort']) ? sanitize_key($_POST['sort']) : 'last_seen',
+        'sort_dir'    => (isset($_POST['sort_dir']) && $_POST['sort_dir'] === 'asc') ? 'asc' : 'desc',
+    ]));
+    wp_die();
+}
+
+/**
+ * Build the Leads payload: the transcripts-derived list plus the chat-deleted
+ * and orphan buckets, paginated and hydrated exactly as the Leads tab shows it.
+ *
+ * Extracted from mxchat_fetch_leads() so the REST route (f958cf) reads leads
+ * through the same query rather than growing a second one that would drift —
+ * in particular from the address-less lead key introduced by c0cfaf. Callers
+ * own their own capability check and their own per_page ceiling; this method
+ * reads no superglobals and echoes nothing.
+ *
+ * @param array $args page, per_page, search, date_cutoff (MySQL datetime or ''),
+ *                    status (all|orphan|chat_deleted), page_url, sort, sort_dir.
+ * @return array
+ */
+public static function mxchat_collect_leads(array $args = []) {
     global $wpdb;
     $table = $wpdb->prefix . 'mxchat_chat_transcripts';
 
-    $page           = isset($_POST['page']) ? max(1, absint($_POST['page'])) : 1;
-    $per_page       = isset($_POST['per_page']) ? min(100, max(10, absint($_POST['per_page']))) : 25;
+    $page           = max(1, (int) ($args['page'] ?? 1));
+    $per_page       = max(1, (int) ($args['per_page'] ?? 25));
     $offset         = ($page - 1) * $per_page;
-    $search         = isset($_POST['search']) ? sanitize_text_field(wp_unslash($_POST['search'])) : '';
-    $date_range     = isset($_POST['date_range']) ? sanitize_key($_POST['date_range']) : 'all';
-    $status         = isset($_POST['status']) ? sanitize_key($_POST['status']) : 'all';
-    $page_filter    = isset($_POST['page_url']) ? esc_url_raw(wp_unslash($_POST['page_url'])) : '';
-    $sort           = isset($_POST['sort']) ? sanitize_key($_POST['sort']) : 'last_seen';
-    $sort_dir       = (isset($_POST['sort_dir']) && $_POST['sort_dir'] === 'asc') ? 'ASC' : 'DESC';
+    $search         = (string) ($args['search'] ?? '');
+    $status         = (string) ($args['status'] ?? 'all');
+    $page_filter    = (string) ($args['page_url'] ?? '');
+    $sort           = (string) ($args['sort'] ?? 'last_seen');
+    $sort_dir       = (isset($args['sort_dir']) && $args['sort_dir'] === 'asc') ? 'ASC' : 'DESC';
 
-    $date_cutoff = self::mxchat_leads_date_cutoff($date_range);
+    $date_cutoff = (string) ($args['date_cutoff'] ?? '');
     $has_page_url_column = !empty($wpdb->get_results("SHOW COLUMNS FROM $table LIKE 'originating_page_url'"));
 
     // Base WHERE for transcripts leads.
-    $where_clauses = ["user_email IS NOT NULL", "user_email != ''"];
+    //
+    // Email is the row key whenever there IS one. With "Require Email Address"
+    // turned off (c0cfaf) a capture can be name-only, and keying on email
+    // would drop it from this list entirely — the lead would be collected and
+    // then invisible. Those rows key on session id instead, written as
+    // "session:<id>" so the two kinds of key can never collide.
+    //
+    // The widening is gated on the option: while email is required (the
+    // default, and every install that has not opted in) both the WHERE and the
+    // GROUP BY reduce to exactly what they were before.
+    $lead_key_sql   = self::mxchat_leads_key_sql();
+    $email_optional = self::mxchat_leads_email_optional();
+
+    $where_clauses = $email_optional
+        ? ["((user_email IS NOT NULL AND user_email != '') OR (user_name IS NOT NULL AND user_name != ''))"]
+        : ["user_email IS NOT NULL", "user_email != ''"];
     $where_params  = [];
 
     if ($date_cutoff) {
@@ -2175,15 +2255,16 @@ public function mxchat_fetch_leads() {
     }
     $where_sql = 'WHERE ' . implode(' AND ', $where_clauses);
 
-    // Aggregate query grouped by email.
-    $select_sql = $has_page_url_column
-        ? "SELECT user_email, MAX(timestamp) AS last_seen, MIN(timestamp) AS first_seen,
-                  COUNT(DISTINCT session_id) AS conversation_count"
-        : "SELECT user_email, MAX(timestamp) AS last_seen, MIN(timestamp) AS first_seen,
-                  COUNT(DISTINCT session_id) AS conversation_count";
+    // Aggregate query grouped by the lead key (email, or session id when the
+    // capture had no email). MAX(user_email) is safe as the display address:
+    // rows sharing an email key all carry that same address, and rows keyed by
+    // session have no address to disagree about.
+    $select_sql = "SELECT {$lead_key_sql} AS lead_key, MAX(user_email) AS user_email,
+                          MAX(timestamp) AS last_seen, MIN(timestamp) AS first_seen,
+                          COUNT(DISTINCT session_id) AS conversation_count";
 
     $order_column = in_array($sort, ['last_seen', 'conversation_count', 'first_seen'], true) ? $sort : 'last_seen';
-    $group_order_limit = " GROUP BY user_email ORDER BY {$order_column} {$sort_dir} LIMIT %d OFFSET %d";
+    $group_order_limit = " GROUP BY lead_key ORDER BY {$order_column} {$sort_dir} LIMIT %d OFFSET %d";
 
     $transcripts_sql = $wpdb->prepare(
         "{$select_sql} FROM {$table} {$where_sql}{$group_order_limit}",
@@ -2193,7 +2274,7 @@ public function mxchat_fetch_leads() {
 
     // Count of unique transcript-based leads under the same filters.
     $count_sql = $wpdb->prepare(
-        "SELECT COUNT(DISTINCT user_email) FROM {$table} {$where_sql}",
+        "SELECT COUNT(DISTINCT {$lead_key_sql}) FROM {$table} {$where_sql}",
         $where_params
     );
     $transcripts_lead_count = (int) $wpdb->get_var($count_sql);
@@ -2204,17 +2285,18 @@ public function mxchat_fetch_leads() {
         $detail = $has_page_url_column
             ? $wpdb->get_row($wpdb->prepare(
                 "SELECT session_id, user_name, originating_page_url, originating_page_title
-                 FROM {$table} WHERE user_email = %s ORDER BY timestamp DESC LIMIT 1",
-                $row->user_email
+                 FROM {$table} WHERE {$lead_key_sql} = %s ORDER BY timestamp DESC LIMIT 1",
+                $row->lead_key
             ))
             : $wpdb->get_row($wpdb->prepare(
                 "SELECT session_id, user_name FROM {$table}
-                 WHERE user_email = %s ORDER BY timestamp DESC LIMIT 1",
-                $row->user_email
+                 WHERE {$lead_key_sql} = %s ORDER BY timestamp DESC LIMIT 1",
+                $row->lead_key
             ));
 
         $leads[] = [
-            'email'              => $row->user_email,
+            'lead_key'           => $row->lead_key,
+            'email'              => (string) $row->user_email,
             'name'               => isset($detail->user_name) ? (string) $detail->user_name : '',
             'conversation_count' => (int) $row->conversation_count,
             'last_seen'          => $row->last_seen,
@@ -2232,7 +2314,7 @@ public function mxchat_fetch_leads() {
     // status filter below. Deduplication priority when the same email appears in multiple
     // sources: transcripts > chat_deleted > orphan.
     $transcripts_emails_seen = array_flip(array_map(
-        function ($r) { return strtolower($r['email']); },
+        function ($r) { return self::mxchat_leads_dedup_key($r); },
         $leads
     ));
 
@@ -2245,11 +2327,11 @@ public function mxchat_fetch_leads() {
         $chat_deleted_leads_all = array_values(array_filter(
             $chat_deleted_leads_all,
             function ($row) use ($transcripts_emails_seen) {
-                return !isset($transcripts_emails_seen[strtolower($row['email'])]);
+                return !isset($transcripts_emails_seen[self::mxchat_leads_dedup_key($row)]);
             }
         ));
         foreach ($chat_deleted_leads_all as $row) {
-            $transcripts_emails_seen[strtolower($row['email'])] = true;
+            $transcripts_emails_seen[self::mxchat_leads_dedup_key($row)] = true;
         }
     }
 
@@ -2261,7 +2343,7 @@ public function mxchat_fetch_leads() {
         $orphan_leads_all = array_values(array_filter(
             $orphan_leads_all,
             function ($row) use ($transcripts_emails_seen) {
-                return !isset($transcripts_emails_seen[strtolower($row['email'])]);
+                return !isset($transcripts_emails_seen[self::mxchat_leads_dedup_key($row)]);
             }
         ));
     }
@@ -2336,7 +2418,7 @@ public function mxchat_fetch_leads() {
     }
     unset($lead_consent_ref);
 
-    wp_send_json([
+    return [
         'success'        => true,
         'leads'          => $leads,
         'page'           => $page,
@@ -2347,8 +2429,7 @@ public function mxchat_fetch_leads() {
         'showing_end'    => min($offset + $per_page, $total_count),
         'stats'          => $stats,
         'top_pages'      => $top_pages,
-    ]);
-    wp_die();
+    ];
 }
 
 /**
@@ -2363,28 +2444,87 @@ public function mxchat_delete_leads() {
     }
     check_ajax_referer('mxchat_delete_leads', 'security');
 
-    $emails_raw = isset($_POST['emails']) ? (array) wp_unslash($_POST['emails']) : [];
-    $emails = [];
-    foreach ($emails_raw as $e) {
-        $clean = sanitize_email((string) $e);
-        if ($clean) {
-            $emails[] = $clean;
-        }
-    }
-    if (empty($emails)) {
+    // The tab sends back the key it was given, which is an address for most
+    // leads and "session:<id>" for a name-only capture (c0cfaf). Splitting
+    // here keeps sanitize_email() as the gate for the email half — an empty
+    // or malformed value is dropped rather than turned into a WHERE clause
+    // that would match every address-less row at once.
+    $keys = self::mxchat_leads_split_keys(
+        isset($_POST['emails']) ? (array) wp_unslash($_POST['emails']) : []
+    );
+    $emails   = $keys['emails'];
+    $sessions = $keys['sessions'];
+
+    if (empty($emails) && empty($sessions)) {
         wp_send_json_error(['message' => 'No emails provided']);
         wp_die();
     }
 
-    $summary = self::mxchat_wipe_leads_by_email($emails);
+    $summary = ['deleted_sessions' => 0, 'deleted_rows' => 0];
+    if (!empty($emails)) {
+        $summary = self::mxchat_wipe_leads_by_email($emails);
+    }
+    if (!empty($sessions)) {
+        $session_summary = self::mxchat_wipe_leads_by_session($sessions);
+        $summary['deleted_sessions'] += $session_summary['deleted_sessions'];
+        $summary['deleted_rows']     += $session_summary['deleted_rows'];
+    }
 
     wp_send_json([
         'success'           => true,
-        'deleted_leads'     => count($emails),
+        'deleted_leads'     => count($emails) + count($sessions),
         'deleted_sessions'  => $summary['deleted_sessions'],
         'deleted_rows'      => $summary['deleted_rows'],
     ]);
     wp_die();
+}
+
+/**
+ * Wipe address-less leads by session id (c0cfaf) — the session-keyed twin of
+ * mxchat_wipe_leads_by_email(). Same per-session option cleanup; no
+ * email-keyed orphan sweep, because these leads have no address to sweep on.
+ */
+private static function mxchat_wipe_leads_by_session(array $session_ids) {
+    global $wpdb;
+    $table = $wpdb->prefix . 'mxchat_chat_transcripts';
+    $translations_table = $wpdb->prefix . 'mxchat_transcript_translations';
+    $has_translations = $wpdb->get_var("SHOW TABLES LIKE '$translations_table'") === $translations_table;
+
+    $deleted_sessions = 0;
+    $deleted_rows = 0;
+
+    foreach ($session_ids as $sid) {
+        if ($sid === '') {
+            continue;
+        }
+
+        $rows_removed = $wpdb->delete($table, ['session_id' => $sid], ['%s']);
+        if ($rows_removed !== false) {
+            $deleted_rows += (int) $rows_removed;
+        }
+
+        $deleted_sessions++;
+        wp_cache_delete('chat_session_' . $sid, 'mxchat_chat_sessions');
+        delete_option('mxchat_history_' . $sid);
+        delete_option('mxchat_email_' . $sid);
+        delete_option('mxchat_name_' . $sid);
+        delete_option('mxchat_agent_name_' . $sid);
+        delete_option('mxchat_lead_del_email_' . $sid);
+        delete_option('mxchat_lead_del_name_' . $sid);
+        delete_option('mxchat_lead_del_ts_' . $sid);
+        delete_option('mxchat_lead_del_consent_' . $sid);
+        delete_option('mxchat_lead_del_consent_label_' . $sid);
+        delete_option('mxchat_lead_del_consent_at_' . $sid);
+        if (class_exists('MxChat_Session_Store')) {
+            MxChat_Session_Store::delete_session($sid); // b64b77
+        }
+
+        if ($has_translations) {
+            $wpdb->delete($translations_table, ['session_id' => $sid], ['%s']);
+        }
+    }
+
+    return ['deleted_sessions' => $deleted_sessions, 'deleted_rows' => $deleted_rows];
 }
 
 /**
@@ -2493,33 +2633,43 @@ public function mxchat_export_leads() {
 
     $scope       = isset($_POST['scope']) ? sanitize_key($_POST['scope']) : 'all';
     $fields_mode = isset($_POST['fields']) ? sanitize_key($_POST['fields']) : 'email_and_name';
-    $emails_in   = isset($_POST['emails']) ? (array) wp_unslash($_POST['emails']) : [];
-
-    $emails_in_clean = [];
-    foreach ($emails_in as $e) {
-        $clean = sanitize_email((string) $e);
-        if ($clean) {
-            $emails_in_clean[] = $clean;
-        }
-    }
+    // Selection keys arrive in the same shape the Leads tab renders them:
+    // an address, or "session:<id>" for a name-only capture (c0cfaf).
+    $selection_keys  = self::mxchat_leads_split_keys(
+        isset($_POST['emails']) ? (array) wp_unslash($_POST['emails']) : []
+    );
+    $emails_in_clean = $selection_keys['emails'];
+    $sessions_in     = $selection_keys['sessions'];
 
     global $wpdb;
     $table = $wpdb->prefix . 'mxchat_chat_transcripts';
     $has_page_url_column = !empty($wpdb->get_results("SHOW COLUMNS FROM $table LIKE 'originating_page_url'"));
 
-    // Collect leads from transcripts.
-    $transcripts_sql = "SELECT user_email AS email,
+    // Collect leads from transcripts. Keyed by email, or by session id when
+    // the capture had no address (c0cfaf) — gated on the option, so with email
+    // required this is the same query and the same rows as before.
+    $lead_key_sql = self::mxchat_leads_key_sql();
+    $email_filter = self::mxchat_leads_email_optional()
+        ? "((user_email IS NOT NULL AND user_email != '') OR (user_name IS NOT NULL AND user_name != ''))"
+        : "user_email IS NOT NULL AND user_email != ''";
+
+    $transcripts_sql = "SELECT {$lead_key_sql} AS lead_key,
+                               MAX(user_email) AS email,
                                MAX(timestamp) AS last_seen,
                                COUNT(DISTINCT session_id) AS conversation_count
                         FROM {$table}
-                        WHERE user_email IS NOT NULL AND user_email != ''";
+                        WHERE {$email_filter}";
     $params = [];
-    if ($scope === 'selected' && !empty($emails_in_clean)) {
-        $placeholders = implode(',', array_fill(0, count($emails_in_clean), '%s'));
-        $transcripts_sql .= " AND user_email IN ({$placeholders})";
-        $params = $emails_in_clean;
+    $selected_keys = array_merge(
+        $emails_in_clean,
+        array_map(function ($sid) { return 'session:' . $sid; }, $sessions_in)
+    );
+    if ($scope === 'selected' && !empty($selected_keys)) {
+        $placeholders = implode(',', array_fill(0, count($selected_keys), '%s'));
+        $transcripts_sql .= " AND {$lead_key_sql} IN ({$placeholders})";
+        $params = $selected_keys;
     }
-    $transcripts_sql .= " GROUP BY user_email ORDER BY last_seen DESC";
+    $transcripts_sql .= " GROUP BY lead_key ORDER BY last_seen DESC";
 
     $rows = !empty($params)
         ? $wpdb->get_results($wpdb->prepare($transcripts_sql, $params))
@@ -2531,16 +2681,16 @@ public function mxchat_export_leads() {
         $detail = $has_page_url_column
             ? $wpdb->get_row($wpdb->prepare(
                 "SELECT user_name, originating_page_url FROM {$table}
-                 WHERE user_email = %s ORDER BY timestamp DESC LIMIT 1",
-                $row->email
+                 WHERE {$lead_key_sql} = %s ORDER BY timestamp DESC LIMIT 1",
+                $row->lead_key
             ))
             : $wpdb->get_row($wpdb->prepare(
                 "SELECT user_name FROM {$table}
-                 WHERE user_email = %s ORDER BY timestamp DESC LIMIT 1",
-                $row->email
+                 WHERE {$lead_key_sql} = %s ORDER BY timestamp DESC LIMIT 1",
+                $row->lead_key
             ));
         $export_rows[] = [
-            'email'              => $row->email,
+            'email'              => (string) $row->email,
             'name'               => isset($detail->user_name) ? (string) $detail->user_name : '',
             'conversation_count' => (int) $row->conversation_count,
             'last_seen'          => $row->last_seen,
@@ -2831,8 +2981,10 @@ private static function mxchat_collect_orphan_leads($search = '') {
 
     // Primary source since 5658f2: the sessions table's identity columns.
     // The legacy option scan stays for installs still mid-migration.
+    // Ask for name-only sessions too when the owner made email optional
+    // (c0cfaf) — that is the only source an address-less lead has.
     $store_rows = (class_exists('MxChat_Session_Store') && method_exists('MxChat_Session_Store', 'identity_rows'))
-        ? MxChat_Session_Store::identity_rows()
+        ? MxChat_Session_Store::identity_rows(self::mxchat_leads_email_optional())
         : [];
 
     $option_rows = $wpdb->get_results(
@@ -2884,24 +3036,34 @@ private static function mxchat_collect_orphan_leads($search = '') {
         ];
     }
 
+    // A capture with no address is an orphan too, and the commonest one: a
+    // name-only lead (c0cfaf) has no transcript row until the visitor actually
+    // sends a message, so this collector is the ONLY place it can surface.
+    // Keying it on email would drop it silently — collected, then invisible.
+    $email_optional = self::mxchat_leads_email_optional();
+
     foreach ($candidates as $cand) {
         $email = sanitize_email(trim($cand['email']));
-        if (!$email) {
-            continue;
-        }
-        $sid = $cand['sid'];
+        $name  = trim($cand['name']);
+        $sid   = $cand['sid'];
         if (!$sid) {
             continue;
         }
+        if (!$email) {
+            // Address-less rows are only leads when the owner made email
+            // optional; otherwise they are incomplete captures, and skipping
+            // them keeps this list identical to what it has always shown.
+            if (!$email_optional || $name === '') {
+                continue;
+            }
+        }
         // Exclude leads who have any transcripts rows (they appear in the main list).
-        if (isset($emails_in_transcripts[strtolower($email)])) {
+        if ($email && isset($emails_in_transcripts[strtolower($email)])) {
             continue;
         }
         if (isset($session_ids_with_rows[$sid])) {
             continue;
         }
-
-        $name = trim($cand['name']);
 
         if ($needle !== '') {
             $hay = strtolower($email . ' ' . $name);
@@ -2910,16 +3072,21 @@ private static function mxchat_collect_orphan_leads($search = '') {
             }
         }
 
-        $key = strtolower($email);
+        $key = $email !== '' ? strtolower($email) : 'session:' . $sid;
         if (!isset($orphans_by_email[$key])) {
             $orphans_by_email[$key] = [
+                'lead_key'           => $key,
                 'email'              => $email,
                 'name'               => $name,
                 'conversation_count' => 0,
                 'last_seen'          => '',
                 'last_seen_display'  => __('No conversation yet', 'mxchat'),
                 'first_seen'         => '',
-                'latest_session_id'  => '',
+                // An address-less orphan carries its session id: that is the
+                // only handle the delete and export paths have on it. Rows
+                // that DO have an address keep the empty value they always
+                // had, so the "View convo" button stays hidden for them.
+                'latest_session_id'  => $email !== '' ? '' : $sid,
                 'top_page_url'       => '',
                 'top_page_title'     => '',
                 'is_orphan'          => true,
@@ -2929,6 +3096,81 @@ private static function mxchat_collect_orphan_leads($search = '') {
     }
 
     return array_values($orphans_by_email);
+}
+
+/**
+ * Is the pre-chat email field optional? (c0cfaf)
+ *
+ * When it is, a lead can exist with a name and no address, and every place
+ * that treats email as the row key has to widen. Default ON — an install that
+ * never touched the setting behaves exactly as it did before.
+ */
+private static function mxchat_leads_email_optional() {
+    $options = get_option('mxchat_options', []);
+    return is_array($options) && ($options['lead_capture_require_email_toggle'] ?? 'on') !== 'on';
+}
+
+/**
+ * SQL expression for a lead's key: its email address, or "session:<id>" when
+ * the capture had no address (c0cfaf).
+ *
+ * The literal prefix is what keeps the two key spaces apart — an address can
+ * never contain a colon before its local part, so a session key can never be
+ * mistaken for an email or vice versa. NULLIF collapses '' and NULL to the
+ * same thing, since the column uses both for "no email given".
+ *
+ * Contains no user input: safe to interpolate into a prepared statement.
+ */
+private static function mxchat_leads_key_sql() {
+    return "COALESCE(NULLIF(user_email, ''), CONCAT('session:', session_id))";
+}
+
+/**
+ * The PHP-side twin of mxchat_leads_key_sql(), used to dedupe rows arriving
+ * from the three lead sources. Email keys stay lowercased, exactly as before,
+ * so dedup behaviour for addressed leads is unchanged.
+ */
+private static function mxchat_leads_dedup_key($row) {
+    $email = isset($row['email']) ? trim((string) $row['email']) : '';
+    if ($email !== '') {
+        return strtolower($email);
+    }
+    if (!empty($row['lead_key'])) {
+        return (string) $row['lead_key'];
+    }
+    return 'session:' . (isset($row['latest_session_id']) ? (string) $row['latest_session_id'] : '');
+}
+
+/**
+ * Split a list of client-supplied lead keys into real email addresses and
+ * session keys. The Leads tab sends back whatever key it was given, so both
+ * shapes arrive on the same parameter (c0cfaf).
+ *
+ * Anything that is neither a valid address nor a well-formed session key is
+ * dropped — in particular an empty string, which as a bare email would match
+ * every address-less row in the table at once.
+ */
+private static function mxchat_leads_split_keys(array $raw) {
+    $emails = [];
+    $sessions = [];
+    foreach ($raw as $value) {
+        $value = trim((string) $value);
+        if ($value === '') {
+            continue;
+        }
+        if (strpos($value, 'session:') === 0) {
+            $sid = MxChat_Utils::sanitize_session_id(substr($value, 8));
+            if ($sid !== '' && $sid !== 'null') {
+                $sessions[] = $sid;
+            }
+            continue;
+        }
+        $clean = sanitize_email($value);
+        if ($clean) {
+            $emails[] = $clean;
+        }
+    }
+    return ['emails' => array_values(array_unique($emails)), 'sessions' => array_values(array_unique($sessions))];
 }
 
 /**
@@ -3984,6 +4226,12 @@ public function mxchat_create_prompts_page() {
         $prompts = $records['data'] ?? array();
         $total_in_database = $records['total_in_database'] ?? 0;
         $showing_recent_only = $records['showing_recent_only'] ?? false;
+        // Plan dd6e10: over 500 vectors the total is the index/namespace vector
+        // count and pages come from Pinecone's cursor — the template renders
+        // Previous / Next instead of numbered pages on that path.
+        $count_unit = $records['count_unit'] ?? '';
+        $cursor_pagination = !empty($records['cursor_pagination']);
+        $has_next = !empty($records['has_next']);
 
         $total_pages = ceil($total_records / $per_page);
 
@@ -3995,6 +4243,9 @@ public function mxchat_create_prompts_page() {
         // Initialize these variables for WordPress DB
         $total_in_database = 0;
         $showing_recent_only = false;
+        $count_unit = '';
+        $cursor_pagination = false;
+        $has_next = false;
 
         $offset = ($current_page - 1) * $per_page;
 
@@ -4204,6 +4455,9 @@ public function mxchat_create_prompts_page() {
         'is_processing' => $is_processing,
         'total_in_database' => $total_in_database ?? 0,
         'showing_recent_only' => $showing_recent_only ?? false,
+        'count_unit' => $count_unit ?? '',
+        'cursor_pagination' => $cursor_pagination ?? false,
+        'has_next' => $has_next ?? false,
     );
 
     // Render the new sidebar-based page
@@ -7976,6 +8230,12 @@ public function system_prompt_instructions_callback() {
     echo esc_html__('Use {visitor_name} to personalize AI responses when lead capture is enabled.', 'mxchat') . '<br>';
     echo '<code style="font-size: 12px;">' . esc_html__('Example: The visitor\'s name is {visitor_name}. Address them by name.', 'mxchat') . '</code>';
     echo '</p>';
+    // Date awareness (plan cfcd80): the automatic line is the default; the
+    // placeholders are for owners who want the date at a specific spot, with
+    // the prompt-caching cost spelled out.
+    echo '<p class="description" style="margin-top: 8px;">';
+    echo esc_html__('The chatbot is told the current date and time in your site\'s timezone with every message, so it can tell past events from upcoming ones. You can also place {current_date} or {current_datetime} in the instructions above. Note: a placeholder changes the prompt once a day (date) or every minute (date and time), which reduces how much of it your AI provider can cache; the automatic line has no such cost, so most sites do not need one.', 'mxchat');
+    echo '</p>';
     // Sample instructions button
     echo '<div class="mxchat-instructions-container">';
     echo '<button type="button" class="mxchat-instructions-btn" id="mxchatViewSampleBtn">';
@@ -8489,6 +8749,39 @@ public function consent_checkbox_required_callback() {
     echo '<label class="toggle-switch">';
     echo sprintf(
         '<input type="checkbox" id="consent_checkbox_required" name="consent_checkbox_required" value="on" %s />',
+        esc_attr($checked)
+    );
+    echo '<span class="slider"></span>';
+    echo '</label>';
+}
+
+// Show the pre-chat form to logged-in visitors too (c0cfaf). Default OFF —
+// today the form short-circuits on is_user_logged_in(), which means a
+// membership or LMS site where everyone is signed in never captures a lead
+// and never shows the consent checkbox.
+public function lead_capture_logged_in_toggle_callback() {
+    $all_options = get_option('mxchat_options', []);
+    $enabled = isset($all_options['lead_capture_logged_in_toggle']) ? $all_options['lead_capture_logged_in_toggle'] : 'off';
+    $checked = ($enabled === 'on') ? 'checked' : '';
+    echo '<label class="toggle-switch">';
+    echo sprintf(
+        '<input type="checkbox" id="lead_capture_logged_in_toggle" name="lead_capture_logged_in_toggle" value="on" %s />',
+        esc_attr($checked)
+    );
+    echo '<span class="slider"></span>';
+    echo '</label>';
+}
+
+// Require an email address to submit the pre-chat form (c0cfaf). Default ON,
+// which is today's behaviour. Turning it off lets an owner collect a name
+// (and consent) without demanding an address.
+public function lead_capture_require_email_toggle_callback() {
+    $all_options = get_option('mxchat_options', []);
+    $required = isset($all_options['lead_capture_require_email_toggle']) ? $all_options['lead_capture_require_email_toggle'] : 'on';
+    $checked = ($required === 'on') ? 'checked' : '';
+    echo '<label class="toggle-switch">';
+    echo sprintf(
+        '<input type="checkbox" id="lead_capture_require_email_toggle" name="lead_capture_require_email_toggle" value="on" %s />',
         esc_attr($checked)
     );
     echo '<span class="slider"></span>';
@@ -10502,6 +10795,19 @@ public function mxchat_sanitize($input) {
         $new_input['consent_checkbox_required'] = ($input['consent_checkbox_required'] === 'on') ? 'on' : 'off';
     } else {
         $new_input['consent_checkbox_required'] = 'off';
+    }
+    // Lead capture options (c0cfaf). Default OFF gets the else-branch so
+    // unticking sticks; default ON deliberately has NO else — an absent key
+    // must stay absent so the reader's ?? 'on' default applies, otherwise
+    // every autosave of an unrelated field would silently flip the setting
+    // off on installs that never touched it (the 2c02ea bug class).
+    if (isset($input['lead_capture_logged_in_toggle'])) {
+        $new_input['lead_capture_logged_in_toggle'] = ($input['lead_capture_logged_in_toggle'] === 'on') ? 'on' : 'off';
+    } else {
+        $new_input['lead_capture_logged_in_toggle'] = 'off';
+    }
+    if (isset($input['lead_capture_require_email_toggle'])) {
+        $new_input['lead_capture_require_email_toggle'] = ($input['lead_capture_require_email_toggle'] === 'on') ? 'on' : 'off';
     }
     if (isset($input['intro_message'])) {
         $new_input['intro_message'] = wp_kses_post($input['intro_message']);  // Use wp_kses_post instead

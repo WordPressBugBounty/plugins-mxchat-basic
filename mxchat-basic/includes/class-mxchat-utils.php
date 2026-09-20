@@ -186,6 +186,76 @@ public static function flush_session_history_cache($session_id = null) {
 }
 
 /**
+ * Append one message to a session's transcript on behalf of an add-on
+ * (plan 4a664e). The Forms add-on's wizard steps travel over the add-on's
+ * own AJAX action, never through the chat request, so nothing wrote them
+ * to the transcript: Transcripts, the live-agent handoff card, Download
+ * Transcript and every transcript email showed "[WIZARD_COMPLETE]" and no
+ * answers. This is the write half of get_session_history() — same row
+ * shape as the chat writer (visitor identity, captured name/email and
+ * originating page from the session store, GMT timestamp), without the
+ * new-session side effects (ownership, notification email, delayed
+ * transcript) that only the visitor's first message should trigger.
+ *
+ * Public and static so add-ons can call it, guarded with method_exists
+ * against an older mxchat-basic.
+ *
+ * @param string $session_id Chat session id.
+ * @param string $role       user|bot|system|agent.
+ * @param string $message    Stored as-is: bot rows may carry HTML, user rows
+ *                           are rendered as text by every reader.
+ * @return int The new transcripts row id, 0 when nothing was written.
+ */
+public static function save_session_message($session_id, $role, $message) {
+    global $wpdb;
+
+    $session_id = self::sanitize_session_id($session_id);
+    $role       = is_string($role) ? strtolower(trim($role)) : '';
+    $message    = is_scalar($message) ? trim((string) $message) : '';
+
+    if ($session_id === '' || $message === ''
+        || !in_array($role, array('user', 'bot', 'system', 'agent'), true)) {
+        return 0;
+    }
+
+    $table = $wpdb->prefix . 'mxchat_chat_transcripts';
+
+    $saved_email = MxChat_Session_Store::get($session_id, 'email');
+    $saved_name  = MxChat_Session_Store::get($session_id, 'name');
+
+    $row = array(
+        'user_id'         => is_user_logged_in() ? get_current_user_id() : 0,
+        'user_identifier' => MxChat_User::mxchat_get_user_identifier(),
+        'user_email'      => $saved_email ?: MxChat_User::mxchat_get_user_email(),
+        'user_name'       => $saved_name ?: '',
+        'session_id'      => $session_id,
+        'role'            => $role,
+        'message'         => $message,
+        'timestamp'       => current_time('mysql', 1),
+    );
+
+    // Same page attribution as the rest of the session; the column pair was
+    // added by an upgrade routine, so tolerate its absence like the chat
+    // writer does.
+    $originating = MxChat_Session_Store::get($session_id, 'originating_page');
+    if (is_array($originating) && !empty($originating['url'])
+        && $wpdb->get_var("SHOW COLUMNS FROM `$table` LIKE 'originating_page_url'")) {
+        $row['originating_page_url']   = $originating['url'];
+        $row['originating_page_title'] = isset($originating['title']) ? $originating['title'] : '';
+    }
+
+    $inserted = $wpdb->insert($table, $row);
+    if ($inserted === false) {
+        return 0;
+    }
+
+    $row_id = (int) $wpdb->insert_id;
+    self::flush_session_history_cache($session_id);
+
+    return $row_id;
+}
+
+/**
  * Most recipients the Notification Email field will accept (plan 2f131a).
  * A settings field is not a mailing list.
  */
@@ -862,7 +932,17 @@ private static function store_in_pinecone_main($embedding_vector, $content, $url
         'created_at' => time(), // Add creation timestamp
         'bot_id' => $bot_id, // Add bot identification
     );
-    
+
+    // Document index (plan 362c31): same id, same metadata, through the
+    // documents API. A site on the classic vector index never enters here.
+    if (class_exists('MxChat_Pinecone_Documents') && MxChat_Pinecone_Documents::is_document_index($bot_id)) {
+        return MxChat_Pinecone_Documents::upsert_one($vector_id, $content, $embedding_vector, $metadata, array(
+            'api_key'   => $api_key,
+            'host'      => $host,
+            'namespace' => $namespace,
+        ));
+    }
+
     $vector_data = array(
         'id' => $vector_id,
         'values' => $embedding_vector,
@@ -1541,6 +1621,15 @@ private static function store_chunk_in_pinecone($embedding_vector, $chunk_text, 
         'bot_id' => $bot_id,
     );
 
+    // Document index (plan 362c31): same chunk id and metadata, documents API.
+    if (class_exists('MxChat_Pinecone_Documents') && MxChat_Pinecone_Documents::is_document_index($bot_id)) {
+        return MxChat_Pinecone_Documents::upsert_one($vector_id, $chunk_text, $embedding_vector, $metadata, array(
+            'api_key'   => $api_key,
+            'host'      => $host,
+            'namespace' => $namespace,
+        ));
+    }
+
     $vector_data = array(
         'id' => $vector_id,
         'values' => $embedding_vector,
@@ -1662,6 +1751,19 @@ private static function cleanup_pinecone_chunk_stragglers($source_url, $bot_id) 
         return;
     }
 
+    // Document index (plan 362c31): list the chunk ids and delete them through the documents API.
+    if (class_exists('MxChat_Pinecone_Documents') && MxChat_Pinecone_Documents::is_document_index($bot_id)) {
+        $docs_cfg = array('api_key' => $api_key, 'host' => $host, 'namespace' => $namespace);
+        $doc_stragglers = MxChat_Pinecone_Documents::list_ids(md5($source_url) . '_chunk_', $docs_cfg);
+        if (!empty($doc_stragglers)) {
+            $doc_result = MxChat_Pinecone_Documents::delete_ids($doc_stragglers, $docs_cfg);
+            if (is_wp_error($doc_result) && class_exists('MxChat_Admin') && method_exists('MxChat_Admin', 'mxchat_log_debug')) {
+                MxChat_Admin::mxchat_log_debug('pinecone_error', 'Failed to sweep stale chunk documents after single-vector re-store', array('source_url' => $source_url, 'bot_id' => $bot_id, 'count' => count($doc_stragglers)));
+            }
+        }
+        return;
+    }
+
     $stragglers = array();
 
     // Pinecone /vectors/list is a GET endpoint with query-string parameters (a POST
@@ -1732,54 +1834,73 @@ private static function cleanup_pinecone_chunk_stragglers($source_url, $bot_id) 
     }
 }
 
-private static function delete_pinecone_chunks_by_url($source_url, $bot_id) {
-    // Get Pinecone configuration
+/**
+ * Resolve the Pinecone credentials for a bot: the bot's own config when the
+ * multi-bot add-on supplies one, else the site-wide options. Extracted so the
+ * delete path and the count path can never resolve different credentials.
+ *
+ * @param  string $bot_id
+ * @return array{api_key:string,host:string,namespace:string}
+ */
+private static function pinecone_config_for_bot($bot_id) {
     if ($bot_id === 'default' || !class_exists('MxChat_Multi_Bot_Manager')) {
-        $pinecone_options = get_option('mxchat_pinecone_addon_options');
-        $api_key = $pinecone_options['mxchat_pinecone_api_key'] ?? '';
-        $host = $pinecone_options['mxchat_pinecone_host'] ?? '';
-        $namespace = $pinecone_options['mxchat_pinecone_namespace'] ?? '';
+        $bot_pinecone_config = array();
     } else {
         $bot_pinecone_config = apply_filters('mxchat_get_bot_pinecone_config', array(), $bot_id);
-        if (empty($bot_pinecone_config)) {
-            $pinecone_options = get_option('mxchat_pinecone_addon_options');
-            $api_key = $pinecone_options['mxchat_pinecone_api_key'] ?? '';
-            $host = $pinecone_options['mxchat_pinecone_host'] ?? '';
-            $namespace = $pinecone_options['mxchat_pinecone_namespace'] ?? '';
-        } else {
-            $api_key = $bot_pinecone_config['api_key'] ?? '';
-            $host = $bot_pinecone_config['host'] ?? '';
-            $namespace = $bot_pinecone_config['namespace'] ?? '';
-        }
     }
 
-    if (empty($host) || empty($api_key)) {
-        return new WP_Error('pinecone_config', 'Pinecone is not properly configured');
+    if (empty($bot_pinecone_config)) {
+        $pinecone_options = get_option('mxchat_pinecone_addon_options');
+        return array(
+            'api_key'    => $pinecone_options['mxchat_pinecone_api_key'] ?? '',
+            'host'       => $pinecone_options['mxchat_pinecone_host'] ?? '',
+            'namespace'  => $pinecone_options['mxchat_pinecone_namespace'] ?? '',
+            // 'vector' | 'document' (plan 362c31) — the delete / count paths branch on it.
+            'index_type' => (($pinecone_options['mxchat_pinecone_index_type'] ?? 'vector') === 'document') ? 'document' : 'vector',
+        );
     }
 
-    $base_vector_id = md5($source_url);
-    $vectors_to_delete = array();
-
-    // Add the original single-vector ID (for non-chunked content)
-    $vectors_to_delete[] = $base_vector_id;
-
-    // Pinecone /vectors/list is a GET endpoint with query-string parameters; a POST here returns a
-    // non-200 silently and we end up only deleting the base vector, leaving chunks orphaned.
-    $query_params = array(
-        'prefix' => $base_vector_id . '_chunk_',
-        'limit' => 100,
+    return array(
+        'api_key'    => $bot_pinecone_config['api_key'] ?? '',
+        'host'       => $bot_pinecone_config['host'] ?? '',
+        'namespace'  => $bot_pinecone_config['namespace'] ?? '',
+        'index_type' => (($bot_pinecone_config['index_type'] ?? 'vector') === 'document') ? 'document' : 'vector',
     );
-    if (!empty($namespace)) {
-        $query_params['namespace'] = $namespace;
+}
+
+/**
+ * List every Pinecone vector id under a prefix, following pagination.
+ *
+ * Pinecone /vectors/list is a GET endpoint with query-string parameters; a POST here returns a
+ * non-200 silently and we end up seeing only the base vector, leaving chunks orphaned.
+ *
+ * @param  string $prefix Vector-id prefix to match.
+ * @param  array  $cfg    From pinecone_config_for_bot().
+ * @return array List of vector ids (empty when none match or the API is unreachable).
+ */
+private static function pinecone_list_ids_by_prefix($prefix, array $cfg) {
+    // Document index (plan 362c31): the documents API lists by prefix too.
+    if (($cfg['index_type'] ?? 'vector') === 'document' && class_exists('MxChat_Pinecone_Documents')) {
+        return MxChat_Pinecone_Documents::list_ids($prefix, $cfg);
     }
 
-    $list_url = "https://{$host}/vectors/list?" . http_build_query($query_params);
+    $ids = array();
+
+    $query_params = array(
+        'prefix' => $prefix,
+        'limit'  => 100,
+    );
+    if (!empty($cfg['namespace'])) {
+        $query_params['namespace'] = $cfg['namespace'];
+    }
+
+    $list_url = "https://{$cfg['host']}/vectors/list?" . http_build_query($query_params);
 
     // Paginate in case a URL has more than 100 chunks.
     do {
         $list_response = wp_remote_get($list_url, array(
             'headers' => array(
-                'Api-Key' => $api_key,
+                'Api-Key' => $cfg['api_key'],
                 'accept' => 'application/json',
             ),
             'timeout' => 30,
@@ -1793,7 +1914,7 @@ private static function delete_pinecone_chunks_by_url($source_url, $bot_id) {
         if (!empty($list_data['vectors'])) {
             foreach ($list_data['vectors'] as $vector) {
                 if (isset($vector['id'])) {
-                    $vectors_to_delete[] = $vector['id'];
+                    $ids[] = $vector['id'];
                 }
             }
         }
@@ -1804,8 +1925,69 @@ private static function delete_pinecone_chunks_by_url($source_url, $bot_id) {
         }
 
         $query_params['paginationToken'] = $next_token;
-        $list_url = "https://{$host}/vectors/list?" . http_build_query($query_params);
+        $list_url = "https://{$cfg['host']}/vectors/list?" . http_build_query($query_params);
     } while (true);
+
+    return $ids;
+}
+
+/**
+ * How many stored pieces a URL currently has, in whichever backend holds it.
+ *
+ * Branches on the SAME condition delete_chunks_for_url() branches on, so the
+ * number reported is the number that call removes. Used by the REST DELETE
+ * route to answer "was anything actually there?" without a second delete path.
+ *
+ * @param  string $source_url
+ * @param  string $bot_id
+ * @return int
+ */
+public static function count_chunks_for_url($source_url, $bot_id = 'default') {
+    if (self::is_pinecone_enabled_for_bot($bot_id)) {
+        $cfg = self::pinecone_config_for_bot($bot_id);
+        if (empty($cfg['host']) || empty($cfg['api_key'])) {
+            return 0;
+        }
+        // The base id and every "<base>_chunk_N" share the base as a prefix,
+        // so one prefix listing covers chunked and non-chunked content alike.
+        return count(self::pinecone_list_ids_by_prefix(md5($source_url), $cfg));
+    }
+
+    global $wpdb;
+    $table_name = $wpdb->prefix . 'mxchat_system_prompt_content';
+
+    return (int) $wpdb->get_var($wpdb->prepare(
+        "SELECT COUNT(*) FROM {$table_name} WHERE source_url = %s",
+        $source_url
+    ));
+}
+
+private static function delete_pinecone_chunks_by_url($source_url, $bot_id) {
+    $cfg       = self::pinecone_config_for_bot($bot_id);
+    $api_key   = $cfg['api_key'];
+    $host      = $cfg['host'];
+    $namespace = $cfg['namespace'];
+
+    if (empty($host) || empty($api_key)) {
+        return new WP_Error('pinecone_config', 'Pinecone is not properly configured');
+    }
+
+    // Document index (plan 362c31): base id + every <md5>_chunk_N, documents API.
+    if (($cfg['index_type'] ?? 'vector') === 'document' && class_exists('MxChat_Pinecone_Documents')) {
+        $doc_ids = array_merge(array(md5($source_url)), MxChat_Pinecone_Documents::list_ids(md5($source_url) . '_chunk_', $cfg));
+        return MxChat_Pinecone_Documents::delete_ids($doc_ids, $cfg);
+    }
+
+    $base_vector_id = md5($source_url);
+    $vectors_to_delete = array();
+
+    // Add the original single-vector ID (for non-chunked content)
+    $vectors_to_delete[] = $base_vector_id;
+
+    $vectors_to_delete = array_merge(
+        $vectors_to_delete,
+        self::pinecone_list_ids_by_prefix($base_vector_id . '_chunk_', $cfg)
+    );
 
     if (empty($vectors_to_delete)) {
         //error_log('[MXCHAT-CHUNK-DELETE] No vectors found to delete');

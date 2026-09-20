@@ -1433,6 +1433,34 @@ input:indeterminate + .mxchat-toggle-slider:before {
     box-shadow: 0 0 0 1px #7873f5;
 }
 
+/* Contextual note under the modal filter strip — only rendered for content types
+   that need one (currently Media). Continues the filter strip's own surface so it
+   reads as part of it rather than as a banner dropped on top. */
+.mxchat-kb-filter-note {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 20px;
+    background-color: #f8f9fa;
+    border-bottom: 1px solid #e5e5e5;
+    color: #555;
+    font-size: 13px;
+    line-height: 1.4;
+}
+
+/* An author-level display value outranks the browser default for [hidden], so the
+   hidden state has to be restated here or the note would never hide. */
+.mxchat-kb-filter-note[hidden] {
+    display: none;
+}
+
+.mxchat-kb-filter-note-icon {
+    width: 16px;
+    height: 16px;
+    flex-shrink: 0;
+    color: #7873f5;
+}
+
 /* Special style for the "processed" filter */
 #mxchat-kb-processed-filter {
     border-left: 3px solid #1e88e5;

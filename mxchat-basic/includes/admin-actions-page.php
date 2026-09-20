@@ -164,7 +164,7 @@ function mxchat_render_actions_page($admin_instance, $page_data) {
                                     <span class="mxch-approach-pill"><?php esc_html_e('Recommended', 'mxchat'); ?></span>
                                 </div>
                             </div>
-                            <p class="mxch-approach-desc"><?php esc_html_e('Add the tools your chatbot is allowed to use, and the AI decides when to use each one from the conversation. Easiest to set up — there are no phrases to write. Best for most sites.', 'mxchat'); ?></p>
+                            <p class="mxch-approach-desc"><?php esc_html_e('Add the tools your chatbot is allowed to use, and the AI decides when to use each one from the conversation. Easiest to set up — there are no phrases to write. Best for most sites. While at least one tool is active, replies arrive as one complete message rather than word by word.', 'mxchat'); ?></p>
                             <button type="button" class="mxch-btn mxch-btn-primary mxch-approach-btn" data-approach-target="ai-tools">
                                 <?php esc_html_e('Set up AI Tools', 'mxchat'); ?>
                                 <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>

@@ -513,6 +513,16 @@ function mxchat_render_settings_page($admin_instance) {
                         mxchat_render_field_wrapper('consent_checkbox_required', __('Require Consent to Submit', 'mxchat'), function() use ($admin_instance) {
                             $admin_instance->consent_checkbox_required_callback();
                         }, __('Block form submission until the box is ticked. Off means the checkbox is optional (a soft opt-in).', 'mxchat'));
+
+                        // Also show for logged-in users (c0cfaf)
+                        mxchat_render_field_wrapper('lead_capture_logged_in_toggle', __('Also Show for Logged-In Users', 'mxchat'), function() use ($admin_instance) {
+                            $admin_instance->lead_capture_logged_in_toggle_callback();
+                        }, __('Show the form to signed-in visitors too, pre-filled from their profile. Off means signed-in visitors skip it, as they do today.', 'mxchat'));
+
+                        // Require email (c0cfaf)
+                        mxchat_render_field_wrapper('lead_capture_require_email_toggle', __('Require Email Address', 'mxchat'), function() use ($admin_instance) {
+                            $admin_instance->lead_capture_require_email_toggle_callback();
+                        }, __('Off means the email field is optional, so you can collect a name (and consent) without an address.', 'mxchat'));
                         ?>
                     </div>
                 </div>

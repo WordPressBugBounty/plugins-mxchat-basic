@@ -442,6 +442,11 @@ public function get_dynamic_widget_settings($fresh = false) {
         'enable_streaming_toggle' => isset($options['enable_streaming_toggle']) ? $options['enable_streaming_toggle'] : 'on',
         'rate_limit_message' => $options['rate_limit_message'] ?? 'Rate limit exceeded. Please try again later.',
         'chat_toolbar_toggle' => $options['chat_toolbar_toggle'] ?? 'off',
+        // Require Email Address (c0cfaf). Lives here, in the shared dynamic
+        // settings, so the inline payload and the first-open refresh endpoint
+        // cannot disagree about whether the field is optional. 'on'/'off'
+        // STRINGS, never booleans — see the note on satisfaction_rating_enabled.
+        'lead_capture_require_email' => ($options['lead_capture_require_email_toggle'] ?? 'on') === 'on' ? 'on' : 'off',
         'print_button_enabled' => $options['print_button_enabled'] ?? 'on',
         'print_button_label' => esc_html__('Download Transcript', 'mxchat'),
         // "Start new chat" header-menu item (plan ac2e81). Default OFF.
@@ -541,6 +546,22 @@ function mxchat_fetch_conversation_history() {
 }
 private function mxchat_fetch_conversation_history_for_ai($session_id, $session_start_timestamp = 0) {
     $history = MxChat_Utils::get_session_history($session_id);
+
+    /**
+     * The transcript rows about to become the model's conversation history
+     * (plan 4a664e). An add-on that writes rows meant for humans — the
+     * Forms add-on's wizard questions and answers, which the model already
+     * receives once through its guidance context — can drop them here so
+     * they never reach the model twice. Entries are the get_session_history()
+     * shape (id, role, content, timestamp, agent_name), chronological.
+     *
+     * @param array  $history    Transcript entries for the session.
+     * @param string $session_id Chat session id.
+     */
+    $history = apply_filters('mxchat_ai_conversation_history', $history, $session_id);
+    if (!is_array($history)) {
+        $history = array();
+    }
 
     // Check persistence setting - when OFF, only include messages from current page load
     $options = get_option('mxchat_options', []);
@@ -1021,6 +1042,35 @@ public function mxchat_stream_events(WP_REST_Request $request) {
 
 
 
+/**
+ * What humans should read for a visitor message that is really a signal from
+ * an add-on's widget code (plan 4a664e). The Forms add-on ends a wizard by
+ * sending the literal "[WIZARD_COMPLETE]" through the chat request so the
+ * model gets its guidance context; that token is what the transcript, the
+ * handoff card and every transcript email used to show. The model's own
+ * input is untouched — only the stored row and the live-agent relay pass
+ * through here.
+ *
+ * @param string $message    The message as received.
+ * @param string $session_id Chat session id.
+ * @param string $context    'transcript' (the stored row) or 'agent' (the
+ *                           text relayed to a Telegram topic / Slack thread).
+ * @return string
+ */
+private function mxchat_user_message_for_humans($message, $session_id, $context) {
+    /**
+     * Filter the human-readable form of a visitor message before it is
+     * stored in the transcript or relayed to a live agent.
+     *
+     * @param string $message    The message as received.
+     * @param string $session_id Chat session id.
+     * @param string $context    'transcript' or 'agent'.
+     */
+    $readable = apply_filters('mxchat_transcript_user_message', $message, $session_id, $context);
+
+    return (is_string($readable) && trim($readable) !== '') ? $readable : $message;
+}
+
 private function mxchat_save_chat_message($session_id, $role, $message, $originating_page = null, $rag_context = null) {
     global $wpdb;
     $table_name = $wpdb->prefix . 'mxchat_chat_transcripts';
@@ -1481,14 +1531,34 @@ public function mxchat_handle_save_email_and_response() {
 
     //error_log("[DEBUG] handle_save_email_and_response -> session_id: {$session_id}, email: {$email}, name: {$name}");
 
-    if (empty($session_id) || $session_id === 'null' || empty($email)) {
-        //error_log("[ERROR] Missing session_id or email: session_id={$session_id}, email={$email}");
+    $options = get_option('mxchat_options', []);
+
+    // Require Email Address (c0cfaf). Default ON = today's rejection. When the
+    // owner has made email optional the field may arrive empty, but a value
+    // that IS supplied still has to be a real address — sanitize_email() turns
+    // "not an email" into '' silently, so check the raw input for content and
+    // reject only when something was typed and it did not survive.
+    $require_email = ($options['lead_capture_require_email_toggle'] ?? 'on') === 'on';
+    $email_supplied = isset($_POST['email']) && trim((string) wp_unslash($_POST['email'])) !== '';
+
+    if (empty($session_id) || $session_id === 'null') {
+        //error_log("[ERROR] Missing session_id: session_id={$session_id}");
         wp_send_json_error(['message' => esc_html__('Session ID or email is missing.', 'mxchat')]);
         wp_die();
     }
 
+    if ($require_email && empty($email)) {
+        //error_log("[ERROR] Missing email: session_id={$session_id}");
+        wp_send_json_error(['message' => esc_html__('Session ID or email is missing.', 'mxchat')]);
+        wp_die();
+    }
+
+    if (!$require_email && $email_supplied && !is_email($email)) {
+        wp_send_json_error(['message' => esc_html__('Please enter a valid email address.', 'mxchat')]);
+        wp_die();
+    }
+
     //   Validate name if provided (check if name field is enabled and name is required)
-    $options = get_option('mxchat_options', []);
     $name_field_enabled = isset($options['enable_name_field']) && 
         ($options['enable_name_field'] === '1' || $options['enable_name_field'] === 'on');
     
@@ -1511,13 +1581,24 @@ public function mxchat_handle_save_email_and_response() {
         wp_die();
     }
 
+    // With email optional AND the name field off there is nothing left to
+    // require, so a bare POST would file an empty lead on every page load.
+    // Keep at least one identifying value (c0cfaf).
+    if (!$require_email && empty($email) && empty($name)) {
+        wp_send_json_error(['message' => esc_html__('Please enter your name or email address.', 'mxchat')]);
+        wp_die();
+    }
+
     // 1) Always store email in the session store (one row per session, 5658f2)
-    MxChat_Session_Store::set($session_id, 'email', $email);
+    if (!empty($email)) {
+        MxChat_Session_Store::set($session_id, 'email', $email);
+    }
 
     //   Store name if provided
     if (!empty($name)) {
         MxChat_Session_Store::set($session_id, 'name', $name);
     }
+
 
     // Record the consent decision — ticked or not — with a timestamp and the
     // exact label the visitor saw. The label is re-derived server-side from
@@ -1544,23 +1625,30 @@ public function mxchat_handle_save_email_and_response() {
     //error_log("[DEBUG] handle_save_email_and_response -> session_count for {$session_id}: {$session_count} (SQL: {$sql})");
 
     if ($session_count) {
-        //   Update both user_email and user_name if row(s) exist
-        if (!empty($name)) {
-            $update_sql = $wpdb->prepare(
-                "UPDATE {$table_name} SET user_email = %s, user_name = %s WHERE session_id = %s",
-                $email,
-                $name,
-                $session_id
-            );
-        } else {
-            $update_sql = $wpdb->prepare(
-                "UPDATE {$table_name} SET user_email = %s WHERE session_id = %s",
-                $email,
-                $session_id
-            );
+        //   Update whichever of user_email / user_name we actually received.
+        //   An empty value is never written over an existing one: with email
+        //   optional (c0cfaf) a name-only submission must not blank out an
+        //   address the session already had.
+        $set_parts  = [];
+        $set_params = [];
+        if (!empty($email)) {
+            $set_parts[]  = 'user_email = %s';
+            $set_params[] = $email;
         }
-        $wpdb->query($update_sql);
-        //error_log("[DEBUG] handle_save_email_and_response -> DB updated: {$update_sql}");
+        if (!empty($name)) {
+            $set_parts[]  = 'user_name = %s';
+            $set_params[] = $name;
+        }
+
+        if (!empty($set_parts)) {
+            $set_params[] = $session_id;
+            $update_sql = $wpdb->prepare(
+                "UPDATE {$table_name} SET " . implode(', ', $set_parts) . " WHERE session_id = %s",
+                $set_params
+            );
+            $wpdb->query($update_sql);
+        }
+        //error_log("[DEBUG] handle_save_email_and_response -> DB updated");
     } else {
         //error_log("[INFO] handle_save_email_and_response -> No DB entry for {$session_id}, so email/name is only in wp_options.");
     }
@@ -1588,26 +1676,48 @@ public function mxchat_check_email_provided() {
         wp_send_json_error(['message' => esc_html__('No session ID provided', 'mxchat')]);
     }
 
+    $options = get_option('mxchat_options', []);
+
+    // "Also Show for Logged-In Users" (c0cfaf). Off — the default and today's
+    // behaviour — a signed-in visitor bypasses the form entirely. On, they
+    // fall through to the same session check as a guest, so they are asked
+    // once per session and their answer (including consent) is recorded.
+    $show_for_logged_in = isset($options['lead_capture_logged_in_toggle'])
+        && $options['lead_capture_logged_in_toggle'] === 'on';
+
+    $prefill = [];
+
     // Check if the user is logged in
     if (is_user_logged_in()) {
         $current_user = wp_get_current_user();
         //error_log("[DEBUG] User is logged in as {$current_user->user_email}");
-        
+
         //   Get user's display name for logged in users
-        $user_name = !empty($current_user->display_name) ? $current_user->display_name : 
+        $user_name = !empty($current_user->display_name) ? $current_user->display_name :
                     (!empty($current_user->first_name) ? $current_user->first_name : '');
-        
-        $response_data = ['logged_in' => true, 'email' => $current_user->user_email];
-        if (!empty($user_name)) {
-            $response_data['name'] = $user_name;
+
+        if (!$show_for_logged_in) {
+            $response_data = ['logged_in' => true, 'email' => $current_user->user_email];
+            if (!empty($user_name)) {
+                $response_data['name'] = $user_name;
+            }
+
+            wp_send_json_success($response_data);
         }
-        
-        wp_send_json_success($response_data);
+
+        // The form IS being shown to them, so carry their profile values back
+        // as pre-fill. This response is nocache'd (nocache_headers() above),
+        // which is why the render path deliberately leaves the inputs empty —
+        // the page HTML is cacheable and must never carry one visitor's
+        // address to the next.
+        $prefill = [
+            'prefill_email' => $current_user->user_email,
+            'prefill_name'  => $user_name,
+        ];
     }
 
     //   Check if name field is required
-    $options = get_option('mxchat_options', []);
-    $name_field_enabled = isset($options['enable_name_field']) && 
+    $name_field_enabled = isset($options['enable_name_field']) &&
         ($options['enable_name_field'] === '1' || $options['enable_name_field'] === 'on');
 
     $stored_email = MxChat_Session_Store::get($session_id, 'email', '');
@@ -1617,23 +1727,39 @@ public function mxchat_check_email_provided() {
 
     //   Check if we have email and name (if name is required)
     $has_required_info = !empty($stored_email);
-    
+
+    // With email optional (c0cfaf) a completed capture can legitimately have no
+    // address, and this check keys off one — so a name-only lead would be
+    // re-prompted on every page load. The stored name stands in for the
+    // capture: the save handler rejects a submission carrying neither email
+    // nor name, so a successful optional-email capture always has one.
+    //
+    // A separate "captured" flag would be the more literal marker, but
+    // MxChat_Session_Store::set() is allowlisted to real columns and silently
+    // no-ops on anything else — so that marker would never have been written.
+    // Only consulted when the owner made email optional; while it is required
+    // this check is byte-for-byte the old one.
+    $require_email = ($options['lead_capture_require_email_toggle'] ?? 'on') === 'on';
+    if (!$require_email && !$has_required_info) {
+        $has_required_info = !empty($stored_name);
+    }
+
     if ($name_field_enabled) {
         $has_required_info = $has_required_info && !empty($stored_name);
     }
 
     if ($has_required_info) {
         //error_log("[DEBUG] mxchat_check_email_provided -> Required info found, returning success");
-        
+
         $response_data = ['email' => $stored_email];
         if (!empty($stored_name)) {
             $response_data['name'] = $stored_name;
         }
-        
+
         wp_send_json_success($response_data);
     } else {
         //error_log("[DEBUG] mxchat_check_email_provided -> Required info missing, returning error");
-        wp_send_json_error(['message' => esc_html__('No email found', 'mxchat')]);
+        wp_send_json_error(array_merge(['message' => esc_html__('No email found', 'mxchat')], $prefill));
     }
 }
 
@@ -2007,10 +2133,10 @@ public function mxchat_handle_chat_request() {
                 $image_count = intval($_POST['vision_images_count']);
                 $original_message .= " [{$image_count} image(s)]";
             }
-            $this->mxchat_save_chat_message($session_id, 'user', $original_message);
+            $this->mxchat_save_chat_message($session_id, 'user', $this->mxchat_user_message_for_humans($original_message, $session_id, 'transcript'));
         } else {
             // Regular message - save as normal
-            $this->mxchat_save_chat_message($session_id, 'user', $message);
+            $this->mxchat_save_chat_message($session_id, 'user', $this->mxchat_user_message_for_humans($message, $session_id, 'transcript'));
         }
 
         
@@ -2100,7 +2226,11 @@ public function mxchat_handle_chat_request() {
             } elseif (!$intent_matched) {
                 // No intent matched, handle live agent message
                 try {
-                    $this->mxchat_send_user_message_to_agent($message, $user_id, $session_id);
+                    $this->mxchat_send_user_message_to_agent(
+                        $this->mxchat_user_message_for_humans($message, $session_id, 'agent'),
+                        $user_id,
+                        $session_id
+                    );
 
                     $agent_response = [
                         'status' => 'waiting_for_agent',
@@ -2347,8 +2477,12 @@ public function mxchat_handle_chat_request() {
             wp_die();
         }
 
-        // Build context with both knowledge base and PDF content if available
-        $context_content = "User asked: '{$message}'\n\n";
+        // Build context with both knowledge base and PDF content if available.
+        // The current date/time line leads it (plan cfcd80): this block changes
+        // every turn anyway, so the line costs nothing in provider prompt
+        // caching, and it reaches the plain path, streaming, the
+        // function-calling loop and the Testing tab through this one place.
+        $context_content = $this->mxchat_current_datetime_line($bot_id) . "User asked: '{$message}'\n\n";
         
         //   Add action instruction if present (add this right after the above line)
         if (!empty($this->current_action_instruction)) {
@@ -4863,6 +4997,15 @@ public function mxchat_live_agent_handover($message, $user_id, $session_id) {
     }
     $channel_message .= "\n";
 
+    // Add-on supplied sections, e.g. the Forms add-on's wizard answers (plan 4a664e).
+    foreach ($this->mxchat_handoff_card_sections($session_id, 'slack') as $section) {
+        $channel_message .= "*" . $this->mxchat_slack_plain_text($section['title']) . ":*\n";
+        foreach ($section['lines'] as $line) {
+            $channel_message .= ">" . $this->mxchat_slack_plain_text($line) . "\n";
+        }
+        $channel_message .= "\n";
+    }
+
     if (!empty($conversation_context)) {
         $channel_message .= $conversation_context;
     }
@@ -5197,6 +5340,58 @@ public static function mxchat_probe_slack_channel_privacy($slack_bot_token, $cha
  * @param int    $count
  * @return array Last $count messages of the session history.
  */
+/**
+ * Extra sections an add-on wants on the live-agent handoff card (plan
+ * 4a664e) — the Forms add-on adds "Wizard answers" from its own session
+ * table so an agent sees what the visitor chose even when those rows have
+ * scrolled out of the recent-conversation slice. Each section is
+ * ['title' => string, 'lines' => string[]] of plain text; the caller
+ * escapes for its destination.
+ *
+ * @param string $session_id
+ * @param string $destination 'telegram' or 'slack'.
+ * @return array
+ */
+private function mxchat_handoff_card_sections($session_id, $destination) {
+    /**
+     * @param array  $sections    Each ['title' => string, 'lines' => string[]].
+     * @param string $session_id  Session being handed off.
+     * @param string $destination 'telegram' or 'slack'.
+     */
+    $sections = apply_filters('mxchat_handoff_card_sections', array(), $session_id, $destination);
+
+    $clean = array();
+    foreach ((array) $sections as $section) {
+        if (!is_array($section) || empty($section['title']) || empty($section['lines']) || !is_array($section['lines'])) {
+            continue;
+        }
+        $lines = array();
+        foreach ($section['lines'] as $line) {
+            $line = is_scalar($line) ? trim(wp_strip_all_tags((string) $line)) : '';
+            if ($line !== '') {
+                $lines[] = mb_substr($line, 0, 500, 'UTF-8');
+            }
+        }
+        if (!empty($lines)) {
+            $clean[] = array(
+                'title' => mb_substr(trim(wp_strip_all_tags((string) $section['title'])), 0, 100, 'UTF-8'),
+                'lines' => array_slice($lines, 0, 40),
+            );
+        }
+    }
+
+    return array_slice($clean, 0, 5);
+}
+
+/**
+ * Plain text for a Slack mrkdwn card: tags stripped, entities decoded, and
+ * the three characters Slack's parser reserves escaped (plan 4a664e).
+ */
+private function mxchat_slack_plain_text($content) {
+    $text = html_entity_decode(wp_strip_all_tags((string) $content), ENT_QUOTES, 'UTF-8');
+    return str_replace(array('&', '<', '>'), array('&amp;', '&lt;', '&gt;'), $text);
+}
+
 private function mxchat_recent_handoff_history($session_id, $count = 5) {
     /**
      * How many trailing messages a live-agent handoff carries. One filter for
@@ -5586,6 +5781,14 @@ public function mxchat_telegram_live_agent_handover($message, $user_id, $session
     $topic_message .= "<b>Session ID:</b> <code>{$session_id}</code>\n";
     $topic_message .= "<b>User:</b> " . $this->mxchat_telegram_plain_text($user_name) . "\n";
     $topic_message .= "<b>Email:</b> " . $this->mxchat_telegram_plain_text($user_email) . "\n\n";
+    // Add-on supplied sections, e.g. the Forms add-on's wizard answers (plan 4a664e).
+    foreach ($this->mxchat_handoff_card_sections($session_id, 'telegram') as $section) {
+        $topic_message .= '<b>' . $this->mxchat_telegram_plain_text($section['title']) . ":</b>\n";
+        foreach ($section['lines'] as $line) {
+            $topic_message .= $this->mxchat_telegram_plain_text($line) . "\n";
+        }
+        $topic_message .= "\n";
+    }
     $topic_message .= "<b>Current Message:</b>\n{$escaped_message}\n\n";
     $topic_message .= "<i>Reply in this topic - messages will be sent to the user</i>\n";
     $topic_message .= "<i>Type #close, #end, #disconnect, or #done to end the session</i>";
@@ -7008,6 +7211,12 @@ private function mxchat_find_relevant_content($user_embedding, $bot_id = 'defaul
     //error_log("MXCHAT DEBUG: Using " . ($use_pinecone ? "Pinecone" : "WordPress Database") . " for knowledge retrieval");
 
     if ($use_pinecone) {
+        // Document index (plan 362c31): the opt-in index type gets its own
+        // retrieval, which receives the query text for the keyword leg. The
+        // classic vector path below is untouched.
+        if (class_exists('MxChat_Pinecone_Documents') && MxChat_Pinecone_Documents::is_document_index($bot_id)) {
+            return $this->find_relevant_content_pinecone_documents($user_embedding, $bot_id, $bot_pinecone_config, $user_query);
+        }
         return $this->find_relevant_content_pinecone($user_embedding, $bot_id, $bot_pinecone_config);
     } else {
         return $this->find_relevant_content_wordpress($user_embedding, $bot_id, $user_query);
@@ -7197,35 +7406,17 @@ private function find_relevant_content_wordpress($user_embedding, $bot_id = 'def
         }
         unset($cand_ref);
     } else {
-        $rrf_k = 60;
-        $fused = array();
-        foreach (array_slice($candidates, 0, 20) as $leg_rank => $cand) {
-            $fused[$cand['id']] = array(
-                'id'         => $cand['id'],
-                'similarity' => $cand['similarity'],
-                'source_url' => $cand['source_url'],
-                'rrf'        => 1 / ($rrf_k + $leg_rank + 1),
-                'via'        => 'vector',
+        // The fusion itself is shared with the Pinecone document-index path
+        // (plan 362c31) — one helper, one k, one tie rule.
+        $keyword_rows = array();
+        foreach ($keyword_hits as $hit) {
+            $keyword_rows[] = array(
+                'id'         => $hit['id'],
+                'similarity' => $keyword_similarities[$hit['id']] ?? 0.0,
+                'source_url' => $hit['source_url'],
             );
         }
-        foreach ($keyword_hits as $leg_rank => $hit) {
-            $rrf = 1 / ($rrf_k + $leg_rank + 1);
-            if (isset($fused[$hit['id']])) {
-                $fused[$hit['id']]['rrf'] += $rrf;
-                $fused[$hit['id']]['via'] = 'both';
-            } else {
-                $fused[$hit['id']] = array(
-                    'id'         => $hit['id'],
-                    'similarity' => $keyword_similarities[$hit['id']] ?? 0.0,
-                    'source_url' => $hit['source_url'],
-                    'rrf'        => $rrf,
-                    'via'        => 'keyword',
-                );
-            }
-        }
-        uasort($fused, function ($a, $b) {
-            return $b['rrf'] <=> $a['rrf'];
-        });
+        $fused = $this->mxchat_rrf_fuse(array_slice($candidates, 0, 20), $keyword_rows, 60);
 
         // Vector candidates beyond the top-20 leg keep flowing to the prompt
         // builders after the fused block, in their vector order — the result
@@ -8221,6 +8412,453 @@ private function find_relevant_content_pinecone($user_embedding, $bot_id = 'defa
 /**
  * Get role restriction for a single vector (with caching)
  */
+/**
+ * Reciprocal-rank fusion of two ranked legs (plan 38ffa1, k = 60). Rows are
+ * ['id' => …, …] in leg order; the result is keyed by id, ordered by fused
+ * score, and carries 'rrf' plus 'via' ('vector' | 'keyword' | 'both'). When
+ * an id is in both legs the vector leg's fields win (it carries the true
+ * cosine). Rank-based, so the incomparable score scales (cosine 0-1 vs
+ * FULLTEXT relevance vs BM25) never need calibrating. Shared by the WP-DB
+ * hybrid path and the Pinecone document-index path (plan 362c31).
+ *
+ * @param  array $vector_leg
+ * @param  array $keyword_leg
+ * @param  int   $rrf_k
+ * @return array id => row + rrf + via, best first
+ */
+private function mxchat_rrf_fuse(array $vector_leg, array $keyword_leg, $rrf_k = 60) {
+    $fused = array();
+    foreach (array_values($vector_leg) as $leg_rank => $row) {
+        $fused[$row['id']] = $row + array('rrf' => 1 / ($rrf_k + $leg_rank + 1), 'via' => 'vector');
+    }
+    foreach (array_values($keyword_leg) as $leg_rank => $row) {
+        $rrf = 1 / ($rrf_k + $leg_rank + 1);
+        if (isset($fused[$row['id']])) {
+            $fused[$row['id']]['rrf'] += $rrf;
+            $fused[$row['id']]['via']  = 'both';
+        } else {
+            $fused[$row['id']] = $row + array('rrf' => $rrf, 'via' => 'keyword');
+        }
+    }
+    uasort($fused, function ($a, $b) {
+        return $b['rrf'] <=> $a['rrf'];
+    });
+    return $fused;
+}
+
+/**
+ * Retrieval on a Pinecone DOCUMENT index (plan 362c31) — the twin of
+ * find_relevant_content_pinecone() for the opt-in index type. That function
+ * is untouched; this one also receives the query text so a keyword leg can
+ * run on Pinecone's BM25 index:
+ *
+ *   (a) a dense search (cosine), topK from the Pinecone card, the
+ *       mxchat_pinecone_query_body filter honoured on the classic-shaped body;
+ *   (b) with the Hybrid keyword boost on and code-like tokens in the question
+ *       (HGH25CA, SR25W, R1621-314-20), a dense search FILTERED to documents
+ *       that contain one of the codes — Pinecone cannot combine a dense and a
+ *       text score in one search — falling back to a BM25 search on the whole
+ *       question when the filter matches nothing;
+ *   fused by reciprocal rank (mxchat_rrf_fuse, k = 60), then the same
+ *   source_url grouping, threshold, RAG Sources Limit, chunk reassembly and
+ *   testing-panel rows as the classic path, with matched_via + fused_rank so
+ *   Transcripts / Testing show the Vector / Keyword / Both chips.
+ */
+private function find_relevant_content_pinecone_documents($user_embedding, $bot_id = 'default', $bot_config = null, $user_query = '') {
+    if ($bot_config === null) {
+        $bot_config = $this->get_bot_pinecone_config($bot_id);
+    }
+    $docs_cfg = array(
+        'api_key'   => $bot_config['api_key'] ?? '',
+        'host'      => $bot_config['host'] ?? '',
+        'namespace' => $bot_config['namespace'] ?? '',
+    );
+    $hybrid_enabled = get_option('mxchat_hybrid_keyword_toggle', 'off') === 'on'
+        && trim((string) $user_query) !== '';
+
+    $this->last_similarity_analysis = [
+        'knowledge_base_type' => 'Pinecone',
+        'index_type'          => 'document',
+        'hybrid'              => $hybrid_enabled,
+        'bot_id'              => $bot_id,
+        'namespace'           => $docs_cfg['namespace'],
+        'top_matches'         => [],
+        'threshold_used'      => 0,
+        'total_checked'       => 0,
+    ];
+    $valid_urls = [];
+
+    if (empty($docs_cfg['host']) || empty($docs_cfg['api_key']) || !is_array($user_embedding)) {
+        $this->current_valid_urls = [];
+        return '';
+    }
+
+    $knowledge_manager = MxChat_Knowledge_Manager::get_instance();
+    $bot_options = $this->get_bot_options($bot_id);
+    $current_options = !empty($bot_options) ? $bot_options : get_option('mxchat_options', []);
+    $similarity_threshold = isset($current_options['similarity_threshold'])
+        ? ((int) $current_options['similarity_threshold']) / 100
+        : 0.35;
+    $this->last_similarity_analysis['threshold_used'] = $similarity_threshold;
+
+    $pinecone_addon_options = get_option('mxchat_pinecone_addon_options', array());
+    $top_k = isset($pinecone_addon_options['mxchat_pinecone_top_k']) ? absint($pinecone_addon_options['mxchat_pinecone_top_k']) : 50;
+    if ($top_k < 1 || $top_k > 1000) {
+        $top_k = 50;
+    }
+
+    // Same seam as the classic path (d0cae1): the filter sees the classic body
+    // shape and may set topK or a metadata filter; both are translated.
+    $request_body = array(
+        'vector'          => $user_embedding,
+        'topK'            => $top_k,
+        'includeMetadata' => true,
+        'includeValues'   => false,
+    );
+    if ($docs_cfg['namespace'] !== '') {
+        $request_body['namespace'] = $docs_cfg['namespace'];
+    }
+    $filtered_body = apply_filters('mxchat_pinecone_query_body', $request_body, $bot_id);
+    $translated = MxChat_Pinecone_Documents::translate_classic_body(is_array($filtered_body) ? $filtered_body : $request_body, $top_k);
+    $top_k       = $translated['top_k'];
+    $user_filter = $translated['filter'];
+
+    // ----- (a) dense leg -----
+    $dense = MxChat_Pinecone_Documents::search_dense($user_embedding, $top_k, $user_filter, $docs_cfg);
+    if (is_wp_error($dense)) {
+        error_log('MxChat Pinecone (document index): search failed — ' . $dense->get_error_message());
+        $this->current_valid_urls = [];
+        return '';
+    }
+
+    // ----- (b) keyword leg -----
+    $keyword_hits   = array();
+    $keyword_tokens = array();
+    $keyword_leg    = 'none';
+    if ($hybrid_enabled) {
+        $keyword_tokens = MxChat_Pinecone_Documents::extract_code_tokens($user_query);
+        if (!empty($keyword_tokens)) {
+            $leg_k     = min(20, $top_k);
+            $kw_filter = MxChat_Pinecone_Documents::merge_filters($user_filter, MxChat_Pinecone_Documents::keyword_filter($keyword_tokens));
+            $kw_hits   = MxChat_Pinecone_Documents::search_dense($user_embedding, $leg_k, $kw_filter, $docs_cfg);
+            if (!is_wp_error($kw_hits) && !empty($kw_hits)) {
+                $keyword_hits = $kw_hits;
+                $keyword_leg  = 'filter';
+            } else {
+                $bm25 = MxChat_Pinecone_Documents::search_text($user_query, $leg_k, $user_filter, $docs_cfg);
+                if (!is_wp_error($bm25) && !empty($bm25)) {
+                    // BM25 scores are not cosines: anchor on the dense score when
+                    // the same document is in the dense leg, else unknown (0).
+                    $dense_scores = array();
+                    foreach ($dense as $d) {
+                        $dense_scores[$d['id']] = $d['score'];
+                    }
+                    foreach ($bm25 as $hit) {
+                        $hit['score']   = $dense_scores[$hit['id']] ?? 0.0;
+                        $keyword_hits[] = $hit;
+                    }
+                    $keyword_leg = 'bm25';
+                }
+            }
+        }
+    }
+    $this->last_similarity_analysis['keyword_tokens'] = $keyword_tokens;
+    $this->last_similarity_analysis['keyword_leg']    = $keyword_leg;
+
+    // ----- access + threshold -----
+    $matches_by_id = array();
+    foreach ($dense as $hit) {
+        $matches_by_id[$hit['id']] = $hit;
+    }
+    foreach ($keyword_hits as $hit) {
+        if (!isset($matches_by_id[$hit['id']])) {
+            $matches_by_id[$hit['id']] = $hit;
+        }
+    }
+    $access_cache = array();
+    $access_for = function ($hit) use (&$access_cache, $knowledge_manager) {
+        $id = $hit['id'];
+        if (!isset($access_cache[$id])) {
+            $role = $this->get_single_vector_role($id, $hit['metadata'] ?? array());
+            $access_cache[$id] = array('role' => $role, 'has_access' => $knowledge_manager->mxchat_user_has_content_access($role));
+        }
+        return $access_cache[$id];
+    };
+
+    $vector_candidates = array();
+    foreach ($dense as $hit) {
+        if ($hit['score'] < $similarity_threshold) {
+            continue;
+        }
+        if (!$access_for($hit)['has_access']) {
+            continue;
+        }
+        $vector_candidates[] = array(
+            'id'         => $hit['id'],
+            'similarity' => (float) $hit['score'],
+            'source_url' => $hit['metadata']['source_url'] ?? '',
+        );
+    }
+    $keyword_rows = array();
+    foreach ($keyword_hits as $hit) {
+        if (!$access_for($hit)['has_access']) {
+            continue;
+        }
+        $keyword_rows[] = array(
+            'id'         => $hit['id'],
+            'similarity' => (float) $hit['score'],
+            'source_url' => $hit['metadata']['source_url'] ?? '',
+        );
+    }
+
+    // ----- fusion -----
+    $fused_rank_map  = array();
+    $matched_via_map = array();
+    $ordered = array();
+    if (!$hybrid_enabled) {
+        foreach ($vector_candidates as $cand) {
+            $cand['rank_score'] = $cand['similarity'];
+            $ordered[] = $cand;
+        }
+    } else {
+        $fused = $this->mxchat_rrf_fuse(array_slice($vector_candidates, 0, 20), $keyword_rows, 60);
+        $rank = 0;
+        foreach ($fused as $f) {
+            $rank++;
+            $fused_rank_map[$f['id']]  = $rank;
+            $matched_via_map[$f['id']] = $f['via'];
+            $ordered[] = array(
+                'id'         => $f['id'],
+                'similarity' => $f['similarity'],
+                'source_url' => $f['source_url'],
+                'rank_score' => $f['rrf'],
+            );
+        }
+        foreach (array_slice($vector_candidates, 20) as $cand) {
+            $cand['rank_score'] = $cand['similarity'] * 1e-6;
+            $ordered[] = $cand;
+        }
+    }
+
+    // ----- grouping by source (same rules as the classic path) -----
+    $content = '';
+    $matches_used = 0;
+    $matches_used_for_context = [];
+    $total_chunks_used = 0;
+    $max_total_chunks = isset($current_options['rag_chunks_limit']) ? intval($current_options['rag_chunks_limit']) : 15;
+    if ($max_total_chunks < 8) $max_total_chunks = 8;
+    if ($max_total_chunks > 20) $max_total_chunks = 20;
+    $max_chunks_per_source = 5;
+
+    $fresh_options = get_option('mxchat_options', []);
+    $citation_links_enabled = isset($fresh_options['citation_links_toggle']) ? ($fresh_options['citation_links_toggle'] === 'on') : true;
+
+    $url_groups = array();
+    foreach ($ordered as $cand) {
+        $hit      = $matches_by_id[$cand['id']] ?? null;
+        if ($hit === null) {
+            continue;
+        }
+        $metadata   = $hit['metadata'] ?? array();
+        $source_url = $metadata['source_url'] ?? '';
+        $group_key  = !empty($source_url) ? $source_url : '_manual_' . $cand['id'];
+        if (!isset($url_groups[$group_key])) {
+            $url_groups[$group_key] = array(
+                'source_url'      => $source_url,
+                'best_score'      => 0,
+                'best_similarity' => 0,
+                'is_chunked'      => !empty($metadata['is_chunked']),
+                'chunks'          => array(),
+                'single_text'     => '',
+            );
+        }
+        if ($cand['rank_score'] > $url_groups[$group_key]['best_score']) {
+            $url_groups[$group_key]['best_score'] = $cand['rank_score'];
+        }
+        if ((float) $cand['similarity'] > $url_groups[$group_key]['best_similarity']) {
+            $url_groups[$group_key]['best_similarity'] = (float) $cand['similarity'];
+        }
+        if ($url_groups[$group_key]['is_chunked']) {
+            $url_groups[$group_key]['chunks'][] = array(
+                'id'          => $cand['id'],
+                'score'       => $cand['similarity'],
+                'chunk_index' => $metadata['chunk_index'] ?? 0,
+                'text'        => $metadata['text'] ?? '',
+            );
+        } else {
+            $url_groups[$group_key]['single_text'] = $metadata['text'] ?? '';
+            $url_groups[$group_key]['single_id']   = $cand['id'];
+        }
+    }
+
+    uasort($url_groups, function ($a, $b) {
+        return $b['best_score'] <=> $a['best_score'];
+    });
+
+    $rag_sources_limit = isset($current_options['rag_sources_limit']) ? intval($current_options['rag_sources_limit']) : 3;
+    if ($rag_sources_limit < 3) $rag_sources_limit = 3;
+    if ($rag_sources_limit > 10) $rag_sources_limit = 10;
+    $top_urls = array_slice($url_groups, 0, $rag_sources_limit, true);
+
+    foreach ($top_urls as $group) {
+        if ($group['is_chunked']) {
+            foreach ($group['chunks'] as $chunk) {
+                $matches_used_for_context[] = $chunk['id'];
+            }
+        } elseif (!empty($group['single_id'])) {
+            $matches_used_for_context[] = $group['single_id'];
+        }
+    }
+
+    foreach ($top_urls as $group_key => $group) {
+        $source_url = $group['source_url'];
+        if ($total_chunks_used >= $max_total_chunks) {
+            break;
+        }
+        $full_text = '';
+        $chunks_in_this_source = 1;
+        if ($group['is_chunked']) {
+            $chunks_remaining = min($max_chunks_per_source, $max_total_chunks - $total_chunks_used);
+            $full_text = MxChat_Pinecone_Documents::reassemble_chunks($source_url, $docs_cfg, $chunks_remaining, $chunks_in_this_source);
+            if (empty($full_text)) {
+                usort($group['chunks'], function ($a, $b) {
+                    return $a['chunk_index'] <=> $b['chunk_index'];
+                });
+                $chunk_texts = array();
+                $chunks_in_this_source = 0;
+                foreach ($group['chunks'] as $chunk) {
+                    if ($total_chunks_used + $chunks_in_this_source >= $max_total_chunks) {
+                        break;
+                    }
+                    $chunk_texts[] = $chunk['text'];
+                    $chunks_in_this_source++;
+                }
+                $full_text = implode("\n\n", $chunk_texts);
+            }
+        } else {
+            $full_text = $group['single_text'];
+            $chunks_in_this_source = 1;
+        }
+
+        if (!empty($full_text)) {
+            if (!$citation_links_enabled) {
+                $full_text = preg_replace('#\bhttps?://[^\s<>"\']+#i', '', $full_text);
+                $full_text = preg_replace('/\s+/', ' ', trim($full_text));
+            }
+            if (!empty($source_url) && $source_url !== '#' && strpos($source_url, 'mxchat://') !== 0) {
+                $matches_used++;
+                $content .= "## Reference " . $matches_used . " ##\n";
+                $content .= $full_text . "\n\n";
+                if ($citation_links_enabled) {
+                    $valid_urls[] = $source_url;
+                    $content .= "URL: " . $source_url . "\n\n";
+                }
+                $this->maybe_queue_youtube_embed($source_url, $full_text, $group['best_similarity'] ?? null);
+            } else {
+                // Manual entry — counted as a used source, uncited (plan c1fe6a).
+                $matches_used++;
+                $content .= "## Information ##\n";
+                $content .= $full_text . "\n\n";
+            }
+            if ($citation_links_enabled) {
+                preg_match_all('#\bhttps?://[^\s<>"\']+#i', $full_text, $content_urls);
+                if (!empty($content_urls[0])) {
+                    $valid_urls = array_merge($valid_urls, $content_urls[0]);
+                }
+            }
+            $total_chunks_used += $chunks_in_this_source;
+        }
+    }
+
+    // ----- testing / transcript rows (top 10) -----
+    $display_row = function ($hit) use ($similarity_threshold, $matches_used_for_context, $access_for) {
+        $metadata = $hit['metadata'] ?? array();
+        $match_id = $hit['id'];
+        $access   = $access_for($hit);
+        if (!empty($metadata['source_url'])) {
+            $source_display = $metadata['source_url'];
+        } else {
+            $content_preview = preg_replace('/\s+/', ' ', strip_tags($metadata['text'] ?? ''));
+            $source_display  = substr(trim($content_preview), 0, 50) . '...';
+        }
+        $is_chunk = !empty($metadata['is_chunked']) || MxChat_Chunker::is_chunk_vector_id($match_id);
+        return [
+            'document_id'           => $match_id,
+            'similarity'            => (float) $hit['score'],
+            'similarity_percentage' => round(((float) $hit['score']) * 100, 2),
+            'above_threshold'       => ((float) $hit['score']) >= $similarity_threshold,
+            'source_display'        => $source_display,
+            'content_preview'       => substr(strip_tags($metadata['text'] ?? ''), 0, 100) . '...',
+            'used_for_context'      => in_array($match_id, $matches_used_for_context, true),
+            'role_restriction'      => $access['role'],
+            'has_access'            => $access['has_access'],
+            'filtered_out'          => !$access['has_access'],
+            'is_chunk'              => $is_chunk,
+            'chunk_index'           => isset($metadata['chunk_index']) ? intval($metadata['chunk_index']) : null,
+            'total_chunks'          => isset($metadata['total_chunks']) ? intval($metadata['total_chunks']) : null,
+        ];
+    };
+    $all_matches = [];
+    $displayed   = [];
+    foreach (array_slice($dense, 0, 10) as $hit) {
+        $all_matches[] = $display_row($hit);
+        $displayed[$hit['id']] = true;
+    }
+    if ($hybrid_enabled) {
+        // Every fused-top-10 row appears (a keyword rescue may sit below the
+        // dense top-10), stamped with matched_via + fused_rank (38ffa1's rule).
+        foreach ($fused_rank_map as $fused_id => $fused_rank) {
+            if ($fused_rank > 10 || isset($displayed[$fused_id]) || !isset($matches_by_id[$fused_id])) {
+                continue;
+            }
+            $all_matches[] = $display_row($matches_by_id[$fused_id]);
+            $displayed[$fused_id] = true;
+        }
+        foreach ($all_matches as &$disp_ref) {
+            $disp_ref['matched_via'] = $matched_via_map[$disp_ref['document_id']] ?? null;
+            $disp_ref['fused_rank']  = $fused_rank_map[$disp_ref['document_id']] ?? null;
+        }
+        unset($disp_ref);
+        usort($all_matches, function ($a, $b) {
+            $ar = $a['fused_rank'] ?? PHP_INT_MAX;
+            $br = $b['fused_rank'] ?? PHP_INT_MAX;
+            if ($ar !== $br) {
+                return $ar <=> $br;
+            }
+            return $b['similarity'] <=> $a['similarity'];
+        });
+    }
+
+    $this->last_similarity_analysis['top_matches']       = $all_matches;
+    $this->last_similarity_analysis['total_checked']     = count($dense);
+    $this->last_similarity_analysis['sources_used']      = $matches_used;
+    $this->last_similarity_analysis['total_chunks_used'] = $total_chunks_used;
+    $this->current_valid_urls = array_unique($valid_urls);
+
+    do_action('mxchat_similarity_results', $this->last_similarity_analysis['top_matches'], $bot_id);
+
+    if ($matches_used === 0) {
+        $content = '';
+    } else {
+        $content .= "\n## Response Guidelines ##\n" .
+                   "You are an AI Chatbot. Answer naturally and helpfully using only the information from the references above. " .
+                   "Be conversational and friendly, but never mention your knowledge base or training data. " .
+                   "If you don't have specific information or are uncertain about any details, it's always " .
+                   "better to honestly say you don't know rather than making up or guessing at answers. " .
+                   "When information is incomplete, let them know you are unsure.\n\n";
+        if ($citation_links_enabled) {
+            $content .= "CRITICAL: When creating hyperlinks, always use proper markdown format with descriptive text: " .
+                       "[descriptive text](url). NEVER use empty brackets like [](url). The text in brackets must describe what the link is about. " .
+                       "Only cite references that have a URL. Do not cite or add source labels to Information sections that have no URL.";
+        } else {
+            $content .= "IMPORTANT: Do not include any citation links, source URLs, or hyperlinks in your responses. " .
+                       "Simply provide helpful answers based on the reference information without citing sources.";
+        }
+    }
+
+    return $content;
+}
+
 private function get_single_vector_role($vector_id, $metadata = array()) {
     global $wpdb;
     
@@ -8897,6 +9535,25 @@ private function find_relevant_products_pinecone($user_embedding) {
 
     //error_log('Sending request to Pinecone with body: ' . wp_json_encode($request_body));
 
+    // Document index (plan 362c31): same query — dense, top 5, type = product — through documents/search.
+    if (class_exists('MxChat_Pinecone_Documents') && MxChat_Pinecone_Documents::is_document_options($options)) {
+        $doc_hits = MxChat_Pinecone_Documents::search_dense($user_embedding, 5, array('type' => array('$eq' => 'product')), MxChat_Pinecone_Documents::cfg_from_options($options), array('text', 'source_url'));
+        $doc_content = '';
+        foreach ((is_wp_error($doc_hits) ? array() : $doc_hits) as $match) {
+            if ($match['score'] < $similarity_threshold) {
+                continue;
+            }
+            if (!empty($match['metadata']['text'])) {
+                $doc_content .= $match['metadata']['text'];
+                if (!empty($match['metadata']['source_url'])) {
+                    $doc_content .= "\n\nFor more details, check out this product: " . esc_url($match['metadata']['source_url']);
+                }
+                $doc_content .= "\n\n";
+            }
+        }
+        return trim($doc_content);
+    }
+
     $response = wp_remote_post($api_endpoint, array(
         'headers' => array(
             'Api-Key' => $api_key,
@@ -8977,6 +9634,66 @@ private function fetch_content_with_product_links($most_relevant_id) {
  * @param string $bot_id The bot ID to get instructions for
  * @param string $session_id Optional session ID to lookup visitor name
  */
+/**
+ * The line that tells the model what day it is (plan cfcd80). Site timezone
+ * (Settings → General), minute granularity, always on — the failure mode of
+ * not having it is a chatbot that lists last week's meeting as upcoming
+ * because nothing in the request ever said what "today" was. Filter
+ * mxchat_current_datetime_line to reword it, or return '' to suppress it.
+ *
+ * Deliberately NOT part of system_prompt_instructions: plan 1ff43b's cache
+ * breakpoint needs that prefix byte-identical between requests, so the line
+ * rides with the per-request context block instead.
+ *
+ * @param string $bot_id
+ * @return string The line followed by a blank line, or '' when suppressed.
+ */
+private function mxchat_current_datetime_line($bot_id = 'default') {
+    $timezone = wp_timezone();
+    $line = sprintf(
+        /* translators: 1: formatted local date and time, 2: site timezone name */
+        __('Current date and time: %1$s (%2$s). Anything dated before today is in the past.', 'mxchat'),
+        wp_date('l, F j, Y, g:i A', null, $timezone),
+        wp_timezone_string()
+    );
+
+    /**
+     * Reword or suppress the current date/time line sent with every request.
+     *
+     * @param string $line   The line as built.
+     * @param string $bot_id Bot the request is for.
+     */
+    $line = apply_filters('mxchat_current_datetime_line', $line, $bot_id);
+    if (!is_string($line) || trim($line) === '') {
+        return '';
+    }
+    return trim($line) . "\n\n";
+}
+
+/**
+ * Value for {current_date} (site date format, e.g. "September 16, 2026") or
+ * {current_datetime} (date, time and timezone abbreviation) in the
+ * instructions (plan cfcd80).
+ *
+ * @param bool $with_time
+ * @return string
+ */
+private function mxchat_current_datetime_placeholder($with_time = false) {
+    $timezone = wp_timezone();
+    $date_format = get_option('date_format');
+    if (!is_string($date_format) || trim($date_format) === '') {
+        $date_format = 'F j, Y';
+    }
+    if (!$with_time) {
+        return wp_date($date_format, null, $timezone);
+    }
+    $time_format = get_option('time_format');
+    if (!is_string($time_format) || trim($time_format) === '') {
+        $time_format = 'g:i a';
+    }
+    return wp_date($date_format . ' ' . $time_format . ' T', null, $timezone);
+}
+
 private function get_system_instructions($bot_id = 'default', $session_id = '') {
     $instructions = '';
 
@@ -9016,6 +9733,16 @@ private function get_system_instructions($bot_id = 'default', $session_id = '') 
             $instructions = str_ireplace('{visitor_name}', '', $instructions);
             $instructions = preg_replace('/\s{2,}/', ' ', trim($instructions)); // Clean up extra spaces
         }
+    }
+
+    // {current_date} / {current_datetime} placeholders (plan cfcd80) for owners
+    // who want the date at a specific spot. Documented with the caveat that a
+    // placeholder here changes the prompt prefix once a day (date) or every
+    // minute (datetime), which defeats provider prompt caching for that span;
+    // the automatic per-request line has no such cost.
+    if (!empty($instructions) && stripos($instructions, '{current_date') !== false) {
+        $instructions = str_ireplace('{current_datetime}', $this->mxchat_current_datetime_placeholder(true), $instructions);
+        $instructions = str_ireplace('{current_date}', $this->mxchat_current_datetime_placeholder(false), $instructions);
     }
 
     // {context} placeholder (plan 59bc1b): inject the assembled knowledge-base
@@ -9680,10 +10407,24 @@ private function mxchat_fc_loop_openai($prov, $system, $relevant_content, $conve
     $tool_schema = MxChat_Tool_Registry::to_openai_tools($tools);
     $used_tool = false;
     $calls_made = 0;
+    $tool_texts = array();
+    $out_tokens = 0;
 
     for ($step = 0; $step <= $depth; $step++) {
-        $offer_tools = ($step < $depth) && !empty($tool_schema);
+        // plan 3c23ab: once the per-turn budget is spent, stop offering tools —
+        // the model is asked for a text answer from what it already has.
+        $offer_tools = ($step < $depth) && !empty($tool_schema) && ($calls_made < $budget);
         $body = array('model' => $prov['model'], 'messages' => $messages, 'temperature' => 1, 'stream' => false);
+        if (strpos($prov['url'], 'api.openai.com') !== false) {
+            // plan 12761a: prompt parity with the normal OpenAI path, which sets
+            // reasoning_effort from the model catalog (plan dcb71c). Now that a
+            // no-tool first hop is the visitor's answer, it must be generated
+            // with the same effort the normal path would have used.
+            $effort = $this->mxchat_reasoning_effort_for($prov['model'], 'chat');
+            if ($effort !== null) {
+                $body['reasoning_effort'] = $effort;
+            }
+        }
         if (strpos($prov['url'], 'api.deepseek.com') !== false) {
             // DeepSeek V4 defaults to thinking mode ON; tool loops want fast
             // deterministic non-thinking turns (legacy deepseek-chat semantics).
@@ -9695,24 +10436,41 @@ private function mxchat_fc_loop_openai($prov, $system, $relevant_content, $conve
         }
         $r = $this->mxchat_fc_post($prov['url'], $body, $prov['headers'], $prov['tag']);
         if ($r['code'] !== 200 || !is_array($r['data'])) {
-            $this->mxchat_fc_log('openai call failed: code=' . $r['code'] . ' err=' . ($r['error'] ?? ''));
-            return $used_tool ? array('handled' => true, 'text' => $this->mxchat_fc_giveup_text()) : array('handled' => false);
+            return $this->mxchat_fc_degrade('openai', $this->mxchat_fc_failure_detail($r), $used_tool, $calls_made, $tool_texts);
         }
         $msg = isset($r['data']['choices'][0]['message']) ? $r['data']['choices'][0]['message'] : null;
         if (!$msg) {
-            return $used_tool ? array('handled' => true, 'text' => $this->mxchat_fc_giveup_text()) : array('handled' => false);
+            return $this->mxchat_fc_degrade('openai', 'response carried no message', $used_tool, $calls_made, $tool_texts);
         }
+        $out_tokens += isset($r['data']['usage']['completion_tokens']) ? (int) $r['data']['usage']['completion_tokens'] : 0;
         $tool_calls = isset($msg['tool_calls']) && is_array($msg['tool_calls']) ? $msg['tool_calls'] : array();
         if (empty($tool_calls)) {
             $text = isset($msg['content']) ? trim((string) $msg['content']) : '';
-            if (!$used_tool) return array('handled' => false);          // model never used a tool → normal path
-            return array('handled' => true, 'text' => ($text !== '' ? $text : $this->mxchat_fc_giveup_text()));
+            if (!$used_tool) {
+                // plan 12761a: the model answered without a tool — keep that
+                // answer instead of generating it again on the normal path.
+                // Empty text (a stop-sequence oddity) still falls through.
+                if ($text !== '' && $this->mxchat_fc_keep_first_hop_text($prov['model'])) {
+                    $this->mxchat_fc_usage_log('openai', $step + 1, 0, $out_tokens);
+                    return array('handled' => true, 'text' => $text, 'no_tool' => true);
+                }
+                return array('handled' => false);                        // normal path
+            }
+            if ($text === '') return $this->mxchat_fc_degrade('openai', 'empty text after tool results', $used_tool, $calls_made, $tool_texts);
+            $this->mxchat_fc_usage_log('openai', $step + 1, $calls_made, $out_tokens);
+            return array('handled' => true, 'text' => $text);
         }
         // Append the assistant tool-call turn verbatim, then a tool result per call.
         $used_tool = true;
         $messages[] = $msg;
         foreach ($tool_calls as $tc) {
-            if ($calls_made >= $budget) break;
+            $tool_call_id = isset($tc['id']) ? $tc['id'] : '';
+            if ($calls_made >= $budget) {
+                // plan 3c23ab: never leave a tool call unanswered — a missing
+                // tool message for a tool_call_id is a 400 on the next hop.
+                $messages[] = array('role' => 'tool', 'tool_call_id' => $tool_call_id, 'content' => $this->mxchat_fc_budget_exhausted_text());
+                continue;
+            }
             $calls_made++;
             $name = isset($tc['function']['name']) ? $tc['function']['name'] : '';
             $args = array();
@@ -9721,14 +10479,15 @@ private function mxchat_fc_loop_openai($prov, $system, $relevant_content, $conve
                 if (is_array($decoded)) $args = $decoded;
             }
             $exec = $this->mxchat_fc_execute_tool($name, $args, $orig_message, $user_id, $session_id);
+            if (!empty($exec['ok']) && empty($this->fc_ui_captured)) $tool_texts[] = $exec['content'];
             $messages[] = array(
                 'role' => 'tool',
-                'tool_call_id' => isset($tc['id']) ? $tc['id'] : '',
+                'tool_call_id' => $tool_call_id,
                 'content' => $exec['content'],
             );
         }
     }
-    return $used_tool ? array('handled' => true, 'text' => $this->mxchat_fc_giveup_text()) : array('handled' => false);
+    return $this->mxchat_fc_degrade('openai', 'hop depth exhausted', $used_tool, $calls_made, $tool_texts);
 }
 
 /* ---------------- Anthropic Claude loop ---------------- */
@@ -9742,9 +10501,12 @@ private function mxchat_fc_loop_anthropic($prov, $system, $relevant_content, $co
     $omit_temp = $this->mxchat_claude_omits_temperature($prov['model']);
     $used_tool = false;
     $calls_made = 0;
+    $tool_texts = array();
+    $out_tokens = 0;
 
     for ($step = 0; $step <= $depth; $step++) {
-        $offer_tools = ($step < $depth) && !empty($tool_schema);
+        // plan 3c23ab: no tools offered once the per-turn budget is spent.
+        $offer_tools = ($step < $depth) && !empty($tool_schema) && ($calls_made < $budget);
         $body = array('model' => $prov['model'], 'max_tokens' => 1024, 'temperature' => 0.8,
                       'messages' => $messages,
                       // Breakpoint on the last system block caches tools+system
@@ -9757,10 +10519,10 @@ private function mxchat_fc_loop_anthropic($prov, $system, $relevant_content, $co
         }
         $r = $this->mxchat_fc_post($prov['url'], $body, $prov['headers'], $prov['tag']);
         if ($r['code'] !== 200 || !is_array($r['data'])) {
-            $this->mxchat_fc_log('anthropic call failed: code=' . $r['code'] . ' err=' . ($r['error'] ?? ''));
-            return $used_tool ? array('handled' => true, 'text' => $this->mxchat_fc_giveup_text()) : array('handled' => false);
+            return $this->mxchat_fc_degrade('anthropic', $this->mxchat_fc_failure_detail($r), $used_tool, $calls_made, $tool_texts);
         }
         $content = isset($r['data']['content']) && is_array($r['data']['content']) ? $r['data']['content'] : array();
+        $out_tokens += isset($r['data']['usage']['output_tokens']) ? (int) $r['data']['usage']['output_tokens'] : 0;
         $tool_uses = array();
         $text_out = '';
         foreach ($content as $block) {
@@ -9772,29 +10534,45 @@ private function mxchat_fc_loop_anthropic($prov, $system, $relevant_content, $co
             }
         }
         if (empty($tool_uses)) {
-            if (!$used_tool) return array('handled' => false);
             $text_out = trim($text_out);
-            return array('handled' => true, 'text' => ($text_out !== '' ? $text_out : $this->mxchat_fc_giveup_text()));
+            if (!$used_tool) {
+                // plan 12761a: keep the no-tool first hop's answer (see the OpenAI loop).
+                if ($text_out !== '' && $this->mxchat_fc_keep_first_hop_text($prov['model'])) {
+                    $this->mxchat_fc_usage_log('anthropic', $step + 1, 0, $out_tokens);
+                    return array('handled' => true, 'text' => $text_out, 'no_tool' => true);
+                }
+                return array('handled' => false);
+            }
+            if ($text_out === '') return $this->mxchat_fc_degrade('anthropic', 'empty text after tool results', $used_tool, $calls_made, $tool_texts);
+            $this->mxchat_fc_usage_log('anthropic', $step + 1, $calls_made, $out_tokens);
+            return array('handled' => true, 'text' => $text_out);
         }
         // Append the assistant turn (the full content array), then a user turn of tool_result blocks.
         $used_tool = true;
         $messages[] = array('role' => 'assistant', 'content' => $content);
         $results = array();
         foreach ($tool_uses as $tu) {
-            if ($calls_made >= $budget) break;
+            $tool_use_id = isset($tu['id']) ? $tu['id'] : '';
+            if ($calls_made >= $budget) {
+                // plan 3c23ab: every tool_use gets a tool_result, or the next
+                // hop is a 400 (and an empty content array is one on its own).
+                $results[] = array('type' => 'tool_result', 'tool_use_id' => $tool_use_id, 'content' => $this->mxchat_fc_budget_exhausted_text(), 'is_error' => true);
+                continue;
+            }
             $calls_made++;
             $name = isset($tu['name']) ? $tu['name'] : '';
             $args = isset($tu['input']) && is_array($tu['input']) ? $tu['input'] : array();
             $exec = $this->mxchat_fc_execute_tool($name, $args, $orig_message, $user_id, $session_id);
+            if (!empty($exec['ok']) && empty($this->fc_ui_captured)) $tool_texts[] = $exec['content'];
             $results[] = array(
                 'type' => 'tool_result',
-                'tool_use_id' => isset($tu['id']) ? $tu['id'] : '',
+                'tool_use_id' => $tool_use_id,
                 'content' => $exec['content'],
             );
         }
         $messages[] = array('role' => 'user', 'content' => $results);
     }
-    return $used_tool ? array('handled' => true, 'text' => $this->mxchat_fc_giveup_text()) : array('handled' => false);
+    return $this->mxchat_fc_degrade('anthropic', 'hop depth exhausted', $used_tool, $calls_made, $tool_texts);
 }
 
 /* ---------------- Google Gemini loop ---------------- */
@@ -9822,24 +10600,38 @@ private function mxchat_fc_loop_gemini($prov, $system, $relevant_content, $conve
     $headers = array('Content-Type' => 'application/json');
     $used_tool = false;
     $calls_made = 0;
+    $tool_texts = array();
+    $out_tokens = 0;
 
     for ($step = 0; $step <= $depth; $step++) {
-        $offer_tools = ($step < $depth) && !empty($tool_schema);
+        // plan 3c23ab: no tools offered once the per-turn budget is spent.
+        $offer_tools = ($step < $depth) && !empty($tool_schema) && ($calls_made < $budget);
         $body = array(
             'contents' => $contents,
             'generationConfig' => array('temperature' => 0.7, 'topP' => 0.95, 'topK' => 40, 'maxOutputTokens' => 8192),
         );
-        if ($offer_tools) {
+        // plan a9774b: thinking level from the catalog (Gemini 3.x → low; Flash-Lite → none).
+        $thinking = MxChat_Model_Catalog::gemini_thinking_config($prov['model']);
+        if ($thinking !== null) {
+            $body['generationConfig']['thinkingConfig'] = $thinking;
+        }
+        if (!empty($tool_schema)) {
+            // plan 3c23ab: Gemini must keep the declarations on every hop —
+            // once the history carries a functionCall, a request with no tools
+            // block makes it answer finishReason UNEXPECTED_TOOL_CALL and no
+            // content when it wants another call. Mode NONE is the documented
+            // way to say "answer in text": the model sees the functions and is
+            // barred from calling them.
             $body['tools'] = $tool_schema;
-            $body['toolConfig'] = array('functionCallingConfig' => array('mode' => 'AUTO'));
+            $body['toolConfig'] = array('functionCallingConfig' => array('mode' => $offer_tools ? 'AUTO' : 'NONE'));
         }
         $r = $this->mxchat_fc_post($url, $body, $headers, 'gemini');
         if ($r['code'] !== 200 || !is_array($r['data']) || isset($r['data']['error'])) {
-            $this->mxchat_fc_log('gemini call failed: code=' . $r['code'] . ' err=' . ($r['error'] ?? ''));
-            return $used_tool ? array('handled' => true, 'text' => $this->mxchat_fc_giveup_text()) : array('handled' => false);
+            return $this->mxchat_fc_degrade('gemini', $this->mxchat_fc_failure_detail($r), $used_tool, $calls_made, $tool_texts);
         }
         $parts = isset($r['data']['candidates'][0]['content']['parts']) && is_array($r['data']['candidates'][0]['content']['parts'])
             ? $r['data']['candidates'][0]['content']['parts'] : array();
+        $out_tokens += isset($r['data']['usageMetadata']['candidatesTokenCount']) ? (int) $r['data']['usageMetadata']['candidatesTokenCount'] : 0;
         $fn_calls = array();
         $text_out = '';
         foreach ($parts as $p) {
@@ -9850,20 +10642,37 @@ private function mxchat_fc_loop_gemini($prov, $system, $relevant_content, $conve
             }
         }
         if (empty($fn_calls)) {
-            if (!$used_tool) return array('handled' => false);
             $text_out = trim($text_out);
-            return array('handled' => true, 'text' => ($text_out !== '' ? $text_out : $this->mxchat_fc_giveup_text()));
+            if (!$used_tool) {
+                // plan 12761a: keep the no-tool first hop's answer (see the OpenAI loop).
+                if ($text_out !== '' && $this->mxchat_fc_keep_first_hop_text($prov['model'])) {
+                    $this->mxchat_fc_usage_log('gemini', $step + 1, 0, $out_tokens);
+                    return array('handled' => true, 'text' => $text_out, 'no_tool' => true);
+                }
+                return array('handled' => false);
+            }
+            if ($text_out === '') return $this->mxchat_fc_degrade('gemini', 'empty text after tool results (finishReason=' . (isset($r['data']['candidates'][0]['finishReason']) ? $r['data']['candidates'][0]['finishReason'] : '?') . ')', $used_tool, $calls_made, $tool_texts);
+            $this->mxchat_fc_usage_log('gemini', $step + 1, $calls_made, $out_tokens);
+            return array('handled' => true, 'text' => $text_out);
         }
         // Append the model turn (its parts) then a user turn of functionResponse parts.
         $used_tool = true;
         $contents[] = array('role' => 'model', 'parts' => $parts);
         $resp_parts = array();
         foreach ($fn_calls as $fcall) {
-            if ($calls_made >= $budget) break;
-            $calls_made++;
             $name = isset($fcall['name']) ? $fcall['name'] : '';
+            if ($calls_made >= $budget) {
+                // plan 3c23ab: a functionCall without a functionResponse is
+                // rejected on the next hop — answer it with the budget error.
+                $fr = array('name' => $name, 'response' => array('error' => $this->mxchat_fc_budget_exhausted_text()));
+                if (isset($fcall['id']) && $fcall['id'] !== '') { $fr['id'] = $fcall['id']; }
+                $resp_parts[] = array('functionResponse' => $fr);
+                continue;
+            }
+            $calls_made++;
             $args = isset($fcall['args']) && is_array($fcall['args']) ? $fcall['args'] : array();
             $exec = $this->mxchat_fc_execute_tool($name, $args, $orig_message, $user_id, $session_id);
+            if (!empty($exec['ok']) && empty($this->fc_ui_captured)) $tool_texts[] = $exec['content'];
             $fr = array('name' => $name, 'response' => array('result' => $exec['content']));
             // Gemini 3 function calls carry a unique id; echo the matching id back in the
             // functionResponse so the model maps the result to the right call (Google REST
@@ -9873,11 +10682,84 @@ private function mxchat_fc_loop_gemini($prov, $system, $relevant_content, $conve
         }
         $contents[] = array('role' => 'user', 'parts' => $resp_parts);
     }
-    return $used_tool ? array('handled' => true, 'text' => $this->mxchat_fc_giveup_text()) : array('handled' => false);
+    return $this->mxchat_fc_degrade('gemini', 'hop depth exhausted', $used_tool, $calls_made, $tool_texts);
 }
 
 private function mxchat_fc_giveup_text() {
     return esc_html__('I looked into that but could not put together a final answer. Please try rephrasing your request.', 'mxchat');
+}
+
+/**
+ * plan 3c23ab — the result handed back for a tool call the per-turn budget
+ * refuses. Model-facing, never shown to the visitor. Every call the model
+ * makes gets SOME result, so the conversation stays valid for the provider:
+ * Anthropic needs a tool_result per tool_use, OpenAI a tool message per
+ * tool_call_id, Gemini a functionResponse per functionCall.
+ */
+private function mxchat_fc_budget_exhausted_text() {
+    return 'Tool-call budget for this turn is exhausted; answer with what you already have.';
+}
+
+/**
+ * plan 3c23ab — the loop cannot finish normally (provider rejected a hop, or
+ * the hop depth ran out). Decide what the visitor sees and what gets logged.
+ *
+ * Before: any failure after a tool had run returned the bare give-up string
+ * and, unless MXCHAT_DEV_MODE was on, logged nothing — the transcript showed
+ * a successful tool call followed by "could not put together a final answer"
+ * with no explanation. Now a failure after a tool ran ALWAYS reaches error_log
+ * (that is an actionable error, not debug noise), and the visitor gets the
+ * best thing we have: a UI result the tool already rendered (cards / image —
+ * the envelope emits it, so the caption is left empty rather than
+ * contradicting it), else the text the tools returned, else the give-up line.
+ */
+private function mxchat_fc_degrade($provider, $reason, $used_tool, $calls_made, $tool_texts) {
+    $this->mxchat_fc_log($provider . ' ' . $reason);
+    if (!$used_tool) {
+        return array('handled' => false);
+    }
+    error_log('[MxChat FC] ' . $provider . ' ' . $reason . ' after ' . (int) $calls_made . ' tool call(s) — answering from the tool results already fetched.');
+    if (!empty($this->fc_ui_captured)) {
+        return array('handled' => true, 'text' => '');
+    }
+    if (!empty($tool_texts)) {
+        return array('handled' => true, 'text' => implode("\n\n", $tool_texts));
+    }
+    return array('handled' => true, 'text' => $this->mxchat_fc_giveup_text());
+}
+
+/**
+ * plan 12761a — a first hop that comes back as text with no tool call IS the
+ * answer. It used to be discarded (`handled => false`) and the normal path
+ * generated it again without tools: two complete generations for the most
+ * common kind of turn, and the visible reply delayed by the hidden one. The
+ * hop was built from the same system instructions and the same retrieved
+ * context the normal path uses (get_system_instructions() + $relevant_content,
+ * page-data fence included), so nothing is lost by keeping it. What changes
+ * for a no-tool turn while tools are active: the reply arrives as one complete
+ * message instead of streaming word by word. Sites that want the old
+ * behaviour back can return false from this filter.
+ */
+private function mxchat_fc_keep_first_hop_text($model) {
+    return (bool) apply_filters('mxchat_fc_keep_first_hop_text', true, $model);
+}
+
+/**
+ * plan 12761a — measurable in the dev log: one line per turn with the hop
+ * count, tool calls made and output tokens billed. The reporter measured the
+ * double generation from provider logs; this is the number to re-check.
+ */
+private function mxchat_fc_usage_log($provider, $hops, $tools, $out_tokens) {
+    $this->mxchat_fc_log($provider . ' hops=' . (int) $hops . ' tools=' . (int) $tools . ' out_tokens=' . (int) $out_tokens);
+}
+
+/** plan 3c23ab — provider failure detail for the log line (code, transport error, body error). */
+private function mxchat_fc_failure_detail($r) {
+    $detail = 'call failed: code=' . (int) $r['code'] . ' err=' . (isset($r['error']) ? $r['error'] : '');
+    if (is_array($r['data']) && isset($r['data']['error'])) {
+        $detail .= ' body=' . substr((string) wp_json_encode($r['data']['error']), 0, 300);
+    }
+    return $detail;
 }
 
 private function mxchat_generate_response($relevant_content, $api_key, $xai_api_key, $claude_api_key, $deepseek_api_key, $gemini_api_key, $openrouter_api_key, $conversation_history, $streaming = false, $session_id = '', $testing_data = null, $selected_model = 'gpt-5.6-sol') {
@@ -10893,6 +11775,15 @@ private function mxchat_generate_response_custom_stream($selected_model, $conver
             'messages' => $formatted_conversation,
             'stream'   => true,
         );
+        // plan a9774b: a Gemini model reached through Google's OpenAI-compatible
+        // endpoint gets the catalog's thinking level as reasoning_effort. Gemini
+        // ids only — Ollama / vLLM / Azure models keep the bare body they had.
+        if (strpos((string) $cfg['model'], 'gemini-') === 0) {
+            $effort = $this->mxchat_reasoning_effort_for($cfg['model'], 'chat');
+            if ($effort !== null) {
+                $request_body['reasoning_effort'] = $effort;
+            }
+        }
         $body = json_encode($request_body);
 
         // V2 retry-on-initial-connect: setup_streaming_headers is lazy-fired in WRITEFUNCTION.
@@ -11064,12 +11955,20 @@ private function mxchat_generate_response_custom($selected_model, $conversation_
         }
     }
 
+    $custom_body = array(
+        'model'    => $cfg['model'],
+        'messages' => $messages,
+    );
+    // plan a9774b: see the streaming twin — Gemini ids only.
+    if (strpos((string) $cfg['model'], 'gemini-') === 0) {
+        $effort = $this->mxchat_reasoning_effort_for($cfg['model'], 'chat');
+        if ($effort !== null) {
+            $custom_body['reasoning_effort'] = $effort;
+        }
+    }
     $response = $this->mxchat_provider_call_with_retry($cfg['chat_url'], array(
         'headers' => $headers_assoc,
-        'body'    => wp_json_encode(array(
-            'model'    => $cfg['model'],
-            'messages' => $messages,
-        )),
+        'body'    => wp_json_encode($custom_body),
         'timeout' => 120,
     ), 'openai');
 
@@ -13230,6 +14129,11 @@ private function mxchat_generate_response_gemini($selected_model, $gemini_api_ke
             ]
         ]
     ];
+    // plan a9774b: thinking level from the catalog (Gemini 3.x → low; Flash-Lite → none).
+    $gemini_thinking = MxChat_Model_Catalog::gemini_thinking_config($selected_model);
+    if ($gemini_thinking !== null) {
+        $request_payload['generationConfig']['thinkingConfig'] = $gemini_thinking;
+    }
 
     if ($grounding_active) {
         // Gemini 1.5 used the older google_search_retrieval shape; 2.0+ uses the
@@ -14029,7 +14933,7 @@ public function check_rate_limit() {
         $global_data       = get_option($global_option, ['count' => 0, 'timestamp' => time()]);
         if ((int) $global_data['count'] === 0) {
             $global_data['timestamp'] = time();
-            update_option($global_option, $global_data);
+            $this->mxchat_save_rate_counter($global_option, $global_data);
         }
         $now = time();
         $ts  = (int) $global_data['timestamp'];
@@ -14042,7 +14946,7 @@ public function check_rate_limit() {
         }
         if ($reset) {
             $global_data = ['count' => 0, 'timestamp' => $now];
-            update_option($global_option, $global_data);
+            $this->mxchat_save_rate_counter($global_option, $global_data);
         }
         if ((int) $global_data['count'] >= (int) $global_limit_raw) {
             $global_msg = !empty($global_cfg['message'])
@@ -14056,7 +14960,7 @@ public function check_rate_limit() {
         // Reserve the slot for this request. Per-role check below also increments
         // its own counter — that is intentional, both ceilings apply independently.
         $global_data['count']++;
-        update_option($global_option, $global_data);
+        $this->mxchat_save_rate_counter($global_option, $global_data);
     }
 
     // Determine user role or if logged out
@@ -14101,11 +15005,16 @@ public function check_rate_limit() {
     
     // Get the counter data
     $limit_data = get_option($option_name, ['count' => 0, 'timestamp' => time()]);
-    
+
     // If first request or counter reset needed, set the initial timestamp
     if ($limit_data['count'] === 0) {
         $limit_data['timestamp'] = time();
-        update_option($option_name, $limit_data);
+        if ($role === 'logged_out' && get_option($option_name, null) === null) {
+            // A brand-new visitor row: keep the number of them per bot bounded
+            // before adding one more (plan 284318).
+            $this->mxchat_cap_visitor_counters($safe_bot_id, $safe_role);
+        }
+        $this->mxchat_save_rate_counter($option_name, $limit_data);
     }
     
     // Get the timeframe
@@ -14135,9 +15044,9 @@ public function check_rate_limit() {
     // Reset the counter if the timeframe has passed
     if ($should_reset) {
         $limit_data = ['count' => 0, 'timestamp' => $current_time];
-        update_option($option_name, $limit_data);
+        $this->mxchat_save_rate_counter($option_name, $limit_data);
     }
-    
+
     // Check if user has exceeded their limit
     if ($limit_data['count'] >= intval($limit)) {
         // Get the custom message for this role
@@ -14181,9 +15090,63 @@ public function check_rate_limit() {
     
     // Increment the counter
     $limit_data['count']++;
-    update_option($option_name, $limit_data);
-    
+    $this->mxchat_save_rate_counter($option_name, $limit_data);
+
     return true;
+}
+
+/**
+ * Write a rate-limit counter without autoloading it (plan 284318).
+ *
+ * update_option() on a row that does not exist yet creates it autoloaded,
+ * so every visitor counter used to ride along on every page load's
+ * alloptions read. Counters are only ever read by name, in the chat
+ * request that owns them.
+ */
+private function mxchat_save_rate_counter($option_name, $data) {
+    if (get_option($option_name, null) === null) {
+        add_option($option_name, $data, '', false);
+        return;
+    }
+    update_option($option_name, $data);
+}
+
+/**
+ * Bound the number of logged-out counters a bot can hold (plan 284318).
+ *
+ * Counters for visitors are one options row per address. A flood of new
+ * addresses — a real botnet, or a proxy that hands us a fresh one per
+ * request — would otherwise grow wp_options without limit. Above the cap
+ * the oldest rows (by option_id, i.e. creation order) are dropped in a
+ * batch so the check is not paid on every request.
+ */
+private function mxchat_cap_visitor_counters($safe_bot_id, $safe_role) {
+    global $wpdb;
+    $max = (int) apply_filters('mxchat_rate_limit_max_visitor_counters', 5000, $safe_bot_id);
+    if ($max < 1) {
+        return;
+    }
+    $prefix = 'mxchat_chat_limit_' . $safe_bot_id . '_' . $safe_role . '_';
+    $like   = $wpdb->esc_like($prefix) . '%';
+    $count  = (int) $wpdb->get_var(
+        $wpdb->prepare("SELECT COUNT(*) FROM {$wpdb->options} WHERE option_name LIKE %s", $like)
+    );
+    if ($count < $max) {
+        return;
+    }
+    // Evict a tenth of the cap (at least the overflow) so the next few
+    // thousand new visitors do not each pay for a delete.
+    $evict = max($count - $max + 1, (int) ceil($max / 10));
+    $names = $wpdb->get_col(
+        $wpdb->prepare(
+            "SELECT option_name FROM {$wpdb->options} WHERE option_name LIKE %s ORDER BY option_id ASC LIMIT %d",
+            $like,
+            $evict
+        )
+    );
+    foreach ((array) $names as $name) {
+        delete_option($name);
+    }
 }
 
 /**
@@ -14194,56 +15157,80 @@ public function mxchat_reset_rate_limits() {
         global $wpdb;
         $all_options = get_option('mxchat_options', []);
         $current_time = time();
-        
-        // Get rate limit options with a safer query and limit
+
+        // Get rate limit options with a safer query and limit. Ordered so a
+        // site with more than 1000 rows does not scan the same 1000 every hour.
         $option_names = $wpdb->get_col(
             $wpdb->prepare(
-                "SELECT option_name FROM {$wpdb->options} 
-                 WHERE option_name LIKE %s 
+                "SELECT option_name FROM {$wpdb->options}
+                 WHERE option_name LIKE %s
+                 ORDER BY option_id ASC
                  LIMIT 1000",
                 'mxchat_chat_limit_%'
             )
         );
-        
+
         if (empty($option_names)) {
             return;
         }
-        
+
         $processed_count = 0;
         $max_processing_time = 30; // Maximum 30 seconds
         $start_time = time();
-        
+        $bot_limits_cache = array();
+
         foreach ($option_names as $option_name) {
             // Check processing time limit
             if ((time() - $start_time) > $max_processing_time) {
                 //error_log('MxChat: Rate limit reset timeout after processing ' . $processed_count . ' entries');
                 break;
             }
-            
-            // Parse the option name more safely
-            if (!preg_match('/^mxchat_chat_limit_(.+)_(.+)$/', $option_name, $matches)) {
-                continue;
-            }
-            
-            $role_and_user = $matches[1] . '_' . $matches[2];
-            $parts = explode('_', $role_and_user);
-            
-            if (count($parts) < 2) {
-                continue;
-            }
-            
-            // Extract role (everything except the last part which is user ID)
-            $user_id_part = array_pop($parts);
-            $role = implode('_', $parts);
-            
-            // Skip if role doesn't exist in our settings
-            if (!isset($all_options['rate_limits'][$role])) {
-                // Clean up orphaned entries
+
+            // Name shape: mxchat_chat_limit_{bot}_{role}_{identifier}, or
+            // mxchat_chat_limit_{bot}_global. Bot ids, roles AND identifiers
+            // all contain underscores (an address is 203_0_113_1), so the name
+            // cannot be split on '_'; it is matched against the roles that can
+            // actually occur instead (plan 284318). The identifier is opaque.
+            $parsed = $this->mxchat_parse_rate_counter_name($option_name);
+            if ($parsed === null) {
+                // Not a shape check_rate_limit() writes — the only real orphan.
                 delete_option($option_name);
                 continue;
             }
-            
-            $timeframe = $all_options['rate_limits'][$role]['timeframe'] ?? 'daily';
+
+            $bot_key = $parsed['bot'];
+            if (!array_key_exists($bot_key, $bot_limits_cache)) {
+                // Per-bot overrides win, exactly as in check_rate_limit().
+                $bot_options = ($bot_key === 'default') ? array() : $this->get_bot_options($bot_key);
+                $bot_limits_cache[$bot_key] = array(
+                    'rate_limits'        => isset($bot_options['rate_limits']) && is_array($bot_options['rate_limits'])
+                        ? $bot_options['rate_limits']
+                        : (isset($all_options['rate_limits']) && is_array($all_options['rate_limits']) ? $all_options['rate_limits'] : array()),
+                    'rate_limits_global' => isset($bot_options['rate_limits_global']) && is_array($bot_options['rate_limits_global'])
+                        ? $bot_options['rate_limits_global']
+                        : (isset($all_options['rate_limits_global']) && is_array($all_options['rate_limits_global']) ? $all_options['rate_limits_global'] : array()),
+                );
+            }
+            $limits = $bot_limits_cache[$bot_key];
+
+            if ($parsed['role'] === 'global') {
+                $global_limit = isset($limits['rate_limits_global']['limit']) ? (string) $limits['rate_limits_global']['limit'] : 'unlimited';
+                if ($global_limit === '' || $global_limit === 'unlimited') {
+                    // The whole-chatbot cap is off for this bot; its pool is stale.
+                    delete_option($option_name);
+                    continue;
+                }
+                $timeframe = $limits['rate_limits_global']['timeframe'] ?? 'daily';
+            } else {
+                $role = $parsed['role'];
+                // Skip if role doesn't exist in our settings
+                if (!isset($limits['rate_limits'][$role])) {
+                    // Clean up orphaned entries
+                    delete_option($option_name);
+                    continue;
+                }
+                $timeframe = $limits['rate_limits'][$role]['timeframe'] ?? 'daily';
+            }
             $limit_data = get_option($option_name);
             
             if (!$limit_data || !is_array($limit_data) || !isset($limit_data['timestamp'])) {
@@ -14281,12 +15268,69 @@ public function mxchat_reset_rate_limits() {
         
         // Clean up any orphaned cache entries
         wp_cache_delete('mxchat_all_chat_limits', 'options');
-        
+
         //error_log("MxChat: Rate limit reset completed. Processed {$processed_count} entries.");
-        
+
     } catch (Exception $e) {
         //error_log('MxChat: Rate limit reset error: ' . $e->getMessage());
     }
+}
+
+/**
+ * Split a counter option name into bot, role and identifier (plan 284318).
+ *
+ * The role is found by matching against every role check_rate_limit() can
+ * produce — each registered WordPress role plus logged_out — longest first,
+ * so a role that contains another role's name still resolves. What sits
+ * before the role is the bot, what sits after it is the identifier, and
+ * neither is split further. Returns null when the name matches no shape.
+ *
+ * @return array|null ['bot' => string, 'role' => string, 'identifier' => string]
+ */
+public function mxchat_parse_rate_counter_name($option_name) {
+    $prefix = 'mxchat_chat_limit_';
+    if (strpos($option_name, $prefix) !== 0) {
+        return null;
+    }
+    $rest = substr($option_name, strlen($prefix));
+    if ($rest === '' || $rest === false) {
+        return null;
+    }
+
+    // Whole-chatbot pool: {bot}_global
+    if (substr($rest, -7) === '_global' && strlen($rest) > 7) {
+        return array('bot' => substr($rest, 0, -7), 'role' => 'global', 'identifier' => '');
+    }
+
+    $roles = array('logged_out');
+    if (function_exists('wp_roles')) {
+        $roles = array_merge($roles, array_keys((array) wp_roles()->get_names()));
+    }
+    $roles = array_unique(array_map(function ($r) {
+        return preg_replace('/[^a-zA-Z0-9_]/', '_', (string) $r);
+    }, $roles));
+    usort($roles, function ($a, $b) {
+        return strlen($b) - strlen($a);
+    });
+
+    foreach ($roles as $role) {
+        if ($role === '') {
+            continue;
+        }
+        // Rightmost occurrence: the bot id may carry underscores of its own,
+        // the identifier is digits, hex and underscores and cannot spell a role.
+        $needle = '_' . $role . '_';
+        $pos    = strrpos($rest, $needle);
+        if ($pos === false || $pos === 0) {
+            continue;
+        }
+        $identifier = substr($rest, $pos + strlen($needle));
+        if ($identifier === '' || $identifier === false) {
+            continue;
+        }
+        return array('bot' => substr($rest, 0, $pos), 'role' => $role, 'identifier' => $identifier);
+    }
+    return null;
 }
 
 
@@ -14409,26 +15453,12 @@ private function auto_link_urls($text) {
 }
 
 
-// Helper function to get client IP address
+// Helper function to get client IP address.
+// Keyed on REMOTE_ADDR (Cloudflare-aware) — the same resolver the transcript
+// identifier uses, so the two always name the same address (plan 284318).
+// Client-IP / X-Forwarded-For are never read: the sender chooses them.
 private function get_client_ip() {
-    // Check for shared internet/ISP IP
-    if (!empty($_SERVER['HTTP_CLIENT_IP'])) {
-        return sanitize_text_field($_SERVER['HTTP_CLIENT_IP']);
-    }
-    
-    // Check for IPs passing through proxies
-    if (!empty($_SERVER['HTTP_X_FORWARDED_FOR'])) {
-        // Use the first value in the comma-separated list
-        $forwarded_for = explode(',', sanitize_text_field($_SERVER['HTTP_X_FORWARDED_FOR']));
-        return trim($forwarded_for[0]);
-    }
-    
-    if (!empty($_SERVER['REMOTE_ADDR'])) {
-        return sanitize_text_field($_SERVER['REMOTE_ADDR']);
-    }
-    
-    // Fallback
-    return 'unknown';
+    return MxChat_User::mxchat_get_client_ip();
 }
 
 /**

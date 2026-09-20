@@ -1087,10 +1087,9 @@ function checkForActiveQueues() {
                         // Update entry count displays (header and sidebar)
                         var $countSpan = $('#mxchat-entry-count');
                         if ($countSpan.length) {
-                            var currentText = $countSpan.text();
-                            var match = currentText.match(/\((\d+)\)/);
-                            if (match) {
-                                var newCount = Math.max(0, parseInt(match[1]) - 1);
+                            var currentCount = readEntryCount($countSpan);
+                            if (!isNaN(currentCount)) {
+                                var newCount = Math.max(0, currentCount - 1);
                                 updateEntryCount(newCount);
                             }
                         }
@@ -1151,10 +1150,9 @@ function checkForActiveQueues() {
                         // Update entry count displays (header and sidebar)
                         var $countSpan = $('#mxchat-entry-count');
                         if ($countSpan.length) {
-                            var currentText = $countSpan.text();
-                            var match = currentText.match(/\((\d+)\)/);
-                            if (match) {
-                                var newCount = Math.max(0, parseInt(match[1]) - 1);
+                            var currentCount = readEntryCount($countSpan);
+                            if (!isNaN(currentCount)) {
+                                var newCount = Math.max(0, currentCount - 1);
                                 updateEntryCount(newCount);
                             }
                         }
@@ -1352,10 +1350,9 @@ function checkForActiveQueues() {
                     if (successCount > 0) {
                         var $countSpan = $('#mxchat-entry-count');
                         if ($countSpan.length) {
-                            var currentText = $countSpan.text();
-                            var match = currentText.match(/\((\d+)\)/);
-                            if (match) {
-                                var newCount = Math.max(0, parseInt(match[1]) - successCount);
+                            var currentCount = readEntryCount($countSpan);
+                            if (!isNaN(currentCount)) {
+                                var newCount = Math.max(0, currentCount - successCount);
                                 updateEntryCount(newCount);
                             }
                         }
@@ -1530,7 +1527,7 @@ function checkForActiveQueues() {
 
                     // Update the count display
                     if (response.data.total_count !== undefined) {
-                        updateEntryCount(response.data.total_count);
+                        updateEntryCount(response.data.total_count, response.data.count_unit);
                     }
 
                     // Show success feedback
@@ -1745,7 +1742,7 @@ function checkForActiveQueues() {
                 if (response.success && response.data) {
                     // Update count
                     if (response.data.total_count !== undefined) {
-                        updateEntryCount(response.data.total_count);
+                        updateEntryCount(response.data.total_count, response.data.count_unit);
                     }
 
                     // Handle Pinecone data source differently
@@ -1820,12 +1817,30 @@ function checkForActiveQueues() {
         });
     }
 
-    // Update the entry count display
-    function updateEntryCount(count) {
+    // Read the heading's count from its data attribute, not from the text: the
+    // text now carries a thousands separator and a unit ("(1,240 vectors)") on
+    // the Pinecone cursor path (plan dd6e10).
+    function readEntryCount($countSpan) {
+        var stored = parseInt($countSpan.attr('data-count'), 10);
+        if (!isNaN(stored)) {
+            return stored;
+        }
+        var match = $countSpan.text().match(/\(([\d,]+)/);
+        return match ? parseInt(match[1].replace(/,/g, ''), 10) : NaN;
+    }
+
+    // Update the entry count display. `unit` is 'vectors' on the Pinecone
+    // cursor path and '' otherwise; omitted = keep whatever the span carries.
+    function updateEntryCount(count, unit) {
         // Update main table count
         const $countSpan = $('#mxchat-entry-count');
         if ($countSpan.length) {
-            $countSpan.text('(' + count + ')');
+            if (unit === undefined) {
+                unit = $countSpan.attr('data-unit') || '';
+            }
+            var shown = Number(count).toLocaleString();
+            $countSpan.attr('data-count', count).attr('data-unit', unit);
+            $countSpan.text('(' + shown + (unit === 'vectors' ? ' vectors' : '') + ')');
 
             // Flash animation to indicate update
             $countSpan.addClass('mxchat-count-updated');
@@ -1894,7 +1909,7 @@ function checkForActiveQueues() {
 
                     // Update count display
                     if (response.data.total_count !== undefined) {
-                        updateEntryCount(response.data.total_count);
+                        updateEntryCount(response.data.total_count, response.data.count_unit);
                     }
                 }
             },

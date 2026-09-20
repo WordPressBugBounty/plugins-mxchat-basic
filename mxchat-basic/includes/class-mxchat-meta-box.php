@@ -208,6 +208,29 @@ class MxChat_Meta_Box {
                 </div>
             <?php endif; ?>
 
+            <!-- Knowledge base access (plan 6ab002) -->
+            <?php if (class_exists('MxChat_Knowledge_Manager')) :
+                $kb_role    = get_post_meta($post->ID, '_mxchat_kb_role_restriction', true);
+                $kb_options = MxChat_Knowledge_Manager::mxchat_role_options();
+            ?>
+                <div style="margin-top: 15px;">
+                    <label for="mxchat_kb_role_restriction" style="display: block; font-weight: 600; margin-bottom: 5px;">
+                        <?php _e('Knowledge base access', 'mxchat'); ?>
+                    </label>
+                    <select name="mxchat_kb_role_restriction" id="mxchat_kb_role_restriction" style="width: 100%;">
+                        <option value=""><?php _e('Use tag rules (default)', 'mxchat'); ?></option>
+                        <?php foreach ($kb_options as $role_key => $role_label) : ?>
+                            <option value="<?php echo esc_attr($role_key); ?>" <?php selected($kb_role, $role_key); ?>>
+                                <?php echo esc_html($role_label); ?>
+                            </option>
+                        <?php endforeach; ?>
+                    </select>
+                    <p style="font-size: 12px; color: #666; margin-top: 5px; font-style: italic;">
+                        <?php _e('Who may retrieve this content in chat once it is imported. Tags only work on posts, so this is how you restrict a page. The stricter of this setting and any tag rule wins.', 'mxchat'); ?>
+                    </p>
+                </div>
+            <?php endif; ?>
+
             <!-- Preview Notice -->
             <div style="margin-top: 15px; padding: 8px; background: #fff3cd; border-left: 3px solid #ffc107; font-size: 12px;">
                 <p style="margin: 0; color: #856404;">
@@ -261,6 +284,22 @@ class MxChat_Meta_Box {
             update_post_meta($post_id, '_mxchat_hide_chatbot', '1');
         } else {
             delete_post_meta($post_id, '_mxchat_hide_chatbot');
+        }
+
+        // Save knowledge-base role restriction (plan 6ab002). Validated against
+        // the site's real roles, so a stale or forged slug is dropped rather
+        // than stored as a restriction nothing can satisfy.
+        if (isset($_POST['mxchat_kb_role_restriction'])) {
+            $kb_role = sanitize_text_field(wp_unslash($_POST['mxchat_kb_role_restriction']));
+            $valid   = class_exists('MxChat_Knowledge_Manager')
+                ? array_keys(MxChat_Knowledge_Manager::mxchat_role_options())
+                : array();
+
+            if ($kb_role !== '' && in_array($kb_role, $valid, true)) {
+                update_post_meta($post_id, '_mxchat_kb_role_restriction', $kb_role);
+            } else {
+                delete_post_meta($post_id, '_mxchat_kb_role_restriction');
+            }
         }
 
         // Save selected bot setting

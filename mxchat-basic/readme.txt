@@ -2,10 +2,10 @@
 Contributors: mxchat
 Author: [MxChat](https://mxchat.ai)
 Tags: ai chatbot, chatgpt, woocommerce, customer support, content generation
-Requires at least: 5.0
-Tested up to: 7.0
-Requires PHP: 7.2
-Stable tag: 3.2.21
+Requires at least: 5.3
+Tested up to: 7.1
+Requires PHP: 7.4
+Stable tag: 3.2.22
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -72,7 +72,7 @@ Claude Opus 4.8, Claude Opus 4.7, Claude Opus 4.6, Claude Sonnet 4.6, Claude Opu
 **X.AI**:  
 **Grok 4.1 Fast (Reasoning)**, **Grok 4.1 Fast (Non-Reasoning)**, Grok 4, Grok-3, Grok-3 Fast, Grok-3 Mini, Grok-3 Mini Fast
 **Google Gemini**:
-Gemini 3.5 Flash, Gemini 3.1 Pro, Gemini 3 Flash, Gemini 3.1 Flash-Lite, Gemini 2.5 Pro, Gemini 2.5 Flash, Gemini 2.5 Flash-Lite
+Gemini 3.8 Flash, Gemini 3.7 Flash, Gemini 3.6 Flash, Gemini 3.5 Flash, Gemini 3.1 Pro, Gemini 3 Flash, Gemini 3.5 Flash-Lite, Gemini 3.1 Flash-Lite, Gemini 2.5 Pro, Gemini 2.5 Flash, Gemini 2.5 Flash-Lite
 **DeepSeek**:  
 DeepSeek V3
 
@@ -171,7 +171,7 @@ Whether you're running a small business or launching a new online store, MxChat�
 
 = What AI models does MxChat support? =
 
-MxChat supports 100+ AI models including OpenAI GPT-5.5, GPT-5.1 Chat Latest, GPT-5, Anthropic Claude Opus 4.8, Claude Sonnet 4.6, Claude Haiku 4.5, Google Gemini 3.5 Flash, Gemini 3.1 Pro, xAI Grok 4, Grok 3, DeepSeek V3, and many more. With OpenRouter integration, you get access to models from OpenAI, Anthropic, Google, Meta, Mistral, and other providers with a single API key.
+MxChat supports 100+ AI models including OpenAI GPT-5.5, GPT-5.1 Chat Latest, GPT-5, Anthropic Claude Opus 4.8, Claude Sonnet 4.6, Claude Haiku 4.5, Google Gemini 3.8 Flash, Gemini 3.1 Pro, xAI Grok 4, Grok 3, DeepSeek V3, and many more. With OpenRouter integration, you get access to models from OpenAI, Anthropic, Google, Meta, Mistral, and other providers with a single API key.
 
 = How do I get API keys for the AI chatbot? =
 
@@ -191,7 +191,7 @@ Yes. MxChat includes full WooCommerce integration. The AI chatbot can be trained
 
 = Can I customize the AI chatbot appearance? =
 
-Yes. MxChat offers extensive customization options including custom colors, chatbot icon, AI avatar, chat bubble size, light/dark/system themes, positioning (left/right), custom CSS, greeting messages, placeholder text, and widget layouts. Use the built-in AI Theme Generator to describe your ideal design and let AI create custom styling automatically.
+Yes. The free plugin lets you set the widget position (left or right), the greeting and placeholder text, and add your own custom CSS. The MxChat Theme Customizer add-on (Pro) handles the rest of the look: custom colors for around 20 widget elements, your own chatbot icon and avatar image, chat bubble size, light, dark and system themes, widget layouts, and a built-in CSS editor. Its AI Theme Generator lets you describe the design you want and generates the theme for you.
 
 = How do I add the chatbot to my WordPress site? =
 
@@ -268,7 +268,7 @@ Yes. MxChat's Custom Provider setting accepts any OpenAI-compatible API endpoint
 
 = Is there a free version of MxChat? =
 
-Yes. MxChat is available for free on the WordPress plugin repository with full AI chatbot functionality. Premium add-ons are available for advanced features like the AI Theme Generator and priority support.
+Yes. MxChat is available for free on the WordPress plugin repository with full AI chatbot functionality. Premium add-ons are available for advanced features such as the Theme Customizer with its AI Theme Generator, and come with priority support.
 
 == Developer Hooks & Filters ==
 
@@ -281,6 +281,10 @@ Runs during knowledge base indexing and lets you modify a post's data before MxC
 = mxchat_system_instructions =
 
 Dynamically modify the system prompt before every AI response. Use this to inject live data such as business hours, inventory status, or user-specific context into the prompt at runtime. Receives the instructions text, bot ID, and session ID. MxChat also supports WordPress shortcodes directly in the system prompt field — any registered shortcodes are automatically expanded before being sent to the AI.
+
+= Added in 3.2.22 =
+
+mxchat_client_ip (the visitor address behind a trusted proxy), mxchat_current_datetime_line (the date and time line sent with each message), mxchat_transcript_user_message and mxchat_ai_conversation_history (what humans and the model each see of a transcript), mxchat_chat_toolbar_items with the mxchat:toolbar-ready and mxchat:opened browser events (toolbar buttons from an add-on), mxchat_handoff_card_sections (extra sections on the Telegram and Slack handoff card), and the MxChat_Utils::save_session_message helper for writing to a transcript. Each is documented with examples on the page linked above.
 
 ## ✅ Get Started with MxChat AI Chatbot Today
 
@@ -318,9 +322,33 @@ Please ensure compliance with applicable terms and data privacy laws.
 
 == Changelog ==
 
-
-
-
+= 3.2.22 - September 20, 2026 =
+* New: An opt-in Pinecone Document index with full-text search, so a question carrying a part number, SKU or code finds the record that holds it. Create index for me, Check index and Migrate move an existing index across with no re-embedding, and classic vector indexes are untouched.
+* New: The chatbot knows the current date and time in your site's timezone, so it can tell past events from upcoming ones. The line travels with each message and does not affect prompt caching; {current_date} and {current_datetime} also work as placeholders in the instructions.
+* New: Knowledge base content can be restricted to any role on your site, including custom ones from User Role Editor, Members or a membership plugin. The built-in Subscribers and Above through Administrators Only choices behave exactly as before.
+* New: Every post and page has a Knowledge base access setting in the MxChat box on its edit screen, so content without tags is no longer stuck as public. Where both apply, the stricter of the tag rule and the page setting wins.
+* New: PDF, Word, text and Markdown files already in your media library can be imported into the knowledge base, with the text read from the file itself. The Media source now lists only those four types.
+* New: Switch on Media under Advanced Custom Post Sync Settings and a supported file adds itself to the knowledge base on upload, updates its entry when replaced and is removed when deleted.
+* New: The pre-chat lead form can be shown to signed-in visitors too, pre-filled from their profile, and the email address can be made optional so you can collect a name and consent alone. Leads captured either way appear in the Leads tab and the CSV export.
+* New: The API can remove knowledge base entries by source URL, singly or up to 50 at a time, so a document deleted in SharePoint, Drive or your CMS can be taken out of the chatbot by your sync job. Deleting a URL that is not stored is reported as nothing removed, not an error.
+* New: Lead capture submissions can be read over the API, with paging and a since filter, so leads can be synced into a CRM or spreadsheet automatically.
+* New: Gemini 3.8 Flash, 3.7 Flash and 3.6 Flash join the model picker, with 3.8 Flash as the recommended Gemini default and 3.5 Flash-Lite as the lowest-cost choice. Sites already on 3.5 Flash keep it until they pick something else.
+* New for developers: Add-ons can put a button in the chat toolbar with the mxchat_chat_toolbar_items filter, and the mxchat:toolbar-ready and mxchat:opened page events mean no more watching the page or running requests on every view. The WooCommerce cart button is the first to use it.
+* New for developers: Add-ons can append to a chat transcript with save_session_message, shape what humans read with mxchat_transcript_user_message and mxchat_ai_conversation_history, and add sections to the Telegram and Slack handoff card with mxchat_handoff_card_sections.
+* Security: Hardened how links are written into the chat window and how a visitor's own earlier messages are restored after a page reload. Ordinary links, encoded addresses and file names with brackets look and behave exactly as before.
+* Security: Hardened per-visitor rate limiting and its hourly reset. A visitor's allowance is now counted against the address the request really came from, with Cloudflare handled automatically, and daily, weekly and monthly limits hold for the full period; other proxies can use the new mxchat_client_ip filter.
+* Fixed: Restricting a knowledge entry to a custom role no longer leaves it readable by every signed-in visitor.
+* Fixed: Choosing Media in the WordPress Content importer now lists your files instead of coming back empty on every site.
+* Fixed: With Pinecone, the Knowledge Entries heading shows the vector count Pinecone reports instead of 50 for any index over 500 vectors, paging uses Previous and Next and continues where the last page ended, and a bot with its own empty namespace shows 0.
+* Fixed: With Contextual Awareness on, sending a message on a page with a video or audio player no longer starts an invisible copy playing or downloads the media again. The page text is read from an inert copy, gathered once per page.
+* Fixed: The function-calling loop no longer sends an invalid request when the per-turn tool budget is reached. Every tool call gets a result, the model answers from what it has, and a provider failure after a tool has run is logged even with developer mode off.
+* Fixed: Words joined with underscores, such as file names, SKUs and placeholders, no longer lose their underscores and turn italic. A backslash writes an underscore, asterisk, tilde or backtick literally, and anything inside backticks is shown exactly as written.
+* Improved: The Hybrid keyword boost now applies to Pinecone document indexes as well as the WordPress database, and the Transcripts and Testing panels label each match Vector, Keyword or Both.
+* Improved: With AI Tools active, questions that need no tool are generated once instead of twice, so replies arrive sooner and ordinary turns use roughly half the output tokens. Those replies arrive as one message; the mxchat_fc_keep_first_hop_text filter restores the old behaviour.
+* Improved: Gemini 3 series models are asked for a low thinking level on every chat reply, natively and through the OpenAI-compatible provider, so you stop paying for hidden reasoning tokens. A developer can change it with the mxchat_gemini_thinking_level filter.
+* Improved: The API Access screen documents every endpoint in one place, with ready-to-run examples for removing a deleted document and syncing new leads.
+* Improved: The plugin listing's appearance FAQ now says which customization options are in the free plugin and which come with the Theme Customizer add-on.
+* Changed: The plugin now declares WordPress 5.3 and PHP 7.4 as its minimum versions, matching what the code has required for some time. Every MxChat add-on already required PHP 7.4.
 
 = 3.2.21 - September 6, 2026 =
 * Fixed: Ending a Telegram live agent conversation, from MxChat or from Telegram itself, now retires its topic and returns the visitor to the AI. The visitor's next request used to post into the closed topic, where agents could not reply.
@@ -690,9 +718,8 @@ Older releases are archived in the plugin's full version history on WordPress.or
 
 == Upgrade Notice ==
 
-
-
-
+= 3.2.22 =
+Adds the current date and time to every chat, knowledge restrictions for custom roles and single pages, media library imports with auto-sync, and an optional Pinecone full-text document index. Also hardens chat links and rate limiting, fixes function calling and underscore rendering, and adds Gemini 3.8 Flash. Now requires WordPress 5.3 and PHP 7.4.
 
 = 3.2.21 =
 Live agent chat is more reliable on both channels: Telegram conversations can be ended and restarted cleanly, conversation history always arrives, and both Telegram delivery failures and rejected incoming requests now show on the settings screen. Slack agents can reply in thread and are told when a message could not be relayed. Start new chat now works correctly with Chat Persistence on.

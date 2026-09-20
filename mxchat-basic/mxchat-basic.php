@@ -3,7 +3,7 @@
  * Plugin Name: MxChat
  * Plugin URI: https://mxchat.ai/
  * Description: AI chatbot for WordPress with OpenAI, Claude, xAI, DeepSeek, live agent, PDF uploads, WooCommerce, and training on website data.
- * Version: 3.2.21
+ * Version: 3.2.22
  * Author: MxChat
  * Author URI: https://mxchat.ai
  * License: GPLv2 or later
@@ -36,6 +36,18 @@ if (!defined('MXCHAT_VERSION')) {
         $version .= '.' . time();
     }
     define('MXCHAT_VERSION', $version);
+}
+
+/**
+ * Toolbar items API level (plan-mxchat-20260916-65c9b6). Defined only by cores
+ * that apply the `mxchat_chat_toolbar_items` filter while rendering the chat
+ * toolbar and fire the `mxchat:toolbar-ready` / `mxchat:opened` document events.
+ * Add-ons test `defined('MXCHAT_TOOLBAR_ITEMS_API')` and fall back to their
+ * older DOM-injection path on cores without it, so a button is never rendered
+ * twice. Bump the value only if the item shape (id / html / order) changes.
+ */
+if (!defined('MXCHAT_TOOLBAR_ITEMS_API')) {
+    define('MXCHAT_TOOLBAR_ITEMS_API', 1);
 }
 
 /**
@@ -489,6 +501,7 @@ function mxchat_include_classes() {
         'includes/class-rest-api.php',
         'admin/class-ajax-handler.php',
         'admin/class-pinecone-manager.php',
+        'admin/class-pinecone-documents.php',
         'admin/class-knowledge-manager.php',
         'admin/class-vectorstore-manager.php'
     );

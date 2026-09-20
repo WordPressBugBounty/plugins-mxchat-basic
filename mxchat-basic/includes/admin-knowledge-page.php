@@ -897,7 +897,8 @@ function mxchat_render_knowledge_base_section($admin_instance, $knowledge_manage
             <div class="mxch-card-header">
                 <h3 class="mxch-card-title">
                     <?php esc_html_e('Knowledge Entries', 'mxchat'); ?>
-                    <span id="mxchat-entry-count" style="font-weight: normal; color: var(--mxch-text-secondary);">(<?php echo esc_html($total_records); ?>)</span>
+                    <?php $count_unit = $count_unit ?? ''; ?>
+                    <span id="mxchat-entry-count" style="font-weight: normal; color: var(--mxch-text-secondary);" data-count="<?php echo esc_attr($total_records); ?>" data-unit="<?php echo esc_attr($count_unit); ?>"<?php if ($count_unit === 'vectors') : ?> title="<?php esc_attr_e('Pinecone reports vectors, not documents; a long entry is stored as several vectors.', 'mxchat'); ?>"<?php endif; ?>>(<?php echo esc_html(number_format_i18n($total_records)); ?><?php if ($count_unit === 'vectors') : ?> <?php esc_html_e('vectors', 'mxchat'); ?><?php endif; ?>)</span>
                     <?php if (!empty($use_vectorstore)) : ?>
                         <span style="display: inline-flex; align-items: center; gap: 4px; padding: 4px 8px; border-radius: 12px; font-size: 12px; font-weight: 500; margin-left: 8px; background: #fff3e0; color: #e65100;">
                             <span class="dashicons dashicons-database" style="font-size: 14px;"></span>
@@ -1276,8 +1277,19 @@ function mxchat_render_knowledge_base_section($admin_instance, $knowledge_manage
                 </div>
 
                 <!-- Pagination wrapper - always present so JS can populate it after processing -->
-                <div id="mxchat-kb-pagination" class="mxchat-kb-pagination-wrapper" style="<?php echo $total_pages > 1 ? 'padding: 16px; border-top: 1px solid var(--mxch-card-border); text-align: center;' : ''; ?>" data-current-page="<?php echo esc_attr($current_page); ?>" data-total-pages="<?php echo esc_attr($total_pages); ?>" data-search="<?php echo esc_attr($search_query); ?>" data-content-type="<?php echo esc_attr($content_type_filter); ?>">
-                    <?php if ($total_pages > 1) : ?>
+                <?php
+                // Plan dd6e10: Pinecone's list endpoint is a cursor — there is no
+                // random access to page N, so over 500 vectors the screen offers
+                // Previous / Next only. The same markup is built for AJAX page
+                // loads by MxChat_Knowledge_Manager::mxchat_cursor_pagination_html().
+                $cursor_pagination = !empty($cursor_pagination);
+                $has_next = !empty($has_next);
+                $show_pagination = $cursor_pagination ? ($current_page > 1 || $has_next) : ($total_pages > 1);
+                ?>
+                <div id="mxchat-kb-pagination" class="mxchat-kb-pagination-wrapper" style="<?php echo $show_pagination ? 'padding: 16px; border-top: 1px solid var(--mxch-card-border); text-align: center;' : ''; ?>" data-current-page="<?php echo esc_attr($current_page); ?>" data-total-pages="<?php echo esc_attr($total_pages); ?>" data-search="<?php echo esc_attr($search_query); ?>" data-content-type="<?php echo esc_attr($content_type_filter); ?>">
+                    <?php if ($cursor_pagination) : ?>
+                        <?php echo MxChat_Knowledge_Manager::mxchat_cursor_pagination_html($current_page, $has_next, $search_query, $content_type_filter); // phpcs:ignore WordPress.Security.EscapeOutput -- escaped inside ?>
+                    <?php elseif ($total_pages > 1) : ?>
                     <div class="mxchat-ajax-pagination" data-current-page="<?php echo esc_attr($current_page); ?>" data-total-pages="<?php echo esc_attr($total_pages); ?>">
                         <?php if ($current_page > 1) : ?>
                             <a href="#" class="mxchat-page-link" data-page="<?php echo ($current_page - 1); ?>"><?php esc_html_e('&laquo; Previous', 'mxchat'); ?></a>
@@ -1460,10 +1472,10 @@ function mxchat_render_chunking_section() {
                             <input type="checkbox" name="mxchat_hybrid_keyword_toggle" id="mxchat_hybrid_keyword_toggle" class="mxchat-autosave-field" value="on" <?php checked(get_option('mxchat_hybrid_keyword_toggle', 'off'), 'on'); ?>>
                             <span class="mxchat-toggle-slider"></span>
                         </label>
-                        <span style="font-weight: 500;"><?php esc_html_e('Hybrid keyword boost (WP-DB knowledge base)', 'mxchat'); ?></span>
+                        <span style="font-weight: 500;"><?php esc_html_e('Hybrid keyword boost (WordPress database and Pinecone document indexes)', 'mxchat'); ?></span>
                     </div>
-                    <p class="mxch-field-description" style="margin-top: 8px;"><?php esc_html_e('Combines keyword matching with vector similarity when searching your WordPress-database knowledge base. Helps exact-token questions — product codes, SKUs, error codes, names — find the right document even when semantic similarity alone would miss it.', 'mxchat'); ?></p>
-                    <p class="mxch-field-hint"><?php esc_html_e('Only affects the WordPress-database knowledge base; Pinecone is unaffected. Changes which sources are retrieved on existing installs, so test after enabling. The Transcripts sources panel labels how each match was found while this is on.', 'mxchat'); ?></p>
+                    <p class="mxch-field-description" style="margin-top: 8px;"><?php esc_html_e('Combines keyword matching with vector similarity when searching your WordPress-database knowledge base or a Pinecone document index. Helps exact-token questions — product codes, SKUs, error codes, names — find the right document even when semantic similarity alone would miss it.', 'mxchat'); ?></p>
+                    <p class="mxch-field-hint"><?php esc_html_e('Applies to the WordPress-database knowledge base and to Pinecone when the index type is Document index with full-text search; a classic Pinecone vector index is unaffected. Changes which sources are retrieved on existing installs, so test after enabling. The Transcripts sources panel labels how each match was found while this is on.', 'mxchat'); ?></p>
                 </div>
             </div>
         </div>
@@ -1524,27 +1536,27 @@ function mxchat_render_chunking_section() {
  * Render Role Restrictions Section
  */
 function mxchat_render_role_restrictions_section($knowledge_manager) {
-    $role_options = array(
-        'public' => __('Public (Everyone)', 'mxchat'),
-        'logged_in' => __('Logged In Users', 'mxchat'),
-        'subscriber' => __('Subscribers & Above', 'mxchat'),
-        'contributor' => __('Contributors & Above', 'mxchat'),
-        'author' => __('Authors & Above', 'mxchat'),
-        'editor' => __('Editors & Above', 'mxchat'),
-        'administrator' => __('Administrators Only', 'mxchat')
-    );
+    // Same source as the per-entry dropdown, so the two selectors cannot drift
+    // and both offer the site's custom roles (plan 6ab002). This screen used to
+    // hold its own hardcoded copy of the five built-ins.
+    $role_options = (is_object($knowledge_manager) && method_exists($knowledge_manager, 'mxchat_get_role_options'))
+        ? $knowledge_manager->mxchat_get_role_options()
+        : array(
+            'public'    => __('Public (Everyone)', 'mxchat'),
+            'logged_in' => __('Logged In Users', 'mxchat'),
+        );
     ?>
     <div id="role-restrictions" class="mxch-section">
         <div class="mxch-content-header">
             <h1 class="mxch-content-title"><?php esc_html_e('Role-Based Content Restrictions', 'mxchat'); ?></h1>
-            <p class="mxch-content-subtitle"><?php esc_html_e('Automatically restrict content access based on WordPress tags.', 'mxchat'); ?></p>
+            <p class="mxch-content-subtitle"><?php esc_html_e('Automatically restrict tagged posts by role. Pages and untagged content are restricted per entry in the Knowledge list.', 'mxchat'); ?></p>
         </div>
 
         <div class="mxch-card">
             <div class="mxch-card-body">
                 <div class="mxch-notice mxch-notice-info" style="margin-bottom: 20px;">
                     <svg class="mxch-notice-icon" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
-                    <span><strong><?php esc_html_e('How it works:', 'mxchat'); ?></strong> <?php esc_html_e('Add a tag below and select which role should have access. Content with that tag will be restricted to that role level.', 'mxchat'); ?></span>
+                    <span><strong><?php esc_html_e('How it works:', 'mxchat'); ?></strong> <?php esc_html_e('Add a tag below and select which role should have access. Content with that tag will be restricted to that role level. Tags apply to posts — pages and other content have no tags, so restrict those from the role dropdown on the entry itself in the Knowledge list. Any role on this site can be chosen, including custom ones.', 'mxchat'); ?></span>
                 </div>
 
                 <h4 style="margin: 0 0 16px 0;"><?php esc_html_e('Add Tag-Role Mapping', 'mxchat'); ?></h4>
@@ -1838,6 +1850,48 @@ function mxchat_render_pinecone_section() {
                             </p>
                         </div>
 
+                        <?php
+                        // Index type (plan 362c31): the classic vector index (default) or a
+                        // document index with full-text search. Same key, host and namespace.
+                        $pc_index_type    = (($pinecone_options['mxchat_pinecone_index_type'] ?? 'vector') === 'document') ? 'document' : 'vector';
+                        $pc_docs_cloud    = $pinecone_options['mxchat_pinecone_docs_cloud'] ?? 'aws';
+                        $pc_docs_region   = $pinecone_options['mxchat_pinecone_docs_region'] ?? 'us-east-1';
+                        $pc_docs_lang     = $pinecone_options['mxchat_pinecone_docs_language'] ?? 'en';
+                        $pc_verified      = $pinecone_options['mxchat_pinecone_docs_verified_host'] ?? '';
+                        $pc_vector_host   = $pinecone_options['mxchat_pinecone_vector_host'] ?? '';
+                        $pc_current_host  = $pinecone_options['mxchat_pinecone_host'] ?? '';
+                        $pc_docs_class    = class_exists('MxChat_Pinecone_Documents');
+                        $pc_expected_dim  = $pc_docs_class ? MxChat_Pinecone_Documents::expected_dimension() : 1536;
+                        $pc_migration     = $pc_docs_class ? MxChat_Pinecone_Documents::migration_get() : array();
+                        $pc_host_verified = ($pc_current_host !== '' && strtolower(trim($pc_current_host, '/')) === strtolower($pc_verified));
+                        $pc_clouds        = $pc_docs_class ? MxChat_Pinecone_Documents::clouds() : array('aws' => 'AWS');
+                        $pc_languages     = $pc_docs_class ? MxChat_Pinecone_Documents::languages() : array('en' => 'English');
+                        ?>
+                        <div class="mxch-field" id="mxchat-pinecone-index-type-field">
+                            <span class="mxch-field-label"><?php esc_html_e('Index type', 'mxchat'); ?></span>
+                            <div style="display: flex; flex-direction: column; gap: 6px; margin-top: 8px;">
+                                <label style="display: flex; align-items: baseline; gap: 8px; cursor: pointer;">
+                                    <input type="radio" name="mxchat_pinecone_addon_options[mxchat_pinecone_index_type]" class="mxchat-pinecone-index-type" value="vector" <?php checked($pc_index_type, 'vector'); ?>>
+                                    <span>
+                                        <strong><?php esc_html_e('Vector index (current)', 'mxchat'); ?></strong>
+                                        <span class="mxch-field-description" style="display: block; margin: 2px 0 0;"><?php esc_html_e('The classic Pinecone index. Nothing changes for existing setups.', 'mxchat'); ?></span>
+                                    </span>
+                                </label>
+                                <label style="display: flex; align-items: baseline; gap: 8px; cursor: pointer;">
+                                    <input type="radio" name="mxchat_pinecone_addon_options[mxchat_pinecone_index_type]" class="mxchat-pinecone-index-type" value="document" <?php checked($pc_index_type, 'document'); ?>>
+                                    <span>
+                                        <strong><?php esc_html_e('Document index with full-text search (new)', 'mxchat'); ?></strong>
+                                        <span class="mxch-field-description" style="display: block; margin: 2px 0 0;"><?php esc_html_e('A Pinecone document index keeps a keyword index of your content next to the vectors, so questions with part numbers, SKUs and codes find the exact record. It is a new index: create one below and copy your existing index into it, no re-embedding needed. Turn on the Hybrid keyword boost under Retrieval to use it.', 'mxchat'); ?></span>
+                                    </span>
+                                </label>
+                            </div>
+                        </div>
+                        <script type="application/json" id="mxchat-pinecone-docs-state"><?php echo wp_json_encode(array(
+                            'verified_host' => $pc_verified,
+                            'expected_dimension' => (int) $pc_expected_dim,
+                            'migration' => $pc_migration,
+                        )); ?></script>
+
                         <div class="mxch-field">
                             <label class="mxch-field-label" for="mxchat_pinecone_environment"><?php esc_html_e('Region', 'mxchat'); ?></label>
                             <input type="text" id="mxchat_pinecone_environment" name="mxchat_pinecone_addon_options[mxchat_pinecone_environment]" value="<?php echo esc_attr($pinecone_options['mxchat_pinecone_environment'] ?? ''); ?>" class="mxch-input" placeholder="e.g., gcp-starter">
@@ -1858,6 +1912,67 @@ function mxchat_render_pinecone_section() {
                             </label>
                             <input type="text" id="mxchat_pinecone_host" name="mxchat_pinecone_addon_options[mxchat_pinecone_host]" value="<?php echo esc_attr($pinecone_options['mxchat_pinecone_host'] ?? ''); ?>" class="mxch-input" placeholder="e.g., my-index-xyz123.svc.pinecone.io">
                             <p class="mxch-field-description"><?php esc_html_e('The hostname from your Pinecone index URL (exclude https://). Found in index details.', 'mxchat'); ?></p>
+                        </div>
+
+                        <div class="mxchat-pinecone-docs-settings" <?php echo $pc_index_type === 'document' ? '' : 'style="display: none;"'; ?>>
+                            <div class="mxch-notice <?php echo $pc_host_verified ? 'mxch-notice-success' : 'mxch-notice-warning'; ?>" id="mxchat-pinecone-docs-status" style="margin-bottom: 20px;">
+                                <svg class="mxch-notice-icon" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+                                <span id="mxchat-pinecone-docs-status-text"><?php
+                                    if ($pc_host_verified) {
+                                        printf(esc_html__('Document index checked: %1$s (%2$d dimensions).', 'mxchat'), esc_html($pc_verified), (int) $pc_expected_dim);
+                                    } else {
+                                        esc_html_e('Not checked yet. Create a document index below, or enter its host above and click Check index. The index type only saves once the host has been checked.', 'mxchat');
+                                    }
+                                ?></span>
+                            </div>
+
+                            <div class="mxch-field">
+                                <label class="mxch-field-label" for="mxchat_pinecone_docs_cloud"><?php esc_html_e('Cloud and region for a new index', 'mxchat'); ?></label>
+                                <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+                                    <select id="mxchat_pinecone_docs_cloud" name="mxchat_pinecone_addon_options[mxchat_pinecone_docs_cloud]" class="mxch-select" style="max-width: 160px;">
+                                        <?php foreach ($pc_clouds as $pc_cloud_key => $pc_cloud_label) : ?>
+                                            <option value="<?php echo esc_attr($pc_cloud_key); ?>" <?php selected($pc_docs_cloud, $pc_cloud_key); ?>><?php echo esc_html($pc_cloud_label); ?></option>
+                                        <?php endforeach; ?>
+                                    </select>
+                                    <input type="text" id="mxchat_pinecone_docs_region" name="mxchat_pinecone_addon_options[mxchat_pinecone_docs_region]" value="<?php echo esc_attr($pc_docs_region); ?>" class="mxch-input" style="max-width: 220px;" placeholder="us-east-1">
+                                    <select id="mxchat_pinecone_docs_language" name="mxchat_pinecone_addon_options[mxchat_pinecone_docs_language]" class="mxch-select" style="max-width: 200px;">
+                                        <?php foreach ($pc_languages as $pc_lang_key => $pc_lang_label) : ?>
+                                            <option value="<?php echo esc_attr($pc_lang_key); ?>" <?php selected($pc_docs_lang, $pc_lang_key); ?>><?php echo esc_html($pc_lang_label); ?></option>
+                                        <?php endforeach; ?>
+                                    </select>
+                                </div>
+                                <p class="mxch-field-description"><?php printf(esc_html__('Create index for me makes a new document index named after the Index Name field, sized for your embedding model (%d dimensions, cosine), with full-text search on the content in the chosen language, then fills in the host. Check index confirms the host above points at a document index MxChat can use.', 'mxchat'), (int) $pc_expected_dim); ?></p>
+                            </div>
+
+                            <div class="mxch-field" style="display: flex; gap: 8px; flex-wrap: wrap;">
+                                <button type="button" class="mxch-btn mxch-btn-secondary" id="mxchat-pinecone-docs-create"><?php esc_html_e('Create index for me', 'mxchat'); ?></button>
+                                <button type="button" class="mxch-btn mxch-btn-secondary" id="mxchat-pinecone-docs-check"><?php esc_html_e('Check index', 'mxchat'); ?></button>
+                            </div>
+                            <div id="mxchat-pinecone-docs-result" style="display: none;"></div>
+                            <p class="mxch-field-hint" id="mxchat-pinecone-docs-gate" style="display: none;"><?php esc_html_e('Check the document index host before saving.', 'mxchat'); ?></p>
+
+                            <div class="mxch-field" style="margin-top: 20px;">
+                                <label class="mxch-field-label" for="mxchat_pinecone_vector_host"><?php esc_html_e('Copy from vector index host', 'mxchat'); ?></label>
+                                <input type="text" id="mxchat_pinecone_vector_host" name="mxchat_pinecone_addon_options[mxchat_pinecone_vector_host]" value="<?php echo esc_attr($pc_vector_host); ?>" class="mxch-input" placeholder="my-index-xyz123.svc.pinecone.io">
+                                <p class="mxch-field-description"><?php esc_html_e('Migrate copies every record of that index into the document index — text, vector and metadata, same ids — with no embedding calls. Safe to run again: records already copied are simply replaced. Both indexes must use the same embedding dimension.', 'mxchat'); ?></p>
+                            </div>
+                            <div class="mxch-field" style="display: flex; gap: 12px; align-items: center; flex-wrap: wrap;">
+                                <button type="button" class="mxch-btn mxch-btn-secondary" id="mxchat-pinecone-docs-migrate"><?php esc_html_e('Migrate', 'mxchat'); ?></button>
+                                <span id="mxchat-pinecone-docs-migrate-counts" class="mxch-field-description"></span>
+                            </div>
+                            <div id="mxchat-pinecone-docs-migrate-progress" style="display: none; margin-bottom: 16px;">
+                                <div class="mxch-progress-bar"><div class="mxch-progress-bar-fill" style="width: 0%;"></div></div>
+                                <div class="mxch-progress-label"></div>
+                            </div>
+
+                            <div class="mxch-field" id="mxchat-pinecone-docs-delete-old" style="display: none;">
+                                <label class="mxch-field-label" for="mxchat_pinecone_docs_delete_confirm"><?php esc_html_e('Delete old index', 'mxchat'); ?></label>
+                                <p class="mxch-field-description"><?php esc_html_e('Available once the copy count matches. Type the old index name to confirm. This deletes the whole vector index at Pinecone and cannot be undone.', 'mxchat'); ?></p>
+                                <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+                                    <input type="text" id="mxchat_pinecone_docs_delete_confirm" class="mxch-input" style="max-width: 320px;" placeholder="<?php esc_attr_e('old index name', 'mxchat'); ?>" autocomplete="off">
+                                    <button type="button" class="mxch-btn mxch-btn-danger" id="mxchat-pinecone-docs-delete-old-btn"><?php esc_html_e('Delete old index', 'mxchat'); ?></button>
+                                </div>
+                            </div>
                         </div>
 
                         <div class="mxch-field">
@@ -2144,6 +2259,18 @@ function mxchat_render_content_selector_modal() {
                         <option value="unprocessed"><?php esc_html_e('Not In Knowledge Base', 'mxchat'); ?></option>
                     </select>
                 </div>
+            </div>
+            <?php
+            // Shown only while Media is the selected type (plan 01010a). Media lists
+            // just the files whose text MxChat can read; saying so here is clearer
+            // than listing images and audio as rows that cannot be selected.
+            ?>
+            <div class="mxchat-kb-filter-note" id="mxchat-kb-media-note" hidden>
+                <svg class="mxchat-kb-filter-note-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                    <path d="M14 2v6h6"></path>
+                </svg>
+                <span><?php esc_html_e('Media lists PDF, Word, text and Markdown files — the types MxChat can read text from. Images, audio and video are not shown.', 'mxchat'); ?></span>
             </div>
             <div class="mxchat-kb-content-selection">
                 <div class="mxchat-kb-selection-header">

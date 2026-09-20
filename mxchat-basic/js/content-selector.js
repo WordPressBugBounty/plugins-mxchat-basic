@@ -268,9 +268,9 @@ function displayNoResults(processedStatus) {
                             ${isProcessed ? '<span class="mxchat-kb-last-updated">Last updated: ' + item.processed_date + '</span>' : ''}
                         </div>
                         <div class="mxchat-kb-content-meta">
-                            <span class="mxchat-kb-content-type">${item.type}</span>
+                            <span class="mxchat-kb-content-type">${item.type_label || item.type}</span>
                             <span class="mxchat-kb-content-date">${item.date}</span>
-                            <span class="mxchat-kb-content-words">${item.word_count} words</span>
+                            <span class="mxchat-kb-content-words">${item.size_label ? item.size_label : item.word_count + ' words'}</span>
                         </div>
                         <div class="mxchat-kb-content-excerpt">${item.excerpt}</div>
                     </div>
@@ -447,8 +447,20 @@ function displayNoResults(processedStatus) {
     $typeFilter.add($statusFilter).add($processedFilter).on('change', function() {
         currentPage = 1; // Reset to first page on filter change
         selectedItems.clear(); // Clear selection when filter changes
+        updateMediaNote();
         loadContent();
     });
+
+    // The Media note explains what that list deliberately leaves out; it is
+    // meaningless next to any other type, so it only exists while Media is picked.
+    function updateMediaNote() {
+        const $note = $('#mxchat-kb-media-note');
+        if (!$note.length) {
+            return;
+        }
+        $note.prop('hidden', $typeFilter.val() !== 'attachment');
+    }
+    updateMediaNote();
     
 // Process selected content
 $processButton.on('click', function() {
@@ -790,9 +802,230 @@ var initPineconeFeatures, initVectorStoreFeatures;
         }
 
         initPineconeToggle();
+        initPineconeIndexType();
         initPineconeConnectionTest();
         checkPineconeCompatibility();
     };
+
+    // Index type (plan 362c31): the document-index controls on the Pinecone
+    // card — Create index for me, Check index, Migrate, Delete old index —
+    // plus the save gate (a document host must be checked before it saves).
+    function initPineconeIndexType() {
+        var $type = $('input.mxchat-pinecone-index-type');
+        if ($type.length === 0) {
+            return;
+        }
+        var $docs = $('.mxchat-pinecone-docs-settings');
+        var $form = $type.closest('form');
+        var $submit = $form.find('input[type="submit"], button[type="submit"]');
+        var $result = $('#mxchat-pinecone-docs-result');
+        var stateEl = document.getElementById('mxchat-pinecone-docs-state');
+        var state = {};
+        try { state = stateEl ? JSON.parse(stateEl.textContent || '{}') : {}; } catch (e) { state = {}; }
+        var verifiedHost = String(state.verified_host || '').toLowerCase();
+        var ajaxUrl = (typeof mxchatAdmin !== 'undefined' && mxchatAdmin.ajax_url) ? mxchatAdmin.ajax_url : ajaxurl;
+        var nonce = (typeof mxchatAdmin !== 'undefined' && mxchatAdmin.settings_nonce) ? mxchatAdmin.settings_nonce :
+                    ((typeof mxchatPromptsAdmin !== 'undefined' && mxchatPromptsAdmin.prompts_setting_nonce) ? mxchatPromptsAdmin.prompts_setting_nonce : '');
+
+        function escapeText(text) { return $('<div>').text(String(text == null ? '' : text)).html(); }
+        function notice(kind, text) {
+            $result.html('<div class="mxch-notice mxch-notice-' + kind + '" style="margin: 12px 0;"><span>' + escapeText(text) + '</span></div>').show();
+        }
+        function setStatus(ok, text) {
+            $('#mxchat-pinecone-docs-status').removeClass('mxch-notice-success mxch-notice-warning').addClass(ok ? 'mxch-notice-success' : 'mxch-notice-warning');
+            $('#mxchat-pinecone-docs-status-text').text(text);
+        }
+        function currentType() { return $type.filter(':checked').val() || 'vector'; }
+        function hostValue() {
+            return $.trim($('#mxchat_pinecone_host').val() || '').replace(/^https?:\/\//i, '').replace(/\/+$/, '').toLowerCase();
+        }
+        function refreshGate() {
+            var isDoc = currentType() === 'document';
+            $docs.toggle(isDoc);
+            var blocked = isDoc && (hostValue() === '' || hostValue() !== verifiedHost);
+            $submit.prop('disabled', blocked);
+            $('#mxchat-pinecone-docs-gate').toggle(blocked);
+        }
+        $type.off('change.pineconeDocs').on('change.pineconeDocs', refreshGate);
+        $('#mxchat_pinecone_host').off('input.pineconeDocs change.pineconeDocs').on('input.pineconeDocs change.pineconeDocs', refreshGate);
+        refreshGate();
+
+        function post(data) {
+            data.nonce = nonce;
+            return $.post(ajaxUrl, data);
+        }
+        function failMessage(response, fallback) {
+            if (response && response.data) {
+                if (typeof response.data === 'string') { return response.data; }
+                if (response.data.message) { return response.data.message; }
+            }
+            return fallback;
+        }
+
+        // ---- Create index for me
+        $('#mxchat-pinecone-docs-create').off('click.pineconeDocs').on('click.pineconeDocs', function () {
+            var $btn = $(this);
+            var name = $.trim($('#mxchat_pinecone_index').val() || '');
+            if (!name) {
+                notice('error', 'Enter an Index Name first — the document index is created under that name.');
+                return;
+            }
+            $btn.prop('disabled', true).text('Creating…');
+            $result.hide();
+            post({
+                action: 'mxchat_pinecone_docs_create_index',
+                index_name: name,
+                api_key: $('#mxchat_pinecone_api_key').val(),
+                cloud: $('#mxchat_pinecone_docs_cloud').val(),
+                region: $('#mxchat_pinecone_docs_region').val(),
+                language: $('#mxchat_pinecone_docs_language').val()
+            }).done(function (response) {
+                if (response && response.success) {
+                    $('#mxchat_pinecone_host').val(response.data.host);
+                    $('#mxchat_pinecone_index').val(response.data.name);
+                    if (response.data.vector_host && !$.trim($('#mxchat_pinecone_vector_host').val() || '')) {
+                        $('#mxchat_pinecone_vector_host').val(response.data.vector_host);
+                    }
+                    verifiedHost = String(response.data.host || '').toLowerCase();
+                    setStatus(true, 'Document index checked: ' + response.data.host + ' (' + response.data.dimension + ' dimensions).');
+                    notice(response.data.ready ? 'success' : 'info', response.data.message);
+                    refreshGate();
+                } else {
+                    notice('error', failMessage(response, 'Could not create the index.'));
+                }
+            }).fail(function () {
+                notice('error', 'Could not reach the server to create the index.');
+            }).always(function () {
+                $btn.prop('disabled', false).text('Create index for me');
+            });
+        });
+
+        // ---- Check index
+        $('#mxchat-pinecone-docs-check').off('click.pineconeDocs').on('click.pineconeDocs', function () {
+            var $btn = $(this);
+            var host = hostValue();
+            if (!host) {
+                notice('error', 'Enter the Pinecone Host of the document index first.');
+                return;
+            }
+            $btn.prop('disabled', true).text('Checking…');
+            $result.hide();
+            post({
+                action: 'mxchat_pinecone_docs_check_index',
+                host: host,
+                api_key: $('#mxchat_pinecone_api_key').val()
+            }).done(function (response) {
+                if (response && response.success) {
+                    verifiedHost = String(response.data.host || host).toLowerCase();
+                    if (response.data.name) { $('#mxchat_pinecone_index').val(response.data.name); }
+                    if (response.data.vector_host && !$.trim($('#mxchat_pinecone_vector_host').val() || '')) {
+                        $('#mxchat_pinecone_vector_host').val(response.data.vector_host);
+                    }
+                    setStatus(true, 'Document index checked: ' + response.data.host + ' (' + response.data.dimension + ' dimensions).');
+                    notice('success', response.data.message);
+                } else {
+                    setStatus(false, 'Not checked: this host cannot be used as a document index.');
+                    notice('error', failMessage(response, 'Check failed.'));
+                }
+                refreshGate();
+            }).fail(function () {
+                notice('error', 'Could not reach the server to check the index.');
+            }).always(function () {
+                $btn.prop('disabled', false).text('Check index');
+            });
+        });
+
+        // ---- Migrate (copy, batch by batch, resumable)
+        var $migrateBtn = $('#mxchat-pinecone-docs-migrate');
+        function renderMigration(st) {
+            var $progress = $('#mxchat-pinecone-docs-migrate-progress');
+            if (!st || !st.status) {
+                $progress.hide();
+                $('#mxchat-pinecone-docs-migrate-counts').text('');
+                $('#mxchat-pinecone-docs-delete-old').hide();
+                return;
+            }
+            var total = parseInt(st.total, 10) || 0;
+            var copied = parseInt(st.copied, 10) || 0;
+            var pct = total > 0 ? Math.min(100, Math.round(copied * 100 / total)) : (st.status === 'done' ? 100 : 0);
+            var suffix = st.status === 'done' ? ' — done' : (st.status === 'source_deleted' ? ' — old index deleted' : (st.status === 'running' ? ' — copying…' : ''));
+            $progress.show().find('.mxch-progress-bar-fill').css('width', pct + '%');
+            $progress.find('.mxch-progress-label').text(copied + ' of ' + total + ' records copied (' + pct + '%)' + suffix);
+            $('#mxchat-pinecone-docs-migrate-counts').text(st.source_name ? ('Source: ' + st.source_name + ' (' + total + ' records)') : '');
+            $('#mxchat-pinecone-docs-delete-old').toggle(st.status === 'done' && total > 0 && copied >= total);
+        }
+        function migrateStep() {
+            post({ action: 'mxchat_pinecone_docs_migrate', mode: 'step' }).done(function (response) {
+                if (response && response.success) {
+                    renderMigration(response.data.state);
+                    if (response.data.state && response.data.state.status === 'running') {
+                        setTimeout(migrateStep, 150);
+                    } else {
+                        $migrateBtn.prop('disabled', false).text('Migrate');
+                        notice('success', 'Copy finished: ' + response.data.state.copied + ' of ' + response.data.state.total + ' records are in the document index.');
+                    }
+                } else {
+                    if (response && response.data && response.data.state) { renderMigration(response.data.state); }
+                    notice('error', failMessage(response, 'The copy stopped.') + ' Click Migrate to resume.');
+                    $migrateBtn.prop('disabled', false).text('Migrate');
+                }
+            }).fail(function () {
+                notice('error', 'Could not reach the server. Click Migrate to resume.');
+                $migrateBtn.prop('disabled', false).text('Migrate');
+            });
+        }
+        $migrateBtn.off('click.pineconeDocs').on('click.pineconeDocs', function () {
+            var source = $.trim($('#mxchat_pinecone_vector_host').val() || '');
+            if (!source) {
+                notice('error', 'Enter the host of the vector index to copy from.');
+                return;
+            }
+            $migrateBtn.prop('disabled', true).text('Copying…');
+            $result.hide();
+            post({ action: 'mxchat_pinecone_docs_migrate', mode: 'start', source_host: source }).done(function (response) {
+                if (response && response.success) {
+                    renderMigration(response.data.state);
+                    if (response.data.state && response.data.state.status === 'running') {
+                        migrateStep();
+                    } else {
+                        $migrateBtn.prop('disabled', false).text('Migrate');
+                    }
+                } else {
+                    notice('error', failMessage(response, 'The copy could not start.'));
+                    $migrateBtn.prop('disabled', false).text('Migrate');
+                }
+            }).fail(function () {
+                notice('error', 'Could not reach the server to start the copy.');
+                $migrateBtn.prop('disabled', false).text('Migrate');
+            });
+        });
+        renderMigration(state.migration || null);
+
+        // ---- Delete old index (typed confirmation)
+        $('#mxchat-pinecone-docs-delete-old-btn').off('click.pineconeDocs').on('click.pineconeDocs', function () {
+            var $btn = $(this);
+            var confirmName = $.trim($('#mxchat_pinecone_docs_delete_confirm').val() || '');
+            if (!confirmName) {
+                notice('error', 'Type the old index name to confirm.');
+                return;
+            }
+            $btn.prop('disabled', true).text('Deleting…');
+            post({ action: 'mxchat_pinecone_docs_delete_old_index', confirm_name: confirmName }).done(function (response) {
+                if (response && response.success) {
+                    notice('success', response.data.message);
+                    $('#mxchat_pinecone_vector_host').val('');
+                    $('#mxchat_pinecone_docs_delete_confirm').val('');
+                    renderMigration(response.data.state);
+                } else {
+                    notice('error', failMessage(response, 'The old index was not deleted.'));
+                }
+            }).fail(function () {
+                notice('error', 'Could not reach the server.');
+            }).always(function () {
+                $btn.prop('disabled', false).text('Delete old index');
+            });
+        });
+    }
 
     function initPineconeToggle() {
         // Remove any existing handlers to prevent duplicates

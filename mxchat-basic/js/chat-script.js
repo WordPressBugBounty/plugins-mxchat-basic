@@ -168,6 +168,14 @@ jQuery(document).ready(function($) {
     const MxChatInstances = {
         instances: {},
 
+        // Lifecycle facts add-ons can read after the fact (plan 65c9b6). The
+        // events below fire once; a script that loads late checks these instead.
+        toolbarReady: false,
+        opened: {},
+        hasOpened: function(botId) {
+            return !!this.opened[botId || 'default'];
+        },
+
         // Initialize an instance for a bot
         init: function(botId) {
             if (!this.instances[botId]) {
@@ -316,6 +324,48 @@ jQuery(document).ready(function($) {
             return newSessionId;
         }
     };
+
+    // ====================================
+    // LIFECYCLE EVENTS FOR ADD-ONS (plan 65c9b6)
+    // ====================================
+    //
+    // Document-level CustomEvents an add-on listens for instead of polling the
+    // DOM or firing requests on page load:
+    //   mxchat:toolbar-ready  detail { enabled }          once, right after the
+    //                         toolbar show/hide pass; items rendered through the
+    //                         mxchat_chat_toolbar_items filter can bind now.
+    //   mxchat:opened         detail { botId, embedded }  once per bot per page
+    //                         load, the first time its window is shown — the
+    //                         launcher, the pre-chat bubble, an embedded widget
+    //                         (at load), or any script that reveals it.
+    // Same facts, readable late: MxChatInstances.toolbarReady / hasOpened(botId).
+    function mxchatDispatch(name, detail) {
+        try {
+            document.dispatchEvent(new CustomEvent(name, { detail: detail || {} }));
+        } catch (err) { /* CustomEvent unsupported — nothing to notify */ }
+    }
+
+    function mxchatFireOpened(botId) {
+        botId = botId || 'default';
+        if (MxChatInstances.opened[botId]) return;
+        MxChatInstances.opened[botId] = true;
+        mxchatDispatch('mxchat:opened', { botId: botId, embedded: isEmbeddedBot(botId) });
+    }
+
+    // Catch openers this file does not own (the Trigger add-on, theme buttons,
+    // custom scripts): a floating window gaining .visible counts as opened.
+    function mxchatWatchForOpen(botId) {
+        var el = getElementDOM(botId, 'floating-chatbot');
+        if (!el || typeof MutationObserver === 'undefined') return;
+        if (el.classList.contains('visible')) { mxchatFireOpened(botId); return; }
+        var obs = new MutationObserver(function() {
+            if (el.classList.contains('visible')) {
+                mxchatFireOpened(botId);
+                obs.disconnect();
+            }
+        });
+        obs.observe(el, { attributes: true, attributeFilter: ['class'] });
+    }
 
     // ====================================
     // ELEMENT SELECTOR HELPERS
@@ -472,21 +522,26 @@ jQuery(document).ready(function($) {
 // CONTEXTUAL AWARENESS FUNCTIONALITY
 // ====================================
 
+// Plan f3e515: the page context is computed once per page, not once per message.
+// Keyed on URL + title + the content element's text length — cheap to check,
+// and enough to notice a navigation or a re-rendered content area.
+var pageContextCache = { key: null, value: null };
+
 function getPageContext() {
     // Check if contextual awareness is enabled
     if (mxchatChat.contextual_awareness_toggle !== 'on') {
         return null;
     }
-    
+
     // Get page URL
     const pageUrl = window.location.href;
-    
+
     // Get page title
     const pageTitle = document.title || '';
-    
+
     // Get main content from the page
     let pageContent = '';
-    
+
     // Try to get content from common content areas
     const contentSelectors = [
         'main',
@@ -500,7 +555,7 @@ function getPageContext() {
         '#content',
         '#main'
     ];
-    
+
     let contentElement = null;
     for (const selector of contentSelectors) {
         contentElement = document.querySelector(selector);
@@ -508,16 +563,29 @@ function getPageContext() {
             break;
         }
     }
-    
+
     // If no specific content area found, use body but exclude header, footer, nav, sidebar
     if (!contentElement) {
         contentElement = document.body;
     }
-    
+
     if (contentElement) {
-        // Clone the element to avoid modifying the original
-        const clone = contentElement.cloneNode(true);
-        
+        const cacheKey = pageUrl + '\u0000' + pageTitle + '\u0000' + (contentElement.textContent || '').length;
+        if (pageContextCache.key === cacheKey) {
+            return pageContextCache.value;
+        }
+
+        // Copy the element into a document that has no browsing context
+        // (plan f3e515). A live cloneNode(true) constructed real <video> /
+        // <audio> / <img> elements: media with a src runs resource selection
+        // on creation whether or not it is attached, and an autoplay attribute
+        // made the detached copy PLAY — audibly, once the visible player had
+        // been unmuted through the property. Every message spawned another
+        // one. Elements in an inert document never fetch or play, while
+        // querySelectorAll / textContent / dataset all still work on them.
+        const inertDocument = document.implementation.createHTMLDocument('');
+        const clone = inertDocument.importNode(contentElement, true);
+
         // Remove unwanted elements
         const unwantedSelectors = [
             'header',
@@ -537,14 +605,23 @@ function getPageContext() {
             '#floating-chatbot-button',
             '.mxchat',
             '[class*="chat"]',
-            '[id*="chat"]'
+            '[id*="chat"]',
+            // Media contributes no text and (outside the inert document) fetches.
+            'video',
+            'audio',
+            'iframe',
+            'object',
+            'embed',
+            'picture',
+            'img',
+            'source'
         ];
-        
+
         unwantedSelectors.forEach(selector => {
             const elements = clone.querySelectorAll(selector);
             elements.forEach(el => el.remove());
         });
-        
+
         //   Extract MxChat context data attributes before getting text content
         const contextData = [];
         clone.querySelectorAll('[data-mxchat-context]').forEach(el => {
@@ -553,32 +630,32 @@ function getPageContext() {
                 contextData.push(contextValue);
             }
         });
-        
+
         // Get text content and clean it up
         pageContent = clone.textContent || clone.innerText || '';
-        
+
         // Add context data to page content if any were found
         if (contextData.length > 0) {
             pageContent += '\n\nAdditional Context:\n' + contextData.join('\n');
         }
-        
+
         // Clean up whitespace and limit length
         pageContent = pageContent
             .replace(/\s+/g, ' ')
             .trim()
             .substring(0, 3000); // Limit to 3000 characters to avoid token limits
+
+        // Only return context if we have meaningful content
+        const result = (!pageContent || pageContent.length < 50) ? null : {
+            url: pageUrl,
+            title: pageTitle,
+            content: pageContent
+        };
+        pageContextCache = { key: cacheKey, value: result };
+        return result;
     }
-    
-    // Only return context if we have meaningful content
-    if (!pageContent || pageContent.length < 50) {
-        return null;
-    }
-    
-    return {
-        url: pageUrl,
-        title: pageTitle,
-        content: pageContent
-    };
+
+    return null;
 }
 
 //   Track originating page when chat starts
@@ -2261,11 +2338,14 @@ function replaceLastMessage(sender, responseText, responseHtml = '', images = []
     if (images.length > 0) {
         fullMessage += '<div class="image-gallery" dir="auto">';
         images.forEach(img => {
+            const safeTitle = sanitizeUserInput(img.title);
+            const safeUrl = escapeAttr(img.image_url);
+            const safeThumbnail = escapeAttr(img.thumbnail_url);
             fullMessage += `
                 <div style="margin-bottom: 10px;">
-                    <strong>${img.title}</strong><br>
-                    <a href="${img.image_url}" target="_blank">
-                        <img src="${img.thumbnail_url}" alt="${img.title}" style="max-width: 100px; height: auto; margin: 5px;" />
+                    <strong>${safeTitle}</strong><br>
+                    <a href="${safeUrl}" target="_blank">
+                        <img src="${safeThumbnail}" alt="${safeTitle}" style="max-width: 100px; height: auto; margin: 5px;" />
                     </a>
                 </div>`;
         });
@@ -2386,24 +2466,39 @@ function replaceLastMessage(sender, responseText, responseHtml = '', images = []
         return /%[0-9a-fA-F]{2}/.test(url);
     }
     
-    // Helper function to safely encode URLs only if needed
+    // Helper function to safely encode URLs only if needed, then make the
+    // result attribute-safe. "Don't double-encode an already-encoded URL"
+    // used to mean "return it untouched" — so a literal quote riding next
+    // to a %20 reached href="…" intact and closed the attribute
+    // (plan 2db182). Every href this function feeds now goes through
+    // escapeAttr(), whether or not the URL was already percent-encoded.
     function safeEncodeUrl(url) {
-        // If URL already contains encoded characters, return as-is
-        if (isUrlEncoded(url)) {
-            return url;
-        }
-        // Otherwise, encode it
-        return encodeURI(url);
+        const encoded = isUrlEncoded(url) ? url : encodeURI(url);
+        return escapeAttr(encoded);
     }
     
-    // Process markdown headers FIRST
-    let processedText = formatMarkdownHeaders(inputText);
-    
+    // Take backslash escapes and code (fenced + inline) out of the text FIRST
+    // (plan 9dc34f). Styling used to run before formatCodeBlocks(), so a
+    // backtick could not protect an underscore and \_ was not an escape at
+    // all; the header rule also ran over fenced code. Each escape becomes a
+    // placeholder carrying its literal character, each code span a
+    // placeholder carrying its rendered HTML; both are restored below, after
+    // the styling rules have run, so nothing downstream changes.
+    const literals = protectLiterals(inputText);
+    let processedText = literals.text;
+
+    // Process markdown headers
+    processedText = formatMarkdownHeaders(processedText);
+
     // Process text styling (bold, italic, strikethrough)
     processedText = formatTextStyling(processedText);
-    
-    // Process code blocks BEFORE processing links
+
+    // Legacy raw <?php ... ?> blocks (fenced + inline code were already
+    // rendered inside protectLiterals) — still BEFORE processing links
     processedText = formatCodeBlocks(processedText);
+
+    // Put the rendered code and the escaped characters back
+    processedText = literals.restore(processedText);
 
     // Process markdown tables BEFORE converting newlines to paragraphs
     processedText = formatMarkdownTables(processedText);
@@ -2418,8 +2513,11 @@ function replaceLastMessage(sender, responseText, responseHtml = '', images = []
         // Clean the URL of any trailing punctuation
         let cleanUrl = url.replace(/[.,;!?]+$/, '');
         const safeUrl = safeEncodeUrl(cleanUrl);
+        // The bracket body is the only link text that can carry angle
+        // brackets (the standalone matcher excludes them) — keep it text.
+        const safeText = cleanUrl.replace(/</g, '&lt;').replace(/>/g, '&gt;');
         // Return as a proper link without the brackets
-        return `<a href="${safeUrl}" target="${linkTarget}">${cleanUrl}</a>`;
+        return `<a href="${safeUrl}" target="${linkTarget}">${safeText}</a>`;
     });
     
     // Process markdown links: [text](url) and [](url)
@@ -2525,6 +2623,28 @@ function replaceLastMessage(sender, responseText, responseHtml = '', images = []
     return processedText;
 }
      
+    // One left-to-right pass over backslash escapes and code (plan 9dc34f).
+    // A single alternation keeps the two honest with each other: an escaped
+    // backtick is consumed as an escape before it can open a code span, and a
+    // code span is consumed whole so the escapes inside it stay verbatim.
+    // Placeholders are private-use characters — no underscore, asterisk,
+    // backtick, hash, pipe or bracket for a later rule to match.
+    function protectLiterals(text) {
+        const store = [];
+        const out = String(text).replace(/\\([\\`*_~])|(```[\s\S]*?```)|(`[^`\n]+`)/g, function(match, escaped) {
+            store.push(escaped !== undefined ? escaped : formatCodeBlocks(match));
+            return '\uE000' + (store.length - 1) + '\uE001';
+        });
+        return {
+            text: out,
+            restore: function(t) {
+                return String(t).replace(/\uE000(\d+)\uE001/g, function(m, i) {
+                    return store[Number(i)];
+                });
+            }
+        };
+    }
+
     function formatMarkdownHeaders(text) {
         // Handle h1 to h6 headers
         return text.replace(/^(#{1,6})\s+(.+)$/gm, function(match, hashes, content) {
@@ -2568,9 +2688,22 @@ function formatTextStyling(text) {
     // Match single asterisks that aren't part of bold (**) by checking they're not followed/preceded by another *
     protectedText = protectedText.replace(/(?!\*\*)\*([^*\n]+)\*(?!\*)/g, '<em>$1</em>');
 
-    // Handle underscores for italic - Safari-compatible (no lookbehind)
-    // Exclude __PROTECTED_N__ placeholders by checking the content doesn't contain PROTECTED
-    protectedText = protectedText.replace(/(?!__)_((?!PROTECTED)[^_\n]+)_(?!_)/g, '<em>$1</em>');
+    // Handle underscores for italic - Safari-compatible (no lookbehind), and
+    // word-bounded (plan 9dc34f): the opener must follow the start of the
+    // text or a non-word character, the closer must precede the end or a
+    // non-word character, and the content may not start or end with a
+    // space. So my_var_name, MXCHAT_API_KEY and snake_case stay as typed
+    // while "use _this_ word" still italicises. A token whose content is
+    // entirely upper-case letters and digits (_VALUE_, _ID_) is a placeholder
+    // convention, not prose emphasis — it is left verbatim too (ticket 440).
+    // __PROTECTED_N__ placeholders cannot match: their underscores are all
+    // adjacent to another underscore or a word character.
+    protectedText = protectedText.replace(/(^|[^\p{L}\p{N}_])_((?!PROTECTED)[^\s_](?:[^_\n]*[^\s_])?)_(?![\p{L}\p{N}_])/gu, function(match, before, content) {
+        if (/^[\p{Lu}\p{N}]+$/u.test(content)) {
+            return match;
+        }
+        return before + '<em>' + content + '</em>';
+    });
     
     // Handle strikethrough (~~text~~)
     protectedText = protectedText.replace(/~~(.*?)~~/g, '<del>$1</del>');
@@ -2704,6 +2837,22 @@ function convertNewlinesToBreaks(text) {
         const div = document.createElement('div');
         div.textContent = text;
         return div.innerHTML;
+    }
+
+    // Attribute-safe URL for href="…" / src="…" interpolation (plan 2db182).
+    // Percent-encodes the characters that can end or extend an attribute.
+    // Valid in every scheme the widget emits (http, https, tel, mailto) and
+    // never changes where a legitimate link resolves — encodeURI() already
+    // produces most of these, this just guarantees them for URLs that skip
+    // encodeURI() because they were percent-encoded on arrival.
+    function escapeAttr(url) {
+        return String(url)
+            .replace(/"/g, '%22')
+            .replace(/'/g, '%27')
+            .replace(/</g, '%3C')
+            .replace(/>/g, '%3E')
+            .replace(/`/g, '%60')
+            .replace(/ /g, '%20');
     }
 
     function escapeHtml(unsafe) {
@@ -3111,6 +3260,15 @@ function loadChatHistory(botId, onComplete) {
                                 content = content.replace(/\\'/g, "'").replace(/\\"/g, '"');
                                 content = decodeHTMLEntities(content);
 
+                                // A visitor's own rows get the same treatment as the
+                                // live turn (appendMessage escapes user text before
+                                // linkify). Without this a replayed user message came
+                                // back as live markup after a refresh (plan 2db182).
+                                // Bot/agent rows are trusted HTML and stay as they were.
+                                if (message.role === 'user') {
+                                    content = sanitizeUserInput(content);
+                                }
+
                                 // Skip linkify for messages containing structured HTML
                                 // (forms, product cards, galleries, etc.) to avoid
                                 // markdown formatting corrupting HTML attributes
@@ -3495,6 +3653,7 @@ $(document).on('click', '.mxchat-youtube-embed .mxchat-youtube-facade', function
             $badge.hide(); // Hide notification when opening chat
             disableScroll();
             $preChat.fadeOut(250);
+            mxchatFireOpened(botId);
 
             // First open per page load: re-fetch behavior settings in case
             // this page's inline values came from a stale full-page cache
@@ -3765,7 +3924,10 @@ $(document).on('click', '.mxchat-youtube-embed .mxchat-youtube-facade', function
     } else {
         $('.chat-toolbar').hide();
     }
-    
+    // Toolbar pass done — server-rendered add-on items can bind (plan 65c9b6).
+    MxChatInstances.toolbarReady = true;
+    mxchatDispatch('mxchat:toolbar-ready', { enabled: mxchatChat.chat_toolbar_toggle === 'on' });
+
     // Apply toolbar icon colors
     const toolbarElements = [
         '#mxchat-chatbot .toolbar-btn svg',
@@ -4042,18 +4204,40 @@ if (mxchatChat && mxchatChat.email_collection_enabled === 'on') {
         })
         .then((data) => {
             if (data.success) {
-                if (data.data.logged_in || data.data.email) {
+                // A success response means the server has already decided the
+                // required info is on file. With email optional (c0cfaf) that
+                // info can be a name and no address, so keying on data.email
+                // alone re-prompted a name-only visitor on every page load.
+                if (data.data.logged_in || data.data.email || data.data.name) {
                     showChatContainerForBot(botId);
                 } else {
                     showEmailFormForBot(botId);
                 }
             } else {
+                // Pre-fill for a signed-in visitor being shown the form
+                // (c0cfaf). It arrives on this nocache'd response rather than
+                // in the page HTML, which is cacheable. Never overwrite what
+                // the visitor has already typed.
+                if (data.data) {
+                    prefillEmailForm(botId, data.data.prefill_name, data.data.prefill_email);
+                }
                 showEmailFormForBot(botId);
             }
         })
         .catch((error) => {
             showEmailFormForBot(botId);
         });
+    }
+
+    function prefillEmailForm(botId, name, email) {
+        var nameInput = getElementDOM(botId, 'user-name');
+        var emailInput = getElementDOM(botId, 'user-email');
+        if (nameInput && name && !nameInput.value) {
+            nameInput.value = name;
+        }
+        if (emailInput && email && !emailInput.value) {
+            emailInput.value = email;
+        }
     }
 
     // Event delegation for email form submission
@@ -4075,14 +4259,24 @@ if (mxchatChat && mxchatChat.email_collection_enabled === 'on') {
         var userName = nameInput ? nameInput.value.trim() : '';
         var sessionId = MxChatInstances.ensureSession(botId);
 
-        // Validate email
-        if (!userEmail) {
+        // Validate email. The address is optional when the owner turned
+        // "Require Email Address" off (c0cfaf) — but anything actually typed
+        // still has to be a valid address. The server enforces both rules
+        // independently.
+        var emailRequired = (mxchatChat.lead_capture_require_email || 'on') !== 'off';
+
+        if (emailRequired && !userEmail) {
             showEmailError(botId, 'Please enter your email address.');
             return false;
         }
 
-        if (!isValidEmailAddress(userEmail)) {
+        if (userEmail && !isValidEmailAddress(userEmail)) {
             showEmailError(botId, 'Please enter a valid email address.');
+            return false;
+        }
+
+        if (!emailRequired && !userEmail && !userName) {
+            showEmailError(botId, 'Please enter your name or email address.');
             return false;
         }
 
@@ -4243,6 +4437,7 @@ if (mxchatChat && mxchatChat.email_collection_enabled === 'on') {
             getElement(botId, 'floating-chatbot-button').addClass('hidden');
             handlePreChatDismissal(botId);
             disableScroll(); // Disable scroll when chatbot opens
+            mxchatFireOpened(botId);
 
             // Load chat history for returning visitors (persistence)
             var chatPersistenceEnabled = typeof mxchatChat !== 'undefined' && mxchatChat.chat_persistence_toggle === 'on';
@@ -4410,6 +4605,13 @@ $(document).on('click', '.chat-box a[href]:not([data-tracked])', function(e) {
     $('.mxchat-chatbot-wrapper').each(function() {
         var botId = $(this).data('bot-id') || 'default';
         initializeChatVisibility(botId);
+        // An embedded widget is on screen from the first paint; a floating one
+        // reports mxchat:opened when its window is shown (plan 65c9b6).
+        if (isEmbeddedBot(botId)) {
+            mxchatFireOpened(botId);
+        } else {
+            mxchatWatchForOpen(botId);
+        }
     });
 
     // Make functions globally available for add-ons

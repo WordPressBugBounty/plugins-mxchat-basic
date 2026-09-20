@@ -1058,6 +1058,27 @@ if (strpos($name, 'mxchat_pinecone_addon_options') !== false) {
                     $new_value = str_replace(['https://', 'http://'], '', $new_value);
                 }
                 break;
+            case 'mxchat_pinecone_index_type':
+                // 362c31: document only once the host has been checked (see sanitize_pinecone_settings).
+                $new_value = ($value === 'document') ? 'document' : 'vector';
+                if ($new_value === 'document' && strtolower(trim((string) ($current_options['mxchat_pinecone_host'] ?? ''), '/')) !== strtolower((string) ($current_options['mxchat_pinecone_docs_verified_host'] ?? ''))) {
+                    wp_send_json_error(['message' => esc_html__('Check the document index host first (Check index or Create index for me).', 'mxchat')]);
+                }
+                break;
+            case 'mxchat_pinecone_vector_host':
+                $new_value = trim(str_replace(['https://', 'http://'], '', sanitize_text_field($value)), '/');
+                break;
+            case 'mxchat_pinecone_vector_index':
+            case 'mxchat_pinecone_docs_region':
+                $new_value = sanitize_text_field($value);
+                break;
+            case 'mxchat_pinecone_docs_cloud':
+                $new_value = in_array($value, array('aws', 'gcp', 'azure'), true) ? $value : 'aws';
+                break;
+            case 'mxchat_pinecone_docs_language':
+                $lang_value = sanitize_key($value);
+                $new_value = (class_exists('MxChat_Pinecone_Documents') && array_key_exists($lang_value, MxChat_Pinecone_Documents::languages())) ? $lang_value : 'en';
+                break;
             case 'mxchat_pinecone_top_k':
                 // d0cae1: out-of-range and junk normalize to the default 50 —
                 // same clamp the read site applies.

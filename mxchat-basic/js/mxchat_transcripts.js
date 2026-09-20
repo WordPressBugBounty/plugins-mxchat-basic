@@ -1639,6 +1639,24 @@ jQuery(document).ready(function($) {
         $wrap.html(html);
     }
 
+    // A lead's key is its email address, or "session:<id>" when the capture
+    // had no address (c0cfaf). Email keys are lowercased exactly as before;
+    // session keys pass through untouched, because the server resolves them
+    // back to a real session id and case matters there. Both shapes travel on
+    // the same wire field the tab has always used, so the selection set, the
+    // delete call and the export call need no new parameter.
+    function leadKeyOf(r) {
+        const email = (r && r.email ? String(r.email) : '').trim();
+        if (email) return email.toLowerCase();
+        if (r && r.lead_key) return String(r.lead_key);
+        return 'session:' + (r && r.latest_session_id ? r.latest_session_id : '');
+    }
+
+    function normalizeLeadKey(value) {
+        const key = (value === undefined || value === null) ? '' : String(value);
+        return key.indexOf('session:') === 0 ? key : key.toLowerCase();
+    }
+
     function renderLeadsTable(rows) {
         const $tbody = $('#mxch-leads-tbody');
         if (!rows || rows.length === 0) {
@@ -1655,7 +1673,7 @@ jQuery(document).ready(function($) {
 
         let html = '';
         rows.forEach(function(r) {
-            const emailKey = (r.email || '').toLowerCase();
+            const emailKey = leadKeyOf(r);
             const isChecked = leadsState.selected.has(emailKey) ? ' checked' : '';
             // Status: 'active' (has conversations), 'chat_deleted' (admin removed the chat), 'orphan' (no chat ever).
             const status = r.status || (r.is_orphan ? 'orphan' : 'active');
@@ -1664,10 +1682,19 @@ jQuery(document).ready(function($) {
             const nameLine = r.name
                 ? `<span class="mxch-leads-lead-name">${escapeHtmlLeads(r.name)}</span>`
                 : '';
+            // A lead captured with no email address (c0cfaf) still has a
+            // name; show that on the primary line rather than an empty cell,
+            // and say plainly that there is no address.
+            const primaryLine = r.email
+                ? `<span class="mxch-leads-lead-email" title="${escapeHtmlLeads(r.email)}">${escapeHtmlLeads(r.email)}</span>`
+                : `<span class="mxch-leads-lead-email">${escapeHtmlLeads(r.name || 'Unnamed lead')}</span>`;
+            const secondaryLine = r.email
+                ? nameLine
+                : '<span class="mxch-leads-muted">No email address</span>';
             const leadCell = `
                 <div class="mxch-leads-lead-cell">
-                    <span class="mxch-leads-lead-email" title="${escapeHtmlLeads(r.email)}">${escapeHtmlLeads(r.email)}</span>
-                    ${nameLine}
+                    ${primaryLine}
+                    ${secondaryLine}
                 </div>`;
             let countCell;
             if (isOrphan) {
@@ -1698,13 +1725,13 @@ jQuery(document).ready(function($) {
                         <span>View convo</span>
                     </button>`
                 : '';
-            const deleteBtn = `<button type="button" class="mxch-btn mxch-btn-ghost mxch-btn-sm mxch-btn-danger-ghost mxch-leads-delete-row" data-email="${escapeHtmlLeads(r.email)}" title="Delete lead">
+            const deleteBtn = `<button type="button" class="mxch-btn mxch-btn-ghost mxch-btn-sm mxch-btn-danger-ghost mxch-leads-delete-row" data-email="${escapeHtmlLeads(emailKey)}" title="Delete lead">
                     <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
                 </button>`;
 
             const rowStateClass = isOrphan ? ' is-orphan' : (isChatDeleted ? ' is-chat-deleted' : '');
             html += `
-                <tr class="mxch-leads-row${rowStateClass}" data-email="${escapeHtmlLeads(r.email)}">
+                <tr class="mxch-leads-row${rowStateClass}" data-email="${escapeHtmlLeads(emailKey)}">
                     <td class="mxch-leads-col-check"><input type="checkbox" class="mxch-leads-rowcheck"${isChecked}></td>
                     <td class="mxch-leads-col-lead">${leadCell}</td>
                     <td class="mxch-leads-col-count">${countCell}</td>
@@ -1833,7 +1860,7 @@ jQuery(document).ready(function($) {
         const on = $(this).is(':checked');
         $('.mxch-leads-rowcheck').prop('checked', on);
         $('.mxch-leads-row').each(function() {
-            const email = ($(this).data('email') || '').toString().toLowerCase();
+            const email = normalizeLeadKey($(this).data('email'));
             if (on) {
                 leadsState.selected.add(email);
             } else {
@@ -1845,7 +1872,7 @@ jQuery(document).ready(function($) {
 
     // Row checkbox
     $leads().on('change', '.mxch-leads-rowcheck', function() {
-        const email = ($(this).closest('.mxch-leads-row').data('email') || '').toString().toLowerCase();
+        const email = normalizeLeadKey($(this).closest('.mxch-leads-row').data('email'));
         if ($(this).is(':checked')) {
             leadsState.selected.add(email);
         } else {
@@ -1913,7 +1940,7 @@ jQuery(document).ready(function($) {
                 $btn.prop('disabled', false).text('Delete permanently');
                 closeLeadsConfirm();
                 if (response && response.success) {
-                    emails.forEach(function(e) { leadsState.selected.delete(e.toLowerCase()); });
+                    emails.forEach(function(e) { leadsState.selected.delete(normalizeLeadKey(e)); });
                     loadLeads(leadsState.page);
                 } else {
                     alert((response && response.data && response.data.message) || 'Failed to delete leads.');

@@ -91,6 +91,7 @@ function mxchat_render_api_admin_page() {
     $health_url    = $base_url . 'health';
     $transcripts_u = $base_url . 'transcripts';
     $knowledge_url = $base_url . 'knowledge';
+    $leads_url     = $base_url . 'leads';
 
     $plugin_url    = plugin_dir_url(dirname(__FILE__));
     $masked        = $token_set
@@ -351,6 +352,18 @@ function mxchat_render_api_admin_page() {
                                 </tr>
                                 <tr>
                                     <td><span class="mxch-api-method mxch-api-method-delete">DELETE</span></td>
+                                    <td><code><?php echo esc_html($knowledge_url); ?></code></td>
+                                    <td><span class="mxch-api-auth mxch-api-auth-bearer"><?php esc_html_e('Bearer', 'mxchat'); ?></span></td>
+                                    <td><?php esc_html_e('Remove knowledge entries by source_url — one, or an array of up to 50. Removing a URL that is not stored reports deleted:false rather than failing, so a sync job can re-run safely.', 'mxchat'); ?></td>
+                                </tr>
+                                <tr>
+                                    <td><span class="mxch-api-method mxch-api-method-get">GET</span></td>
+                                    <td><code><?php echo esc_html($leads_url); ?></code></td>
+                                    <td><span class="mxch-api-auth mxch-api-auth-bearer"><?php esc_html_e('Bearer', 'mxchat'); ?></span></td>
+                                    <td><?php esc_html_e('Read lead-capture submissions — the same rows the Leads tab shows, with consent state. Filterable by since, search and status; supports page + per_page pagination (max 200).', 'mxchat'); ?></td>
+                                </tr>
+                                <tr>
+                                    <td><span class="mxch-api-method mxch-api-method-delete">DELETE</span></td>
                                     <td><code><?php echo esc_html($transcripts_u); ?></code></td>
                                     <td><span class="mxch-api-auth mxch-api-auth-bearer"><?php esc_html_e('Bearer', 'mxchat'); ?></span></td>
                                     <td><?php esc_html_e('Bulk-delete chat sessions by session_id, with optional cascade to translations and click-tracking. Capped at 1000 per call.', 'mxchat'); ?></td>
@@ -397,6 +410,30 @@ function mxchat_render_api_admin_page() {
   -H "Content-Type: application/json" \
   -d '{"content":"Q: How do I enable streaming?\nA: ...","source_url":"https://example.com/faq#streaming","content_type":"faq"}' \
   "<?php echo esc_html($knowledge_url); ?>"</code></pre>
+                    </div>
+                </div>
+
+                <div class="mxch-card">
+                    <div class="mxch-card-header">
+                        <h3 class="mxch-card-title"><?php esc_html_e('Remove documents deleted in your source system', 'mxchat'); ?></h3>
+                    </div>
+                    <div class="mxch-card-body">
+                        <p class="mxch-field-description"><?php esc_html_e('When a file is deleted in SharePoint, Drive or your CMS, delete it here by the same source_url you pushed it with — otherwise the bot keeps answering from it. Up to 50 per call, and a URL that is already gone comes back as deleted:false instead of an error, so an automation can re-send the same batch safely.', 'mxchat'); ?></p>
+                        <pre class="mxch-api-codeblock"><code>curl -X DELETE -H "Authorization: Bearer YOUR_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"source_url":["https://example.com/handbook.pdf","https://example.com/policy-2024.docx"]}' \
+  "<?php echo esc_html($knowledge_url); ?>"</code></pre>
+                    </div>
+                </div>
+
+                <div class="mxch-card">
+                    <div class="mxch-card-header">
+                        <h3 class="mxch-card-title"><?php esc_html_e('Sync new leads into your CRM', 'mxchat'); ?></h3>
+                    </div>
+                    <div class="mxch-card-body">
+                        <p class="mxch-field-description"><?php esc_html_e('Poll incrementally by passing the timestamp of the last lead you imported.', 'mxchat'); ?></p>
+                        <pre class="mxch-api-codeblock"><code>curl -H "Authorization: Bearer YOUR_TOKEN" \
+  "<?php echo esc_html($leads_url); ?>?since=2026-05-01T00:00:00Z&amp;per_page=200"</code></pre>
                     </div>
                 </div>
 

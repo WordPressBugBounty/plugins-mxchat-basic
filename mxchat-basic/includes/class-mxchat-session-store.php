@@ -440,7 +440,16 @@ class MxChat_Session_Store {
      *
      * @return array[] Rows of [session_id, visitor_email, visitor_name].
      */
-    public static function identity_rows() {
+    /**
+     * Sessions carrying visitor identity.
+     *
+     * @param bool $include_nameless_email Also return sessions that have a
+     *        NAME but no email address. Off by default, so every existing
+     *        caller sees exactly the rows it always has; the Leads tab opts in
+     *        when the owner has made the email field optional (c0cfaf), where
+     *        a name-only capture is a real lead rather than a half-filled one.
+     */
+    public static function identity_rows($include_nameless_email = false) {
         global $wpdb;
 
         if (!self::ensure_table()) {
@@ -449,9 +458,14 @@ class MxChat_Session_Store {
 
         $table = self::table();
 
+        $where = "visitor_email IS NOT NULL AND visitor_email != ''";
+        if ($include_nameless_email) {
+            $where = "($where) OR (visitor_name IS NOT NULL AND visitor_name != '')";
+        }
+
         $rows = $wpdb->get_results(
             "SELECT session_id, visitor_email, visitor_name FROM `$table`
-             WHERE visitor_email IS NOT NULL AND visitor_email != ''",
+             WHERE $where",
             ARRAY_A
         );
 

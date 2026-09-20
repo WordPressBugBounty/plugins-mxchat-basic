@@ -56,9 +56,13 @@ class MxChat_Model_Catalog {
                 'key_option'                  => 'gemini_api_key',
                 'requires_key_to_load_models' => false,
                 'models' => array(
-                    'gemini-3.5-flash'              => array('label' => 'Gemini 3.5 Flash',          'description' => __('Stable — newest Flash generation, recommended default', 'mxchat')),
+                    'gemini-3.8-flash'              => array('label' => 'Gemini 3.8 Flash',          'description' => __('Stable — newest Flash generation, recommended default', 'mxchat')),
+                    'gemini-3.7-flash'              => array('label' => 'Gemini 3.7 Flash',          'description' => __('Stable — efficiency-first Flash', 'mxchat')),
+                    'gemini-3.6-flash'              => array('label' => 'Gemini 3.6 Flash',          'description' => __('Stable — previous Flash generation', 'mxchat')),
+                    'gemini-3.5-flash'              => array('label' => 'Gemini 3.5 Flash',          'description' => __('Stable — older Flash, priced above 3.8 Flash on every token', 'mxchat')),
                     'gemini-3.1-pro-preview'        => array('label' => 'Gemini 3.1 Pro',            'description' => __('Preview — most intelligent, multimodal & agentic', 'mxchat')),
                     'gemini-3-flash-preview'        => array('label' => 'Gemini 3 Flash',            'description' => __('Preview — balanced speed and scale', 'mxchat')),
+                    'gemini-3.5-flash-lite'         => array('label' => 'Gemini 3.5 Flash-Lite',     'description' => __('Stable — cheapest Gemini, no thinking', 'mxchat')),
                     'gemini-3.1-flash-lite'         => array('label' => 'Gemini 3.1 Flash-Lite',     'description' => __('Stable — cost-efficient, high throughput', 'mxchat')),
                     'gemini-3.1-flash-lite-preview' => array('label' => 'Gemini 3.1 Flash-Lite (Preview)', 'description' => __('Preview — latest cost-efficient model', 'mxchat')),
                     'gemini-2.5-pro'                => array('label' => 'Gemini 2.5 Pro',            'description' => __('Stable — advanced thinking, code, math & long context', 'mxchat')),
@@ -672,7 +676,7 @@ class MxChat_Model_Catalog {
             'openai' => 'gpt-5.6-sol',
             'claude' => 'claude-haiku-4-5-20251001',
             'xai'    => 'grok-4.6',
-            'gemini' => 'gemini-3.5-flash',
+            'gemini' => 'gemini-3.8-flash',
         );
         $model = isset($map[$provider]) ? $map[$provider] : '';
         return (string) apply_filters('mxchat_default_vision_model', $model, $provider);
@@ -718,6 +722,22 @@ class MxChat_Model_Catalog {
      */
     public static function reasoning_effort_for($model, $context = 'chat') {
         $model = (string) $model;
+
+        // plan a9774b: every Gemini 3.x output price is "including thinking
+        // tokens" and the model thinks at its default level unless told
+        // otherwise — measured on this site's own support prompt, 71% of
+        // billed output on 3.8 Flash was hidden thinking, with indistinguishable
+        // replies at 'low' (0 hidden tokens). So the chat surface sends 'low':
+        // as reasoning_effort on the OpenAI-compatible endpoint, and as
+        // generationConfig.thinkingConfig.thinkingLevel on the native one (see
+        // gemini_thinking_config()). Flash-Lite does not think and returns 400
+        // on any reasoning parameter — it must send nothing.
+        if (strpos($model, 'gemini-3') === 0) {
+            if (strpos($model, 'flash-lite') !== false) {
+                return null;
+            }
+            return ($context === 'chat') ? 'low' : null;
+        }
 
         // Only the gpt-5 family carries reasoning_effort. Everything else omits.
         if (strpos($model, 'gpt-5') !== 0) {
@@ -816,6 +836,28 @@ class MxChat_Model_Catalog {
      * @param string $model Chat model id.
      * @return bool         true if a custom temperature may be sent.
      */
+    /**
+     * generationConfig.thinkingConfig for the native Gemini endpoint, or null
+     * to send none (plan a9774b). Derived from reasoning_effort_for() so the
+     * two Gemini paths — native generateContent and the OpenAI-compatible
+     * endpoint — always agree on the thinking level. Overridable via
+     * mxchat_gemini_thinking_level (return '' to send none).
+     *
+     * @param string $model Chat model id.
+     * @return array|null   e.g. array('thinkingLevel' => 'low').
+     */
+    public static function gemini_thinking_config($model) {
+        $level = self::reasoning_effort_for($model, 'chat');
+        if (strpos((string) $model, 'gemini-') !== 0) {
+            return null;
+        }
+        $level = apply_filters('mxchat_gemini_thinking_level', $level, $model);
+        if (!is_string($level) || $level === '' || !in_array($level, array('minimal', 'low', 'medium', 'high'), true)) {
+            return null;
+        }
+        return array('thinkingLevel' => $level);
+    }
+
     public static function supports_temperature($model) {
         $model = (string) $model;
 

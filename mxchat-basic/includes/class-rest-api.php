@@ -7,6 +7,8 @@
  *   GET    /wp-json/mxchat/v1/transcripts   — read chat transcripts (filterable)
  *   DELETE /wp-json/mxchat/v1/transcripts   — delete by session_ids (cascades)
  *   POST   /wp-json/mxchat/v1/knowledge     — push content into the knowledge base
+ *   DELETE /wp-json/mxchat/v1/knowledge     — remove entries by source_url
+ *   GET    /wp-json/mxchat/v1/leads         — read lead-capture submissions
  *   GET    /wp-json/mxchat/v1/health        — connectivity + capability check
  *
  * These are general-purpose primitives. They power the official MxChat FAQ
@@ -172,6 +174,78 @@ class MxChat_Rest_Api {
                         'required'          => false,
                         'default'           => 'manual',
                         'sanitize_callback' => 'sanitize_key',
+                    ),
+                ),
+            ),
+        ));
+
+        register_rest_route(self::REST_NAMESPACE, '/knowledge', array(
+            array(
+                'methods'             => WP_REST_Server::DELETABLE,
+                'callback'            => array($this, 'handle_delete_knowledge'),
+                'permission_callback' => array($this, 'check_bearer_token'),
+                'args'                => array(
+                    'source_url' => array(
+                        'description' => __('The source_url of the entry to remove — the same value used when it was pushed. Accepts a single string or an array of up to 50 URLs so a sync job can batch. Removing a URL that is not in the knowledge base is not an error: the result reports deleted:false for it.', 'mxchat'),
+                        'required'    => true,
+                    ),
+                    'bot_id' => array(
+                        'description'       => __('Bot ID (for multi-bot installs). Defaults to "default".', 'mxchat'),
+                        'type'              => 'string',
+                        'required'          => false,
+                        'default'           => 'default',
+                        'sanitize_callback' => 'sanitize_key',
+                    ),
+                ),
+            ),
+        ));
+
+        register_rest_route(self::REST_NAMESPACE, '/leads', array(
+            array(
+                'methods'             => WP_REST_Server::READABLE,
+                'callback'            => array($this, 'handle_get_leads'),
+                'permission_callback' => array($this, 'check_bearer_token'),
+                'args'                => array(
+                    'since' => array(
+                        'description'       => __('Only return leads last seen at or after this value. Accepts ISO 8601 (2026-05-07T00:00:00Z) or any strtotime-compatible string. Orphan leads (captured but never chatted) have no timestamp and are omitted when this is set.', 'mxchat'),
+                        'type'              => 'string',
+                        'required'          => false,
+                        'sanitize_callback' => 'sanitize_text_field',
+                    ),
+                    'search' => array(
+                        'description'       => __('Substring match on email or name.', 'mxchat'),
+                        'type'              => 'string',
+                        'required'          => false,
+                        'sanitize_callback' => 'sanitize_text_field',
+                    ),
+                    'status' => array(
+                        'description' => __('Filter by lead source. One of: all, orphan (captured but never chatted), chat_deleted (conversation removed by an admin). Default: all.', 'mxchat'),
+                        'type'        => 'string',
+                        'required'    => false,
+                        'enum'        => array('all', 'orphan', 'chat_deleted'),
+                        'default'     => 'all',
+                    ),
+                    'page' => array(
+                        'description' => __('1-based page number.', 'mxchat'),
+                        'type'        => 'integer',
+                        'required'    => false,
+                        'default'     => 1,
+                        'minimum'     => 1,
+                    ),
+                    'per_page' => array(
+                        'description' => __('Leads per page. 1-200, default 100.', 'mxchat'),
+                        'type'        => 'integer',
+                        'required'    => false,
+                        'default'     => 100,
+                        'minimum'     => 1,
+                        'maximum'     => 200,
+                    ),
+                    'order' => array(
+                        'description' => __('Sort order on last_seen. asc or desc (default: desc).', 'mxchat'),
+                        'type'        => 'string',
+                        'required'    => false,
+                        'enum'        => array('asc', 'desc'),
+                        'default'     => 'desc',
                     ),
                 ),
             ),
@@ -569,6 +643,238 @@ class MxChat_Rest_Api {
             'content_type' => $content_type,
             'bytes'        => strlen($content),
         ));
+    }
+
+    /**
+     * DELETE /knowledge — remove entries from the KB by source_url.
+     *
+     * Wraps MxChat_Utils::delete_chunks_for_url(), which is the same entry
+     * point the admin's delete-by-URL action uses: it mirrors the removal to
+     * the OpenAI Vector Store and then clears whichever backend holds the
+     * content (Pinecone chunks, or the WordPress rows). There is deliberately
+     * no second delete path here.
+     *
+     * Idempotent by design: a URL that is not in the knowledge base comes back
+     * as deleted:false rather than an error, so a sync job can re-run cleanly.
+     */
+    public function handle_delete_knowledge($request) {
+        if (!class_exists('MxChat_Utils')) {
+            return new WP_Error(
+                'mxchat_rest_no_utils',
+                __('MxChat_Utils is not loaded.', 'mxchat'),
+                array('status' => 500)
+            );
+        }
+
+        // get_param() covers both a JSON body and a query string, so an
+        // automation can send either.
+        $raw = $request->get_param('source_url');
+        if ($raw === null) {
+            $body = $request->get_json_params();
+            if (is_array($body) && isset($body['source_url'])) {
+                $raw = $body['source_url'];
+            }
+        }
+
+        $bot_id = $request->get_param('bot_id');
+        $bot_id = is_string($bot_id) ? sanitize_key($bot_id) : '';
+        if ($bot_id === '') {
+            $bot_id = 'default';
+        }
+
+        if (is_string($raw)) {
+            $raw = array($raw);
+        }
+
+        if (!is_array($raw) || empty($raw)) {
+            return new WP_Error(
+                'mxchat_rest_no_source_url',
+                __('source_url is required — a string, or a non-empty array of strings.', 'mxchat'),
+                array('status' => 400)
+            );
+        }
+
+        if (count($raw) > 50) {
+            return new WP_Error(
+                'mxchat_rest_too_many',
+                __('Too many source_urls in a single request. Cap is 50; split into multiple calls.', 'mxchat'),
+                array('status' => 400)
+            );
+        }
+
+        // Normalise the same way the content was normalised on the way in, so
+        // a URL that POST accepted is the URL DELETE matches. Dedupe, keep order.
+        $urls = array();
+        foreach ($raw as $candidate) {
+            if (!is_string($candidate)) {
+                continue;
+            }
+            $clean = $this->normalize_source_url($candidate);
+            if ($clean !== '' && !in_array($clean, $urls, true)) {
+                $urls[] = $clean;
+            }
+        }
+
+        if (empty($urls)) {
+            return new WP_Error(
+                'mxchat_rest_no_valid_source_url',
+                __('source_url must contain at least one valid non-empty URL.', 'mxchat'),
+                array('status' => 400)
+            );
+        }
+
+        // Pinecone listing + deletion is several round trips per URL.
+        if (function_exists('set_time_limit')) {
+            @set_time_limit(300);
+        }
+        @ignore_user_abort(true);
+
+        $results         = array();
+        $urls_deleted    = 0;
+        $entries_removed = 0;
+
+        foreach ($urls as $url) {
+            // Counted before the delete, against the same backend the delete
+            // will act on, so the number reported is the number removed.
+            $before = (int) MxChat_Utils::count_chunks_for_url($url, $bot_id);
+
+            // Called even at zero: the entry may still have a mirrored Vector
+            // Store file, and that must not outlive it.
+            $outcome = MxChat_Utils::delete_chunks_for_url($url, $bot_id);
+
+            $row = array(
+                'source_url'      => $url,
+                'deleted'         => false,
+                'entries_removed' => 0,
+            );
+
+            if (is_wp_error($outcome)) {
+                $row['error'] = $outcome->get_error_message();
+                if (class_exists('MxChat_Admin')) {
+                    MxChat_Admin::mxchat_log_debug(
+                        'rest_knowledge_delete',
+                        'DELETE /knowledge failed: ' . $outcome->get_error_message(),
+                        array('source_url' => $url, 'bot_id' => $bot_id)
+                    );
+                }
+            } elseif ($before > 0) {
+                $row['deleted']         = true;
+                $row['entries_removed'] = $before;
+                $urls_deleted++;
+                $entries_removed += $before;
+            }
+
+            $results[] = $row;
+        }
+
+        if (class_exists('MxChat_Admin')) {
+            MxChat_Admin::mxchat_log_debug(
+                'rest_knowledge_delete',
+                'DELETE /knowledge removed ' . $entries_removed . ' entries across ' . $urls_deleted . ' of ' . count($urls) . ' URLs',
+                array('bot_id' => $bot_id)
+            );
+        }
+
+        return rest_ensure_response(array(
+            'source_urls_requested' => count($urls),
+            'urls_deleted'          => $urls_deleted,
+            'entries_removed'       => $entries_removed,
+            'bot_id'                => $bot_id,
+            'results'               => $results,
+        ));
+    }
+
+    /**
+     * GET /leads — lead-capture submissions, the same rows the Leads tab shows.
+     *
+     * Reads through MxChat_Admin::mxchat_collect_leads() rather than issuing
+     * its own query, so it inherits the address-less lead key (a name-only
+     * capture is keyed "session:<id>") instead of re-opening that blind spot.
+     */
+    public function handle_get_leads($request) {
+        if (!class_exists('MxChat_Admin') || !method_exists('MxChat_Admin', 'mxchat_collect_leads')) {
+            return new WP_Error(
+                'mxchat_rest_no_leads_source',
+                __('The leads reader is not available on this install.', 'mxchat'),
+                array('status' => 500)
+            );
+        }
+
+        $page     = (int) $request->get_param('page');
+        $per_page = (int) $request->get_param('per_page');
+        $page     = $page > 0 ? $page : 1;
+        $per_page = $per_page > 0 ? min(200, $per_page) : 100;
+
+        $since_raw = (string) $request->get_param('since');
+        $since_ts  = $this->parse_datetime($since_raw);
+        if ($since_raw !== '' && $since_ts === null) {
+            return new WP_Error(
+                'mxchat_rest_bad_since',
+                __('since could not be parsed as a date.', 'mxchat'),
+                array('status' => 400)
+            );
+        }
+
+        $status = (string) $request->get_param('status');
+        if (!in_array($status, array('all', 'orphan', 'chat_deleted'), true)) {
+            $status = 'all';
+        }
+
+        $payload = MxChat_Admin::mxchat_collect_leads(array(
+            'page'        => $page,
+            'per_page'    => $per_page,
+            'search'      => (string) $request->get_param('search'),
+            // Timestamps in the transcripts table are UTC, as gmdate() writes
+            // them everywhere else the cutoff is built.
+            'date_cutoff' => $since_ts === null ? '' : gmdate('Y-m-d H:i:s', $since_ts),
+            'status'      => $status,
+            'sort'        => 'last_seen',
+            'sort_dir'    => $request->get_param('order') === 'asc' ? 'asc' : 'desc',
+        ));
+
+        $leads = array();
+        foreach ((array) ($payload['leads'] ?? array()) as $lead) {
+            $leads[] = array(
+                'lead_key'           => (string) ($lead['lead_key'] ?? ''),
+                'email'              => (string) ($lead['email'] ?? ''),
+                'name'               => (string) ($lead['name'] ?? ''),
+                'session_id'         => (string) ($lead['latest_session_id'] ?? ''),
+                'conversation_count' => (int) ($lead['conversation_count'] ?? 0),
+                'first_seen'         => (string) ($lead['first_seen'] ?? ''),
+                'last_seen'          => (string) ($lead['last_seen'] ?? ''),
+                'consent'            => (string) ($lead['consent'] ?? ''),
+                'consent_at'         => (string) ($lead['consent_at'] ?? ''),
+                'consent_label'      => (string) ($lead['consent_label'] ?? ''),
+                'originating_page_url'   => (string) ($lead['top_page_url'] ?? ''),
+                'originating_page_title' => (string) ($lead['top_page_title'] ?? ''),
+                'status'             => (string) ($lead['status'] ?? 'active'),
+                'is_orphan'          => !empty($lead['is_orphan']),
+            );
+        }
+
+        return rest_ensure_response(array(
+            'leads'       => $leads,
+            'page'        => (int) ($payload['page'] ?? $page),
+            'per_page'    => (int) ($payload['per_page'] ?? $per_page),
+            'total_count' => (int) ($payload['total_count'] ?? 0),
+            'total_pages' => (int) ($payload['total_pages'] ?? 0),
+        ));
+    }
+
+    /**
+     * Normalise a source_url the way MxChat_Utils::submit_content_to_db() does
+     * before it stores, so DELETE matches what POST created. The pseudo-scheme
+     * branch matters: esc_url_raw() EMPTIES mxchat:// and upload:// identities.
+     */
+    private function normalize_source_url($raw) {
+        $raw = trim((string) $raw);
+        if ($raw === '') {
+            return '';
+        }
+        if (preg_match('#^(mxchat|upload)://#i', $raw)) {
+            return sanitize_text_field($raw);
+        }
+        return esc_url_raw($raw);
     }
 
     /**
