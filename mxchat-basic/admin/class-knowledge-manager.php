@@ -1862,7 +1862,8 @@ public function mxchat_handle_sitemap_submission() {
         $api_key,
         null,
         $bot_id,
-        'url' // content_type
+        'url', // content_type
+        MxChat_Utils::extract_page_title($body_content) // the page's own title (plan d9ee66)
     );
 
     if (is_wp_error($db_result)) {
@@ -9807,14 +9808,15 @@ private function mxchat_process_queue_url($item_data, $bot_id = 'default', $queu
         return false;
     }
 
-    // Submit to database with content_type
+    // Submit to database with content_type (+ the page's own title, plan d9ee66)
     $result = MxChat_Utils::submit_content_to_db(
         $sanitized,
         $url,
         $api_key,
         null,
         $bot_id,
-        $content_type
+        $content_type,
+        MxChat_Utils::extract_page_title($html)
     );
 
     return $result;

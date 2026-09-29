@@ -536,7 +536,7 @@ public static function video_embed_threshold() {
  * @param string $content_type The type of content (post, page, pdf, url, manual, product, etc.)
  * @return bool|WP_Error True on success, WP_Error on failure
  */
-public static function submit_content_to_db($content, $source_url, $api_key, $vector_id = null, $bot_id = 'default', $content_type = 'content') {
+public static function submit_content_to_db($content, $source_url, $api_key, $vector_id = null, $bot_id = 'default', $content_type = 'content', $title = '') {
     global $wpdb;
     $table_name = $wpdb->prefix . 'mxchat_system_prompt_content';
 
@@ -558,6 +558,12 @@ public static function submit_content_to_db($content, $source_url, $api_key, $ve
     $content_type = sanitize_key($content_type);
     if (empty($content_type)) {
         $content_type = 'content'; // Fallback for backwards compatibility
+    }
+
+    // Page title captured by the importer (plan d9ee66), registered under the
+    // SANITIZED url so the storage writers below find it by the same key.
+    if (is_string($title) && trim($title) !== '') {
+        self::set_source_title($source_url, $title);
     }
 
     // Just ensure UTF-8 validity without aggressive escaping
@@ -619,6 +625,147 @@ public static function submit_content_to_db($content, $source_url, $api_key, $ve
         }
         return $result;
     }
+}
+
+/* -------------------------------------------------------------------------
+ * Source titles (3.2.23, plan d9ee66)
+ *
+ * A knowledge entry imported from a URL or sitemap remembers the page's own
+ * title, so an add-on that names a source (AI Search's source cards) can show
+ * "About Us" instead of a guess from the slug ("Aboutus"). Stored in the
+ * `title` column of the WP knowledge table and as `title` metadata on Pinecone
+ * vectors / documents. The importer hands the title to submit_content_to_db(),
+ * which registers it under the source URL; the writers look it up by that key.
+ * ---------------------------------------------------------------------- */
+
+/** @var array<string,string> source_url => title, for the current request */
+private static $source_titles = array();
+
+public static function set_source_title($source_url, $title) {
+    $key   = trim((string) $source_url);
+    $title = self::clean_title($title);
+    if ($key === '' || $title === '') {
+        return;
+    }
+    self::$source_titles[$key] = $title;
+}
+
+public static function source_title_for($source_url) {
+    $key = trim((string) $source_url);
+    return ($key !== '' && isset(self::$source_titles[$key])) ? self::$source_titles[$key] : '';
+}
+
+/** Entities decoded, tags gone, whitespace collapsed, capped at the column width. */
+public static function clean_title($title) {
+    $title = html_entity_decode((string) $title, ENT_QUOTES | ENT_HTML5, 'UTF-8');
+    $title = wp_strip_all_tags($title);
+    $title = trim((string) preg_replace('/\s+/u', ' ', $title));
+    if (mb_strlen($title, 'UTF-8') > 255) {
+        $title = rtrim(mb_substr($title, 0, 255, 'UTF-8'));
+    }
+    return $title;
+}
+
+/**
+ * The page's own title from fetched HTML: og:title, else <title> with a
+ * trailing "| Site Name" style suffix removed, else the first <h1>. Returns ''
+ * when nothing usable is there, so the caller keeps its own fallback.
+ */
+public static function extract_page_title($html) {
+    $html = (string) $html;
+    if ($html === '') {
+        return '';
+    }
+    $head = substr($html, 0, 200000);
+    $site = '';
+    if (preg_match('/<meta\s+[^>]*property=["\']og:site_name["\'][^>]*content=["\']([^"\']{1,120})["\']/i', $head, $m)
+        || preg_match('/<meta\s+[^>]*content=["\']([^"\']{1,120})["\'][^>]*property=["\']og:site_name["\']/i', $head, $m)) {
+        $site = self::clean_title($m[1]);
+    }
+    $candidate = '';
+    if (preg_match('/<meta\s+[^>]*property=["\']og:title["\'][^>]*content=["\']([^"\']{1,500})["\']/i', $head, $m)
+        || preg_match('/<meta\s+[^>]*content=["\']([^"\']{1,500})["\'][^>]*property=["\']og:title["\']/i', $head, $m)) {
+        $candidate = self::clean_title($m[1]);
+    }
+    if ($candidate === '' && preg_match('/<title[^>]*>(.*?)<\/title>/is', $head, $m)) {
+        $candidate = self::clean_title($m[1]);
+    }
+    if ($candidate !== '') {
+        $candidate = self::strip_site_suffix($candidate, $site);
+    }
+    if ($candidate === '' && preg_match('/<h1[^>]*>(.*?)<\/h1>/is', $html, $m)) {
+        $candidate = self::clean_title($m[1]);
+    }
+    return $candidate;
+}
+
+/**
+ * "About Us | Just Facts" -> "About Us". Only a TRAILING segment after a spaced
+ * separator goes, only when what is left is a real title (3+ characters) and the
+ * removed part is short enough to be a site name; a known og:site_name wins.
+ * Byte offsets throughout: every separator starts with an ASCII space, so a cut
+ * there never lands inside a multibyte character.
+ */
+private static function strip_site_suffix($title, $site_name = '') {
+    $seps = array(' | ', ' – ', ' — ', ' - ', ' :: ', ' · ', ' » ', ' • ');
+    if ($site_name !== '') {
+        foreach ($seps as $sep) {
+            $tail = $sep . $site_name;
+            if (strlen($title) > strlen($tail) && substr($title, -strlen($tail)) === $tail) {
+                return trim(substr($title, 0, strlen($title) - strlen($tail)));
+            }
+        }
+    }
+    $best_pos = -1;
+    $best_sep = '';
+    foreach ($seps as $sep) {
+        $pos = strrpos($title, $sep);
+        if ($pos !== false && $pos > $best_pos) {
+            $best_pos = $pos;
+            $best_sep = $sep;
+        }
+    }
+    if ($best_pos > 0) {
+        $left  = trim(substr($title, 0, $best_pos));
+        $right = trim(substr($title, $best_pos + strlen($best_sep)));
+        if (mb_strlen($left, 'UTF-8') >= 3 && $right !== '' && mb_strlen($right, 'UTF-8') <= 60) {
+            return $left;
+        }
+    }
+    return $title;
+}
+
+/**
+ * Make sure the knowledge table has the `title` column (3.2.23, plan d9ee66).
+ * Activation adds it; this is the safety net for a copy updated in place, and
+ * the one place add-ons ask "may I read/write title?". A positive answer is
+ * remembered in an option, so after the first time this costs one option read.
+ */
+public static function ensure_kb_title_column() {
+    global $wpdb;
+    static $ready = null;
+    if ($ready !== null) {
+        return $ready;
+    }
+    if (get_option('mxchat_kb_title_column') === '1') {
+        $ready = true;
+        return true;
+    }
+    $table = $wpdb->prefix . 'mxchat_system_prompt_content';
+    $cols  = $wpdb->get_col("SHOW COLUMNS FROM {$table}", 0);
+    if (empty($cols)) {
+        $ready = false;
+        return false;
+    }
+    if (!in_array('title', $cols, true)) {
+        $wpdb->query("ALTER TABLE {$table} ADD COLUMN title VARCHAR(255) DEFAULT NULL AFTER source_url");
+        $cols = $wpdb->get_col("SHOW COLUMNS FROM {$table}", 0);
+    }
+    $ready = in_array('title', $cols, true);
+    if ($ready) {
+        update_option('mxchat_kb_title_column', '1', false);
+    }
+    return $ready;
 }
 
 /**
@@ -764,6 +911,11 @@ private static function store_in_wordpress_db($safe_content, $source_url, $embed
     }
     // ===== END FIX =====
 
+    // Page title captured at import (plan d9ee66): written only when the
+    // importer supplied one, so a re-index without a title keeps the old value.
+    $title_value = $is_manual_content ? '' : self::source_title_for($source_url);
+    $title_ready = ($title_value !== '') && self::ensure_kb_title_column();
+
     // Progressive fallback mechanism for problematic content
     $attempt = 1;
     $max_attempts = 3;
@@ -776,37 +928,39 @@ private static function store_in_wordpress_db($safe_content, $source_url, $embed
                 //error_log('[MXCHAT-DB] Found existing entry (ID: ' . $existing_id . '). Updating... (Attempt ' . $attempt . ')');
 
                 // Update the existing row - UPDATED 2.5.6: Added content_type
-                $result = $wpdb->update(
-                    $table_name,
-                    array(
-                        'url'              => $source_url,
-                        'article_content'  => $current_content,
-                        'embedding_vector' => $embedding_vector_serialized,
-                        'source_url'       => $source_url,
-                        'content_type'     => $content_type,
-                        'timestamp'        => current_time('mysql'),
-                    ),
-                    array('id' => $existing_id),
-                    array('%s','%s','%s','%s','%s','%s'),
-                    array('%d')
+                $row = array(
+                    'url'              => $source_url,
+                    'article_content'  => $current_content,
+                    'embedding_vector' => $embedding_vector_serialized,
+                    'source_url'       => $source_url,
+                    'content_type'     => $content_type,
+                    'timestamp'        => current_time('mysql'),
                 );
+                $formats = array('%s','%s','%s','%s','%s','%s');
+                if ($title_ready) {
+                    $row['title'] = $title_value;
+                    $formats[]    = '%s';
+                }
+                $result = $wpdb->update($table_name, $row, array('id' => $existing_id), $formats, array('%d'));
             } else {
                 //error_log('[MXCHAT-DB] No existing entry found. Inserting new row... (Attempt ' . $attempt . ')');
                 //error_log('[MXCHAT-DB] Content sample: ' . substr($current_content, 0, 1000));
 
                 // Insert a new row - UPDATED 2.5.6: Added content_type
-                $result = $wpdb->insert(
-                    $table_name,
-                    array(
-                        'url'              => $source_url, // Now unique for manual content
-                        'article_content'  => $current_content,
-                        'embedding_vector' => $embedding_vector_serialized,
-                        'source_url'       => $source_url, // Now unique for manual content
-                        'content_type'     => $content_type,
-                        'timestamp'        => current_time('mysql'),
-                    ),
-                    array('%s','%s','%s','%s','%s','%s')
+                $row = array(
+                    'url'              => $source_url, // Now unique for manual content
+                    'article_content'  => $current_content,
+                    'embedding_vector' => $embedding_vector_serialized,
+                    'source_url'       => $source_url, // Now unique for manual content
+                    'content_type'     => $content_type,
+                    'timestamp'        => current_time('mysql'),
                 );
+                $formats = array('%s','%s','%s','%s','%s','%s');
+                if ($title_ready) {
+                    $row['title'] = $title_value;
+                    $formats[]    = '%s';
+                }
+                $result = $wpdb->insert($table_name, $row, $formats);
             }
             
         if ($result === false) {
@@ -932,6 +1086,10 @@ private static function store_in_pinecone_main($embedding_vector, $content, $url
         'created_at' => time(), // Add creation timestamp
         'bot_id' => $bot_id, // Add bot identification
     );
+    $page_title = self::source_title_for($url);
+    if ($page_title !== '') {
+        $metadata['title'] = $page_title; // page title captured at import (plan d9ee66)
+    }
 
     // Document index (plan 362c31): same id, same metadata, through the
     // documents API. A site on the classic vector index never enters here.
@@ -1620,6 +1778,10 @@ private static function store_chunk_in_pinecone($embedding_vector, $chunk_text, 
         'created_at' => time(),
         'bot_id' => $bot_id,
     );
+    $page_title = self::source_title_for($source_url);
+    if ($page_title !== '') {
+        $metadata['title'] = $page_title; // page title captured at import (plan d9ee66)
+    }
 
     // Document index (plan 362c31): same chunk id and metadata, documents API.
     if (class_exists('MxChat_Pinecone_Documents') && MxChat_Pinecone_Documents::is_document_index($bot_id)) {
@@ -1674,18 +1836,23 @@ private static function store_chunk_in_wordpress_db($content_with_metadata, $sou
 
     // For chunks, we always insert new rows (no duplicate checking)
     // The URL includes chunk info in the metadata, but source_url stays the same for grouping
-    $result = $wpdb->insert(
-        $table_name,
-        array(
-            'url' => $source_url,
-            'article_content' => $content_with_metadata,
-            'embedding_vector' => $embedding_vector_serialized,
-            'source_url' => $source_url,
-            'content_type' => $content_type,
-            'timestamp' => current_time('mysql')
-        ),
-        array('%s', '%s', '%s', '%s', '%s', '%s')
+    $row = array(
+        'url' => $source_url,
+        'article_content' => $content_with_metadata,
+        'embedding_vector' => $embedding_vector_serialized,
+        'source_url' => $source_url,
+        'content_type' => $content_type,
+        'timestamp' => current_time('mysql')
     );
+    $formats = array('%s', '%s', '%s', '%s', '%s', '%s');
+    // Every chunk row carries the page title too (plan d9ee66) - readers group by
+    // source_url and may pick any chunk as the representative.
+    $page_title = self::source_title_for($source_url);
+    if ($page_title !== '' && self::ensure_kb_title_column()) {
+        $row['title'] = $page_title;
+        $formats[]    = '%s';
+    }
+    $result = $wpdb->insert($table_name, $row, $formats);
 
     if ($result === false) {
         return new WP_Error('database_failed', 'Failed to insert chunk: ' . $wpdb->last_error);

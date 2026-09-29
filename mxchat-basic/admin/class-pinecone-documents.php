@@ -43,13 +43,19 @@ class MxChat_Pinecone_Documents {
     const API_VERSION        = '2026-07';
     const TEXT_FIELD         = 'text';
     const VECTOR_FIELD       = 'embedding';
+    const CODES_FIELD        = 'codes';  // plan 3e83e4: normalised part-number tokens stored beside the text
+    const CODES_MAX          = 60;       // per document — a long spec sheet must not bloat the 40 KB metadata cap
+    const CODE_MIN_LEN       = 4;        // shorter tokens would match everything
+    const CODE_MAX_LEN       = 32;
     const MIGRATION_KEY      = 'mxchat_pinecone_docs_migration';
     const UPSERT_BATCH       = 40;   // 1536-dim vectors are ~30 KB of JSON each; the request cap is 2 MB
     const MIGRATE_BATCH      = 40;
+    const MIGRATE_STEP_SECONDS = 12; // pages copied per AJAX step until this much wall time is used (3e83e4)
+    const MIGRATE_RETRIES    = 3;    // attempts per Pinecone call inside a step, 1 s / 2 s / 4 s apart
     const OPTION             = 'mxchat_pinecone_addon_options';
 
     /** Fields the retrieval and listing paths ask for (never the vector unless needed). */
-    const RECORD_FIELDS = array('text', 'source_url', 'type', 'bot_id', 'is_chunked', 'chunk_index', 'total_chunks', 'parent_url_hash', 'role_restriction', 'created_at', 'last_updated');
+    const RECORD_FIELDS = array('text', 'source_url', 'title', 'type', 'bot_id', 'is_chunked', 'chunk_index', 'total_chunks', 'parent_url_hash', 'role_restriction', 'created_at', 'last_updated');
 
     public static function clouds() {
         return array('aws' => 'AWS', 'gcp' => 'GCP', 'azure' => 'Azure');
@@ -253,6 +259,15 @@ class MxChat_Pinecone_Documents {
         }
         $doc[self::TEXT_FIELD]   = (string) $text;
         $doc[self::VECTOR_FIELD] = array_values(array_map('floatval', $embedding));
+        // 3e83e4: the normalised code set travels with every write (new content
+        // and copied records alike) so a part number typed without its
+        // separators can still reach the record — see index_codes().
+        $codes = self::index_codes((string) $text);
+        if (!empty($codes)) {
+            $doc[self::CODES_FIELD] = $codes;
+        } else {
+            unset($doc[self::CODES_FIELD]);
+        }
         return $doc;
     }
 
@@ -687,6 +702,10 @@ class MxChat_Pinecone_Documents {
      * Text-match filter that requires at least one of the codes. Hyphenated or
      * dotted codes are phrase-matched (the tokenizer splits them, and "20" on
      * its own would match everything); single runs use $match_any.
+     *
+     * 3e83e4: a second leg matches the NORMALISED code set stored on each
+     * document (codes $in …), which is what lets "R165321320" reach a record
+     * that only ever says "R1653" — see query_codes() for the expansion.
      */
     public static function keyword_filter(array $tokens) {
         $clauses = array();
@@ -694,10 +713,150 @@ class MxChat_Pinecone_Documents {
             $op = preg_match('/[.\-]/', $token) ? '$match_phrase' : '$match_any';
             $clauses[] = array(self::TEXT_FIELD => array($op => $token));
         }
+        $query_codes = self::query_codes($tokens);
+        if (!empty($query_codes)) {
+            $clauses[] = array(self::CODES_FIELD => array('$in' => $query_codes));
+        }
         if (empty($clauses)) {
             return null;
         }
         return count($clauses) === 1 ? $clauses[0] : array('$or' => $clauses);
+    }
+
+    /** Upper-case, separators stripped: "R1653 213 20" → "R165321320", "hgh25ca" → "HGH25CA". */
+    public static function normalize_code($code) {
+        return strtoupper(preg_replace('/[\s.\-_\/]+/u', '', (string) $code));
+    }
+
+    /**
+     * Code-like runs in a piece of text, INCLUDING digit groups that follow a
+     * code separated by a space, hyphen or dot ("R1653 213 20" is one number
+     * the way Rexroth prints it). Returns [ [head, full], … ] where head is
+     * the first run and full is the whole joined run, both un-normalised.
+     */
+    private static function code_runs($text) {
+        $runs = array();
+        $pattern = '/(?<![A-Za-z0-9])([A-Za-z0-9]+(?:[.\-][A-Za-z0-9]+)*)((?:[ .\-]\d{2,6}(?![A-Za-z0-9])){1,3})?(?![A-Za-z0-9])/u';
+        if (!preg_match_all($pattern, (string) $text, $m, PREG_SET_ORDER)) {
+            return $runs;
+        }
+        foreach ($m as $match) {
+            $head = rtrim($match[1], '.');
+            if (strlen($head) < self::CODE_MIN_LEN || !preg_match('/\d/', $head)) {
+                continue;
+            }
+            $has_letter = (bool) preg_match('/[A-Za-z]/', $head);
+            $separators = preg_match_all('/[.\-]/', $head);
+            if (!$has_letter && $separators < 2) {
+                continue; // 2024, 26.5, 10-20
+            }
+            $tail = isset($match[2]) ? $match[2] : '';
+            $runs[] = array($head, $head . $tail);
+        }
+        return $runs;
+    }
+
+    /**
+     * The normalised token set stored on a document at write time: for every
+     * code-like run in the text, the separator-stripped form, the leading stem
+     * (the run before the first separator) and the letters+digits stem
+     * ("HGH25" of "HGH25CA"). Unique, minimum 4 characters, capped.
+     */
+    public static function index_codes($text) {
+        $codes = array();
+        foreach (self::code_runs($text) as $run) {
+            list($head, $full) = $run;
+            $candidates = array(self::normalize_code($full), self::normalize_code($head));
+            $stem = preg_split('/[.\-\s]/', $head)[0];
+            $candidates[] = self::normalize_code($stem);
+            if (preg_match('/^([A-Za-z]+\d+)/', $head, $sm)) {
+                $candidates[] = self::normalize_code($sm[1]);
+            }
+            foreach ($candidates as $c) {
+                if (strlen($c) >= self::CODE_MIN_LEN && strlen($c) <= self::CODE_MAX_LEN && preg_match('/\d/', $c)) {
+                    $codes[$c] = true;
+                }
+            }
+            if (count($codes) >= self::CODES_MAX) {
+                break;
+            }
+        }
+        return array_slice(array_keys($codes), 0, self::CODES_MAX);
+    }
+
+    /**
+     * What a question's tokens expand to for the codes $in filter: the
+     * stripped form, every prefix of it from 4 characters up (a stored stem
+     * that is a prefix of what the visitor typed then matches — "R1653" for
+     * "R165321320") and the letters+digits stem. Plain-language questions
+     * carry no tokens and return nothing, so they are unchanged.
+     */
+    public static function query_codes(array $tokens) {
+        $codes = array();
+        foreach ($tokens as $token) {
+            $full = self::normalize_code($token);
+            if (strlen($full) < self::CODE_MIN_LEN || !preg_match('/\d/', $full)) {
+                continue;
+            }
+            $full = substr($full, 0, self::CODE_MAX_LEN);
+            $codes[$full] = true;
+            for ($len = self::CODE_MIN_LEN; $len < strlen($full); $len++) {
+                $codes[substr($full, 0, $len)] = true;
+            }
+            if (preg_match('/^([A-Z]+\d+)/', $full, $sm) && strlen($sm[1]) >= self::CODE_MIN_LEN) {
+                $codes[$sm[1]] = true;
+            }
+            if (count($codes) >= 200) {
+                break;
+            }
+        }
+        return array_slice(array_keys($codes), 0, 200);
+    }
+
+    /**
+     * Order keyword-leg hits so an exact code match outranks a prefix-only
+     * match: a hit is exact when its stored code set (or its text) carries the
+     * stripped question token itself. Dense order is kept inside each group.
+     *
+     * @return array{hits:array,exact:int,prefix:int}
+     */
+    public static function rank_keyword_hits(array $hits, array $tokens) {
+        $exact_codes = array();
+        foreach ($tokens as $token) {
+            $n = self::normalize_code($token);
+            if (strlen($n) >= self::CODE_MIN_LEN) {
+                $exact_codes[$n] = true;
+            }
+        }
+        $exact = array();
+        $prefix = array();
+        foreach ($hits as $hit) {
+            $meta   = is_array($hit['metadata'] ?? null) ? $hit['metadata'] : array();
+            $stored = is_array($meta[self::CODES_FIELD] ?? null) ? $meta[self::CODES_FIELD] : array();
+            $is_exact = false;
+            foreach ($stored as $code) {
+                if (isset($exact_codes[strtoupper((string) $code)])) {
+                    $is_exact = true;
+                    break;
+                }
+            }
+            if (!$is_exact && !empty($tokens) && isset($meta[self::TEXT_FIELD])) {
+                $haystack = self::normalize_code($meta[self::TEXT_FIELD]);
+                foreach ($exact_codes as $code => $_) {
+                    if ($haystack !== '' && strpos($haystack, $code) !== false) {
+                        $is_exact = true;
+                        break;
+                    }
+                }
+            }
+            $hit['code_match'] = $is_exact ? 'exact' : 'prefix';
+            if ($is_exact) {
+                $exact[] = $hit;
+            } else {
+                $prefix[] = $hit;
+            }
+        }
+        return array('hits' => array_merge($exact, $prefix), 'exact' => count($exact), 'prefix' => count($prefix));
     }
 
     /** AND two filters (either may be empty). */
@@ -826,6 +985,54 @@ class MxChat_Pinecone_Documents {
     }
 
     /**
+     * The plain-language "that name is taken" message (3e83e4) — never a bare
+     * HTTP 409. Carries a free suggestion so the UI can fill it in.
+     */
+    public static function name_taken_message($name, $suggested = '') {
+        $message = sprintf(
+            /* translators: %s: Pinecone index name */
+            __('An index named "%s" already exists in this Pinecone project. Pick a different name, or paste that index\'s host above and press Check index instead of creating one.', 'mxchat'),
+            $name
+        );
+        if ($suggested !== '') {
+            /* translators: %s: suggested Pinecone index name */
+            $message .= ' ' . sprintf(__('Suggested free name: %s.', 'mxchat'), $suggested);
+        }
+        return $message;
+    }
+
+    /**
+     * A free index name derived from the current one: <base>-docs, then
+     * <base>-docs-2, -3 … (an existing -docs suffix is not doubled). Lists the
+     * project's indexes once. @return array{name:string,taken:bool,existing:array}
+     */
+    public static function suggest_index_name($base, $api_key) {
+        $base = strtolower(sanitize_text_field($base));
+        $base = preg_replace('/[^a-z0-9-]+/', '-', $base);
+        $base = trim(preg_replace('/-{2,}/', '-', $base), '-');
+        $base = preg_replace('/-docs(-\d+)?$/', '', $base);
+        if ($base === '') {
+            $base = 'mxchat';
+        }
+        $existing = array();
+        $res = self::control_request('GET', 'indexes', null, $api_key);
+        if ($res['error'] === '' && is_array($res['data'])) {
+            foreach (($res['data']['indexes'] ?? array()) as $index) {
+                if (isset($index['name'])) {
+                    $existing[strtolower((string) $index['name'])] = true;
+                }
+            }
+        }
+        $stem = substr($base, 0, 45 - strlen('-docs-99'));
+        $stem = rtrim($stem, '-');
+        $candidate = $stem . '-docs';
+        for ($n = 2; isset($existing[$candidate]) && $n < 100; $n++) {
+            $candidate = $stem . '-docs-' . $n;
+        }
+        return array('name' => $candidate, 'taken' => isset($existing[$base]), 'existing' => array_keys($existing));
+    }
+
+    /**
      * Create a document index for the active embedding dimension.
      * @return array|WP_Error the IndexModel
      */
@@ -833,6 +1040,14 @@ class MxChat_Pinecone_Documents {
         $name = strtolower(sanitize_text_field($name));
         if (!preg_match('/^[a-z0-9]([a-z0-9-]{0,43}[a-z0-9])?$/', $name)) {
             return new WP_Error('pinecone_index', 'Index names are 1-45 lowercase letters, digits and hyphens.');
+        }
+        // 3e83e4: say so in plain words BEFORE Pinecone can answer 409 — the
+        // name field is prefilled with the vector index being migrated away
+        // from, so the first click used to collide for exactly that customer.
+        $taken = self::describe_index($name, $api_key);
+        if (!is_wp_error($taken)) {
+            $suggest = self::suggest_index_name($name, $api_key);
+            return new WP_Error('pinecone_exists', self::name_taken_message($name, $suggest['name']), array('code' => 409, 'suggested' => $suggest['name']));
         }
         $cloud = array_key_exists($cloud, self::clouds()) ? $cloud : 'aws';
         $region = sanitize_text_field($region) ?: 'us-east-1';
@@ -850,6 +1065,10 @@ class MxChat_Pinecone_Documents {
             )),
         );
         $res = self::control_request('POST', 'indexes', $body, $api_key);
+        if ($res['code'] === 409) {
+            $suggest = self::suggest_index_name($name, $api_key);
+            return new WP_Error('pinecone_exists', self::name_taken_message($name, $suggest['name']), array('code' => 409, 'suggested' => $suggest['name']));
+        }
         if ($res['error'] !== '' || !is_array($res['data'])) {
             return new WP_Error('pinecone_api', $res['error'] !== '' ? $res['error'] : 'Empty create response', array('code' => $res['code']));
         }
@@ -938,6 +1157,70 @@ class MxChat_Pinecone_Documents {
         delete_transient(self::MIGRATION_KEY);
     }
 
+    /**
+     * 3e83e4: is there an unfinished copy INTO this host? The settings save
+     * and the autosave refuse to switch the live chatbot onto a document index
+     * while its copy is still running (unless the owner ticks Switch anyway),
+     * so a production bot never answers from a half-filled index.
+     *
+     * @return array|null the running state, or null when nothing blocks
+     */
+    public static function migration_blocks_switch($host) {
+        $host  = strtolower(trim(str_replace(array('https://', 'http://'), '', (string) $host), '/'));
+        $state = self::migration_get();
+        if ($host === '' || empty($state) || ($state['status'] ?? '') !== 'running') {
+            return null;
+        }
+        if (strtolower((string) ($state['target_host'] ?? '')) !== $host) {
+            return null;
+        }
+        return $state;
+    }
+
+    /** Plain-language line for the switch gate: "The copy into X is still running (481 of 4,503 records)…". */
+    public static function switch_blocked_message(array $state) {
+        return sprintf(
+            /* translators: 1: document index name, 2: records copied, 3: records in total */
+            __('The copy into "%1$s" is still running (%2$s of %3$s records). Let it finish before switching the chatbot to the document index, or tick Switch anyway to move it now and copy the rest afterwards.', 'mxchat'),
+            (string) ($state['target_name'] ?: $state['target_host']),
+            number_format_i18n((int) ($state['copied'] ?? 0)),
+            number_format_i18n((int) ($state['total'] ?? 0))
+        );
+    }
+
+    /**
+     * Run one Pinecone call up to MIGRATE_RETRIES times, 1 s / 2 s / 4 s apart,
+     * so a single dropped connection or a 5xx does not end the copy.
+     *
+     * @param callable $call returns array|true|WP_Error
+     * @return array{result:mixed,attempts:int}
+     */
+    private static function with_retry(callable $call) {
+        $result = null;
+        $attempts = 0;
+        for ($attempt = 1; $attempt <= self::MIGRATE_RETRIES; $attempt++) {
+            $attempts = $attempt;
+            $result = call_user_func($call);
+            if (!is_wp_error($result)) {
+                return array('result' => $result, 'attempts' => $attempts);
+            }
+            if ($attempt < self::MIGRATE_RETRIES) {
+                sleep((int) pow(2, $attempt - 1));
+            }
+        }
+        return array('result' => $result, 'attempts' => $attempts);
+    }
+
+    /** Seconds one AJAX step may spend copying pages (bounded by PHP's own limit). */
+    private static function step_budget() {
+        $budget = (float) apply_filters('mxchat_pinecone_migrate_step_seconds', self::MIGRATE_STEP_SECONDS);
+        $limit  = (int) ini_get('max_execution_time');
+        if ($limit > 0 && $limit - 8 < $budget) {
+            $budget = max(3, $limit - 8);
+        }
+        return $budget;
+    }
+
     /** Classic GET /vectors/list page. @return array{ids:array,next:string}|WP_Error */
     public static function classic_list_page($host, $api_key, $namespace, $limit, $token) {
         $params = array('limit' => max(1, min(100, (int) $limit)));
@@ -1016,10 +1299,131 @@ class MxChat_Pinecone_Documents {
         return $data;
     }
 
+    /** Display key of a namespace in the per-namespace map — Pinecone's console names the default one __default__. */
+    public static function ns_key($namespace) {
+        return (string) $namespace === '' ? '__default__' : (string) $namespace;
+    }
+
+    /** Raw namespace for a display key (the default namespace is '' on the wire). */
+    public static function ns_raw($key) {
+        return (string) $key === '__default__' ? '' : (string) $key;
+    }
+
+    /** Classic describe_index_stats → [raw namespace => record count], the default namespace as ''. */
+    private static function namespace_counts(array $stats) {
+        $counts = array();
+        foreach ((array) ($stats['namespaces'] ?? array()) as $ns_name => $ns_info) {
+            $counts[self::ns_raw($ns_name)] = (int) ($ns_info['vectorCount'] ?? $ns_info['recordCount'] ?? 0);
+        }
+        return $counts;
+    }
+
+    /**
+     * e50d2e: the order namespaces are copied in when every namespace is
+     * asked for — the default namespace first, then the rest by name. Only
+     * namespaces that hold records are queued.
+     */
+    private static function namespace_queue(array $counts) {
+        $queue = array();
+        if (!empty($counts[''])) {
+            $queue[] = '';
+        }
+        $named = array();
+        foreach ($counts as $ns => $count) {
+            if ($ns !== '' && $count > 0) {
+                $named[] = (string) $ns;
+            }
+        }
+        sort($named, SORT_STRING);
+        return array_merge($queue, $named);
+    }
+
+    private static function new_namespace_entry($namespace, $total, $status = 'queued') {
+        return array('namespace' => (string) $namespace, 'total' => (int) $total, 'copied' => 0, 'status' => $status, 'target_count' => null);
+    }
+
+    /**
+     * e50d2e: the per-namespace map of a migration state — display key →
+     * namespace / total / copied / status / target_count. A state written
+     * before this build copied one namespace and carries no map, so one is
+     * synthesised from its single namespace; the Delete guard and the step
+     * loop read every state through here.
+     */
+    public static function per_namespace_map(array $state) {
+        if (!empty($state['per_namespace']) && is_array($state['per_namespace'])) {
+            return $state['per_namespace'];
+        }
+        $namespace = (string) ($state['namespace'] ?? '');
+        $status = ($state['status'] ?? '') === 'running' ? 'running' : (in_array($state['status'] ?? '', array('done', 'source_deleted'), true) ? 'done' : 'queued');
+        $entry = self::new_namespace_entry($namespace, (int) ($state['total'] ?? 0), $status);
+        $entry['copied'] = (int) ($state['copied'] ?? 0);
+        $entry['target_count'] = isset($state['target_count']) ? $state['target_count'] : null;
+        return array(self::ns_key($namespace) => $entry);
+    }
+
+    /**
+     * e50d2e: widen a single-namespace copy — running or finished — to every
+     * namespace of the source that holds records. Namespaces already copied
+     * keep their entry, the rest queue behind the current one, the total
+     * becomes the sum, and "other namespaces" empties because none are left
+     * out any more. A finished copy with nothing left to queue stays done.
+     *
+     * @return array|WP_Error state
+     */
+    private static function extend_to_all_namespaces(array $state, $api_key) {
+        $stats = self::classic_stats((string) ($state['source_host'] ?? ''), $api_key);
+        if (is_wp_error($stats)) {
+            return $stats;
+        }
+        $ns_counts = self::namespace_counts($stats);
+        $map       = self::per_namespace_map($state);
+        $queue     = array_values((array) ($state['queue'] ?? array()));
+        $current   = isset($state['current']) ? (string) $state['current'] : (string) ($state['namespace'] ?? '');
+        foreach (self::namespace_queue($ns_counts) as $ns) {
+            if (isset($map[self::ns_key($ns)]) || $ns === $current || in_array($ns, $queue, true)) {
+                continue;
+            }
+            $map[self::ns_key($ns)] = self::new_namespace_entry($ns, $ns_counts[$ns]);
+            $queue[] = $ns;
+        }
+        $total = 0;
+        foreach ($map as $entry) {
+            $total += (int) ($entry['total'] ?? 0);
+        }
+        $state['per_namespace']    = $map;
+        $state['queue']            = $queue;
+        $state['current']          = $current;
+        $state['namespace']        = $current;
+        $state['total']            = $total;
+        $state['total_all']        = (int) ($stats['totalVectorCount'] ?? $total);
+        $state['other_namespaces'] = array();
+        $state['all_namespaces']   = true;
+        if (($state['status'] ?? '') === 'done' && !empty($queue)) {
+            $next = array_shift($queue);
+            $state['queue']     = $queue;
+            $state['current']   = $next;
+            $state['namespace'] = $next;
+            $state['token']     = '';
+            $state['status']    = 'running';
+            $state['error']     = '';
+            $state['error_at']  = 0;
+            $state['per_namespace'][self::ns_key($next)]['status'] = 'running';
+            unset($state['finished']);
+        }
+        return $state;
+    }
+
     /**
      * Validate and start (or resume) a migration. @return array|WP_Error state
+     *
+     * e50d2e: $all_namespaces copies every namespace of the source that holds
+     * records — the default namespace first, then the rest by name — each into
+     * the same-named namespace of the document index, one after another, in
+     * one run. Without it the copy is exactly 3e83e4's: the one configured
+     * namespace. Asking for every namespace on a copy that is already running
+     * or finished keeps what was copied and queues the rest.
      */
-    public static function migrate_start($source_host, array $target_cfg, $restart = false) {
+    public static function migrate_start($source_host, array $target_cfg, $restart = false, $all_namespaces = false) {
         $source_host = strtolower(trim(str_replace(array('https://', 'http://'), '', (string) $source_host), '/'));
         if ($source_host === '') {
             return new WP_Error('migrate', 'Enter the host of the vector index to copy from.');
@@ -1030,19 +1434,75 @@ class MxChat_Pinecone_Documents {
         if ($source_host === strtolower($target_cfg['host'])) {
             return new WP_Error('migrate', 'The source and the document index are the same host.');
         }
-        $existing = self::migration_get();
-        if (!$restart && !empty($existing) && ($existing['source_host'] ?? '') === $source_host && ($existing['target_host'] ?? '') === $target_cfg['host'] && ($existing['status'] ?? '') === 'running') {
-            return $existing; // resume
+        $existing  = self::migration_get();
+        $same_copy = !empty($existing) && ($existing['source_host'] ?? '') === $source_host && strtolower((string) ($existing['target_host'] ?? '')) === strtolower($target_cfg['host']);
+        if (!$restart && $same_copy && ($existing['status'] ?? '') === 'running') {
+            // Resume from the recorded cursor — whether the last step ended
+            // cleanly or with an error (3e83e4: a second click continues,
+            // it never starts over unless asked).
+            $existing['error'] = '';
+            if ($all_namespaces && empty($existing['all_namespaces'])) {
+                $existing = self::extend_to_all_namespaces($existing, $target_cfg['api_key']);
+                if (is_wp_error($existing)) {
+                    return $existing;
+                }
+            }
+            return self::migration_set($existing);
+        }
+        if (!$restart && $same_copy && $all_namespaces && ($existing['status'] ?? '') === 'done') {
+            $extended = self::extend_to_all_namespaces($existing, $target_cfg['api_key']);
+            if (is_wp_error($extended)) {
+                return $extended;
+            }
+            return self::migration_set($extended);
         }
         $stats = self::classic_stats($source_host, $target_cfg['api_key']);
         if (is_wp_error($stats)) {
             return $stats;
         }
         $namespace = (string) ($target_cfg['namespace'] ?? '');
-        if ($namespace !== '') {
-            $total = isset($stats['namespaces'][$namespace]['vectorCount']) ? (int) $stats['namespaces'][$namespace]['vectorCount'] : 0;
+        // 3e83e4: the total is the SOURCE NAMESPACE's count, never the whole
+        // index — the copy lists one namespace, so an index with records in
+        // other namespaces used to report "done" with copied < total and no
+        // explanation. The other namespaces are recorded for the UI instead.
+        $ns_counts = self::namespace_counts($stats);
+        $queue            = array();
+        $per_namespace    = array();
+        $other_namespaces = array();
+        if ($all_namespaces) {
+            $queue = self::namespace_queue($ns_counts);
+            if (empty($queue)) {
+                $queue = array($namespace); // stats listed no namespaces — copy the configured one, as before
+            }
+            $total = 0;
+            foreach ($queue as $ns) {
+                if (isset($ns_counts[$ns])) {
+                    $count = (int) $ns_counts[$ns];
+                } elseif ($ns === '' && empty($ns_counts)) {
+                    $count = (int) ($stats['totalVectorCount'] ?? 0);
+                } else {
+                    $count = 0;
+                }
+                $per_namespace[self::ns_key($ns)] = self::new_namespace_entry($ns, $count);
+                $total += $count;
+            }
+            $current = (string) array_shift($queue);
+            $per_namespace[self::ns_key($current)]['status'] = 'running';
         } else {
-            $total = (int) ($stats['totalVectorCount'] ?? 0);
+            $current = $namespace;
+            if (isset($ns_counts[$namespace])) {
+                $total = (int) $ns_counts[$namespace];
+            } elseif ($namespace === '' && empty($ns_counts)) {
+                $total = (int) ($stats['totalVectorCount'] ?? 0);
+            } else {
+                $total = 0;
+            }
+            $per_namespace[self::ns_key($namespace)] = self::new_namespace_entry($namespace, $total, 'running');
+            foreach ($ns_counts as $ns_name => $ns_count) {
+                if ($ns_name !== $namespace && $ns_count > 0) {
+                    $other_namespaces[self::ns_key($ns_name)] = $ns_count;
+                }
+            }
         }
         $source_dimension = (int) ($stats['dimension'] ?? 0);
         $target_index = self::find_index_by_host($target_cfg['host'], $target_cfg['api_key']);
@@ -1057,18 +1517,31 @@ class MxChat_Pinecone_Documents {
             return new WP_Error('migrate', sprintf('Dimensions differ (source %d, document index %d) — the vectors cannot be copied. Re-import your content into the document index instead.', $source_dimension, $schema['dimension']));
         }
         $state = array(
-            'status'       => 'running',
-            'source_host'  => $source_host,
-            'target_host'  => $target_cfg['host'],
-            'target_name'  => (string) ($target_index['name'] ?? ''),
-            'namespace'    => $namespace,
-            'total'        => $total,
-            'copied'       => 0,
-            'token'        => '',
-            'batches'      => 0,
-            'started'      => time(),
-            'error'        => '',
-            'source_name'  => '',
+            'status'           => 'running',
+            'source_host'      => $source_host,
+            'target_host'      => $target_cfg['host'],
+            'target_name'      => (string) ($target_index['name'] ?? ''),
+            'namespace'        => $current,
+            'total'            => $total,
+            'total_all'        => (int) ($stats['totalVectorCount'] ?? $total),
+            'other_namespaces' => $other_namespaces,
+            // e50d2e: the namespace being copied, the ones still queued and
+            // a per-namespace ledger — the Delete guard checks every entry.
+            'all_namespaces'   => (bool) $all_namespaces,
+            'current'          => $current,
+            'queue'            => $queue,
+            'per_namespace'    => $per_namespace,
+            'copied'           => 0,
+            'skipped'          => 0,
+            'token'            => '',
+            'batches'          => 0,
+            'retries'          => 0,
+            'failed_steps'     => 0,
+            'started'          => time(),
+            'error'            => '',
+            'error_at'         => 0,
+            'target_count'     => null,
+            'source_name'      => '',
         );
         $source_index = self::find_index_by_host($source_host, $target_cfg['api_key']);
         if (!is_wp_error($source_index)) {
@@ -1078,50 +1551,216 @@ class MxChat_Pinecone_Documents {
     }
 
     /**
-     * Copy one page: list → fetch (values + metadata) → documents/upsert.
-     * Idempotent — the same ids land in the same place on a re-run.
+     * Copy pages until the step's time budget is used or the source is
+     * exhausted: list → fetch (values + metadata) → documents/upsert, each
+     * call retried with backoff. Idempotent — the same ids land in the same
+     * place on a re-run. The cursor is persisted after EVERY page, so a step
+     * that dies mid-way (proxy timeout, killed request) loses at most one
+     * page of work and the next click continues from the recorded position.
+     *
      * @return array|WP_Error state
      */
     public static function migrate_step(array $state, array $target_cfg, $batch = self::MIGRATE_BATCH) {
         if (($state['status'] ?? '') !== 'running') {
             return $state;
         }
-        if (($state['target_host'] ?? '') !== ($target_cfg['host'] ?? '')) {
+        if (strtolower((string) ($state['target_host'] ?? '')) !== strtolower((string) ($target_cfg['host'] ?? ''))) {
             return new WP_Error('migrate', 'The document index host changed since the migration started. Start it again.');
         }
-        $page = self::classic_list_page($state['source_host'], $target_cfg['api_key'], $state['namespace'], $batch, $state['token']);
-        if (is_wp_error($page)) {
-            $state['error'] = $page->get_error_message();
-            return self::migration_set($state);
+        $started = microtime(true);
+        $budget  = self::step_budget();
+        $pages   = 0;
+        $api_key = $target_cfg['api_key'];
+        foreach (array('retries', 'skipped', 'failed_steps', 'error_at') as $counter) {
+            $state[$counter] = (int) ($state[$counter] ?? 0); // states written before 3e83e4 lack these
         }
-        if (!empty($page['ids'])) {
-            $vectors = self::classic_fetch($state['source_host'], $target_cfg['api_key'], $state['namespace'], $page['ids']);
-            if (is_wp_error($vectors)) {
-                $state['error'] = $vectors->get_error_message();
-                return self::migration_set($state);
+        if (empty($state['per_namespace']) || !is_array($state['per_namespace'])) {
+            // e50d2e: a state written before this build copied one namespace and has no ledger
+            $state['per_namespace'] = self::per_namespace_map($state);
+            $state['current']       = (string) ($state['namespace'] ?? '');
+            $state['queue']         = array();
+        }
+        if (!isset($state['current'])) {
+            $state['current'] = (string) ($state['namespace'] ?? '');
+        }
+        do {
+            $source_host = $state['source_host'];
+            $namespace   = (string) $state['current'];
+            $ns_key      = self::ns_key($namespace);
+            $token       = $state['token'];
+            // e50d2e: the same namespace on the document side — every bot keeps reading its own
+            $page_cfg    = $target_cfg;
+            $page_cfg['namespace'] = $namespace;
+            $listed = self::with_retry(function () use ($source_host, $api_key, $namespace, $batch, $token) {
+                return self::classic_list_page($source_host, $api_key, $namespace, $batch, $token);
+            });
+            $state['retries'] += max(0, $listed['attempts'] - 1);
+            $page = $listed['result'];
+            if (is_wp_error($page)) {
+                return self::migration_fail($state, 'Listing the source index failed after ' . $listed['attempts'] . ' attempts: ' . $page->get_error_message());
             }
-            $documents = array();
-            foreach ($vectors as $id => $vector) {
-                if (empty($vector['values']) || !is_array($vector['values'])) {
-                    continue;
+            $ids = $page['ids'];
+            if (!empty($ids)) {
+                $fetched = self::with_retry(function () use ($source_host, $api_key, $namespace, $ids) {
+                    return self::classic_fetch($source_host, $api_key, $namespace, $ids);
+                });
+                $state['retries'] += max(0, $fetched['attempts'] - 1);
+                $vectors = $fetched['result'];
+                if (is_wp_error($vectors)) {
+                    return self::migration_fail($state, 'Reading ' . count($ids) . ' records from the source index failed after ' . $fetched['attempts'] . ' attempts: ' . $vectors->get_error_message());
                 }
-                $metadata = is_array($vector['metadata'] ?? null) ? $vector['metadata'] : array();
-                $documents[] = self::build_document((string) ($vector['id'] ?? $id), (string) ($metadata['text'] ?? ''), $vector['values'], $metadata);
+                $documents = array();
+                $skipped = 0;
+                foreach ($vectors as $id => $vector) {
+                    if (empty($vector['values']) || !is_array($vector['values'])) {
+                        $skipped++;
+                        continue;
+                    }
+                    $metadata = is_array($vector['metadata'] ?? null) ? $vector['metadata'] : array();
+                    $documents[] = self::build_document((string) ($vector['id'] ?? $id), (string) ($metadata['text'] ?? ''), $vector['values'], $metadata);
+                }
+                $skipped += max(0, count($ids) - count($vectors));
+                if (!empty($documents)) {
+                    $upserted = self::with_retry(function () use ($documents, $page_cfg) {
+                        return self::upsert($documents, $page_cfg);
+                    });
+                    $state['retries'] += max(0, $upserted['attempts'] - 1);
+                    if (is_wp_error($upserted['result'])) {
+                        return self::migration_fail($state, 'Writing ' . count($documents) . ' records to the document index failed after ' . $upserted['attempts'] . ' attempts: ' . $upserted['result']->get_error_message());
+                    }
+                }
+                $state['copied']  = (int) $state['copied'] + count($documents);
+                $state['skipped'] = (int) ($state['skipped'] ?? 0) + $skipped;
+                $state['per_namespace'][$ns_key]['copied'] = (int) ($state['per_namespace'][$ns_key]['copied'] ?? 0) + count($documents);
             }
-            $result = self::upsert($documents, $target_cfg);
-            if (is_wp_error($result)) {
-                $state['error'] = $result->get_error_message();
-                return self::migration_set($state);
+            $state['batches'] = (int) $state['batches'] + 1;
+            $state['token']   = $page['next'];
+            $state['error']   = '';
+            $state['error_at'] = 0;
+            $pages++;
+            if ($page['next'] === '') {
+                // This namespace is copied: record what the document index
+                // reports for it, then move on to the next queued namespace
+                // inside the same time budget (e50d2e), or finish.
+                $state['per_namespace'][$ns_key]['status']   = 'done';
+                $state['per_namespace'][$ns_key]['finished'] = time();
+                $ns_target = self::namespace_count($page_cfg);
+                $state['per_namespace'][$ns_key]['target_count'] = $ns_target > 0 ? $ns_target : null;
+                $queue = array_values((array) ($state['queue'] ?? array()));
+                if (!empty($queue)) {
+                    $next = (string) array_shift($queue);
+                    $state['queue']     = $queue;
+                    $state['current']   = $next;
+                    $state['namespace'] = $next;
+                    $state['token']     = '';
+                    if (!isset($state['per_namespace'][self::ns_key($next)])) {
+                        $state['per_namespace'][self::ns_key($next)] = self::new_namespace_entry($next, 0);
+                    }
+                    $state['per_namespace'][self::ns_key($next)]['status'] = 'running';
+                    self::migration_set($state);
+                    continue; // re-checks the budget, then lists the next namespace from its first page
+                }
+                $state['status']   = 'done';
+                $state['finished'] = time();
+                // The finished state names what both sides report, so the UI
+                // can say "5,000 copied; the document index holds 5,000".
+                $target_count = 0;
+                foreach ($state['per_namespace'] as $entry) {
+                    $target_count += (int) ($entry['target_count'] ?? 0);
+                }
+                $state['target_count'] = $target_count > 0 ? $target_count : null;
+                $state['target_count_at'] = time();
+                break;
             }
-            $state['copied'] = (int) $state['copied'] + count($documents);
+            self::migration_set($state); // cursor persisted per page, not per step
+        } while ((microtime(true) - $started) < $budget);
+        $state['last_step_pages']   = $pages;
+        $state['last_step_seconds'] = round(microtime(true) - $started, 2);
+        return self::migration_set($state);
+    }
+
+    /** Record count of ONE namespace on a document index (0 when not listed) — count() reads the whole index for the default namespace. */
+    private static function namespace_count(array $cfg) {
+        $stats = self::stats($cfg);
+        if (is_wp_error($stats)) {
+            return 0;
         }
-        $state['batches'] = (int) $state['batches'] + 1;
-        $state['token']   = $page['next'];
-        $state['error']   = '';
-        if ($page['next'] === '') {
-            $state['status'] = 'done';
-            $state['finished'] = time();
+        $ns = (string) ($cfg['namespace'] ?? '');
+        return isset($stats['namespaces'][$ns]['vectorCount']) ? (int) $stats['namespaces'][$ns]['vectorCount'] : 0;
+    }
+
+    /**
+     * e50d2e: namespaces of the OLD index that still hold records without a
+     * finished, count-matching copy — read from the live source stats, so a
+     * namespace filled after the copy counts too. Empty array = every record
+     * on the old index has a copy; the Delete old index button refuses on
+     * anything else and names what is missing.
+     *
+     * @return array|WP_Error display key → ['namespace','source','copied','status']
+     */
+    public static function uncopied_namespaces(array $state, $api_key) {
+        $stats = self::classic_stats((string) ($state['source_host'] ?? ''), $api_key);
+        if (is_wp_error($stats)) {
+            return $stats;
         }
+        $counts = self::namespace_counts($stats);
+        if (empty($counts) && (int) ($stats['totalVectorCount'] ?? 0) > 0) {
+            $counts[''] = (int) $stats['totalVectorCount'];
+        }
+        $map     = self::per_namespace_map($state);
+        $missing = array();
+        foreach ($counts as $ns => $count) {
+            if ($count <= 0) {
+                continue;
+            }
+            $key   = self::ns_key($ns);
+            $entry = isset($map[$key]) && is_array($map[$key]) ? $map[$key] : null;
+            if ($entry === null || ($entry['status'] ?? '') !== 'done' || (int) ($entry['copied'] ?? 0) < $count) {
+                $missing[$key] = array(
+                    'namespace' => (string) $ns,
+                    'source'    => (int) $count,
+                    'copied'    => $entry ? (int) ($entry['copied'] ?? 0) : 0,
+                    'status'    => $entry ? (string) ($entry['status'] ?? '') : 'not copied',
+                );
+            }
+        }
+        // Named in the copy order (default first, then by name) — Pinecone's stats object order varies call to call.
+        $ordered = array();
+        foreach (self::namespace_queue(array_combine(array_map(array(__CLASS__, 'ns_raw'), array_keys($missing)), array_column($missing, 'source')) ?: array()) as $ns) {
+            $ordered[self::ns_key($ns)] = $missing[self::ns_key($ns)];
+        }
+        return $ordered + $missing;
+    }
+
+    /** Plain-language refusal naming every namespace the copy is missing. (Plain __(): the card's JS text-escapes it.) */
+    public static function uncopied_message(array $missing) {
+        $parts = array();
+        foreach ($missing as $key => $m) {
+            $parts[] = sprintf(
+                /* translators: 1: namespace name, 2: records copied, 3: records on the old index */
+                __('%1$s (%2$s of %3$s records copied)', 'mxchat'),
+                $key,
+                number_format_i18n((int) $m['copied']),
+                number_format_i18n((int) $m['source'])
+            );
+        }
+        return sprintf(
+            /* translators: %s: comma-separated namespace names with their counts */
+            _n(
+                'Namespace %s on the old index has records that are not in the document index. Tick Copy every namespace and run Migrate again, then delete. The old index stays.',
+                'Namespaces %s on the old index have records that are not in the document index. Tick Copy every namespace and run Migrate again, then delete. The old index stays.',
+                count($missing),
+                'mxchat'
+            ),
+            implode(', ', $parts)
+        );
+    }
+
+    /** Record a step failure without ending the copy: status stays running, the cursor stays put. */
+    private static function migration_fail(array $state, $message) {
+        $state['error']        = (string) $message;
+        $state['error_at']     = time();
+        $state['failed_steps'] = (int) ($state['failed_steps'] ?? 0) + 1;
         return self::migration_set($state);
     }
 
@@ -1132,8 +1771,43 @@ class MxChat_Pinecone_Documents {
     public static function boot() {
         add_action('wp_ajax_mxchat_pinecone_docs_create_index', array(__CLASS__, 'ajax_create_index'));
         add_action('wp_ajax_mxchat_pinecone_docs_check_index', array(__CLASS__, 'ajax_check_index'));
+        add_action('wp_ajax_mxchat_pinecone_docs_suggest_name', array(__CLASS__, 'ajax_suggest_name'));
         add_action('wp_ajax_mxchat_pinecone_docs_migrate', array(__CLASS__, 'ajax_migrate'));
         add_action('wp_ajax_mxchat_pinecone_docs_delete_old_index', array(__CLASS__, 'ajax_delete_old_index'));
+    }
+
+    /**
+     * Suggest a free document-index name for the name in the field (3e83e4).
+     * With a host that already answers in the project, the name is that
+     * index's own — the owner is pointing at an existing document index, not
+     * about to create one.
+     */
+    public static function ajax_suggest_name() {
+        self::ajax_guard();
+        $api_key = self::posted_api_key();
+        $base    = isset($_POST['base']) ? sanitize_text_field(wp_unslash($_POST['base'])) : '';
+        $host    = isset($_POST['host']) ? sanitize_text_field(wp_unslash($_POST['host'])) : '';
+        if ($api_key === '') {
+            wp_send_json_error(array('message' => esc_html__('Enter your Pinecone API key first.', 'mxchat')));
+        }
+        if ($host !== '') {
+            $index = self::find_index_by_host($host, $api_key);
+            if (!is_wp_error($index) && !empty($index['name'])) {
+                wp_send_json_success(array('name' => strtolower((string) $index['name']), 'resolved' => true, 'taken' => false, 'base' => strtolower($base)));
+            }
+        }
+        $suggest = self::suggest_index_name($base, $api_key);
+        wp_send_json_success(array('name' => $suggest['name'], 'resolved' => false, 'taken' => $suggest['taken'], 'base' => strtolower($base)));
+    }
+
+    /** The document-index target for a migration call: the host in the form, else the saved one. */
+    private static function posted_target_host(array $options) {
+        $posted = isset($_POST['target_host']) ? sanitize_text_field(wp_unslash($_POST['target_host'])) : '';
+        $posted = strtolower(trim(str_replace(array('https://', 'http://'), '', $posted), '/'));
+        if ($posted !== '') {
+            return $posted;
+        }
+        return strtolower(trim((string) ($options['mxchat_pinecone_host'] ?? ''), '/'));
     }
 
     private static function ajax_guard() {
@@ -1172,7 +1846,12 @@ class MxChat_Pinecone_Documents {
         $dimension = self::expected_dimension();
         $index = self::create_document_index($name, $dimension, $cloud, $region, $language, $api_key);
         if (is_wp_error($index)) {
-            wp_send_json_error(array('message' => $index->get_error_message()));
+            $data = $index->get_error_data();
+            wp_send_json_error(array(
+                'message'   => $index->get_error_message(),
+                'code'      => $index->get_error_code(),
+                'suggested' => is_array($data) ? (string) ($data['suggested'] ?? '') : '',
+            ));
         }
         $host = (string) ($index['host'] ?? '');
         // Give Pinecone a few seconds — small serverless indexes are usually Ready quickly.
@@ -1187,19 +1866,22 @@ class MxChat_Pinecone_Documents {
         }
         $options = get_option(self::OPTION, array());
         $options = is_array($options) ? $options : array();
+        // 3e83e4: creating the index no longer moves the live chatbot. The
+        // host and index type are only written when the owner saves the
+        // form; here we record that this host passed the check (the save
+        // gate) and the settings the index was created with.
         $changes = array(
-            'mxchat_pinecone_api_key'            => $api_key,
-            'mxchat_pinecone_host'               => $host,
-            'mxchat_pinecone_index'              => strtolower($name),
-            'mxchat_pinecone_index_type'         => 'document',
             'mxchat_pinecone_docs_verified_host' => $host,
             'mxchat_pinecone_docs_cloud'         => array_key_exists($cloud, self::clouds()) ? $cloud : 'aws',
             'mxchat_pinecone_docs_region'        => $region ?: 'us-east-1',
             'mxchat_pinecone_docs_language'      => array_key_exists($language, self::languages()) ? $language : 'en',
         );
+        if (empty($options['mxchat_pinecone_api_key'])) {
+            $changes['mxchat_pinecone_api_key'] = $api_key;
+        }
         // Remember the classic index so Migrate can copy from it.
         $previous_host = (string) ($options['mxchat_pinecone_host'] ?? '');
-        if ($previous_host !== '' && $previous_host !== $host && self::options_index_type($options) === 'vector' && empty($options['mxchat_pinecone_vector_host'])) {
+        if ($previous_host !== '' && strtolower($previous_host) !== strtolower($host) && self::options_index_type($options) === 'vector' && empty($options['mxchat_pinecone_vector_host'])) {
             $changes['mxchat_pinecone_vector_host']  = $previous_host;
             $changes['mxchat_pinecone_vector_index'] = (string) ($options['mxchat_pinecone_index'] ?? '');
         }
@@ -1210,9 +1892,10 @@ class MxChat_Pinecone_Documents {
             'dimension' => $dimension,
             'ready'     => $ready,
             'vector_host' => $changes['mxchat_pinecone_vector_host'] ?? ($options['mxchat_pinecone_vector_host'] ?? ''),
+            // Plain text: the card's JS escapes it on render (esc_html__ here double-escaped the quotes to a literal &quot;).
             'message'   => $ready
-                ? sprintf(esc_html__('Document index "%1$s" created (%2$d dimensions, cosine, full-text search on the chunk text). Host filled in and saved.', 'mxchat'), strtolower($name), $dimension)
-                : sprintf(esc_html__('Document index "%1$s" is being created (%2$d dimensions). The host is filled in and saved; run Check index in a minute to confirm it is ready.', 'mxchat'), strtolower($name), $dimension),
+                ? sprintf(__('Document index "%1$s" created (%2$d dimensions, cosine, full-text search on the chunk text). The host is filled in above. Your chatbot keeps answering from the current index until you save the Pinecone settings — copy your records across with Migrate first.', 'mxchat'), strtolower($name), $dimension)
+                : sprintf(__('Document index "%1$s" is being created (%2$d dimensions). The host is filled in above; run Check index in a minute to confirm it is ready. Your chatbot keeps answering from the current index until you save the Pinecone settings.', 'mxchat'), strtolower($name), $dimension),
         ));
     }
 
@@ -1245,13 +1928,21 @@ class MxChat_Pinecone_Documents {
         wp_send_json_success($check);
     }
 
-    /** Migrate: mode start | step | status | reset. Each step copies one page. */
+    /**
+     * Migrate: mode start | step | status | reset.
+     *
+     * 3e83e4: the copy is DECOUPLED from the live retrieval path. The target
+     * is the document-index host in the form (posted as target_host) plus the
+     * API key, checked against Pinecone at start — the saved index type is
+     * never consulted, so the site keeps answering from its vector index for
+     * the whole copy and the owner switches by saving the settings afterwards.
+     * Each step copies pages for up to MIGRATE_STEP_SECONDS.
+     */
     public static function ajax_migrate() {
         self::ajax_guard();
         $mode = isset($_POST['mode']) ? sanitize_key($_POST['mode']) : 'status';
         $options = get_option(self::OPTION, array());
         $options = is_array($options) ? $options : array();
-        $target  = self::cfg_from_options($options);
         if ($mode === 'reset') {
             self::migration_clear();
             wp_send_json_success(array('state' => array()));
@@ -1259,29 +1950,42 @@ class MxChat_Pinecone_Documents {
         if ($mode === 'status') {
             wp_send_json_success(array('state' => self::migration_get()));
         }
-        if ($target['index_type'] !== 'document') {
-            wp_send_json_error(array('message' => esc_html__('Save the Pinecone settings with the index type set to Document index first.', 'mxchat')));
-        }
-        if (strtolower((string) ($options['mxchat_pinecone_docs_verified_host'] ?? '')) !== strtolower($target['host'])) {
-            wp_send_json_error(array('message' => esc_html__('Run Check index on the document index host before migrating.', 'mxchat')));
+        $api_key   = self::posted_api_key();
+        $namespace = (string) ($options['mxchat_pinecone_namespace'] ?? '');
+        if ($api_key === '') {
+            wp_send_json_error(array('message' => esc_html__('Enter your Pinecone API key first.', 'mxchat')));
         }
         if ($mode === 'start') {
+            $target_host = self::posted_target_host($options);
+            if ($target_host === '') {
+                wp_send_json_error(array('message' => esc_html__('Enter the host of the document index to copy into (or create one with Create index for me).', 'mxchat')));
+            }
+            $check = self::check_document_index($target_host, $api_key, self::expected_dimension());
+            if (!$check['ok']) {
+                wp_send_json_error(array('message' => $check['message']));
+            }
+            $target = array('api_key' => $api_key, 'host' => strtolower($check['host']), 'namespace' => $namespace, 'index_type' => 'document');
             $source_host = isset($_POST['source_host']) ? sanitize_text_field(wp_unslash($_POST['source_host'])) : '';
             $restart     = !empty($_POST['restart']);
-            $state = self::migrate_start($source_host, $target, $restart);
+            $all_ns      = !empty($_POST['all_namespaces']); // e50d2e: Copy every namespace
+            $state = self::migrate_start($source_host, $target, $restart, $all_ns);
             if (is_wp_error($state)) {
                 wp_send_json_error(array('message' => $state->get_error_message()));
             }
-            if ($source_host !== '' && $source_host !== (string) ($options['mxchat_pinecone_vector_host'] ?? '')) {
-                self::persist_options(array('mxchat_pinecone_vector_host' => $state['source_host'], 'mxchat_pinecone_vector_index' => $state['source_name']));
+            $changes = array('mxchat_pinecone_docs_verified_host' => $target['host']);
+            if ($source_host !== '' && strtolower($state['source_host']) !== strtolower((string) ($options['mxchat_pinecone_vector_host'] ?? ''))) {
+                $changes['mxchat_pinecone_vector_host']  = $state['source_host'];
+                $changes['mxchat_pinecone_vector_index'] = $state['source_name'];
             }
-            wp_send_json_success(array('state' => $state));
+            self::persist_options($changes);
+            wp_send_json_success(array('state' => $state, 'live_index_type' => self::options_index_type($options)));
         }
         if ($mode === 'step') {
             $state = self::migration_get();
             if (empty($state)) {
                 wp_send_json_error(array('message' => esc_html__('No migration in progress. Click Migrate to start one.', 'mxchat')));
             }
+            $target = array('api_key' => $api_key, 'host' => (string) ($state['target_host'] ?? ''), 'namespace' => (string) ($state['current'] ?? ($state['namespace'] ?? $namespace)), 'index_type' => 'document');
             $state = self::migrate_step($state, $target);
             if (is_wp_error($state)) {
                 wp_send_json_error(array('message' => $state->get_error_message()));
@@ -1289,7 +1993,7 @@ class MxChat_Pinecone_Documents {
             if (!empty($state['error'])) {
                 wp_send_json_error(array('message' => $state['error'], 'state' => $state));
             }
-            wp_send_json_success(array('state' => $state));
+            wp_send_json_success(array('state' => $state, 'live_index_type' => self::options_index_type($options)));
         }
         wp_send_json_error(array('message' => esc_html__('Unknown migration action.', 'mxchat')));
     }
@@ -1313,6 +2017,17 @@ class MxChat_Pinecone_Documents {
         }
         if ($target['index_type'] !== 'document' || strtolower($target['host']) !== strtolower((string) $state['target_host'])) {
             wp_send_json_error(array('message' => esc_html__('The saved document index no longer matches the migration. The old index stays.', 'mxchat')));
+        }
+        // e50d2e: EVERY namespace that holds records on the old index needs a
+        // finished copy whose count matches — not just the one copied last.
+        // Before this, a Multi-Bot or legacy-namespace site could delete
+        // records that were never copied.
+        $missing = self::uncopied_namespaces($state, $target['api_key']);
+        if (is_wp_error($missing)) {
+            wp_send_json_error(array('message' => sprintf(__('Could not read the old index before deleting it (%s). The old index stays.', 'mxchat'), $missing->get_error_message())));
+        }
+        if (!empty($missing)) {
+            wp_send_json_error(array('message' => self::uncopied_message($missing), 'uncopied' => $missing));
         }
         $source = self::find_index_by_host($state['source_host'], $target['api_key']);
         if (is_wp_error($source)) {

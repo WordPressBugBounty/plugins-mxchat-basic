@@ -823,6 +823,14 @@ var initPineconeFeatures, initVectorStoreFeatures;
         var state = {};
         try { state = stateEl ? JSON.parse(stateEl.textContent || '{}') : {}; } catch (e) { state = {}; }
         var verifiedHost = String(state.verified_host || '').toLowerCase();
+        // 3e83e4: the LIVE chatbot's index type + host as saved, the migration
+        // state as last known, and the index name the page loaded with (so a
+        // suggested "-docs" name can be undone by switching back to Vector).
+        var liveType = state.index_type === 'document' ? 'document' : 'vector';
+        var storedHost = String(state.stored_host || '').toLowerCase();
+        var storedIndex = String(state.stored_index || '');
+        var originalIndexName = $.trim($('#mxchat_pinecone_index').val() || '');
+        var migrationState = (state.migration && state.migration.status) ? state.migration : null;
         var ajaxUrl = (typeof mxchatAdmin !== 'undefined' && mxchatAdmin.ajax_url) ? mxchatAdmin.ajax_url : ajaxurl;
         var nonce = (typeof mxchatAdmin !== 'undefined' && mxchatAdmin.settings_nonce) ? mxchatAdmin.settings_nonce :
                     ((typeof mxchatPromptsAdmin !== 'undefined' && mxchatPromptsAdmin.prompts_setting_nonce) ? mxchatPromptsAdmin.prompts_setting_nonce : '');
@@ -839,21 +847,78 @@ var initPineconeFeatures, initVectorStoreFeatures;
         function hostValue() {
             return $.trim($('#mxchat_pinecone_host').val() || '').replace(/^https?:\/\//i, '').replace(/\/+$/, '').toLowerCase();
         }
+        function fmt(n) { n = parseInt(n, 10) || 0; return n.toLocaleString(); }
+        // Does saving Document right now point the chatbot at an index whose copy is unfinished?
+        function switchBlockedBy() {
+            if (currentType() !== 'document' || liveType === 'document' || !migrationState) { return null; }
+            if (migrationState.status !== 'running') { return null; }
+            if (String(migrationState.target_host || '').toLowerCase() !== hostValue()) { return null; }
+            return migrationState;
+        }
         function refreshGate() {
             var isDoc = currentType() === 'document';
             $docs.toggle(isDoc);
             var blocked = isDoc && (hostValue() === '' || hostValue() !== verifiedHost);
-            $submit.prop('disabled', blocked);
             $('#mxchat-pinecone-docs-gate').toggle(blocked);
+            var running = blocked ? null : switchBlockedBy();
+            var $switchGate = $('#mxchat-pinecone-docs-switch-gate');
+            if (running) {
+                $('#mxchat-pinecone-docs-switch-gate-text').text(
+                    'The copy into ' + (running.target_name || running.target_host) + ' is still running (' + fmt(running.copied) + ' of ' + fmt(running.total) +
+                    ' records). Let it finish before switching the chatbot to the document index.'
+                );
+                $switchGate.show();
+                blocked = !$('#mxchat_pinecone_docs_switch_anyway').is(':checked');
+            } else {
+                $switchGate.hide();
+                $('#mxchat_pinecone_docs_switch_anyway').prop('checked', false);
+            }
+            $submit.prop('disabled', blocked);
         }
-        $type.off('change.pineconeDocs').on('change.pineconeDocs', refreshGate);
+        $('#mxchat_pinecone_docs_switch_anyway').off('change.pineconeDocs').on('change.pineconeDocs', refreshGate);
         $('#mxchat_pinecone_host').off('input.pineconeDocs change.pineconeDocs').on('input.pineconeDocs change.pineconeDocs', refreshGate);
-        refreshGate();
 
         function post(data) {
             data.nonce = nonce;
             return $.post(ajaxUrl, data);
         }
+
+        // ---- Index type change: a document index needs its own name, so when
+        // the field still holds the vector index's name (or is empty) suggest a
+        // free "<name>-docs" from the project; Vector restores the original.
+        var suggestedName = '';
+        function nameIsOurs() {
+            var name = $.trim($('#mxchat_pinecone_index').val() || '');
+            return name === '' || name === storedIndex || name === originalIndexName || name === suggestedName;
+        }
+        // When the host in the field is a checked document index, the name is
+        // that index's own; otherwise a free "<name>-docs" for the create button.
+        function suggestDocsName() {
+            var name = $.trim($('#mxchat_pinecone_index').val() || '');
+            var apiKey = $('#mxchat_pinecone_api_key').val();
+            if (liveType === 'document' || !apiKey || currentType() !== 'document') { return; }
+            if (!nameIsOurs()) { return; } // the owner typed their own
+            var host = (hostValue() !== '' && hostValue() === verifiedHost) ? hostValue() : '';
+            post({ action: 'mxchat_pinecone_docs_suggest_name', base: name || storedIndex, host: host, api_key: apiKey }).done(function (response) {
+                if (response && response.success && response.data && response.data.name && currentType() === 'document' && nameIsOurs()) {
+                    suggestedName = response.data.name;
+                    $('#mxchat_pinecone_index').val(suggestedName);
+                }
+            });
+        }
+        $type.off('change.pineconeDocs').on('change.pineconeDocs', function () {
+            if (currentType() === 'document') {
+                suggestDocsName();
+            } else if (suggestedName !== '' && $.trim($('#mxchat_pinecone_index').val() || '') === suggestedName) {
+                $('#mxchat_pinecone_index').val(originalIndexName);
+            }
+            refreshGate();
+        });
+        // Pasting the checked document host resolves the name to that index's own.
+        $('#mxchat_pinecone_host').on('change.pineconeDocsName', function () {
+            if (currentType() === 'document' && hostValue() !== '' && hostValue() === verifiedHost) { suggestDocsName(); }
+        });
+        refreshGate();
         function failMessage(response, fallback) {
             if (response && response.data) {
                 if (typeof response.data === 'string') { return response.data; }
@@ -891,6 +956,11 @@ var initPineconeFeatures, initVectorStoreFeatures;
                     notice(response.data.ready ? 'success' : 'info', response.data.message);
                     refreshGate();
                 } else {
+                    // A taken name comes back with a free suggestion — fill it in so the next click works.
+                    if (response && response.data && response.data.suggested) {
+                        suggestedName = response.data.suggested;
+                        $('#mxchat_pinecone_index').val(response.data.suggested);
+                    }
                     notice('error', failMessage(response, 'Could not create the index.'));
                 }
             }).fail(function () {
@@ -935,43 +1005,160 @@ var initPineconeFeatures, initVectorStoreFeatures;
             });
         });
 
-        // ---- Migrate (copy, batch by batch, resumable)
+        // ---- Migrate (copy, page by page, resumable). 3e83e4: the copy runs
+        // against the document host in the form while the chatbot keeps
+        // answering from the vector index; a dropped request is retried with
+        // backoff, and a second click continues from the recorded position.
         var $migrateBtn = $('#mxchat-pinecone-docs-migrate');
+        // e50d2e: "Copy every namespace" — offered once the start response
+        // reports records in other namespaces; the copy then walks every
+        // namespace of the source in one run, each into its own namespace on
+        // the document side. Disabled while a copy runs in this tab (the
+        // server extends a running copy on the next Migrate click, never
+        // underneath a step that is in flight).
+        var $allNs = $('#mxchat_pinecone_docs_all_namespaces');
+        var $allNsRow = $('#mxchat-pinecone-docs-all-namespaces');
+        var stepRetries = 0;
+        var STEP_RETRY_DELAYS = [1000, 2000, 4000, 8000, 16000];
+        function remainingOf(st) {
+            var total = parseInt(st.total, 10) || 0, copied = parseInt(st.copied, 10) || 0;
+            return Math.max(0, total - copied);
+        }
+        function otherNamespacesText(st) {
+            var other = st.other_namespaces || {};
+            var parts = [];
+            $.each(other, function (name, count) { parts.push(name + ' (' + fmt(count) + ')'); });
+            return parts.join(', ');
+        }
+        function otherNamespacesSummary(st) {
+            var records = 0, n = 0;
+            $.each(st.other_namespaces || {}, function (name, count) { records += parseInt(count, 10) || 0; n++; });
+            return n ? { records: records, count: n } : null;
+        }
+        function namespaceEntries(st) {
+            var out = [];
+            $.each(st.per_namespace || {}, function (key, e) { out.push($.extend({ key: key }, e)); });
+            return out;
+        }
+        function isMulti(st) { return !!st.all_namespaces || namespaceEntries(st).length > 1; }
+        function namespaceLine(e, sep) {
+            return e.key + ' ' + fmt(e.copied) + ' of ' + fmt(e.total) + (e.target_count ? (sep + 'the document index reports ' + fmt(e.target_count) + ')') : '');
+        }
         function renderMigration(st) {
+            migrationState = (st && st.status) ? st : null;
             var $progress = $('#mxchat-pinecone-docs-migrate-progress');
             if (!st || !st.status) {
                 $progress.hide();
                 $('#mxchat-pinecone-docs-migrate-counts').text('');
                 $('#mxchat-pinecone-docs-delete-old').hide();
+                $allNsRow.hide();
+                refreshGate();
                 return;
             }
             var total = parseInt(st.total, 10) || 0;
             var copied = parseInt(st.copied, 10) || 0;
             var pct = total > 0 ? Math.min(100, Math.round(copied * 100 / total)) : (st.status === 'done' ? 100 : 0);
-            var suffix = st.status === 'done' ? ' — done' : (st.status === 'source_deleted' ? ' — old index deleted' : (st.status === 'running' ? ' — copying…' : ''));
+            var multi = isMulti(st);
+            var entries = namespaceEntries(st);
+            var others = otherNamespacesSummary(st);
+            var label, suffix;
+            if (st.status === 'done') {
+                suffix = ' — done' + (st.target_count ? ('; the document index reports ' + fmt(st.target_count) + ' records') : '');
+            } else if (st.status === 'source_deleted') {
+                suffix = ' — old index deleted';
+            } else if (st.status === 'running') {
+                suffix = st.error ? (' — stopped: ' + st.error) : (' — copying, ' + fmt(remainingOf(st)) + ' remaining…');
+            } else {
+                suffix = '';
+            }
+            if (multi && st.status === 'running') {
+                var idx = 0, cur = null;
+                $.each(entries, function (i, e) { if (e.key === (st.current === '' ? '__default__' : st.current)) { idx = i + 1; cur = e; } });
+                label = (cur ? ('Namespace ' + idx + ' of ' + entries.length + ' (' + cur.key + ') — ' + fmt(cur.copied) + ' of ' + fmt(cur.total) + ' records copied; ') : '') +
+                    fmt(copied) + ' of ' + fmt(total) + ' overall (' + pct + '%)' + (st.error ? (' — stopped: ' + st.error) : (', ' + fmt(remainingOf(st)) + ' remaining…'));
+            } else if (multi) {
+                label = fmt(copied) + ' of ' + fmt(total) + ' records copied across ' + entries.length + ' namespaces (' + pct + '%)' + suffix;
+            } else {
+                label = fmt(copied) + ' of ' + fmt(total) + ' records copied (' + pct + '%)' + suffix;
+            }
             $progress.show().find('.mxch-progress-bar-fill').css('width', pct + '%');
-            $progress.find('.mxch-progress-label').text(copied + ' of ' + total + ' records copied (' + pct + '%)' + suffix);
-            $('#mxchat-pinecone-docs-migrate-counts').text(st.source_name ? ('Source: ' + st.source_name + ' (' + total + ' records)') : '');
-            $('#mxchat-pinecone-docs-delete-old').toggle(st.status === 'done' && total > 0 && copied >= total);
+            $progress.find('.mxch-progress-label').text(label);
+            var counts;
+            if (multi) {
+                var lines = $.map(entries, function (e) { return namespaceLine(e, ' ('); });
+                counts = (st.source_name ? ('Source: ' + st.source_name + ' (' + fmt(total) + ' records in ' + entries.length + ' namespaces). ') : '') + lines.join(' · ') + '.';
+            } else {
+                counts = st.source_name ? ('Source: ' + st.source_name + ' (' + fmt(total) + ' records' + (st.namespace ? (' in namespace ' + st.namespace) : '') + ')') : '';
+                if (others) {
+                    counts += (counts ? '. ' : '') + 'Not copied — ' + fmt(others.records) + ' records in ' + others.count + ' other namespace' + (others.count === 1 ? '' : 's') + ': ' + otherNamespacesText(st) + '. Tick Copy every namespace and click Migrate to include them.';
+                }
+            }
+            $('#mxchat-pinecone-docs-migrate-counts').text(counts);
+            // The toggle appears once the source is known to have other namespaces, and stays on for a copy of every namespace.
+            $allNsRow.toggle(multi || !!others);
+            if (st.all_namespaces) { $allNs.prop('checked', true); }
+            $allNs.prop('disabled', $migrateBtn.prop('disabled'));
+            // Delete old index is never offered while the copy is known to leave namespaces behind (the server refuses too).
+            $('#mxchat-pinecone-docs-delete-old').toggle(st.status === 'done' && total > 0 && copied >= total && liveType === 'document' && !others);
+            refreshGate();
+        }
+        function migrateFinished(st) {
+            $migrateBtn.prop('disabled', false).text('Migrate');
+            $allNs.prop('disabled', false);
+            var total = parseInt(st.total, 10) || 0, copied = parseInt(st.copied, 10) || 0;
+            var reported = st.target_count ? (' The document index reports ' + fmt(st.target_count) + ' records.') : '';
+            var stillVector = liveType === 'document' ? '' : ' Your chatbot is still on the vector index — save the Pinecone settings to switch it over.';
+            var entries = namespaceEntries(st);
+            var others = otherNamespacesSummary(st);
+            if (isMulti(st)) {
+                var lines = $.map(entries, function (e) { return namespaceLine(e, ' ('); });
+                if (copied >= total) {
+                    notice('success', 'Copy finished: ' + fmt(copied) + ' of ' + fmt(total) + ' records across ' + entries.length + ' namespaces are in the document index — ' + lines.join(', ') + '.' + stillVector);
+                } else {
+                    var short = $.map(entries, function (e) { return (parseInt(e.copied, 10) || 0) < (parseInt(e.total, 10) || 0) ? namespaceLine(e, ' (') : null; });
+                    notice('warning', 'The copy reached the end of every namespace after ' + fmt(copied) + ' records, but ' + fmt(total) + ' were expected. Short: ' + short.join(', ') + '.' + reported +
+                        (parseInt(st.skipped, 10) ? (' ' + fmt(st.skipped) + ' records had no vector and were skipped.') : ''));
+                }
+                return;
+            }
+            if (copied >= total) {
+                notice(others ? 'warning' : 'success', 'Copy finished: ' + fmt(copied) + ' of ' + fmt(total) + ' records are in the document index.' + reported +
+                    (others ? (' ' + fmt(others.records) + ' records in ' + others.count + ' other namespace' + (others.count === 1 ? ' were' : 's were') + ' not copied: ' + otherNamespacesText(st) + '. Tick Copy every namespace and click Migrate to include them.') : '') + stillVector);
+            } else {
+                notice('warning', 'The copy reached the end of the source namespace after ' + fmt(copied) + ' records, but ' + fmt(total) + ' were expected.' + reported +
+                    (others ? (' Records in other namespaces were not copied: ' + otherNamespacesText(st) + '.') : '') +
+                    (parseInt(st.skipped, 10) ? (' ' + fmt(st.skipped) + ' records had no vector and were skipped.') : ''));
+            }
         }
         function migrateStep() {
-            post({ action: 'mxchat_pinecone_docs_migrate', mode: 'step' }).done(function (response) {
+            post({ action: 'mxchat_pinecone_docs_migrate', mode: 'step', target_host: hostValue(), api_key: $('#mxchat_pinecone_api_key').val() }).done(function (response) {
+                stepRetries = 0;
                 if (response && response.success) {
                     renderMigration(response.data.state);
                     if (response.data.state && response.data.state.status === 'running') {
-                        setTimeout(migrateStep, 150);
+                        setTimeout(migrateStep, 250);
                     } else {
-                        $migrateBtn.prop('disabled', false).text('Migrate');
-                        notice('success', 'Copy finished: ' + response.data.state.copied + ' of ' + response.data.state.total + ' records are in the document index.');
+                        migrateFinished(response.data.state || {});
                     }
                 } else {
-                    if (response && response.data && response.data.state) { renderMigration(response.data.state); }
-                    notice('error', failMessage(response, 'The copy stopped.') + ' Click Migrate to resume.');
+                    var st = (response && response.data && response.data.state) ? response.data.state : null;
+                    if (st) { renderMigration(st); }
+                    notice('error', failMessage(response, 'The copy stopped.') + (st ? (' Click Migrate to continue from record ' + fmt(st.copied) + '.') : ' Click Migrate to resume.'));
                     $migrateBtn.prop('disabled', false).text('Migrate');
+                    $allNs.prop('disabled', false);
                 }
-            }).fail(function () {
-                notice('error', 'Could not reach the server. Click Migrate to resume.');
+            }).fail(function (xhr) {
+                // The server did not answer (timeout, 5xx, rate limit): wait and try the same step again.
+                if (stepRetries < STEP_RETRY_DELAYS.length) {
+                    var delay = STEP_RETRY_DELAYS[stepRetries++];
+                    notice('info', 'No answer from the server (HTTP ' + (xhr && xhr.status ? xhr.status : 0) + '). Retrying in ' + Math.round(delay / 1000) + ' s… the copy continues from where it stopped.');
+                    setTimeout(migrateStep, delay);
+                    return;
+                }
+                stepRetries = 0;
+                notice('error', 'The server stopped answering (HTTP ' + (xhr && xhr.status ? xhr.status : 0) + ') after several tries. Nothing is lost — click Migrate to continue from the last record copied.');
                 $migrateBtn.prop('disabled', false).text('Migrate');
+                $allNs.prop('disabled', false);
             });
         }
         $migrateBtn.off('click.pineconeDocs').on('click.pineconeDocs', function () {
@@ -980,23 +1167,33 @@ var initPineconeFeatures, initVectorStoreFeatures;
                 notice('error', 'Enter the host of the vector index to copy from.');
                 return;
             }
+            if (!hostValue()) {
+                notice('error', 'Enter the host of the document index to copy into, or create one with Create index for me.');
+                return;
+            }
             $migrateBtn.prop('disabled', true).text('Copying…');
+            $allNs.prop('disabled', true);
             $result.hide();
-            post({ action: 'mxchat_pinecone_docs_migrate', mode: 'start', source_host: source }).done(function (response) {
+            stepRetries = 0;
+            post({ action: 'mxchat_pinecone_docs_migrate', mode: 'start', source_host: source, target_host: hostValue(), api_key: $('#mxchat_pinecone_api_key').val(), all_namespaces: $allNs.is(':checked') ? 1 : 0 }).done(function (response) {
                 if (response && response.success) {
-                    renderMigration(response.data.state);
-                    if (response.data.state && response.data.state.status === 'running') {
+                    var st = response.data.state || {};
+                    if (st.target_host && !verifiedHost) { verifiedHost = String(st.target_host).toLowerCase(); setStatus(true, 'Document index checked: ' + st.target_host + '.'); }
+                    renderMigration(st);
+                    if (st.status === 'running') {
                         migrateStep();
                     } else {
-                        $migrateBtn.prop('disabled', false).text('Migrate');
+                        migrateFinished(st);
                     }
                 } else {
                     notice('error', failMessage(response, 'The copy could not start.'));
                     $migrateBtn.prop('disabled', false).text('Migrate');
+                    $allNs.prop('disabled', false);
                 }
             }).fail(function () {
                 notice('error', 'Could not reach the server to start the copy.');
                 $migrateBtn.prop('disabled', false).text('Migrate');
+                $allNs.prop('disabled', false);
             });
         });
         renderMigration(state.migration || null);

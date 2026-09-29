@@ -292,7 +292,7 @@ class MxChat_Editor_Assistant_REST {
         // any non-stream fallback) is GPT-5-safe. Without this the multi-block path 400s on
         // every GPT-5 model — which is most installs (plan-8cb0cb fold consistency fix).
         // Only triggers for gpt-5* ids; Grok / custom OpenAI-compatible keep the 0.4 above.
-        if (strpos($model, 'gpt-5') === 0) {
+        if (strpos($model, 'gpt-5') === 0 || strpos($model, 'gpt-6') === 0) { // gpt-6 too (plan 45c22d)
             $body['temperature'] = 1;
             $no_reasoning_models = array('gpt-5.2', 'gpt-5.1-chat-latest', 'gpt-5.3-chat-latest', 'gpt-5.4-mini', 'gpt-5.4-nano');
             if (!in_array($model, $no_reasoning_models, true)) {
@@ -300,6 +300,9 @@ class MxChat_Editor_Assistant_REST {
                     $body['reasoning_effort'] = 'low';
                 } elseif ($model === 'gpt-5.5' || $model === 'gpt-5.4') {
                     $body['reasoning_effort'] = 'none';
+                } elseif (in_array($model, array('gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna'), true)) {
+                    // plan 45c22d (probed 2026-09-27): gpt-6 rejects 'minimal'; core uses 'low'.
+                    $body['reasoning_effort'] = 'low';
                 } elseif (in_array($model, array('gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna'), true)) {
                     // plan-6fb107: gpt-5.6 rejects 'minimal' (live 400); core uses 'low'.
                     $body['reasoning_effort'] = 'low';

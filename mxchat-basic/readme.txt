@@ -5,7 +5,7 @@ Tags: ai chatbot, chatgpt, woocommerce, customer support, content generation
 Requires at least: 5.3
 Tested up to: 7.1
 Requires PHP: 7.4
-Stable tag: 3.2.22
+Stable tag: 3.2.23
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -321,6 +321,18 @@ Please ensure compliance with applicable terms and data privacy laws.
 *(Note: Screenshots will be added in future updates)*
 
 == Changelog ==
+
+= 3.2.23 - September 29, 2026 =
+* Fixed: Pressing Enter with an empty message no longer locks the chat input. The box stays usable, and only a real message disables it while the reply is generated. A message made only of spaces or blank lines now counts as empty too, so nothing is sent to the model for it.
+* Improved: Pages imported from a web address or a sitemap now remember their own page title (from the page's title tag or its social-sharing title, with the site name trimmed off). Add-ons that name a source, such as MxChat AI Search's source cards, can show the real title instead of a guess made from the address.
+* Improved: On a Pinecone document index, part numbers typed without their spaces, hyphens or dots now find the right record. R165321320 reaches the records that describe R1653 213 20 or the R1653 family, in any letter case, and an exact match always ranks above a family match. Records copied or added from now on carry the matching tokens; run Migrate again to add them to records copied earlier.
+* Improved: Migrate now copies your vector index into the document index while the chatbot keeps answering from the vector index. Nothing switches until you save the Pinecone settings, and saving is held back while a copy into that index is still running unless you tick Switch anyway. An interrupted copy continues from where it stopped, each request copies several batches and retries a dropped connection on its own, the real reason is shown if it does stop, and the progress line reports records remaining, records in other namespaces that are not copied, and the count the document index itself reports when done.
+* Fixed: Create index for me no longer fails with an HTTP 409 when the Index Name field still holds your vector index's name. Switching to the document index type suggests a free name ending in -docs, an existing name is refused in plain words with a suggestion filled in, and creating or checking an index no longer moves the chatbot to it before you save.
+* New: The GPT-6 models are in the model picker: GPT-6 Astra (recommended), GPT-6 Sol and GPT-6 Luna. They work for chat, the content generator and the editor assistant, and the request settings each one requires are applied automatically.
+* Improved: When AI Tools are on, the model is now told how many tool calls it may make for a message, is told how many remain after each round, and is asked for a single call when only one is left. Before, a model could request several lookups at once when only one was allowed, have the rest refused, and answer from partial results.
+* Fixed: Delete old index now checks every namespace of the old vector index, not just the one copied last. It refuses, and names the namespace, while any namespace with records has no finished copy whose count matches. Before, a site with several namespaces (one per bot, or a namespace from an earlier setup) could delete records that were never copied.
+* New: Migrate can copy every namespace of the vector index in one run. When the source index holds records in other namespaces, the Pinecone card offers a Copy every namespace switch beside Migrate. Each namespace is copied into the same-named namespace of the document index, so every bot keeps reading its own; the progress line shows which namespace is being copied and the counts for each, an interrupted copy continues with the right namespace, and a namespace already copied is kept rather than copied again.
+
 
 = 3.2.22 - September 20, 2026 =
 * New: An opt-in Pinecone Document index with full-text search, so a question carrying a part number, SKU or code finds the record that holds it. Create index for me, Check index and Migrate move an existing index across with no re-embedding, and classic vector indexes are untouched.
@@ -717,6 +729,10 @@ Please ensure compliance with applicable terms and data privacy laws.
 Older releases are archived in the plugin's full version history on WordPress.org.
 
 == Upgrade Notice ==
+
+= 3.2.23 =
+Fixes the chat input locking up for good when a visitor pressed Enter on an empty message. On a Pinecone document index, Delete old index now refuses while any namespace is still uncopied, Migrate can copy every namespace in one run and continues where it stopped, part numbers typed without spaces find their records, and Create index for me suggests a free name instead of failing on an existing one. Adds the GPT-6 models (Astra, Sol and Luna) to the model picker, and tells the chatbot its AI Tools call budget so it no longer answers from partial results when only one call is allowed.
+
 
 = 3.2.22 =
 Adds the current date and time to every chat, knowledge restrictions for custom roles and single pages, media library imports with auto-sync, and an optional Pinecone full-text document index. Also hardens chat links and rate limiting, fixes function calling and underscore rendering, and adds Gemini 3.8 Flash. Now requires WordPress 5.3 and PHP 7.4.

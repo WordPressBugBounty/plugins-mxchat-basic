@@ -3,7 +3,7 @@
  * Plugin Name: MxChat
  * Plugin URI: https://mxchat.ai/
  * Description: AI chatbot for WordPress with OpenAI, Claude, xAI, DeepSeek, live agent, PDF uploads, WooCommerce, and training on website data.
- * Version: 3.2.22
+ * Version: 3.2.23
  * Author: MxChat
  * Author URI: https://mxchat.ai
  * License: GPLv2 or later
@@ -1372,6 +1372,7 @@ function mxchat_activate() {
         article_content LONGTEXT NOT NULL,
         embedding_vector LONGTEXT,
         source_url TEXT DEFAULT NULL,
+        title VARCHAR(255) DEFAULT NULL,
         role_restriction VARCHAR(50) DEFAULT 'public',
         content_type VARCHAR(50) DEFAULT 'content',
         timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL,
@@ -1443,6 +1444,11 @@ function mxchat_activate() {
         }
         if (!in_array('role_restriction', $existing_system_column_names)) {
             $wpdb->query("ALTER TABLE $system_prompt_table ADD COLUMN role_restriction VARCHAR(50) DEFAULT 'public' AFTER source_url");
+        }
+        // Page title captured at import time (3.2.23, plan d9ee66) - read by
+        // add-ons that name a source, e.g. AI Search's source cards.
+        if (!in_array('title', $existing_system_column_names)) {
+            $wpdb->query("ALTER TABLE $system_prompt_table ADD COLUMN title VARCHAR(255) DEFAULT NULL AFTER source_url");
         }
     }
 

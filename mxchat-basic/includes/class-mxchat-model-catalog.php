@@ -84,7 +84,16 @@ class MxChat_Model_Catalog {
                     // fields: pickers label a future date as "retires <date>" and hide
                     // the entry once the date passes (a saved value keeps rendering via
                     // settings_dropdown_groups($current_model)).
-                    'gpt-5.6-sol'          => array('label' => 'GPT-5.6 Sol',          'description' => __('Recommended — newest OpenAI flagship for reasoning, coding and chat', 'mxchat')),
+                    // GPT-6 (announced 2026-09-22; plan 45c22d). Probed live on
+                    // 2026-09-27: all three need max_completion_tokens, reject any
+                    // temperature but 1 and reject reasoning_effort 'minimal';
+                    // Astra also rejects 'none'. Every "modern OpenAI" gate goes
+                    // through is_modern_openai() so these ids are not sent legacy
+                    // parameters (which 400 on the first message).
+                    'gpt-6-astra'          => array('label' => 'GPT-6 Astra',          'description' => __('Recommended — newest OpenAI flagship; strongest reasoning, coding and agentic work', 'mxchat')),
+                    'gpt-6-sol'            => array('label' => 'GPT-6 Sol',            'description' => __('Strong reasoning on demanding tasks at mid-tier cost', 'mxchat')),
+                    'gpt-6-luna'           => array('label' => 'GPT-6 Luna',           'description' => __('Fastest and cheapest GPT-6 for high-volume, repeatable work', 'mxchat')),
+                    'gpt-5.6-sol'          => array('label' => 'GPT-5.6 Sol',          'description' => __('Previous OpenAI flagship for reasoning, coding and chat', 'mxchat')),
                     'gpt-5.6-terra'        => array('label' => 'GPT-5.6 Terra',        'description' => __('Balanced GPT-5.6 — strong capability at lower cost', 'mxchat')),
                     'gpt-5.6-luna'         => array('label' => 'GPT-5.6 Luna',         'description' => __('Fastest and cheapest GPT-5.6 for lightweight tasks', 'mxchat')),
                     'gpt-5.5'              => array('label' => 'GPT-5.5',              'description' => __('Previous flagship — powerful reasoning and coding model', 'mxchat')),
@@ -739,8 +748,11 @@ class MxChat_Model_Catalog {
             return ($context === 'chat') ? 'low' : null;
         }
 
-        // Only the gpt-5 family carries reasoning_effort. Everything else omits.
-        if (strpos($model, 'gpt-5') !== 0) {
+        // Only the modern OpenAI family (gpt-5*, gpt-6*) carries
+        // reasoning_effort. Everything else omits. plan 45c22d widened this
+        // from a literal gpt-5 prefix: a gpt-6 id used to fall through all
+        // three maps below and be sent legacy parameters.
+        if (!self::is_modern_openai($model)) {
             return null;
         }
 
@@ -749,6 +761,9 @@ class MxChat_Model_Catalog {
                 // integrator web-search (Responses API). Explicit allowlist, no
                 // "else" — anything not listed omits reasoning entirely.
                 $map = array(
+                    'gpt-6-astra'        => 'low', // plan 45c22d, probed 2026-09-27 on /v1/responses
+                    'gpt-6-sol'          => 'low',
+                    'gpt-6-luna'         => 'low',
                     'gpt-5.6-sol'        => 'low',
                     'gpt-5.6-terra'      => 'low',
                     'gpt-5.6-luna'       => 'low',
@@ -769,6 +784,12 @@ class MxChat_Model_Catalog {
                 // REQUIRE 'minimal' and reject 'none'. Do not "harmonize" these
                 // — the two generations genuinely differ.
                 $map = array(
+                    // plan 45c22d (probed 2026-09-27): gpt-6-astra accepts only
+                    // low|medium|high; gpt-6-sol/-luna accept none|low|medium|high.
+                    // 'low' for all three, as for their 5.6 siblings.
+                    'gpt-6-astra'         => 'low',
+                    'gpt-6-sol'           => 'low',
+                    'gpt-6-luna'          => 'low',
                     'gpt-5.6-sol'         => 'low',
                     'gpt-5.6-terra'       => 'low',
                     'gpt-5.6-luna'        => 'low',
@@ -803,6 +824,12 @@ class MxChat_Model_Catalog {
                 }
                 if ($model === 'gpt-5.4') {
                     return 'none';
+                }
+                // plan 45c22d (probed 2026-09-27): gpt-6-astra accepts only
+                // low|medium|high; -sol/-luna accept none|low|medium|high.
+                // 'low' for all three, as for their 5.6 siblings.
+                if (in_array($model, array('gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna'), true)) {
+                    return 'low';
                 }
                 if (in_array($model, array('gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna'), true)) {
                     return 'low';
@@ -861,8 +888,8 @@ class MxChat_Model_Catalog {
     public static function supports_temperature($model) {
         $model = (string) $model;
 
-        // gpt-5 family accepts only the default temperature (1).
-        if (strpos($model, 'gpt-5') === 0) {
+        // gpt-5 / gpt-6 families accept only the default temperature (1).
+        if (self::is_modern_openai($model)) {
             return false;
         }
 
@@ -893,6 +920,27 @@ class MxChat_Model_Catalog {
      * @return string       'max_completion_tokens' | 'max_tokens'
      */
     public static function openai_token_param($model) {
-        return strpos((string) $model, 'gpt-5') === 0 ? 'max_completion_tokens' : 'max_tokens';
+        return self::is_modern_openai($model) ? 'max_completion_tokens' : 'max_tokens';
+    }
+
+    /**
+     * plan 45c22d: ONE predicate for "a modern OpenAI chat model" — the
+     * generations that take max_completion_tokens, only the default
+     * temperature, and reasoning_effort. Every gate that used to test the
+     * literal prefix gpt-5 routes through here, so the next generation is a
+     * one-line change instead of nine edits. Before this, gpt-6-* ids fell
+     * through all nine and were sent legacy parameters: a 400 on the first
+     * message while looking fine in the picker.
+     *
+     * The frozen partial-upgrade fallbacks in the integrator, the content
+     * generator and the editor assistant carry the same two-prefix test
+     * inline (they exist for the window where this class is not loaded).
+     *
+     * @param string $model Chat model id.
+     * @return bool
+     */
+    public static function is_modern_openai($model) {
+        $model = (string) $model;
+        return strpos($model, 'gpt-5') === 0 || strpos($model, 'gpt-6') === 0;
     }
 }

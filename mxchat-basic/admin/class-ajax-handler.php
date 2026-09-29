@@ -1064,6 +1064,13 @@ if (strpos($name, 'mxchat_pinecone_addon_options') !== false) {
                 if ($new_value === 'document' && strtolower(trim((string) ($current_options['mxchat_pinecone_host'] ?? ''), '/')) !== strtolower((string) ($current_options['mxchat_pinecone_docs_verified_host'] ?? ''))) {
                     wp_send_json_error(['message' => esc_html__('Check the document index host first (Check index or Create index for me).', 'mxchat')]);
                 }
+                // 3e83e4: same gate as the form save — no switch onto a half-copied index.
+                if ($new_value === 'document' && (($current_options['mxchat_pinecone_index_type'] ?? 'vector') !== 'document') && class_exists('MxChat_Pinecone_Documents')) {
+                    $running = MxChat_Pinecone_Documents::migration_blocks_switch((string) ($current_options['mxchat_pinecone_host'] ?? ''));
+                    if ($running !== null) {
+                        wp_send_json_error(['message' => MxChat_Pinecone_Documents::switch_blocked_message($running)]);
+                    }
+                }
                 break;
             case 'mxchat_pinecone_vector_host':
                 $new_value = trim(str_replace(['https://', 'http://'], '', sanitize_text_field($value)), '/');

@@ -1890,6 +1890,11 @@ function mxchat_render_pinecone_section() {
                             'verified_host' => $pc_verified,
                             'expected_dimension' => (int) $pc_expected_dim,
                             'migration' => $pc_migration,
+                            // 3e83e4: what the LIVE chatbot is on right now, so the
+                            // page can tell a copy-in-progress from a switch.
+                            'index_type' => $pc_index_type,
+                            'stored_host' => strtolower(trim((string) $pc_current_host, '/')),
+                            'stored_index' => (string) ($pinecone_options['mxchat_pinecone_index'] ?? ''),
                         )); ?></script>
 
                         <div class="mxch-field">
@@ -1941,7 +1946,7 @@ function mxchat_render_pinecone_section() {
                                         <?php endforeach; ?>
                                     </select>
                                 </div>
-                                <p class="mxch-field-description"><?php printf(esc_html__('Create index for me makes a new document index named after the Index Name field, sized for your embedding model (%d dimensions, cosine), with full-text search on the content in the chosen language, then fills in the host. Check index confirms the host above points at a document index MxChat can use.', 'mxchat'), (int) $pc_expected_dim); ?></p>
+                                <p class="mxch-field-description"><?php printf(esc_html__('Create index for me makes a new document index named after the Index Name field (a free name ending in -docs is suggested when you switch to this type), sized for your embedding model (%d dimensions, cosine), with full-text search on the content in the chosen language, then fills in the host. Check index confirms the host above points at a document index MxChat can use. Neither moves your chatbot — that happens when you save.', 'mxchat'), (int) $pc_expected_dim); ?></p>
                             </div>
 
                             <div class="mxch-field" style="display: flex; gap: 8px; flex-wrap: wrap;">
@@ -1950,14 +1955,27 @@ function mxchat_render_pinecone_section() {
                             </div>
                             <div id="mxchat-pinecone-docs-result" style="display: none;"></div>
                             <p class="mxch-field-hint" id="mxchat-pinecone-docs-gate" style="display: none;"><?php esc_html_e('Check the document index host before saving.', 'mxchat'); ?></p>
+                            <div class="mxch-field" id="mxchat-pinecone-docs-switch-gate" style="display: none;">
+                                <p class="mxch-field-hint" id="mxchat-pinecone-docs-switch-gate-text"></p>
+                                <label class="mxch-field-hint" style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                                    <input type="checkbox" id="mxchat_pinecone_docs_switch_anyway" name="mxchat_pinecone_addon_options[mxchat_pinecone_docs_switch_anyway]" value="1">
+                                    <span><?php esc_html_e('Switch anyway — point the chatbot at the document index now and copy the rest afterwards', 'mxchat'); ?></span>
+                                </label>
+                            </div>
 
                             <div class="mxch-field" style="margin-top: 20px;">
                                 <label class="mxch-field-label" for="mxchat_pinecone_vector_host"><?php esc_html_e('Copy from vector index host', 'mxchat'); ?></label>
                                 <input type="text" id="mxchat_pinecone_vector_host" name="mxchat_pinecone_addon_options[mxchat_pinecone_vector_host]" value="<?php echo esc_attr($pc_vector_host); ?>" class="mxch-input" placeholder="my-index-xyz123.svc.pinecone.io">
-                                <p class="mxch-field-description"><?php esc_html_e('Migrate copies every record of that index into the document index — text, vector and metadata, same ids — with no embedding calls. Safe to run again: records already copied are simply replaced. Both indexes must use the same embedding dimension.', 'mxchat'); ?></p>
+                                <p class="mxch-field-description"><?php esc_html_e('Migrate copies every record of that index into the document index above — text, vector and metadata, same ids — with no embedding calls. It runs while your chatbot keeps answering from the vector index; save the Pinecone settings afterwards to switch. Safe to run again: records already copied are simply replaced, and an interrupted copy continues where it stopped. Both indexes must use the same embedding dimension.', 'mxchat'); ?></p>
                             </div>
                             <div class="mxch-field" style="display: flex; gap: 12px; align-items: center; flex-wrap: wrap;">
                                 <button type="button" class="mxch-btn mxch-btn-secondary" id="mxchat-pinecone-docs-migrate"><?php esc_html_e('Migrate', 'mxchat'); ?></button>
+                                <?php /* e50d2e: offered only when the source index holds records in more than one namespace (the JS shows it from the start response). No name attribute — it is not a saved setting. */ ?>
+                                <label class="mxch-toggle" id="mxchat-pinecone-docs-all-namespaces" style="display: none;" title="<?php esc_attr_e('Copy the records of every namespace of the vector index, each into the same-named namespace of the document index, in one run.', 'mxchat'); ?>">
+                                    <input type="checkbox" class="mxch-toggle-input" id="mxchat_pinecone_docs_all_namespaces" value="1">
+                                    <span class="mxch-toggle-switch"></span>
+                                    <span class="mxch-toggle-label"><?php esc_html_e('Copy every namespace', 'mxchat'); ?></span>
+                                </label>
                                 <span id="mxchat-pinecone-docs-migrate-counts" class="mxch-field-description"></span>
                             </div>
                             <div id="mxchat-pinecone-docs-migrate-progress" style="display: none; margin-bottom: 16px;">

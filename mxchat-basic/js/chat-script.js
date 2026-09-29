@@ -848,7 +848,10 @@ function sendMessage(botId) {
         message = customMxChatFilter(message, "prompt");
     }
 
-    if (message) {
+    // Whitespace-only is empty: nothing is sent and nothing is disabled. When
+    // there IS a message the original string (spaces and all) is what goes out,
+    // so the transcript is unchanged (plan b67fd5).
+    if (message && String(message).trim() !== '') {
         // Don't disable input in live agent mode - let users chat freely
         var modeIndicator = getElementDOM(botId, 'chat-mode-indicator');
         var isAgentMode = modeIndicator && modeIndicator.textContent === 'Live Agent';
@@ -892,6 +895,12 @@ function sendMessageToChatbot(message, botId) {
     // ADD PROMPT HOOK HERE
     if (typeof customMxChatFilter === 'function') {
         message = customMxChatFilter(message, "prompt");
+    }
+
+    // Nothing to send means nothing to disable (plan b67fd5): a caller handing
+    // over an empty string must not lock the box the way Enter-on-empty did.
+    if (!message || String(message).trim() === '') {
+        return;
     }
 
     // Don't disable input in live agent mode - let users chat freely
@@ -1754,23 +1763,19 @@ $(document).on('click', '.send-button', function() {
         mxchatStopStreaming(botId);
         return;
     }
-    var modeIndicator = getElementDOM(botId, 'chat-mode-indicator');
-    if (!(modeIndicator && modeIndicator.textContent === 'Live Agent')) {
-        disableChatInput(botId);
-    }
+    // sendMessage() owns the disable - see the Enter handler below (plan b67fd5).
     sendMessage(botId);
 });
 
-// Override enter key handler (using event delegation)
+// Enter sends, Shift+Enter inserts a newline (using event delegation).
+// sendMessage() owns the disable: it greys the box only when a real message is
+// about to go out. Disabling here first left the widget locked for good after
+// Enter on an empty box - the send returned early and no reply path ever
+// re-enabled it (plan b67fd5).
 $(document).on('keypress', '.chat-input', function(e) {
     if (e.which == 13 && !e.shiftKey) {
         e.preventDefault();
-        var botId = getBotIdFromElement(this);
-        var modeIndicator = getElementDOM(botId, 'chat-mode-indicator');
-        if (!(modeIndicator && modeIndicator.textContent === 'Live Agent')) {
-            disableChatInput(botId);
-        }
-        sendMessage(botId);
+        sendMessage(getBotIdFromElement(this));
     }
 });
 

@@ -4045,7 +4045,7 @@ private function mxchat_openai_token_param_for($model) {
     if (class_exists('MxChat_Model_Catalog') && method_exists('MxChat_Model_Catalog', 'openai_token_param')) {
         return MxChat_Model_Catalog::openai_token_param($model);
     }
-    return strpos((string) $model, 'gpt-5') === 0 ? 'max_completion_tokens' : 'max_tokens';
+    return (strpos((string) $model, 'gpt-5') === 0 || strpos((string) $model, 'gpt-6') === 0) ? 'max_completion_tokens' : 'max_tokens'; // gpt-6 too (plan 45c22d)
 }
 
 /**
@@ -4061,7 +4061,7 @@ private function mxchat_openai_supports_temperature_for($model) {
     if (class_exists('MxChat_Model_Catalog') && method_exists('MxChat_Model_Catalog', 'supports_temperature')) {
         return MxChat_Model_Catalog::supports_temperature($model);
     }
-    return strpos((string) $model, 'gpt-5') !== 0;
+    return strpos((string) $model, 'gpt-5') !== 0 && strpos((string) $model, 'gpt-6') !== 0; // gpt-6 too (plan 45c22d)
 }
 
 /**
@@ -4083,7 +4083,7 @@ private function mxchat_reasoning_effort_for($model, $context) {
 }
 
 private function mxchat_reasoning_effort_fallback($model, $context) {
-    if (strpos($model, 'gpt-5') !== 0) {
+    if (strpos($model, 'gpt-5') !== 0 && strpos($model, 'gpt-6') !== 0) { // gpt-6 too (plan 45c22d)
         return null;
     }
     if ($context === 'websearch') {
@@ -4092,6 +4092,7 @@ private function mxchat_reasoning_effort_fallback($model, $context) {
         if ($model === 'gpt-5.1-2025-11-13') return 'low';
         if ($model === 'gpt-5.5') return 'low';
         if ($model === 'gpt-5.4') return 'low';
+        if (in_array($model, array('gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna'), true)) return 'low'; // plan 45c22d
         if (in_array($model, array('gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna'), true)) return 'low';
         return null;
     }
@@ -4104,6 +4105,7 @@ private function mxchat_reasoning_effort_fallback($model, $context) {
     if ($model === 'gpt-5.1-2025-11-13') return 'low';
     if ($model === 'gpt-5.5') return 'none';
     if ($model === 'gpt-5.4') return 'none';
+    if (in_array($model, array('gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna'), true)) return 'low'; // plan 45c22d
     if (in_array($model, array('gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna'), true)) return 'low';
     return 'minimal';
 }
@@ -8535,15 +8537,22 @@ private function find_relevant_content_pinecone_documents($user_embedding, $bot_
     $keyword_hits   = array();
     $keyword_tokens = array();
     $keyword_leg    = 'none';
+    $keyword_code_match = array('exact' => 0, 'prefix' => 0);
     if ($hybrid_enabled) {
         $keyword_tokens = MxChat_Pinecone_Documents::extract_code_tokens($user_query);
         if (!empty($keyword_tokens)) {
             $leg_k     = min(20, $top_k);
+            // 3e83e4: the filter also matches the normalised code set stored on
+            // each document, so "R165321320" reaches the "R1653" records; the
+            // codes field comes back with the hit so exact matches rank first.
             $kw_filter = MxChat_Pinecone_Documents::merge_filters($user_filter, MxChat_Pinecone_Documents::keyword_filter($keyword_tokens));
-            $kw_hits   = MxChat_Pinecone_Documents::search_dense($user_embedding, $leg_k, $kw_filter, $docs_cfg);
+            $kw_fields = array_merge(MxChat_Pinecone_Documents::RECORD_FIELDS, array(MxChat_Pinecone_Documents::CODES_FIELD));
+            $kw_hits   = MxChat_Pinecone_Documents::search_dense($user_embedding, $leg_k, $kw_filter, $docs_cfg, $kw_fields);
             if (!is_wp_error($kw_hits) && !empty($kw_hits)) {
-                $keyword_hits = $kw_hits;
+                $ranked       = MxChat_Pinecone_Documents::rank_keyword_hits($kw_hits, $keyword_tokens);
+                $keyword_hits = $ranked['hits'];
                 $keyword_leg  = 'filter';
+                $keyword_code_match = array('exact' => $ranked['exact'], 'prefix' => $ranked['prefix']);
             } else {
                 $bm25 = MxChat_Pinecone_Documents::search_text($user_query, $leg_k, $user_filter, $docs_cfg);
                 if (!is_wp_error($bm25) && !empty($bm25)) {
@@ -8564,6 +8573,7 @@ private function find_relevant_content_pinecone_documents($user_embedding, $bot_
     }
     $this->last_similarity_analysis['keyword_tokens'] = $keyword_tokens;
     $this->last_similarity_analysis['keyword_leg']    = $keyword_leg;
+    $this->last_similarity_analysis['keyword_codes']  = $keyword_code_match;
 
     // ----- access + threshold -----
     $matches_by_id = array();
@@ -8622,6 +8632,42 @@ private function find_relevant_content_pinecone_documents($user_embedding, $bot_
         }
     } else {
         $fused = $this->mxchat_rrf_fuse(array_slice($vector_candidates, 0, 20), $keyword_rows, 60);
+        // 3e83e4: a prefix-only code hit (the visitor typed "R165321320", the
+        // record only says "R1653") ranks BELOW every exact code hit. Fusion
+        // alone can tie them when the dense leg disagrees by one place, so
+        // prefix rows are capped just under the lowest exact row; exact rows
+        // and vector-only rows keep the scores fusion gave them.
+        $exact_ids = array();
+        $prefix_ids = array();
+        foreach ($keyword_hits as $kh) {
+            if (($kh['code_match'] ?? 'exact') === 'prefix') {
+                $prefix_ids[$kh['id']] = true;
+            } else {
+                $exact_ids[$kh['id']] = true;
+            }
+        }
+        if (!empty($exact_ids) && !empty($prefix_ids)) {
+            $floor = null;
+            foreach ($fused as $fid => $f) {
+                if (isset($exact_ids[$fid])) {
+                    $floor = ($floor === null) ? $f['rrf'] : min($floor, $f['rrf']);
+                }
+            }
+            if ($floor !== null) {
+                $capped = 0;
+                foreach ($fused as $fid => $f) {
+                    if (isset($prefix_ids[$fid]) && $f['rrf'] >= $floor) {
+                        $capped++;
+                        $fused[$fid]['rrf'] = $floor - $capped * 1e-7;
+                    }
+                }
+                if ($capped > 0) {
+                    uasort($fused, function ($a, $b) {
+                        return $b['rrf'] <=> $a['rrf'];
+                    });
+                }
+            }
+        }
         $rank = 0;
         foreach ($fused as $f) {
             $rank++;
@@ -10396,15 +10442,18 @@ private function mxchat_fc_post($url, $body, $headers, $tag) {
 
 /* ---------------- OpenAI-compatible loop (OpenAI/xAI/DeepSeek/OpenRouter/Custom) -------------- */
 private function mxchat_fc_loop_openai($prov, $system, $relevant_content, $conversation_history, $tools, $orig_message, $user_id, $session_id) {
+    $depth = MxChat_Tool_Registry::max_depth();
+    $budget = MxChat_Tool_Registry::max_tool_calls_per_turn();
+    $tool_schema = MxChat_Tool_Registry::to_openai_tools($tools);
     $messages = array();
-    $messages[] = array('role' => 'system', 'content' => $system . ' ' . $relevant_content);
+    // plan 150b72: the model is told its per-turn tool budget up front (only
+    // when tools are actually offered). A local string — the owner's
+    // instructions from get_system_instructions() are never mutated.
+    $messages[] = array('role' => 'system', 'content' => $system . ' ' . $relevant_content . $this->mxchat_fc_budget_notice($budget, $tool_schema));
     foreach ($this->mxchat_fc_normalize_history($conversation_history) as $m) {
         $messages[] = $m;
     }
 
-    $depth = MxChat_Tool_Registry::max_depth();
-    $budget = MxChat_Tool_Registry::max_tool_calls_per_turn();
-    $tool_schema = MxChat_Tool_Registry::to_openai_tools($tools);
     $used_tool = false;
     $calls_made = 0;
     $tool_texts = array();
@@ -10433,6 +10482,16 @@ private function mxchat_fc_loop_openai($prov, $system, $relevant_content, $conve
         if ($offer_tools) {
             $body['tools'] = $tool_schema;
             $body['tool_choice'] = 'auto';
+            if (($budget - $calls_made) === 1) {
+                // plan 150b72: one call left for this turn — ask for it as ONE
+                // call. Without this the model fans out, one call runs, the
+                // rest get the budget-exhausted result and it answers from a
+                // fraction of the data. Only on the last-call hop: a wide,
+                // legitimate fan-out earlier in the turn stays parallel. An
+                // owner's http_request_args filter runs after this body is
+                // built, so a value set there still wins.
+                $body['parallel_tool_calls'] = false;
+            }
         }
         $r = $this->mxchat_fc_post($prov['url'], $body, $prov['headers'], $prov['tag']);
         if ($r['code'] !== 200 || !is_array($r['data'])) {
@@ -10486,6 +10545,13 @@ private function mxchat_fc_loop_openai($prov, $system, $relevant_content, $conve
                 'content' => $exec['content'],
             );
         }
+        if ($calls_made < $budget) {
+            // plan 150b72: say what is left after this hop's calls — as its own
+            // system line, never inside a tool's result (a result the model
+            // parses as data stays pure). A spent budget is already covered by
+            // mxchat_fc_budget_exhausted_text() on the refused calls.
+            $messages[] = array('role' => 'system', 'content' => $this->mxchat_fc_remaining_text($budget - $calls_made));
+        }
     }
     return $this->mxchat_fc_degrade('openai', 'hop depth exhausted', $used_tool, $calls_made, $tool_texts);
 }
@@ -10498,6 +10564,10 @@ private function mxchat_fc_loop_anthropic($prov, $system, $relevant_content, $co
     $depth = MxChat_Tool_Registry::max_depth();
     $budget = MxChat_Tool_Registry::max_tool_calls_per_turn();
     $tool_schema = MxChat_Tool_Registry::to_anthropic_tools($tools);
+    // plan 150b72: budget sentence INSIDE the single cached system block, so the
+    // cache_control breakpoint mxchat_anthropic_system_blocks() sets still
+    // covers tools + system as one prefix (the sentence is constant per turn).
+    $system .= $this->mxchat_fc_budget_notice($budget, $tool_schema);
     $omit_temp = $this->mxchat_claude_omits_temperature($prov['model']);
     $used_tool = false;
     $calls_made = 0;
@@ -10516,6 +10586,10 @@ private function mxchat_fc_loop_anthropic($prov, $system, $relevant_content, $co
         if ($offer_tools) {
             $body['tools'] = $tool_schema;
             $body['tool_choice'] = array('type' => 'auto');
+            if (($budget - $calls_made) === 1) {
+                // plan 150b72: see the OpenAI loop — one call left, ask for one call.
+                $body['tool_choice']['disable_parallel_tool_use'] = true;
+            }
         }
         $r = $this->mxchat_fc_post($prov['url'], $body, $prov['headers'], $prov['tag']);
         if ($r['code'] !== 200 || !is_array($r['data'])) {
@@ -10570,6 +10644,11 @@ private function mxchat_fc_loop_anthropic($prov, $system, $relevant_content, $co
                 'content' => $exec['content'],
             );
         }
+        if ($calls_made < $budget) {
+            // plan 150b72: remaining-count line as a text block AFTER the
+            // tool_result blocks (Anthropic requires the results first).
+            $results[] = array('type' => 'text', 'text' => $this->mxchat_fc_remaining_text($budget - $calls_made));
+        }
         $messages[] = array('role' => 'user', 'content' => $results);
     }
     return $this->mxchat_fc_degrade('anthropic', 'hop depth exhausted', $used_tool, $calls_made, $tool_texts);
@@ -10577,17 +10656,22 @@ private function mxchat_fc_loop_anthropic($prov, $system, $relevant_content, $co
 
 /* ---------------- Google Gemini loop ---------------- */
 private function mxchat_fc_loop_gemini($prov, $system, $relevant_content, $conversation_history, $tools, $orig_message, $user_id, $session_id) {
+    $depth = MxChat_Tool_Registry::max_depth();
+    $budget = MxChat_Tool_Registry::max_tool_calls_per_turn();
+    $tool_schema = MxChat_Tool_Registry::to_gemini_tools($tools);
     $contents = array();
-    $contents[] = array('role' => 'user',  'parts' => array(array('text' => '[System Instructions] ' . $system . ' ' . $relevant_content)));
+    // plan 150b72: the same budget sentence as the other two loops, in the
+    // same place Gemini gets its system text. Gemini has no documented
+    // per-request parallel-disable flag (functionCallingConfig carries mode
+    // and allowedFunctionNames only — checked 2026-09-27), so the prompt
+    // side is all it gets; nothing undocumented is sent.
+    $contents[] = array('role' => 'user',  'parts' => array(array('text' => '[System Instructions] ' . $system . ' ' . $relevant_content . $this->mxchat_fc_budget_notice($budget, $tool_schema))));
     $contents[] = array('role' => 'model', 'parts' => array(array('text' => 'I understand and will follow these instructions.')));
     foreach ($this->mxchat_fc_normalize_history($conversation_history) as $m) {
         $contents[] = array('role' => ($m['role'] === 'assistant' ? 'model' : 'user'),
                             'parts' => array(array('text' => $m['content'])));
     }
 
-    $depth = MxChat_Tool_Registry::max_depth();
-    $budget = MxChat_Tool_Registry::max_tool_calls_per_turn();
-    $tool_schema = MxChat_Tool_Registry::to_gemini_tools($tools);
     // Function calling (tools + functionDeclarations + toolConfig) is a v1beta feature on the
     // Generative Language REST API. The v1 endpoint silently ignores the tools array, so a
     // non-preview model (e.g. gemini-2.5-pro, gemini-3.5-flash, gemini-3.1-flash-lite) would
@@ -10680,6 +10764,11 @@ private function mxchat_fc_loop_gemini($prov, $system, $relevant_content, $conve
             if (isset($fcall['id']) && $fcall['id'] !== '') { $fr['id'] = $fcall['id']; }
             $resp_parts[] = array('functionResponse' => $fr);
         }
+        if ($calls_made < $budget) {
+            // plan 150b72: remaining-count line as a text part after the
+            // functionResponse parts of the same turn.
+            $resp_parts[] = array('text' => $this->mxchat_fc_remaining_text($budget - $calls_made));
+        }
         $contents[] = array('role' => 'user', 'parts' => $resp_parts);
     }
     return $this->mxchat_fc_degrade('gemini', 'hop depth exhausted', $used_tool, $calls_made, $tool_texts);
@@ -10698,6 +10787,53 @@ private function mxchat_fc_giveup_text() {
  */
 private function mxchat_fc_budget_exhausted_text() {
     return 'Tool-call budget for this turn is exhausted; answer with what you already have.';
+}
+
+/**
+ * plan 150b72 — the budget sentence the model reads BEFORE it plans its
+ * calls. Before this the model learned the cap only from the refused calls'
+ * exhausted text, i.e. after it had already overrun it (3c23ab made
+ * exhaustion safe, not visible). Returned WITH a leading space so callers
+ * concatenate it onto their system text; '' when no tools are offered or the
+ * owner suppresses it. Two sentences at most: it precedes every owner's own
+ * instructions and must not compete with them. Model-facing, never shown.
+ *
+ * @param int   $budget      Resolved per-turn cap (MxChat_Tool_Registry::max_tool_calls_per_turn()).
+ * @param array $tool_schema Provider-shaped tool list; empty = no tools offered = no sentence.
+ * @return string
+ */
+private function mxchat_fc_budget_notice($budget, $tool_schema) {
+    $budget = (int) $budget;
+    if ($budget < 1 || empty($tool_schema)) {
+        return '';
+    }
+    $notice = sprintf(
+        'You may make at most %d tool call%s while answering this message. Prefer one call with complete arguments over several narrow ones, and answer from what you have once the calls are used up.',
+        $budget,
+        $budget === 1 ? '' : 's'
+    );
+    /**
+     * Filter the tool-budget sentence appended to the system content when
+     * tools are offered. Return '' to send nothing (an owner who writes their
+     * own tool policy).
+     *
+     * @param string $notice The sentence(s).
+     * @param int    $budget The resolved per-turn tool-call budget.
+     */
+    $notice = apply_filters('mxchat_function_calling_budget_notice', $notice, $budget);
+    $notice = is_string($notice) ? trim($notice) : '';
+    return $notice === '' ? '' : ' ' . $notice;
+}
+
+/**
+ * plan 150b72 — one line appended to a hop's tool-result batch (its own
+ * message / block / part, never inside a tool's result) saying how many
+ * calls remain for the turn. Only while the budget is not yet spent — a
+ * spent budget is covered by mxchat_fc_budget_exhausted_text().
+ */
+private function mxchat_fc_remaining_text($remaining) {
+    $remaining = max(0, (int) $remaining);
+    return sprintf('%d tool call%s for this message.', $remaining, $remaining === 1 ? ' remains' : 's remain');
 }
 
 /**

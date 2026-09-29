@@ -1092,7 +1092,7 @@ function setupMxChatModelSelector() {
                 { value: 'gemini-3.8-flash', label: 'Gemini 3.8 Flash', description: 'Stable — newest Flash generation, recommended default' },
             ],
             openai: [
-                { value: 'gpt-5.6-sol', label: 'GPT-5.6 Sol', description: 'Recommended — newest OpenAI flagship for reasoning, coding and chat' },
+                { value: 'gpt-6-astra', label: 'GPT-6 Astra', description: 'Recommended — newest OpenAI flagship; strongest reasoning, coding and agentic work' },
             ],
             claude: [
                 { value: 'claude-fable-5', label: 'Claude Fable 5', description: 'Latest Flagship — newest and most capable Anthropic model' },

@@ -2285,11 +2285,12 @@ article .entry-content,
      * old inline if/elseif at the call site.
      */
     private function mxchat_cg_reasoning_effort_fallback($model) {
-        if (strpos($model, 'gpt-5') !== 0) return null;
+        if (strpos($model, 'gpt-5') !== 0 && strpos($model, 'gpt-6') !== 0) return null; // gpt-6 too (plan 45c22d)
         if ($model === 'gpt-5.2' || $model === 'gpt-5.1-chat-latest') return null;
         if ($model === 'gpt-5.1-2025-11-13') return 'low';
         if ($model === 'gpt-5.5') return 'low';
         if ($model === 'gpt-5.4') return 'low';
+        if (in_array($model, array('gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna'), true)) return 'low'; // plan 45c22d
         if (in_array($model, array('gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna'), true)) return 'low';
         return 'minimal';
     }
@@ -2312,7 +2313,7 @@ article .entry-content,
         // Token key, temperature gate, and reasoning_effort are sourced from the
         // core model catalog (plan-dcb71c); frozen fallbacks preserve exact
         // pre-dcb71c behavior if the catalog class is unavailable.
-        $is_gpt5   = strpos($model, 'gpt-5') === 0;
+        $is_gpt5   = strpos($model, 'gpt-5') === 0 || strpos($model, 'gpt-6') === 0; // gpt-6 too (plan 45c22d)
         $catalog   = class_exists('MxChat_Model_Catalog');
         $token_key = ($catalog && method_exists('MxChat_Model_Catalog', 'openai_token_param'))
             ? MxChat_Model_Catalog::openai_token_param($model)

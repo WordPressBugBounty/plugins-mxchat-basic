@@ -1012,6 +1012,19 @@ public function sanitize_pinecone_settings($input) {
             add_settings_error('mxchat_pinecone_addon_options', 'mxchat_pinecone_docs_unverified', __('The document index host has not been checked, so the index type stayed on Vector index. Click Check index (or Create index for me) and save again.', 'mxchat'));
         }
     }
+    // 3e83e4: never point the live chatbot at a document index whose copy is
+    // still running — the save keeps the previous type unless the owner
+    // ticked Switch anyway. Only a vector → document switch is gated.
+    $existing_type = (($existing['mxchat_pinecone_index_type'] ?? 'vector') === 'document') ? 'document' : 'vector';
+    if ($index_type === 'document' && $existing_type !== 'document' && class_exists('MxChat_Pinecone_Documents') && empty($input['mxchat_pinecone_docs_switch_anyway'])) {
+        $running = MxChat_Pinecone_Documents::migration_blocks_switch($host_for_check);
+        if ($running !== null) {
+            $index_type = 'vector';
+            if (function_exists('add_settings_error')) {
+                add_settings_error('mxchat_pinecone_addon_options', 'mxchat_pinecone_docs_copy_running', MxChat_Pinecone_Documents::switch_blocked_message($running));
+            }
+        }
+    }
     $sanitized['mxchat_pinecone_index_type'] = $index_type;
     $sanitized['mxchat_pinecone_docs_verified_host'] = $verified_host;
     $vector_host = str_replace(['https://', 'http://'], '', sanitize_text_field($input['mxchat_pinecone_vector_host'] ?? ($existing['mxchat_pinecone_vector_host'] ?? '')));
