@@ -2972,3 +2972,6 @@ body.rtl .mxch-nav-link.active {
 .mxch-status-pill-active .mxch-status-dot { background: #1d7a3a; }
 .mxch-status-pill-disabled { background: #fef3e2; color: #a04a00; }
 .mxch-status-pill-disabled .mxch-status-dot { background: #a04a00; }
+/* Warning: something the owner still has to do by hand (plan 47c61f). */
+.mxch-status-pill-warning { background: var(--mxch-warning-light); color: var(--mxch-warning-text); }
+.mxch-status-pill-warning .mxch-status-dot { background: var(--mxch-warning); }

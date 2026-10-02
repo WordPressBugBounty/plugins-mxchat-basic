@@ -458,6 +458,98 @@ public static function get_selected_embedding_model($options = null) {
 }
 
 /**
+ * Dimension of a STANDARD embedding model, from the dropdown and its two
+ * adjustable-size settings. Says nothing about a Custom Provider model — ask
+ * expected_embedding_dimension() for the model the site actually embeds with.
+ */
+public static function standard_embedding_dimension($options = null) {
+    if (!is_array($options)) {
+        $options = get_option('mxchat_options', array());
+        $options = is_array($options) ? $options : array();
+    }
+    $selected_model = $options['embedding_model'] ?? 'text-embedding-ada-002';
+    $model_dimensions = array(
+        'text-embedding-ada-002' => 1536,
+        'text-embedding-3-small' => 1536,
+        'text-embedding-3-large' => 3072,
+        'voyage-2'               => 1024,
+        'voyage-large-2'         => 1536,
+        'voyage-3-large'         => 2048,
+        'gemini-embedding-001'   => 1536,
+    );
+    if (strpos($selected_model, 'voyage-3-large') === 0) {
+        return intval($options['voyage_output_dimension'] ?? 2048);
+    }
+    if (strpos($selected_model, 'gemini-embedding') === 0) {
+        return intval($options['gemini_output_dimension'] ?? 1536);
+    }
+    return $model_dimensions[$selected_model] ?? 1536;
+}
+
+/**
+ * Dimension of the vectors the NEXT embed will produce — the one place that
+ * answers it (plan 418afd). With Custom Provider embeddings on, the standard
+ * dropdown is disabled and says nothing about the custom model, so the number
+ * is read from the model itself: one short probe embed, remembered per base
+ * URL + model. Three copies of the dropdown table used to answer instead, and
+ * a custom model of another size got a wrong-sized index and wrong-sized
+ * listing vectors.
+ *
+ * @param array|null $options mxchat_options (or a bot's merged options).
+ * @param bool       $force   Probe again even when a recent probe failed.
+ * @return int|WP_Error WP_Error only when a custom model's size could not be read.
+ */
+public static function expected_embedding_dimension($options = null, $force = false) {
+    if (!is_array($options)) {
+        $options = get_option('mxchat_options', array());
+        $options = is_array($options) ? $options : array();
+    }
+    if (isset($options['custom_provider_for_embeddings']) && $options['custom_provider_for_embeddings'] === 'on') {
+        return self::custom_embedding_dimension($options, $force);
+    }
+    return self::standard_embedding_dimension($options);
+}
+
+/**
+ * A Custom Provider embedding model's dimension, by asking it once. The
+ * answer is stored against the base URL + model, so changing either asks
+ * again. A failure is remembered for five minutes so a dead endpoint does not
+ * hold up every admin page that prints the number; $force skips that memory.
+ *
+ * @return int|WP_Error
+ */
+public static function custom_embedding_dimension($options, $force = false) {
+    $model    = self::resolve_custom_embedding_model($options);
+    $base_url = isset($options['custom_provider_base_url']) ? rtrim(trim((string) $options['custom_provider_base_url']), '/') : '';
+    $key      = md5(strtolower($base_url) . '|' . $model);
+
+    $known = get_option('mxchat_custom_embedding_dimension', array());
+    if (is_array($known) && ($known['key'] ?? '') === $key && (int) ($known['dimension'] ?? 0) > 0) {
+        return (int) $known['dimension'];
+    }
+
+    $failed = get_transient('mxchat_custom_embedding_dimension_failed');
+    if (!$force && is_array($failed) && ($failed['key'] ?? '') === $key) {
+        return new WP_Error('embedding_dimension_unknown', (string) ($failed['reason'] ?? ''));
+    }
+
+    $vector = self::generate_embedding_custom('MxChat embedding dimension check', $options);
+    if (!is_array($vector) || count($vector) === 0) {
+        $reason = (is_string($vector) && $vector !== '') ? $vector : __('The custom provider returned no embedding.', 'mxchat');
+        set_transient('mxchat_custom_embedding_dimension_failed', array('key' => $key, 'reason' => $reason), 5 * MINUTE_IN_SECONDS);
+        return new WP_Error('embedding_dimension_unknown', $reason);
+    }
+
+    update_option('mxchat_custom_embedding_dimension', array(
+        'key'       => $key,
+        'model'     => 'custom:' . $model,
+        'dimension' => count($vector),
+    ), false);
+    delete_transient('mxchat_custom_embedding_dimension_failed');
+    return count($vector);
+}
+
+/**
  * Extract the 11-character YouTube video ID from a URL, or '' if the URL is
  * not a single-video YouTube link. Single source of truth for both the KB
  * ingestion side and the chat render side — do not duplicate this parsing.
@@ -1862,6 +1954,140 @@ private static function store_chunk_in_wordpress_db($content_with_metadata, $sou
 }
 
 /**
+ * Option holding the page an uploaded file should be cited as (plan 025ea2).
+ * Keyed "<bot_id>|upload://<filename>" => https URL. The entry itself keeps
+ * its upload:// identity, so a re-upload of the same file still replaces the
+ * same entry and never collides with the cited page's own knowledge entry.
+ */
+const UPLOAD_SOURCE_URLS_OPTION = 'mxchat_upload_source_urls';
+
+/**
+ * Whether a stored source is an uploaded file (Document Upload / PDF Upload).
+ *
+ * @param string $source_url Stored source identity.
+ * @return bool
+ */
+public static function is_upload_source($source_url) {
+    return is_string($source_url) && stripos($source_url, 'upload://') === 0;
+}
+
+/**
+ * File name of an uploaded source, for a plain-text label.
+ *
+ * @param string $source_url Stored source identity (upload://<filename>).
+ * @return string
+ */
+public static function upload_source_name($source_url) {
+    return self::is_upload_source($source_url) ? substr(self::upload_source_base($source_url), strlen('upload://')) : '';
+}
+
+/**
+ * An uploaded source without its page fragment (plan dcc19d). A page of an
+ * uploaded PDF is stored as upload://<filename>#page=<n>; the file it belongs
+ * to, and the key its Source URL is kept under, is upload://<filename>.
+ *
+ * @param string $source_url Stored source identity.
+ * @return string
+ */
+public static function upload_source_base($source_url) {
+    return is_string($source_url) ? preg_replace('/#page=\d+$/', '', $source_url) : '';
+}
+
+/**
+ * Page number carried by an uploaded PDF page's identity, 0 when it has none.
+ *
+ * @param string $source_url Stored source identity.
+ * @return int
+ */
+public static function upload_source_page($source_url) {
+    return (self::is_upload_source($source_url) && preg_match('/#page=(\d+)$/', $source_url, $m)) ? (int) $m[1] : 0;
+}
+
+/**
+ * Identity one page of a PDF is stored under: <pdf>#page=<n>. A web PDF goes
+ * through esc_url() as before. An uploaded PDF (upload://<filename>) must not:
+ * esc_url() empties that scheme, which stored every page of an uploaded PDF
+ * as anonymous manual content, so the file could not be named, cited, given
+ * a Source URL, or replaced by a re-upload (plan dcc19d).
+ *
+ * @param string $pdf_url     The PDF's own source (URL or upload://<filename>).
+ * @param int    $page_number 1-based page number.
+ * @return string
+ */
+public static function pdf_page_identity($pdf_url, $page_number) {
+    $identity = $pdf_url . '#page=' . (int) $page_number;
+    return self::is_upload_source($pdf_url) ? sanitize_text_field($identity) : esc_url($identity);
+}
+
+/**
+ * Remember (or clear) the page an uploaded file should be cited as.
+ * Only http(s) URLs are kept; anything else clears the entry.
+ *
+ * @param string $source_label upload://<filename>
+ * @param string $bot_id       Bot the upload belongs to.
+ * @param string $url          Page URL, or '' to clear.
+ * @return string The URL stored, '' when cleared.
+ */
+public static function set_upload_source_url($source_label, $bot_id, $url) {
+    if (!self::is_upload_source($source_label)) {
+        return '';
+    }
+    $bot_id = ($bot_id === '' || $bot_id === null) ? 'default' : (string) $bot_id;
+    $url = is_string($url) ? esc_url_raw(trim($url), array('http', 'https')) : '';
+    if ($url !== '' && !preg_match('#^https?://#i', $url)) {
+        $url = '';
+    }
+
+    $map = get_option(self::UPLOAD_SOURCE_URLS_OPTION, array());
+    if (!is_array($map)) {
+        $map = array();
+    }
+    $key = $bot_id . '|' . $source_label;
+    if ($url === '') {
+        if (!isset($map[$key])) {
+            return '';
+        }
+        unset($map[$key]);
+    } else {
+        $map[$key] = $url;
+    }
+    if (empty($map)) {
+        delete_option(self::UPLOAD_SOURCE_URLS_OPTION);
+    } else {
+        update_option(self::UPLOAD_SOURCE_URLS_OPTION, $map, false);
+    }
+    return $url;
+}
+
+/**
+ * The page an uploaded file is cited as, '' when it has none.
+ * Looks under the asking bot first, then under the default bot (on the
+ * WordPress database store every bot reads the same entries).
+ *
+ * @param string $source_label upload://<filename>
+ * @param string $bot_id       Bot answering the turn.
+ * @return string
+ */
+public static function get_upload_source_url($source_label, $bot_id = 'default') {
+    if (!self::is_upload_source($source_label)) {
+        return '';
+    }
+    $map = get_option(self::UPLOAD_SOURCE_URLS_OPTION, array());
+    if (!is_array($map) || empty($map)) {
+        return '';
+    }
+    // A PDF page (upload://<file>#page=<n>) is cited as its file's page.
+    $source_label = self::upload_source_base($source_label);
+    $bot_id = ($bot_id === '' || $bot_id === null) ? 'default' : (string) $bot_id;
+    foreach (array($bot_id . '|' . $source_label, 'default|' . $source_label) as $key) {
+        if (!empty($map[$key]) && preg_match('#^https?://#i', $map[$key])) {
+            return $map[$key];
+        }
+    }
+    return '';
+}
+
+/**
  * Delete all chunks for a given URL
  *
  * @param string $source_url The source URL
@@ -1878,10 +2104,122 @@ public static function delete_chunks_for_url($source_url, $bot_id = 'default') {
     }
 
     if (self::is_pinecone_enabled_for_bot($bot_id)) {
-        return self::delete_pinecone_chunks_by_url($source_url, $bot_id);
+        $result = self::delete_pinecone_chunks_by_url($source_url, $bot_id);
     } else {
-        return self::delete_wordpress_chunks_by_url($source_url);
+        $result = self::delete_wordpress_chunks_by_url($source_url);
     }
+
+    // The entry is gone for good (not the clean-slate half of a re-store):
+    // a media file's "already indexed, nothing changed" signature must go
+    // with it, or auto-sync keeps skipping the file on every later save.
+    if (!self::$vectorstore_mirror_suspended && !is_wp_error($result)) {
+        self::forget_attachment_signature($source_url, $bot_id);
+    }
+
+    return $result;
+}
+
+/**
+ * Clear the media auto-sync signature (_mxchat_kb_attachment_sig) of the
+ * attachment a just-deleted knowledge entry was indexed from.
+ *
+ * Call it wherever a WHOLE entry is removed (never for the clean-slate half
+ * of a re-store, and never when sibling chunk rows survive). Posts and pages
+ * carry no signature; for them this is two indexed lookups that find nothing.
+ *
+ * @param string $source_url The entry's source URL.
+ * @param string $bot_id     The bot whose entry was removed.
+ */
+public static function forget_attachment_signature($source_url, $bot_id = 'default') {
+    global $wpdb;
+
+    $source_url = (string) $source_url;
+    if (!preg_match('#^https?://#i', $source_url) || !self::attachment_signature_follows_bot($bot_id)) {
+        return;
+    }
+
+    $attachment_ids = array();
+    $by_url = attachment_url_to_postid($source_url);
+    if ($by_url) {
+        $attachment_ids[] = (int) $by_url;
+    }
+
+    // The signature stores the exact URL the indexer used, which can differ
+    // from where the file lives now (replaced file, scaled variant). Bounded
+    // by the number of signed attachments: the meta_key index does the work.
+    $candidates = $wpdb->get_results($wpdb->prepare(
+        "SELECT post_id, meta_value FROM {$wpdb->postmeta}
+         WHERE meta_key = '_mxchat_kb_attachment_sig' AND meta_value LIKE %s
+         LIMIT 20",
+        '%' . $wpdb->esc_like($source_url) . '%'
+    ));
+    foreach ((array) $candidates as $candidate) {
+        $signature = maybe_unserialize($candidate->meta_value);
+        if (is_array($signature) && isset($signature['url']) && $signature['url'] === $source_url) {
+            $attachment_ids[] = (int) $candidate->post_id;
+        }
+    }
+
+    foreach (array_unique($attachment_ids) as $attachment_id) {
+        delete_post_meta($attachment_id, '_mxchat_kb_attachment_sig');
+    }
+}
+
+/**
+ * The same, for callers that hold a Pinecone vector id instead of a URL.
+ * Only a base id (md5 of the source URL) names a whole entry; a single
+ * chunk id leaves the rest of the entry in place, so it is ignored.
+ */
+public static function forget_attachment_signature_by_key($entry_key, $bot_id = 'default') {
+    global $wpdb;
+
+    $entry_key = (string) $entry_key;
+    if (!preg_match('/^[a-f0-9]{32}$/', $entry_key) || !self::attachment_signature_follows_bot($bot_id)) {
+        return;
+    }
+
+    $signed = $wpdb->get_results(
+        "SELECT post_id, meta_value FROM {$wpdb->postmeta}
+         WHERE meta_key = '_mxchat_kb_attachment_sig' LIMIT 5000"
+    );
+    foreach ((array) $signed as $row) {
+        $signature = maybe_unserialize($row->meta_value);
+        if (is_array($signature) && isset($signature['url']) && md5((string) $signature['url']) === $entry_key) {
+            delete_post_meta((int) $row->post_id, '_mxchat_kb_attachment_sig');
+        }
+    }
+}
+
+/**
+ * Every media entry of a bot was removed at once ("Delete all").
+ */
+public static function forget_all_attachment_signatures($bot_id = 'default') {
+    if ($bot_id !== 'default' && $bot_id !== 'testing' && !self::is_pinecone_enabled_for_bot($bot_id)) {
+        // WordPress-database "Delete all" for another bot removes that bot's
+        // rows only; the default bot's entries are still there.
+        return;
+    }
+    if (self::attachment_signature_follows_bot($bot_id)) {
+        delete_post_meta_by_key('_mxchat_kb_attachment_sig');
+    }
+}
+
+/**
+ * The signature vouches for the DEFAULT bot's entry (media auto-sync only
+ * indexes for the default bot). Removing another bot's copy from a Pinecone
+ * store of its own leaves that entry, and so the signature, in place.
+ */
+private static function attachment_signature_follows_bot($bot_id) {
+    if ($bot_id === 'default' || $bot_id === 'testing' || !self::is_pinecone_enabled_for_bot($bot_id)) {
+        return true;
+    }
+    if (!class_exists('MxChat_Pinecone_Documents') || !self::is_pinecone_enabled_for_bot('default')) {
+        return false;
+    }
+    $theirs = MxChat_Pinecone_Documents::config($bot_id);
+    $ours   = MxChat_Pinecone_Documents::config('default');
+    return strtolower((string) $theirs['host']) === strtolower((string) $ours['host'])
+        && (string) $theirs['namespace'] === (string) $ours['namespace'];
 }
 
 /**

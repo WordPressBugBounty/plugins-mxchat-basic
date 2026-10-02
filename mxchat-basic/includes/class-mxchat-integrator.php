@@ -2226,11 +2226,36 @@ public function mxchat_handle_chat_request() {
             } elseif (!$intent_matched) {
                 // No intent matched, handle live agent message
                 try {
-                    $this->mxchat_send_user_message_to_agent(
+                    $relayed = $this->mxchat_send_user_message_to_agent(
                         $this->mxchat_user_message_for_humans($message, $session_id, 'agent'),
                         $user_id,
                         $session_id
                     );
+
+                    // The relay reports delivery from the agent channel's own
+                    // answer (plan 2a4ab7). When it was refused, say so in a
+                    // normal bot bubble instead of "sent" — top-level text, so
+                    // every widget build renders it — and carry the session's
+                    // current mode: back to AI when the destination is gone,
+                    // still agent when the failure may pass.
+                    if (!$relayed) {
+                        $unavailable_text = __('We could not reach a live agent just now. Please try again in a moment, or leave your email and we will follow up.', 'mxchat');
+                        $this->mxchat_save_chat_message($session_id, 'bot', $unavailable_text);
+
+                        $agent_response = [
+                            'text' => $unavailable_text,
+                            'html' => '',
+                            'status' => 'agent_unavailable',
+                            'session_id' => $session_id,
+                            'chat_mode' => MxChat_Session_Store::get($session_id, 'mode', 'ai')
+                        ];
+
+                        if ($testing_data !== null) {
+                            $agent_response['testing_data'] = $testing_data;
+                        }
+
+                        wp_send_json($agent_response);
+                    }
 
                     $agent_response = [
                         'status' => 'waiting_for_agent',
@@ -4488,6 +4513,11 @@ private function fetch_and_split_pdf_pages($pdf_source, $max_pages) {
                 return false;
             }
             
+            // wp_tempnam() lives in wp-admin/includes/file.php. admin-ajax has it
+            // loaded; a REST request (MxChat Anywhere) does not.
+            if (!function_exists('wp_tempnam')) {
+                require_once ABSPATH . 'wp-admin/includes/file.php';
+            }
             $temp_file = wp_tempnam($pdf_source);
             
             // SECURITY FIX: Changed from wp_remote_get to wp_safe_remote_get
@@ -4983,7 +5013,7 @@ public function mxchat_live_agent_handover($message, $user_id, $session_id) {
     MxChat_Session_Store::set($session_id, 'mode', 'agent');
 
     // Send message to channel
-    $channel_message = "ðŸ”” *New Live Agent Request*\n\n";
+    $channel_message = "🔔 *New Live Agent Request*\n\n";
     $channel_message .= "*Session ID:* `{$session_id}`\n";
     $channel_message .= "*User ID:* `{$user_id}`\n";
 
@@ -5040,41 +5070,27 @@ public function mxchat_live_agent_handover($message, $user_id, $session_id) {
     }
 
     if (!$use_shared_channel) {
-        $handoff_post = wp_remote_post('https://slack.com/api/chat.postMessage', [
-            'headers' => [
-                'Content-Type' => 'application/json',
-                'Authorization' => 'Bearer ' . $slack_bot_token
-            ],
-            'body' => json_encode([
-                'channel' => $channel_id,
-                'text' => $channel_message,
-                'mrkdwn' => true
-            ])
-        ]);
+        // Through the checked helper (plan 2a4ab7) so a refused post is
+        // recorded for the Slack tab; the control flow below is unchanged.
+        $handoff_post = $this->mxchat_slack_api('chat.postMessage', [
+            'channel' => $channel_id,
+            'text' => $channel_message,
+            'mrkdwn' => true
+        ], $slack_bot_token);
         // Re-handover edge (plan 7458a7): the stored mxchat_channel_ may point
         // at a channel archived by the auto-archive toggle (or deleted by an
         // admin). Slack answers is_archived / channel_not_found — clear the
         // stale option, mint a fresh channel, and re-post ONCE so the handoff
         // is never silently dropped.
-        if (!is_wp_error($handoff_post)) {
-            $handoff_data = json_decode(wp_remote_retrieve_body($handoff_post), true);
-            $handoff_err  = isset($handoff_data['error']) ? $handoff_data['error'] : '';
-            if (isset($handoff_data['ok']) && !$handoff_data['ok'] && in_array($handoff_err, array('is_archived', 'channel_not_found'), true)) {
-                MxChat_Session_Store::delete($session_id, 'channel');
-                $channel_id = $this->mxchat_create_conversation_channel($session_id);
-                if (!empty($channel_id)) {
-                    wp_remote_post('https://slack.com/api/chat.postMessage', [
-                        'headers' => [
-                            'Content-Type' => 'application/json',
-                            'Authorization' => 'Bearer ' . $slack_bot_token
-                        ],
-                        'body' => json_encode([
-                            'channel' => $channel_id,
-                            'text' => $channel_message,
-                            'mrkdwn' => true
-                        ])
-                    ]);
-                }
+        if (is_wp_error($handoff_post) && in_array($handoff_post->get_error_code(), array('is_archived', 'channel_not_found'), true)) {
+            MxChat_Session_Store::delete($session_id, 'channel');
+            $channel_id = $this->mxchat_create_conversation_channel($session_id);
+            if (!empty($channel_id)) {
+                $this->mxchat_slack_api('chat.postMessage', [
+                    'channel' => $channel_id,
+                    'text' => $channel_message,
+                    'mrkdwn' => true
+                ], $slack_bot_token);
             }
         }
     }
@@ -6337,10 +6353,16 @@ public function mxchat_send_user_message_to_agent($message, $user_id, $session_i
     }
 
     if (empty($slack_bot_token) || empty($channel_id)) {
+        // Nothing left to relay into (token removed, or the session's channel
+        // mapping is gone): same outcome as a dead destination.
+        $this->mxchat_record_slack_error('chat.postMessage', empty($slack_bot_token) ? 'no_bot_token' : 'no_channel_for_session', (string) $channel_id);
+        MxChat_Session_Store::delete($session_id, 'channel');
+        delete_option("mxchat_thread_{$session_id}");
+        MxChat_Session_Store::set($session_id, 'mode', 'ai');
         return false;
     }
 
-    $user_message = "ðŸ’¬ *User:* {$message}";
+    $user_message = "💬 *User:* {$message}";
 
     $body = [
         'channel' => $channel_id,
@@ -6351,15 +6373,103 @@ public function mxchat_send_user_message_to_agent($message, $user_id, $session_i
         $body['thread_ts'] = $thread_ts;
     }
 
-    $response = wp_remote_post('https://slack.com/api/chat.postMessage', [
+    $result = $this->mxchat_slack_api('chat.postMessage', $body, $slack_bot_token);
+
+    if (is_wp_error($result)) {
+        // Slack answers a refused post with HTTP 200 and ok:false. The old
+        // code returned true for anything that was not a transport error, so
+        // a deleted or archived channel (or a revoked token) was reported to
+        // the visitor as "sent to live agent" forever. When the destination
+        // is gone for good, end the handoff the way the Telegram leg does on
+        // a dead topic so the next message goes back to the bot; a transient
+        // refusal (rate limit, Slack outage) leaves the handoff in place.
+        if ($this->mxchat_is_dead_slack_destination_error($result)) {
+            MxChat_Session_Store::delete($session_id, 'channel');
+            delete_option("mxchat_thread_{$session_id}");
+            MxChat_Session_Store::set($session_id, 'mode', 'ai');
+        }
+        return false;
+    }
+
+    return true;
+}
+
+/**
+ * One checked door to the Slack Web API for live-agent posts (plan 2a4ab7).
+ * Slack reports a refused call as HTTP 200 with {"ok":false,"error":"…"}, so
+ * transport success says nothing about delivery. The body is decoded, ok is
+ * verified, and a failure is recorded in mxchat_slack_last_error (surfaced on
+ * the Slack Integrations tab); the next successful call clears it.
+ *
+ * @param string $method Slack Web API method, e.g. 'chat.postMessage'.
+ * @param array  $body   JSON body for the call.
+ * @param string $token  Bot token.
+ * @return array|WP_Error The decoded response when ok is true; otherwise a
+ *                        WP_Error whose code is Slack's error string (or
+ *                        the transport error code).
+ */
+private function mxchat_slack_api($method, array $body, $token) {
+    $channel = isset($body['channel']) ? (string) $body['channel'] : '';
+
+    $response = wp_remote_post('https://slack.com/api/' . $method, [
         'headers' => [
             'Content-Type' => 'application/json',
-            'Authorization' => 'Bearer ' . $slack_bot_token
+            'Authorization' => 'Bearer ' . $token
         ],
-        'body' => json_encode($body)
+        'body' => json_encode($body),
+        'timeout' => 15
     ]);
 
-    return !is_wp_error($response);
+    if (is_wp_error($response)) {
+        $this->mxchat_record_slack_error($method, $response->get_error_message(), $channel);
+        return $response;
+    }
+
+    $data = json_decode(wp_remote_retrieve_body($response), true);
+    if (!is_array($data) || empty($data['ok'])) {
+        $error = (is_array($data) && !empty($data['error']))
+            ? (string) $data['error']
+            : 'unknown_error (HTTP ' . wp_remote_retrieve_response_code($response) . ')';
+        $this->mxchat_record_slack_error($method, $error, $channel);
+        return new WP_Error($error, $error, ['method' => $method, 'channel' => $channel]);
+    }
+
+    if (get_option('mxchat_slack_last_error') !== false) {
+        delete_option('mxchat_slack_last_error');
+    }
+
+    return $data;
+}
+
+/**
+ * Record the last failed Slack live-agent post. Same shape as
+ * mxchat_telegram_last_error, plus the channel the post was aimed at.
+ */
+private function mxchat_record_slack_error($method, $error, $channel = '') {
+    update_option('mxchat_slack_last_error', array(
+        'error'   => (string) $error,
+        'method'  => (string) $method,
+        'channel' => (string) $channel,
+        'time'    => time(),
+    ), false);
+}
+
+/**
+ * Does this WP_Error mean the Slack destination will never accept the
+ * message (channel deleted or archived, bot removed, token dead)?
+ */
+private function mxchat_is_dead_slack_destination_error($error) {
+    if (!is_wp_error($error)) {
+        return false;
+    }
+    return in_array($error->get_error_code(), array(
+        'channel_not_found',
+        'is_archived',
+        'not_in_channel',
+        'invalid_auth',
+        'account_inactive',
+        'token_revoked',
+    ), true);
 }
 public function handle_slack_interaction(WP_REST_Request $request) {
     //error_log('Received Slack interaction');
@@ -6728,17 +6838,11 @@ public function handle_slack_messages(WP_REST_Request $request) {
 
                 // Confirm in Slack channel
                 if (!empty($slack_bot_token)) {
-                    wp_remote_post('https://slack.com/api/chat.postMessage', [
-                        'headers' => [
-                            'Content-Type' => 'application/json',
-                            'Authorization' => 'Bearer ' . $slack_bot_token
-                        ],
-                        'body' => json_encode([
-                            'channel' => $channel_id,
-                            'text' => "✅ *Chat ended.* User has been transferred back to AI mode.",
-                            'mrkdwn' => true
-                        ])
-                    ]);
+                    $this->mxchat_slack_api('chat.postMessage', [
+                        'channel' => $channel_id,
+                        'text' => "✅ *Chat ended.* User has been transferred back to AI mode.",
+                        'mrkdwn' => true
+                    ], $slack_bot_token);
                 }
 
                 // Auto-archive the ended conversation's channel (plan 7458a7).
@@ -7738,10 +7842,9 @@ private function find_relevant_content_wordpress($user_embedding, $bot_id = 'def
                 $content .= $full_text . "\n\n";
 
                 // Only include citation URLs if citation links are enabled
-                if ($citation_links_enabled) {
-                    $valid_urls[] = $source_url;
-                    $content .= "URL: " . $source_url . "\n\n";
-                }
+                // Uploaded files are cited as their page when one was given,
+                // else named as plain text and never offered as a link (plan 025ea2).
+                $this->append_source_citation($content, $valid_urls, $source_url, $bot_id, $citation_links_enabled);
 
                 // Video-backed source → queue the consent-safe embed (03ba33),
                 // subject to the card's own confidence floor (f52492). Pass the
@@ -7807,6 +7910,41 @@ private function find_relevant_content_wordpress($user_embedding, $bot_id = 'def
     }
 
     return trim($content);
+}
+
+/**
+ * Write the citation line for one knowledge source (plan 025ea2).
+ *
+ * A web source gets its "URL:" line and joins the approved-URL list, as
+ * before. An uploaded file (upload://<filename>) is not a web address: it is
+ * cited as the page its owner gave on upload, or, when there is none, named
+ * as plain text with no URL line and no approved-URL entry, so the model has
+ * the content and nothing to link.
+ *
+ * @param string $content                 Context being built (by reference).
+ * @param array  $valid_urls              Approved URLs (by reference).
+ * @param string $source_url              Stored source identity.
+ * @param string $bot_id                  Bot answering the turn.
+ * @param bool   $citation_links_enabled  Citation links setting.
+ */
+private function append_source_citation(&$content, &$valid_urls, $source_url, $bot_id, $citation_links_enabled) {
+    if (!$citation_links_enabled) {
+        return;
+    }
+    if (MxChat_Utils::is_upload_source($source_url)) {
+        $page_url = MxChat_Utils::get_upload_source_url($source_url, $bot_id);
+        if ($page_url !== '') {
+            $valid_urls[] = $page_url;
+            $content .= "URL: " . $page_url . "\n\n";
+        } else {
+            // A page of an uploaded PDF names its page (plan dcc19d).
+            $pdf_page = MxChat_Utils::upload_source_page($source_url);
+            $content .= "Source: " . MxChat_Utils::upload_source_name($source_url) . ($pdf_page > 0 ? ", page " . $pdf_page : "") . " (an uploaded file, not a web page: it has no link)\n\n";
+        }
+        return;
+    }
+    $valid_urls[] = $source_url;
+    $content .= "URL: " . $source_url . "\n\n";
 }
 
 /**
@@ -8282,10 +8420,9 @@ private function find_relevant_content_pinecone($user_embedding, $bot_id = 'defa
                 $content .= $full_text . "\n\n";
 
                 // Only include citation URLs if citation links are enabled
-                if ($citation_links_enabled) {
-                    $valid_urls[] = $source_url;
-                    $content .= "URL: " . $source_url . "\n\n";
-                }
+                // Uploaded files are cited as their page when one was given,
+                // else named as plain text and never offered as a link (plan 025ea2).
+                $this->append_source_citation($content, $valid_urls, $source_url, $bot_id, $citation_links_enabled);
 
                 // Video-backed source → queue the consent-safe embed (03ba33),
                 // subject to the card's own confidence floor (f52492). Pass the
@@ -8795,10 +8932,9 @@ private function find_relevant_content_pinecone_documents($user_embedding, $bot_
                 $matches_used++;
                 $content .= "## Reference " . $matches_used . " ##\n";
                 $content .= $full_text . "\n\n";
-                if ($citation_links_enabled) {
-                    $valid_urls[] = $source_url;
-                    $content .= "URL: " . $source_url . "\n\n";
-                }
+                // Uploaded files are cited as their page when one was given,
+                // else named as plain text and never offered as a link (plan 025ea2).
+                $this->append_source_citation($content, $valid_urls, $source_url, $bot_id, $citation_links_enabled);
                 $this->maybe_queue_youtube_embed($source_url, $full_text, $group['best_similarity'] ?? null);
             } else {
                 // Manual entry — counted as a used source, uncited (plan c1fe6a).

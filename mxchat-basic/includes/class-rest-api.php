@@ -306,7 +306,10 @@ class MxChat_Rest_Api {
         $token_set = (string) get_option(self::TOKEN_OPTION, '') !== '';
 
         $options = get_option('mxchat_options', array());
-        $embedding_model = isset($options['embedding_model']) ? (string) $options['embedding_model'] : '';
+        // The effective model: custom:<model> when Custom Provider embeddings are on (plan 418afd).
+        $embedding_model = class_exists('MxChat_Utils')
+            ? (string) MxChat_Utils::get_selected_embedding_model(is_array($options) ? $options : array())
+            : (isset($options['embedding_model']) ? (string) $options['embedding_model'] : '');
 
         return rest_ensure_response(array(
             'ok'              => true,
@@ -602,23 +605,14 @@ class MxChat_Rest_Api {
         // admin form handler in MxChat_Knowledge_Manager::mxchat_handle_content_submission).
         $bot_options = $this->get_bot_options($bot_id);
         $options     = !empty($bot_options) ? $bot_options : get_option('mxchat_options', array());
-        $selected_model = isset($options['embedding_model']) ? (string) $options['embedding_model'] : 'text-embedding-ada-002';
-
-        if (strpos($selected_model, 'voyage') === 0) {
-            $api_key = isset($options['voyage_api_key']) ? (string) $options['voyage_api_key'] : '';
-        } elseif (strpos($selected_model, 'gemini-embedding') === 0) {
-            $api_key = isset($options['gemini_api_key']) ? (string) $options['gemini_api_key'] : '';
-        } else {
-            $api_key = isset($options['api_key']) ? (string) $options['api_key'] : '';
+        // The same decision every admin importer makes (plan 418afd): a site
+        // that embeds through a Custom Provider needs no OpenAI, Voyage or
+        // Gemini key, and the key check used to refuse it.
+        $preflight = MxChat_Utils::embedding_preflight(is_array($options) ? $options : array());
+        if (!$preflight['ok']) {
+            return new WP_Error('mxchat_rest_no_api_key', $preflight['reason'], array('status' => 500));
         }
-
-        if ($api_key === '') {
-            return new WP_Error(
-                'mxchat_rest_no_api_key',
-                __('No embedding API key configured for the selected embedding model. Configure it in MxChat settings before pushing knowledge.', 'mxchat'),
-                array('status' => 500)
-            );
-        }
+        $api_key = $preflight['api_key'];
 
         // Embedding + chunking can take 10-60s for large documents.
         if (function_exists('set_time_limit')) {

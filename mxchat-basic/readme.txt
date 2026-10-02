@@ -5,7 +5,7 @@ Tags: ai chatbot, chatgpt, woocommerce, customer support, content generation
 Requires at least: 5.3
 Tested up to: 7.1
 Requires PHP: 7.4
-Stable tag: 3.2.23
+Stable tag: 3.2.24
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -321,6 +321,25 @@ Please ensure compliance with applicable terms and data privacy laws.
 *(Note: Screenshots will be added in future updates)*
 
 == Changelog ==
+
+= 3.2.24 - October 2, 2026 =
+* Fixed: A live-agent message Slack refuses (deleted or archived channel, revoked token) now tells the visitor instead of being reported as sent, ends the handoff so the chatbot takes over again, and shows the error on the Slack tab. Slack messages also no longer begin with stray characters.
+* Fixed: The WordPress personal data export now includes visitors who filled in the pre-chat form without chatting (email, name and consent record).
+* Fixed: A media file whose knowledge entry was deleted is indexed again the next time it is saved, instead of being skipped as unchanged.
+* Fixed: View indexed content now works for entries whose address carries encoded characters (non-Latin pages, addresses with spaces) and for manually added Pinecone entries, and shows a long entry in full.
+* Fixed: Links in chatbot replies now open in Safari on iPhone, iPad and Mac when Open Links in New Tab is on. Safari's pop-up blocker was silently blocking them.
+* Fixed: The video card for a matching YouTube entry now appears on streamed answers from GPT-5 and GPT-6 models. Before, it needed AI Tools on or streaming off.
+* Fixed: A chat message containing a document link no longer fails on chatbots embedded with MxChat Anywhere.
+* Fixed: Answers name an uploaded document or PDF in plain text instead of showing its file name as a link, including files uploaded before this update.
+* Fixed: A PDF added through PDF Upload keeps its file name. Its pages are listed under the file, answers name the file and page, and uploading the same PDF again replaces its pages instead of adding a second copy. PDFs uploaded earlier are left as they are: upload once more for a clean set, then delete the old pages.
+* Fixed: On a Pinecone document index, part numbers and codes that start with digits are found again, such as an order number like 5872EF or 4471AB12 for a part printed 4471-AB-12. Entries written earlier keep their old codes: run Migrate again or re-save the entry to refresh them.
+* Fixed: Sites embedding through a Custom Provider can add knowledge through the REST API without an OpenAI key, and a Pinecone document index is sized from the custom model's real dimension. The Knowledge listing, search, action phrases and import notice follow the custom model too.
+* New: Document Upload and PDF Upload each have an optional Source URL field. Give the page the file lives on and answers drawn from it link to that page.
+* New: WooCommerce product tags are included in each product's knowledge-base text, beside its categories. Re-save or re-import a product to pick them up.
+* New: Re-import affected entries, on the Knowledge screen and as the wp mxchat kb-reimport command. It finds entries that earlier versions stored with currency signs or accents missing, HTML character codes left in, or right-to-left PDF text saved backwards. It shows the list first and changes nothing until you confirm. Uploaded files are not kept on the server, so for those only text direction can be repaired.
+* Improved: Delete old index now refuses while Multi-Bot bots still use that index, and names them.
+* Improved: With Multi-Bot on a site that keeps knowledge in the WordPress database, the Knowledge screen now says the content is shared with all bots. Per-bot separation needs Pinecone or an OpenAI Vector Store.
+* Improved: Admin polish. The warning status pill is styled, the importer's selection counter has its spacing, the Pinecone card's status follows the host you typed, and namespace lists keep a stable order.
 
 = 3.2.23 - September 29, 2026 =
 * Fixed: Pressing Enter with an empty message no longer locks the chat input. The box stays usable, and only a real message disables it while the reply is generated. A message made only of spaces or blank lines now counts as empty too, so nothing is sent to the model for it.
@@ -729,6 +748,9 @@ Please ensure compliance with applicable terms and data privacy laws.
 Older releases are archived in the plugin's full version history on WordPress.org.
 
 == Upgrade Notice ==
+
+= 3.2.24 =
+Fixes links in chatbot replies not opening in Safari on iPhone, iPad and Mac, and live-agent messages being reported as sent when Slack refused them. Uploaded documents and PDFs are now named properly in answers, can carry a Source URL, and no longer duplicate when re-uploaded, and part numbers starting with digits work again on a Pinecone document index. Adds Re-import affected entries, which rebuilds knowledge entries that earlier versions stored with missing accents, HTML character codes or reversed right-to-left text.
 
 = 3.2.23 =
 Fixes the chat input locking up for good when a visitor pressed Enter on an empty message. On a Pinecone document index, Delete old index now refuses while any namespace is still uncopied, Migrate can copy every namespace in one run and continues where it stopped, part numbers typed without spaces find their records, and Create index for me suggests a free name instead of failing on an existing one. Adds the GPT-6 models (Astra, Sol and Luna) to the model picker, and tells the chatbot its AI Tools call budget so it no longer answers from partial results when only one call is allowed.

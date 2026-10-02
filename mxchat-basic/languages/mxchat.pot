@@ -2,14 +2,14 @@
 # This file is distributed under the GPLv2 or later.
 msgid ""
 msgstr ""
-"Project-Id-Version: MxChat 3.2.23\n"
+"Project-Id-Version: MxChat 3.2.24\n"
 "Report-Msgid-Bugs-To: https://wordpress.org/support/plugin/mxchat-basic\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
-"POT-Creation-Date: 2026-09-29T10:31:40+00:00\n"
+"POT-Creation-Date: 2026-10-02T13:42:58+00:00\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "X-Generator: WP-CLI 2.12.0\n"
 "X-Domain: mxchat\n"
@@ -20,7 +20,7 @@ msgstr ""
 #: includes/class-mxchat-admin.php:454
 #: includes/class-mxchat-admin.php:563
 #: includes/class-mxchat-admin.php:564
-#: includes/class-mxchat-privacy.php:640
+#: includes/class-mxchat-privacy.php:732
 msgid "MxChat"
 msgstr ""
 
@@ -278,12 +278,12 @@ msgid "Invalid security token"
 msgstr ""
 
 #: admin/class-ajax-handler.php:1517
-#: admin/class-knowledge-manager.php:212
-#: admin/class-knowledge-manager.php:524
-#: admin/class-knowledge-manager.php:685
-#: admin/class-knowledge-manager.php:1687
-#: admin/class-knowledge-manager.php:3988
-#: admin/class-knowledge-manager.php:4055
+#: admin/class-knowledge-manager.php:216
+#: admin/class-knowledge-manager.php:528
+#: admin/class-knowledge-manager.php:699
+#: admin/class-knowledge-manager.php:1731
+#: admin/class-knowledge-manager.php:4032
+#: admin/class-knowledge-manager.php:4099
 msgid "Unauthorized access"
 msgstr ""
 
@@ -354,768 +354,863 @@ msgstr ""
 msgid "Usage counter reset."
 msgstr ""
 
-#: admin/class-knowledge-manager.php:153
-#: includes/class-mxchat-admin.php:11477
-#: includes/class-mxchat-admin.php:11563
+#: admin/class-knowledge-manager.php:157
+#: includes/class-mxchat-admin.php:11555
+#: includes/class-mxchat-admin.php:11647
 msgid "Nonce verification failed."
 msgstr ""
 
-#: admin/class-knowledge-manager.php:182
+#: admin/class-knowledge-manager.php:186
 msgid "Error storing content: "
 msgstr ""
 
-#: admin/class-knowledge-manager.php:187
+#: admin/class-knowledge-manager.php:191
 msgid "Content successfully submitted!"
 msgstr ""
 
-#: admin/class-knowledge-manager.php:224
+#: admin/class-knowledge-manager.php:228
 msgid "That does not look like a link to a single YouTube video. Please paste a watch, youtu.be, or Shorts URL."
 msgstr ""
 
-#: admin/class-knowledge-manager.php:268
+#: admin/class-knowledge-manager.php:272
 msgid "Please write a description for the video, or switch to auto-fetch."
 msgstr ""
 
-#: admin/class-knowledge-manager.php:288
+#: admin/class-knowledge-manager.php:292
 msgid "Could not retrieve any information for that video (no metadata and no captions). Please check the URL, or use the manual description option."
 msgstr ""
 
 #. translators: 1: video title, 2: channel name
-#: admin/class-knowledge-manager.php:297
+#: admin/class-knowledge-manager.php:301
 #, php-format
 msgid "A YouTube video titled \"%1$s\" from the channel %2$s."
 msgstr ""
 
-#: admin/class-knowledge-manager.php:308
+#: admin/class-knowledge-manager.php:312
 msgid "Error storing video in the knowledge base: "
 msgstr ""
 
-#: admin/class-knowledge-manager.php:317
+#: admin/class-knowledge-manager.php:321
 msgid "Video indexed from its title and channel — no captions were available for a transcript. The form below is pre-filled: write your own description and import again to improve matching (it updates the same entry)."
 msgstr ""
 
-#: admin/class-knowledge-manager.php:329
+#: admin/class-knowledge-manager.php:333
 msgid "YouTube video successfully added to the knowledge base!"
 msgstr ""
 
-#: admin/class-knowledge-manager.php:466
+#: admin/class-knowledge-manager.php:470
 msgid "Failed to save PDF file"
 msgstr ""
 
-#: admin/class-knowledge-manager.php:472
-#: admin/class-knowledge-manager.php:614
+#: admin/class-knowledge-manager.php:476
+#: admin/class-knowledge-manager.php:618
 msgid "Invalid PDF: Unable to parse or no pages found"
 msgstr ""
 
-#: admin/class-knowledge-manager.php:494
-#: admin/class-knowledge-manager.php:636
+#: admin/class-knowledge-manager.php:498
+#: admin/class-knowledge-manager.php:650
 msgid "Failed to add PDF pages to processing queue"
 msgstr ""
 
-#: admin/class-knowledge-manager.php:535
-#: admin/class-knowledge-manager.php:695
+#: admin/class-knowledge-manager.php:539
+#: admin/class-knowledge-manager.php:709
 msgid "The uploaded file exceeds the server upload_max_filesize limit."
 msgstr ""
 
-#: admin/class-knowledge-manager.php:536
-#: admin/class-knowledge-manager.php:696
+#: admin/class-knowledge-manager.php:540
+#: admin/class-knowledge-manager.php:710
 msgid "The uploaded file exceeds the form MAX_FILE_SIZE limit."
 msgstr ""
 
-#: admin/class-knowledge-manager.php:537
-#: admin/class-knowledge-manager.php:697
+#: admin/class-knowledge-manager.php:541
+#: admin/class-knowledge-manager.php:711
 msgid "The file was only partially uploaded."
 msgstr ""
 
-#: admin/class-knowledge-manager.php:538
+#: admin/class-knowledge-manager.php:542
 msgid "No file was uploaded. Please select a PDF file."
 msgstr ""
 
-#: admin/class-knowledge-manager.php:539
-#: admin/class-knowledge-manager.php:699
+#: admin/class-knowledge-manager.php:543
+#: admin/class-knowledge-manager.php:713
 msgid "Server missing temporary folder."
 msgstr ""
 
-#: admin/class-knowledge-manager.php:540
-#: admin/class-knowledge-manager.php:700
+#: admin/class-knowledge-manager.php:544
+#: admin/class-knowledge-manager.php:714
 msgid "Server failed to write file to disk."
 msgstr ""
 
-#: admin/class-knowledge-manager.php:542
-#: admin/class-knowledge-manager.php:702
+#: admin/class-knowledge-manager.php:546
+#: admin/class-knowledge-manager.php:716
 msgid "Unknown upload error."
 msgstr ""
 
-#: admin/class-knowledge-manager.php:557
+#: admin/class-knowledge-manager.php:561
 msgid "Invalid file type. Only PDF files are accepted."
 msgstr ""
 
-#: admin/class-knowledge-manager.php:568
+#: admin/class-knowledge-manager.php:572
 msgid "Invalid file extension. Only .pdf files are accepted."
 msgstr ""
 
-#: admin/class-knowledge-manager.php:581
+#: admin/class-knowledge-manager.php:585
 msgid "WordPress upload directory is not writable."
 msgstr ""
 
-#: admin/class-knowledge-manager.php:593
+#: admin/class-knowledge-manager.php:597
 msgid "Failed to create upload directory."
 msgstr ""
 
-#: admin/class-knowledge-manager.php:603
+#: admin/class-knowledge-manager.php:607
 msgid "Failed to save uploaded PDF file."
 msgstr ""
 
-#: admin/class-knowledge-manager.php:651
+#: admin/class-knowledge-manager.php:665
 #, php-format
 msgid "PDF \"%s\" (%d pages) queued for processing. Processing will start automatically."
 msgstr ""
 
-#: admin/class-knowledge-manager.php:663
+#: admin/class-knowledge-manager.php:677
 msgid "Failed to process uploaded PDF: "
 msgstr ""
 
-#: admin/class-knowledge-manager.php:698
+#: admin/class-knowledge-manager.php:712
 msgid "No file was uploaded. Please select a document."
 msgstr ""
 
-#: admin/class-knowledge-manager.php:729
+#: admin/class-knowledge-manager.php:743
 msgid "Invalid or unreadable document. Accepted types: .docx, .txt, .md."
 msgstr ""
 
-#: admin/class-knowledge-manager.php:744
+#: admin/class-knowledge-manager.php:758
 msgid "The .docx file could not be read. It may be corrupt, empty, or not a real Word document."
 msgstr ""
 
-#: admin/class-knowledge-manager.php:760
+#: admin/class-knowledge-manager.php:774
 msgid "The uploaded document contains no readable text."
 msgstr ""
 
-#: admin/class-knowledge-manager.php:777
+#: admin/class-knowledge-manager.php:791
 #, php-format
 msgid "The document is too large (about %1$d pages; the limit is %2$d). Split it into smaller files, or raise the PDF max pages setting."
 msgstr ""
 
-#: admin/class-knowledge-manager.php:807
+#: admin/class-knowledge-manager.php:831
 msgid "Failed to import the document: "
 msgstr ""
 
-#: admin/class-knowledge-manager.php:813
+#: admin/class-knowledge-manager.php:837
 #, php-format
 msgid "Document \"%s\" imported into the knowledge base."
 msgstr ""
 
-#: admin/class-knowledge-manager.php:999
-#: admin/class-knowledge-manager.php:1305
-#: admin/class-pinecone-documents.php:1816
+#: admin/class-knowledge-manager.php:1023
+#: admin/class-knowledge-manager.php:1329
+#: admin/class-knowledge-manager.php:8684
+#: admin/class-pinecone-documents.php:1895
 #: admin/class-vectorstore-manager.php:645
 #: includes/class-mxchat-admin.php:1095
 #: includes/class-mxchat-admin.php:1166
 msgid "Permission denied."
 msgstr ""
 
-#: admin/class-knowledge-manager.php:1033
+#: admin/class-knowledge-manager.php:1057
 msgid "Database update failed."
 msgstr ""
 
-#: admin/class-knowledge-manager.php:1037
+#: admin/class-knowledge-manager.php:1061
 msgid "Embedding generation failed."
 msgstr ""
 
-#: admin/class-knowledge-manager.php:1040
+#: admin/class-knowledge-manager.php:1064
 msgid "Invalid data."
 msgstr ""
 
-#: admin/class-knowledge-manager.php:1361
+#: admin/class-knowledge-manager.php:1391
 msgid "Entry not found in the local knowledge database."
 msgstr ""
 
-#: admin/class-knowledge-manager.php:1395
+#: admin/class-knowledge-manager.php:1425
 msgid "Stored in the local WordPress database. Only the assembled text shown here is embedded — there are no separate vector metadata fields (e.g. taxonomy terms are not stored unless they were injected into the text itself)."
 msgstr ""
 
-#: admin/class-knowledge-manager.php:1407
+#: admin/class-knowledge-manager.php:1437
 msgid "Pinecone manager not available."
 msgstr ""
 
-#: admin/class-knowledge-manager.php:1423
+#: admin/class-knowledge-manager.php:1453
 msgid "Pinecone not configured."
 msgstr ""
 
-#: admin/class-knowledge-manager.php:1433
-#: admin/class-knowledge-manager.php:1485
+#: admin/class-knowledge-manager.php:1473
+#: admin/class-knowledge-manager.php:1529
 msgid "Entry not found in Pinecone."
 msgstr ""
 
-#: admin/class-knowledge-manager.php:1478
+#: admin/class-knowledge-manager.php:1522
 msgid "Failed to fetch from Pinecone."
 msgstr ""
 
-#: admin/class-knowledge-manager.php:1530
+#: admin/class-knowledge-manager.php:1574
 msgid "Stored in Pinecone. Each chunk above lists the vector metadata fields actually present — if a field you expect (such as taxonomy terms) is missing here, it was not stored as metadata and is only searchable if it appears in the embedded text."
 msgstr ""
 
-#: admin/class-knowledge-manager.php:1652
+#: admin/class-knowledge-manager.php:1696
 msgid "PDF processing appears to be stalled. No updates for over 5 minutes."
 msgstr ""
 
-#: admin/class-knowledge-manager.php:1670
-#: admin/class-knowledge-manager.php:1890
-#: admin/class-knowledge-manager.php:2504
-#: admin/class-knowledge-manager.php:2647
-#: admin/class-knowledge-manager.php:5711
-#: admin/class-knowledge-manager.php:5766
+#: admin/class-knowledge-manager.php:1714
+#: admin/class-knowledge-manager.php:1934
+#: admin/class-knowledge-manager.php:2548
+#: admin/class-knowledge-manager.php:2691
+#: admin/class-knowledge-manager.php:5738
+#: admin/class-knowledge-manager.php:5793
 msgid "ago"
 msgstr ""
 
-#: admin/class-knowledge-manager.php:1696
+#: admin/class-knowledge-manager.php:1740
 msgid "Please provide a valid URL."
 msgstr ""
 
-#: admin/class-knowledge-manager.php:1754
+#: admin/class-knowledge-manager.php:1798
 #, php-format
 msgid "Failed to fetch the URL: %s"
 msgstr ""
 
-#: admin/class-knowledge-manager.php:1768
+#: admin/class-knowledge-manager.php:1812
 msgid "Empty response received from URL."
 msgstr ""
 
-#: admin/class-knowledge-manager.php:1781
+#: admin/class-knowledge-manager.php:1825
 msgid "PDF queued for processing. Processing will start automatically."
 msgstr ""
 
-#: admin/class-knowledge-manager.php:1786
+#: admin/class-knowledge-manager.php:1830
 msgid "Failed to queue PDF processing: "
 msgstr ""
 
-#: admin/class-knowledge-manager.php:1804
+#: admin/class-knowledge-manager.php:1848
 msgid "Invalid sitemap XML. Please provide a valid sitemap."
 msgstr ""
 
-#: admin/class-knowledge-manager.php:1815
+#: admin/class-knowledge-manager.php:1859
 msgid "Sitemap queued for processing. Processing will start automatically."
 msgstr ""
 
-#: admin/class-knowledge-manager.php:1824
+#: admin/class-knowledge-manager.php:1868
 msgid "Failed to queue sitemap processing: "
 msgstr ""
 
-#: admin/class-knowledge-manager.php:1829
+#: admin/class-knowledge-manager.php:1873
 msgid "Failed to queue sitemap processing."
 msgstr ""
 
-#: admin/class-knowledge-manager.php:1850
+#: admin/class-knowledge-manager.php:1894
 msgid "No valid content found on the provided URL."
 msgstr ""
 
-#: admin/class-knowledge-manager.php:1870
+#: admin/class-knowledge-manager.php:1914
 msgid "Failed to store content in database: "
 msgstr ""
 
-#: admin/class-knowledge-manager.php:1873
+#: admin/class-knowledge-manager.php:1917
 msgid "URL content successfully submitted!"
 msgstr ""
 
-#: admin/class-knowledge-manager.php:1905
+#: admin/class-knowledge-manager.php:1949
 msgid "Invalid XML object provided"
 msgstr ""
 
-#: admin/class-knowledge-manager.php:1917
+#: admin/class-knowledge-manager.php:1961
 msgid "Embedding API validation failed: "
 msgstr ""
 
-#: admin/class-knowledge-manager.php:1921
+#: admin/class-knowledge-manager.php:1965
 msgid "Embedding API returned unexpected result type. Please check your configuration."
 msgstr ""
 
-#: admin/class-knowledge-manager.php:1936
+#: admin/class-knowledge-manager.php:1980
 msgid "No valid URLs found in sitemap"
 msgstr ""
 
-#: admin/class-knowledge-manager.php:1946
+#: admin/class-knowledge-manager.php:1990
 msgid "Failed to add URLs to processing queue"
 msgstr ""
 
-#: admin/class-knowledge-manager.php:2647
+#: admin/class-knowledge-manager.php:2691
 msgid "Just now"
 msgstr ""
 
-#: admin/class-knowledge-manager.php:2975
+#: admin/class-knowledge-manager.php:3019
 msgid "No knowledge entries found in Pinecone."
 msgstr ""
 
-#: admin/class-knowledge-manager.php:3009
-#: admin/class-knowledge-manager.php:3537
-#: includes/admin-knowledge-page.php:1062
+#: admin/class-knowledge-manager.php:3053
+#: admin/class-knowledge-manager.php:3581
+#: includes/admin-knowledge-page.php:1120
 msgid "chunks"
 msgstr ""
 
-#: admin/class-knowledge-manager.php:3023
-#: admin/class-knowledge-manager.php:3551
-#: includes/admin-knowledge-page.php:1076
+#: admin/class-knowledge-manager.php:3067
+#: admin/class-knowledge-manager.php:3595
+#: includes/admin-knowledge-page.php:1134
 msgid "View Source"
 msgstr ""
 
-#: admin/class-knowledge-manager.php:3026
-#: admin/class-knowledge-manager.php:3554
-#: includes/admin-knowledge-page.php:1079
-#: includes/admin-knowledge-page.php:2415
+#: admin/class-knowledge-manager.php:3070
+#: admin/class-knowledge-manager.php:3598
+#: includes/admin-knowledge-page.php:1137
+#: includes/admin-knowledge-page.php:2549
 msgid "Manual Content"
 msgstr ""
 
-#: admin/class-knowledge-manager.php:3037
-#: admin/class-knowledge-manager.php:3191
-#: includes/admin-knowledge-page.php:1090
-#: includes/admin-knowledge-page.php:1248
+#: admin/class-knowledge-manager.php:3081
+#: admin/class-knowledge-manager.php:3235
+#: includes/admin-knowledge-page.php:1148
+#: includes/admin-knowledge-page.php:1306
 msgid "View indexed content"
 msgstr ""
 
-#: admin/class-knowledge-manager.php:3047
-#: admin/class-knowledge-manager.php:3201
-#: admin/class-knowledge-manager.php:3566
-#: admin/class-knowledge-manager.php:3710
-#: includes/admin-knowledge-page.php:1100
-#: includes/admin-knowledge-page.php:1258
+#: admin/class-knowledge-manager.php:3091
+#: admin/class-knowledge-manager.php:3245
+#: admin/class-knowledge-manager.php:3610
+#: admin/class-knowledge-manager.php:3754
+#: includes/admin-knowledge-page.php:1158
+#: includes/admin-knowledge-page.php:1316
 msgid "Edit content"
 msgstr ""
 
-#: admin/class-knowledge-manager.php:3058
-#: admin/class-knowledge-manager.php:3578
-#: includes/admin-knowledge-page.php:1111
+#: admin/class-knowledge-manager.php:3102
+#: admin/class-knowledge-manager.php:3622
+#: includes/admin-knowledge-page.php:1169
 msgid "Delete all chunks"
 msgstr ""
 
-#: admin/class-knowledge-manager.php:3087
-#: admin/class-knowledge-manager.php:3607
-#: includes/admin-knowledge-page.php:1141
+#: admin/class-knowledge-manager.php:3131
+#: admin/class-knowledge-manager.php:3651
+#: includes/admin-knowledge-page.php:1199
 #, php-format
 msgid "Chunk %d of %d"
 msgstr ""
 
-#: admin/class-knowledge-manager.php:3112
-#: admin/class-knowledge-manager.php:3632
-#: includes/admin-knowledge-page.php:1166
+#: admin/class-knowledge-manager.php:3156
+#: admin/class-knowledge-manager.php:3676
+#: includes/admin-knowledge-page.php:1224
 msgid "Same as parent"
 msgstr ""
 
-#: admin/class-knowledge-manager.php:3115
-#: admin/class-knowledge-manager.php:3635
-#: includes/admin-knowledge-page.php:1169
+#: admin/class-knowledge-manager.php:3159
+#: admin/class-knowledge-manager.php:3679
+#: includes/admin-knowledge-page.php:1227
 msgid "Managed by group"
 msgstr ""
 
-#: admin/class-knowledge-manager.php:3177
-#: admin/class-knowledge-manager.php:3696
+#: admin/class-knowledge-manager.php:3221
+#: admin/class-knowledge-manager.php:3740
 #: includes/admin-content-page.php:212
-#: includes/admin-knowledge-page.php:1234
+#: includes/admin-knowledge-page.php:1292
 msgid "View"
 msgstr ""
 
-#: admin/class-knowledge-manager.php:3180
-#: admin/class-knowledge-manager.php:3699
-#: includes/admin-knowledge-page.php:1237
+#: admin/class-knowledge-manager.php:3224
+#: admin/class-knowledge-manager.php:3743
+#: includes/admin-knowledge-page.php:1295
 #: includes/admin-settings-page.php:730
 msgid "Manual"
 msgstr ""
 
-#: admin/class-knowledge-manager.php:3229
-#: admin/class-knowledge-manager.php:3293
-#: admin/class-knowledge-manager.php:3731
-#: includes/admin-knowledge-page.php:1295
+#: admin/class-knowledge-manager.php:3273
+#: admin/class-knowledge-manager.php:3337
+#: admin/class-knowledge-manager.php:3775
+#: includes/admin-knowledge-page.php:1353
 #: includes/class-mxchat-admin.php:4422
 #: includes/class-mxchat-admin.php:5195
 msgid "&laquo; Previous"
 msgstr ""
 
-#: admin/class-knowledge-manager.php:3260
-#: admin/class-knowledge-manager.php:3297
-#: admin/class-knowledge-manager.php:3762
-#: includes/admin-knowledge-page.php:1326
+#: admin/class-knowledge-manager.php:3304
+#: admin/class-knowledge-manager.php:3341
+#: admin/class-knowledge-manager.php:3806
+#: includes/admin-knowledge-page.php:1384
 #: includes/class-mxchat-admin.php:4423
 #: includes/class-mxchat-admin.php:5196
 msgid "Next &raquo;"
 msgstr ""
 
-#: admin/class-knowledge-manager.php:3503
-#: includes/admin-knowledge-page.php:1021
+#: admin/class-knowledge-manager.php:3547
+#: includes/admin-knowledge-page.php:1079
 msgid "No knowledge entries found. Use the Import Options to add content."
 msgstr ""
 
-#: admin/class-knowledge-manager.php:4040
+#: admin/class-knowledge-manager.php:4084
 msgid "Processing has been stopped successfully."
 msgstr ""
 
-#: admin/class-knowledge-manager.php:5503
-#: includes/admin-knowledge-page.php:341
-#: includes/admin-knowledge-page.php:766
+#: admin/class-knowledge-manager.php:5530
+#: includes/admin-knowledge-page.php:366
+#: includes/admin-knowledge-page.php:824
 msgid "PDF Processing Status"
 msgstr ""
 
-#: admin/class-knowledge-manager.php:5507
-#: admin/class-knowledge-manager.php:5593
+#: admin/class-knowledge-manager.php:5534
+#: admin/class-knowledge-manager.php:5620
 #: includes/class-mxchat-integrator.php:481
 #: mxchat-basic.php:1296
 msgid "Dismiss"
 msgstr ""
 
-#: admin/class-knowledge-manager.php:5515
-#: admin/class-knowledge-manager.php:5601
-#: includes/admin-knowledge-page.php:775
-#: includes/admin-knowledge-page.php:805
+#: admin/class-knowledge-manager.php:5542
+#: admin/class-knowledge-manager.php:5628
+#: includes/admin-knowledge-page.php:833
+#: includes/admin-knowledge-page.php:863
 msgid "Process Batch"
 msgstr ""
 
-#: admin/class-knowledge-manager.php:5520
-#: admin/class-knowledge-manager.php:5606
-#: admin/class-knowledge-manager.php:5694
-#: admin/class-knowledge-manager.php:5745
+#: admin/class-knowledge-manager.php:5547
+#: admin/class-knowledge-manager.php:5633
+#: admin/class-knowledge-manager.php:5721
+#: admin/class-knowledge-manager.php:5772
 msgid "Error"
-msgstr ""
-
-#: admin/class-knowledge-manager.php:5524
-#: admin/class-knowledge-manager.php:5610
-#, php-format
-msgid "Completed with %d failures"
-msgstr ""
-
-#: admin/class-knowledge-manager.php:5526
-#: admin/class-knowledge-manager.php:5612
-msgid "Complete"
-msgstr ""
-
-#: admin/class-knowledge-manager.php:5540
-#, php-format
-msgid "Progress: %d of %d pages (%d%%)"
-msgstr ""
-
-#: admin/class-knowledge-manager.php:5548
-#: includes/admin-knowledge-page.php:359
-#: includes/admin-knowledge-page.php:785
-msgid "Failed pages:"
 msgstr ""
 
 #: admin/class-knowledge-manager.php:5551
 #: admin/class-knowledge-manager.php:5637
-#: includes/admin-knowledge-page.php:361
-#: includes/admin-knowledge-page.php:392
+#, php-format
+msgid "Completed with %d failures"
+msgstr ""
+
+#: admin/class-knowledge-manager.php:5553
+#: admin/class-knowledge-manager.php:5639
+msgid "Complete"
+msgstr ""
+
+#: admin/class-knowledge-manager.php:5567
+#, php-format
+msgid "Progress: %d of %d pages (%d%%)"
+msgstr ""
+
+#: admin/class-knowledge-manager.php:5575
+#: includes/admin-knowledge-page.php:384
+#: includes/admin-knowledge-page.php:843
+msgid "Failed pages:"
+msgstr ""
+
+#: admin/class-knowledge-manager.php:5578
+#: admin/class-knowledge-manager.php:5664
+#: includes/admin-knowledge-page.php:386
+#: includes/admin-knowledge-page.php:417
 msgid "Status:"
 msgstr ""
 
-#: admin/class-knowledge-manager.php:5552
-#: admin/class-knowledge-manager.php:5638
-#: includes/admin-knowledge-page.php:787
-#: includes/admin-knowledge-page.php:817
+#: admin/class-knowledge-manager.php:5579
+#: admin/class-knowledge-manager.php:5665
+#: includes/admin-knowledge-page.php:845
+#: includes/admin-knowledge-page.php:875
 msgid "Last update:"
 msgstr ""
 
-#: admin/class-knowledge-manager.php:5558
-#: admin/class-knowledge-manager.php:5644
+#: admin/class-knowledge-manager.php:5585
+#: admin/class-knowledge-manager.php:5671
 msgid "Processing Summary"
 msgstr ""
 
-#: admin/class-knowledge-manager.php:5559
+#: admin/class-knowledge-manager.php:5586
 msgid "Total Pages:"
 msgstr ""
 
-#: admin/class-knowledge-manager.php:5560
-#: admin/class-knowledge-manager.php:5646
+#: admin/class-knowledge-manager.php:5587
+#: admin/class-knowledge-manager.php:5673
 msgid "Successful:"
 msgstr ""
 
-#: admin/class-knowledge-manager.php:5561
-#: admin/class-knowledge-manager.php:5647
+#: admin/class-knowledge-manager.php:5588
+#: admin/class-knowledge-manager.php:5674
 msgid "Failed:"
 msgstr ""
 
-#: admin/class-knowledge-manager.php:5562
-#: admin/class-knowledge-manager.php:5648
+#: admin/class-knowledge-manager.php:5589
+#: admin/class-knowledge-manager.php:5675
 msgid "Completed:"
 msgstr ""
 
-#: admin/class-knowledge-manager.php:5589
-#: includes/admin-knowledge-page.php:372
-#: includes/admin-knowledge-page.php:796
+#: admin/class-knowledge-manager.php:5616
+#: includes/admin-knowledge-page.php:397
+#: includes/admin-knowledge-page.php:854
 msgid "Sitemap Processing Status"
 msgstr ""
 
-#: admin/class-knowledge-manager.php:5626
+#: admin/class-knowledge-manager.php:5653
 #, php-format
 msgid "Progress: %d of %d URLs (%d%%)"
 msgstr ""
 
-#: admin/class-knowledge-manager.php:5634
-#: includes/admin-knowledge-page.php:390
-#: includes/admin-knowledge-page.php:815
+#: admin/class-knowledge-manager.php:5661
+#: includes/admin-knowledge-page.php:415
+#: includes/admin-knowledge-page.php:873
 msgid "Failed URLs:"
 msgstr ""
 
-#: admin/class-knowledge-manager.php:5645
+#: admin/class-knowledge-manager.php:5672
 msgid "Total URLs:"
 msgstr ""
 
-#: admin/class-knowledge-manager.php:5661
-#: includes/admin-knowledge-page.php:2187
+#: admin/class-knowledge-manager.php:5688
+#: includes/admin-knowledge-page.php:2321
 msgid "Last error:"
 msgstr ""
 
-#: admin/class-knowledge-manager.php:5685
+#: admin/class-knowledge-manager.php:5712
 #, php-format
 msgid "Failed Pages (%d)"
 msgstr ""
 
-#: admin/class-knowledge-manager.php:5687
+#: admin/class-knowledge-manager.php:5714
 msgid "Show Failed Pages"
 msgstr ""
 
-#: admin/class-knowledge-manager.php:5693
-#: admin/class-knowledge-manager.php:5713
+#: admin/class-knowledge-manager.php:5720
+#: admin/class-knowledge-manager.php:5740
 #: includes/admin-transcripts-page.php:523
 msgid "Page"
 msgstr ""
 
-#: admin/class-knowledge-manager.php:5695
-#: admin/class-knowledge-manager.php:5746
+#: admin/class-knowledge-manager.php:5722
+#: admin/class-knowledge-manager.php:5773
 msgid "Retries"
 msgstr ""
 
-#: admin/class-knowledge-manager.php:5696
-#: admin/class-knowledge-manager.php:5747
+#: admin/class-knowledge-manager.php:5723
+#: admin/class-knowledge-manager.php:5774
 msgid "Time"
 msgstr ""
 
-#: admin/class-knowledge-manager.php:5736
+#: admin/class-knowledge-manager.php:5763
 #, php-format
 msgid "Failed URLs (%d)"
 msgstr ""
 
-#: admin/class-knowledge-manager.php:5738
+#: admin/class-knowledge-manager.php:5765
 msgid "Show Failed URLs"
 msgstr ""
 
-#: admin/class-knowledge-manager.php:5744
+#: admin/class-knowledge-manager.php:5771
 #: includes/admin-api-page.php:329
 msgid "URL"
 msgstr ""
 
-#: admin/class-knowledge-manager.php:5776
+#: admin/class-knowledge-manager.php:5803
 msgid "Unknown URL"
 msgstr ""
 
-#: admin/class-knowledge-manager.php:5790
+#: admin/class-knowledge-manager.php:5817
 msgid "more failed URLs not shown"
 msgstr ""
 
-#: admin/class-knowledge-manager.php:6344
+#: admin/class-knowledge-manager.php:6371
 msgid "PDF"
 msgstr ""
 
-#: admin/class-knowledge-manager.php:6345
+#: admin/class-knowledge-manager.php:6372
 msgid "Word"
 msgstr ""
 
-#: admin/class-knowledge-manager.php:6346
+#: admin/class-knowledge-manager.php:6373
 msgid "Text"
 msgstr ""
 
-#: admin/class-knowledge-manager.php:6347
+#: admin/class-knowledge-manager.php:6374
 msgid "Markdown"
 msgstr ""
 
-#: admin/class-knowledge-manager.php:6350
+#: admin/class-knowledge-manager.php:6377
 msgid "Document"
 msgstr ""
 
-#: admin/class-knowledge-manager.php:6376
+#: admin/class-knowledge-manager.php:6403
 msgid "Unsupported file type — only PDF, Word, text and Markdown files can be imported."
 msgstr ""
 
-#: admin/class-knowledge-manager.php:6390
+#: admin/class-knowledge-manager.php:6417
 msgid "No extractable text — the PDF is empty, scanned images only, or larger than the size limit."
 msgstr ""
 
-#: admin/class-knowledge-manager.php:6401
+#: admin/class-knowledge-manager.php:6428
 msgid "The file could not be read from disk."
 msgstr ""
 
-#: admin/class-knowledge-manager.php:6410
+#: admin/class-knowledge-manager.php:6437
 msgid "The Word file could not be read. It may be corrupt, empty, or not a real Word document."
 msgstr ""
 
-#: admin/class-knowledge-manager.php:6426
+#: admin/class-knowledge-manager.php:6453
 msgid "The file contains no readable text."
 msgstr ""
 
 #. translators: 1: estimated page count, 2: configured page limit
-#: admin/class-knowledge-manager.php:6442
+#: admin/class-knowledge-manager.php:6469
 #, php-format
 msgid "Too large (about %1$d pages; the limit is %2$d). Split the file, or raise the PDF max pages setting."
 msgstr ""
 
 #. translators: 1: attachment title, 2: reason the file was skipped
-#: admin/class-knowledge-manager.php:6499
+#: admin/class-knowledge-manager.php:6526
 #, php-format
 msgid "Skipped \"%1$s\": %2$s"
 msgstr ""
 
-#: admin/class-knowledge-manager.php:6518
+#: admin/class-knowledge-manager.php:6545
 msgid "The file has no URL — it may be missing from the uploads folder."
 msgstr ""
 
-#: admin/class-knowledge-manager.php:7844
-#: admin/class-knowledge-manager.php:9290
+#: admin/class-knowledge-manager.php:7860
+msgid "Pinecone is switched on but has no API key or host."
+msgstr ""
+
+#: admin/class-knowledge-manager.php:8045
+msgid "a video entry, not an imported page"
+msgstr ""
+
+#: admin/class-knowledge-manager.php:8065
+#, php-format
+msgid "the page could not be fetched (%s)"
+msgstr ""
+
+#: admin/class-knowledge-manager.php:8071
+#, php-format
+msgid "the page is gone (HTTP %d)"
+msgstr ""
+
+#: admin/class-knowledge-manager.php:8092
+msgid "the page has no readable text now"
+msgstr ""
+
+#: admin/class-knowledge-manager.php:8105
+msgid "its source is gone (no post or file on this site has this address)"
+msgstr ""
+
+#: admin/class-knowledge-manager.php:8110
+#, php-format
+msgid "the file could not be read (%s)"
+msgstr ""
+
+#: admin/class-knowledge-manager.php:8120
+msgid "its source is no longer published"
+msgstr ""
+
+#: admin/class-knowledge-manager.php:8141
+msgid "its source has no text now"
+msgstr ""
+
+#: admin/class-knowledge-manager.php:8251
+msgid "its source reads differently now, and not because of these fixes"
+msgstr ""
+
+#: admin/class-knowledge-manager.php:8387
+msgid "the embedding request failed"
+msgstr ""
+
+#: admin/class-knowledge-manager.php:8401
+msgid "a manual Pinecone entry: open it on the Knowledge screen and save it to repair it"
+msgstr ""
+
+#: admin/class-knowledge-manager.php:8414
+msgid "the entry could not be stored"
+msgstr ""
+
+#: admin/class-knowledge-manager.php:8442
+#, php-format
+msgid "Manual entry %s"
+msgstr ""
+
+#: admin/class-knowledge-manager.php:8714
+msgid "Check the knowledge base first."
+msgstr ""
+
+#: admin/class-knowledge-manager.php:8726
+msgid "Unknown request."
+msgstr ""
+
+#: admin/class-knowledge-manager.php:8884
+#: admin/class-knowledge-manager.php:10362
 #: includes/class-mxchat-admin.php:4520
 #: includes/class-mxchat-admin.php:4754
 msgid "You do not have sufficient permissions."
 msgstr ""
 
-#: admin/class-knowledge-manager.php:7849
-#: admin/class-knowledge-manager.php:9299
+#: admin/class-knowledge-manager.php:8889
+#: admin/class-knowledge-manager.php:10371
 msgid "Security check failed."
 msgstr ""
 
-#: admin/class-knowledge-manager.php:7856
+#: admin/class-knowledge-manager.php:8896
 msgid "Invalid vector ID."
 msgstr ""
 
-#: admin/class-knowledge-manager.php:7869
+#: admin/class-knowledge-manager.php:8909
 msgid "Pinecone is not properly configured."
 msgstr ""
 
-#: admin/class-knowledge-manager.php:7893
+#: admin/class-knowledge-manager.php:8934
 msgid "Entry deleted successfully from Pinecone."
 msgstr ""
 
-#: admin/class-knowledge-manager.php:7898
+#: admin/class-knowledge-manager.php:8939
 msgid "Failed to delete entry: "
 msgstr ""
 
-#: admin/class-knowledge-manager.php:8516
+#: admin/class-knowledge-manager.php:9588
 msgid "Subscribers & Above"
 msgstr ""
 
-#: admin/class-knowledge-manager.php:8517
+#: admin/class-knowledge-manager.php:9589
 msgid "Contributors & Above"
 msgstr ""
 
-#: admin/class-knowledge-manager.php:8518
+#: admin/class-knowledge-manager.php:9590
 msgid "Authors & Above"
 msgstr ""
 
-#: admin/class-knowledge-manager.php:8519
+#: admin/class-knowledge-manager.php:9591
 msgid "Editors & Above"
 msgstr ""
 
-#: admin/class-knowledge-manager.php:8520
+#: admin/class-knowledge-manager.php:9592
 msgid "Administrators Only"
 msgstr ""
 
-#: admin/class-knowledge-manager.php:8524
-#: includes/admin-knowledge-page.php:1545
+#: admin/class-knowledge-manager.php:9596
+#: includes/admin-knowledge-page.php:1675
 msgid "Public (Everyone)"
 msgstr ""
 
-#: admin/class-knowledge-manager.php:8525
-#: includes/admin-knowledge-page.php:1546
+#: admin/class-knowledge-manager.php:9597
+#: includes/admin-knowledge-page.php:1676
 msgid "Logged In Users"
 msgstr ""
 
 #. translators: %s: Pinecone index name
-#: admin/class-pinecone-documents.php:994
+#: admin/class-pinecone-documents.php:1005
 #, php-format
 msgid "An index named \"%s\" already exists in this Pinecone project. Pick a different name, or paste that index's host above and press Check index instead of creating one."
 msgstr ""
 
 #. translators: %s: suggested Pinecone index name
-#: admin/class-pinecone-documents.php:999
+#: admin/class-pinecone-documents.php:1010
 #, php-format
 msgid "Suggested free name: %s."
 msgstr ""
 
+#: admin/class-pinecone-documents.php:1141
+msgid "The index was not created."
+msgstr ""
+
+#: admin/class-pinecone-documents.php:1142
+msgid "The index was not checked."
+msgstr ""
+
+#. translators: 1: the error the embedding endpoint returned, 2: what did not happen
+#: admin/class-pinecone-documents.php:1145
+#, php-format
+msgid "Could not determine the dimension of your Custom Provider embedding model (%1$s). %2$s Check the Custom Provider embedding settings, then try again."
+msgstr ""
+
+#: admin/class-pinecone-documents.php:1146
+msgid "no answer from the embedding endpoint"
+msgstr ""
+
 #. translators: 1: document index name, 2: records copied, 3: records in total
-#: admin/class-pinecone-documents.php:1184
+#: admin/class-pinecone-documents.php:1221
 #, php-format
 msgid "The copy into \"%1$s\" is still running (%2$s of %3$s records). Let it finish before switching the chatbot to the document index, or tick Switch anyway to move it now and copy the rest afterwards."
 msgstr ""
 
 #. translators: 1: namespace name, 2: records copied, 3: records on the old index
-#: admin/class-pinecone-documents.php:1741
+#: admin/class-pinecone-documents.php:1780
 #, php-format
 msgid "%1$s (%2$s of %3$s records copied)"
 msgstr ""
 
 #. translators: %s: comma-separated namespace names with their counts
-#: admin/class-pinecone-documents.php:1749
+#: admin/class-pinecone-documents.php:1788
 #, php-format
 msgid "Namespace %s on the old index has records that are not in the document index. Tick Copy every namespace and run Migrate again, then delete. The old index stays."
 msgid_plural "Namespaces %s on the old index have records that are not in the document index. Tick Copy every namespace and run Migrate again, then delete. The old index stays."
 msgstr[0] ""
 msgstr[1] ""
 
-#: admin/class-pinecone-documents.php:1791
-#: admin/class-pinecone-documents.php:1841
-#: admin/class-pinecone-documents.php:1956
+#. translators: 1: number of bots, 2: comma-separated bot names
+#: admin/class-pinecone-documents.php:1827
+#, php-format
+msgid "%1$s bot still uses the old index: %2$s. Move it to the new index first (Multi-Bot, All Bots, Move these bots to the new index), or it will stop answering. The old index stays."
+msgid_plural "%1$s bots still use the old index: %2$s. Move them to the new index first (Multi-Bot, All Bots, Move these bots to the new index), or they will stop answering. The old index stays."
+msgstr[0] ""
+msgstr[1] ""
+
+#: admin/class-pinecone-documents.php:1870
+#: admin/class-pinecone-documents.php:1920
+#: admin/class-pinecone-documents.php:2043
 msgid "Enter your Pinecone API key first."
 msgstr ""
 
-#: admin/class-pinecone-documents.php:1844
+#: admin/class-pinecone-documents.php:1923
 msgid "Enter an index name first — the new document index will be created under that name."
 msgstr ""
 
-#: admin/class-pinecone-documents.php:1897
+#: admin/class-pinecone-documents.php:1980
 #, php-format
 msgid "Document index \"%1$s\" created (%2$d dimensions, cosine, full-text search on the chunk text). The host is filled in above. Your chatbot keeps answering from the current index until you save the Pinecone settings — copy your records across with Migrate first."
 msgstr ""
 
-#: admin/class-pinecone-documents.php:1898
+#: admin/class-pinecone-documents.php:1981
 #, php-format
 msgid "Document index \"%1$s\" is being created (%2$d dimensions). The host is filled in above; run Check index in a minute to confirm it is ready. Your chatbot keeps answering from the current index until you save the Pinecone settings."
 msgstr ""
 
-#: admin/class-pinecone-documents.php:1909
+#: admin/class-pinecone-documents.php:1992
 msgid "Enter the Pinecone API key and host first."
 msgstr ""
 
-#: admin/class-pinecone-documents.php:1961
+#: admin/class-pinecone-documents.php:2048
 msgid "Enter the host of the document index to copy into (or create one with Create index for me)."
 msgstr ""
 
-#: admin/class-pinecone-documents.php:1986
+#: admin/class-pinecone-documents.php:2077
 msgid "No migration in progress. Click Migrate to start one."
 msgstr ""
 
-#: admin/class-pinecone-documents.php:1998
+#: admin/class-pinecone-documents.php:2089
 msgid "Unknown migration action."
 msgstr ""
 
-#: admin/class-pinecone-documents.php:2013
+#: admin/class-pinecone-documents.php:2104
 msgid "Finish the migration first — the old index can only be deleted after a completed copy."
 msgstr ""
 
-#: admin/class-pinecone-documents.php:2016
+#: admin/class-pinecone-documents.php:2107
 #, php-format
 msgid "The copy count does not match (%1$d of %2$d copied). The old index stays."
 msgstr ""
 
-#: admin/class-pinecone-documents.php:2019
+#: admin/class-pinecone-documents.php:2110
 msgid "The saved document index no longer matches the migration. The old index stays."
 msgstr ""
 
-#: admin/class-pinecone-documents.php:2027
+#: admin/class-pinecone-documents.php:2131
 #, php-format
 msgid "Could not read the old index before deleting it (%s). The old index stays."
 msgstr ""
 
-#: admin/class-pinecone-documents.php:2038
+#: admin/class-pinecone-documents.php:2142
 #, php-format
 msgid "Type the old index name exactly (%s) to confirm."
 msgstr ""
 
-#: admin/class-pinecone-documents.php:2041
+#: admin/class-pinecone-documents.php:2145
 msgid "Refusing: that is the document index currently in use."
 msgstr ""
 
-#: admin/class-pinecone-documents.php:2050
+#: admin/class-pinecone-documents.php:2154
 #, php-format
 msgid "Old vector index \"%s\" deleted."
 msgstr ""
@@ -1155,7 +1250,7 @@ msgstr ""
 #: includes/admin-actions-page.php:51
 #: includes/admin-actions-page.php:91
 #: includes/admin-actions-page.php:139
-#: includes/admin-knowledge-page.php:1014
+#: includes/admin-knowledge-page.php:1072
 #: includes/admin-onboarding-page.php:458
 #: includes/admin-onboarding-page.php:486
 #: includes/admin-transcripts-page.php:1023
@@ -1226,7 +1321,7 @@ msgid "Both let your chatbot take action during a conversation. Pick whichever f
 msgstr ""
 
 #: includes/admin-actions-page.php:164
-#: includes/admin-knowledge-page.php:502
+#: includes/admin-knowledge-page.php:548
 msgid "Recommended"
 msgstr ""
 
@@ -1266,7 +1361,7 @@ msgid "All"
 msgstr ""
 
 #: includes/admin-actions-page.php:212
-#: includes/admin-knowledge-page.php:984
+#: includes/admin-knowledge-page.php:1042
 #: includes/admin-transcripts-page.php:451
 #: includes/admin-transcripts-page.php:700
 msgid "Delete Selected"
@@ -1284,7 +1379,7 @@ msgstr ""
 
 #: includes/admin-actions-page.php:229
 #: includes/admin-actions-page.php:591
-#: includes/admin-knowledge-page.php:590
+#: includes/admin-knowledge-page.php:636
 #: includes/admin-settings-page.php:837
 #: includes/admin-transcripts-page.php:464
 msgid "Refresh"
@@ -1401,16 +1496,16 @@ msgstr ""
 #: includes/admin-actions-page.php:703
 #: includes/admin-actions-page.php:755
 #: includes/admin-content-page.php:313
-#: includes/admin-knowledge-page.php:2130
-#: includes/admin-knowledge-page.php:2320
-#: includes/admin-knowledge-page.php:2352
+#: includes/admin-knowledge-page.php:2264
+#: includes/admin-knowledge-page.php:2454
+#: includes/admin-knowledge-page.php:2486
 #: includes/admin-settings-page.php:920
 #: includes/admin-transcripts-page.php:620
 #: includes/admin-transcripts-page.php:786
 #: includes/class-mxchat-admin.php:5324
 #: includes/class-mxchat-admin.php:5433
-#: includes/class-mxchat-admin.php:10484
-#: includes/class-mxchat-integrator.php:6402
+#: includes/class-mxchat-admin.php:10562
+#: includes/class-mxchat-integrator.php:6512
 msgid "Cancel"
 msgstr ""
 
@@ -1885,7 +1980,7 @@ msgstr ""
 #: includes/admin-content-page.php:56
 #: includes/admin-content-page.php:99
 #: includes/admin-content-page.php:506
-#: includes/admin-knowledge-page.php:1012
+#: includes/admin-knowledge-page.php:1070
 #: includes/admin-onboarding-page.php:459
 #: includes/class-mxchat-admin.php:637
 #: includes/class-mxchat-admin.php:638
@@ -1934,7 +2029,7 @@ msgid "Draft"
 msgstr ""
 
 #: includes/admin-content-page.php:186
-#: includes/admin-knowledge-page.php:2270
+#: includes/admin-knowledge-page.php:2404
 msgid "Published"
 msgstr ""
 
@@ -2022,9 +2117,9 @@ msgstr ""
 #: includes/class-mxchat-admin.php:9756
 #: includes/class-mxchat-admin.php:9765
 #: includes/class-mxchat-admin.php:9774
-#: includes/class-mxchat-admin.php:9885
-#: includes/class-mxchat-admin.php:9955
-#: includes/class-mxchat-admin.php:10032
+#: includes/class-mxchat-admin.php:9913
+#: includes/class-mxchat-admin.php:9983
+#: includes/class-mxchat-admin.php:10060
 msgid "Show"
 msgstr ""
 
@@ -2165,7 +2260,7 @@ msgid "Optimize All"
 msgstr ""
 
 #: includes/admin-content-page.php:447
-#: includes/admin-knowledge-page.php:2393
+#: includes/admin-knowledge-page.php:2527
 #: includes/class-mxchat-admin.php:8321
 #: includes/class-mxchat-public.php:308
 #: includes/class-mxchat-public.php:313
@@ -2381,17 +2476,17 @@ msgid "Analyze and optimize SEO for all your content."
 msgstr ""
 
 #: includes/admin-content-page.php:821
-#: includes/admin-knowledge-page.php:928
+#: includes/admin-knowledge-page.php:986
 msgid "All Types"
 msgstr ""
 
 #: includes/admin-content-page.php:822
-#: includes/admin-knowledge-page.php:2258
+#: includes/admin-knowledge-page.php:2392
 msgid "Posts"
 msgstr ""
 
 #: includes/admin-content-page.php:823
-#: includes/admin-knowledge-page.php:2259
+#: includes/admin-knowledge-page.php:2393
 msgid "Pages"
 msgstr ""
 
@@ -2446,20 +2541,20 @@ msgstr ""
 #: includes/admin-knowledge-page.php:50
 #: includes/admin-knowledge-page.php:65
 #: includes/admin-knowledge-page.php:152
-#: includes/admin-knowledge-page.php:885
+#: includes/admin-knowledge-page.php:943
 #: includes/admin-settings-page.php:1419
 msgid "Knowledge Base"
 msgstr ""
 
 #: includes/admin-knowledge-page.php:58
 #: includes/admin-knowledge-page.php:136
-#: includes/admin-knowledge-page.php:629
+#: includes/admin-knowledge-page.php:675
 msgid "Import"
 msgstr ""
 
 #: includes/admin-knowledge-page.php:61
 #: includes/admin-knowledge-page.php:143
-#: includes/admin-knowledge-page.php:446
+#: includes/admin-knowledge-page.php:483
 msgid "Import Options"
 msgstr ""
 
@@ -2470,7 +2565,7 @@ msgstr ""
 
 #: includes/admin-knowledge-page.php:77
 #: includes/admin-knowledge-page.php:176
-#: includes/admin-knowledge-page.php:1425
+#: includes/admin-knowledge-page.php:1555
 msgid "Chunking & Retrieval"
 msgstr ""
 
@@ -2500,1045 +2595,1102 @@ msgstr ""
 
 #: includes/admin-knowledge-page.php:97
 #: includes/admin-knowledge-page.php:217
-#: includes/admin-knowledge-page.php:910
-#: includes/admin-knowledge-page.php:2427
+#: includes/admin-knowledge-page.php:968
+#: includes/admin-knowledge-page.php:2561
 msgid "Pinecone"
 msgstr ""
 
 #: includes/admin-knowledge-page.php:104
 #: includes/admin-knowledge-page.php:229
-#: includes/admin-knowledge-page.php:2033
+#: includes/admin-knowledge-page.php:2167
 msgid "OpenAI Vector Store"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:301
+#: includes/admin-knowledge-page.php:320
 msgid "Select Bot Database:"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:311
+#: includes/admin-knowledge-page.php:332
+msgid "This bot answers from the WordPress database, which is shared with all bots: content added here is available to every bot that uses it. A bot gets a knowledge base of its own on Pinecone (its own host or namespace) or an OpenAI Vector Store."
+msgstr ""
+
+#: includes/admin-knowledge-page.php:334
 msgid "Content will be added to the selected bot's knowledge base"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:314
+#: includes/admin-knowledge-page.php:339
 #: includes/admin-onboarding-page.php:518
 msgid "Saved"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:344
-#: includes/admin-knowledge-page.php:375
+#: includes/admin-knowledge-page.php:369
+#: includes/admin-knowledge-page.php:400
 msgid "Keep this tab open - Processing runs in your browser"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:349
-#: includes/admin-knowledge-page.php:380
-#: includes/admin-knowledge-page.php:771
-#: includes/admin-knowledge-page.php:801
+#: includes/admin-knowledge-page.php:374
+#: includes/admin-knowledge-page.php:405
+#: includes/admin-knowledge-page.php:829
+#: includes/admin-knowledge-page.php:859
 msgid "Stop Processing"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:357
-#: includes/admin-knowledge-page.php:783
+#: includes/admin-knowledge-page.php:382
+#: includes/admin-knowledge-page.php:841
 #, php-format
 msgid "Progress: %1$d of %2$d pages (%3$d%%)"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:361
-#: includes/admin-knowledge-page.php:392
+#: includes/admin-knowledge-page.php:386
+#: includes/admin-knowledge-page.php:417
 msgid "Processing"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:388
-#: includes/admin-knowledge-page.php:813
+#: includes/admin-knowledge-page.php:413
+#: includes/admin-knowledge-page.php:871
 #, php-format
 msgid "Progress: %1$d of %2$d URLs (%3$d%%)"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:447
+#: includes/admin-knowledge-page.php:484
 msgid "Import content to your knowledge base from various sources."
 msgstr ""
 
-#: includes/admin-knowledge-page.php:461
+#. translators: %s: the embedding model name configured on the Custom Provider
+#: includes/admin-knowledge-page.php:500
 #, php-format
-msgid "We detected your %s API key. <strong>Remember to add credits to your %s account</strong> before using the knowledgebase."
+msgid "Knowledge is embedded through your Custom Provider (model: %s). No OpenAI, Voyage AI or Google Gemini key is needed for imports."
 msgstr ""
 
-#: includes/admin-knowledge-page.php:463
+#: includes/admin-knowledge-page.php:503
+#: includes/admin-knowledge-page.php:509
 #: includes/class-mxchat-meta-box.php:237
 msgid "Important:"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:464
+#: includes/admin-knowledge-page.php:505
+#: includes/admin-knowledge-page.php:511
+msgid "Go to API Key Settings"
+msgstr ""
+
+#: includes/admin-knowledge-page.php:507
+#, php-format
+msgid "We detected your %s API key. <strong>Remember to add credits to your %s account</strong> before using the knowledgebase."
+msgstr ""
+
+#: includes/admin-knowledge-page.php:510
 #, php-format
 msgid "Before importing knowledge, you must add a %s API key with sufficient credits in the Chatbot settings."
 msgstr ""
 
-#: includes/admin-knowledge-page.php:465
-msgid "Go to API Key Settings"
-msgstr ""
-
-#: includes/admin-knowledge-page.php:477
+#: includes/admin-knowledge-page.php:523
 msgid "Using WordPress Database:"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:478
+#: includes/admin-knowledge-page.php:524
 msgid "The WordPress database is not optimized for vector search with large datasets. If you plan to have more than 500 knowledge entries, we highly recommend using Pinecone for better performance and scalability."
 msgstr ""
 
-#: includes/admin-knowledge-page.php:487
+#: includes/admin-knowledge-page.php:533
 msgid "Choose Import Method"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:499
+#: includes/admin-knowledge-page.php:545
 msgid "WordPress Content"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:500
+#: includes/admin-knowledge-page.php:546
 msgid "Import specific posts and pages to your knowledge base."
 msgstr ""
 
-#: includes/admin-knowledge-page.php:506
+#: includes/admin-knowledge-page.php:552
 msgid "Enter sitemap URL here"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:511
+#: includes/admin-knowledge-page.php:557
 msgid "Sitemap Import"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:512
+#: includes/admin-knowledge-page.php:558
 msgid "Use a content-specific sub-sitemap, not the sitemap index."
 msgstr ""
 
-#: includes/admin-knowledge-page.php:517
+#: includes/admin-knowledge-page.php:563
 msgid "Enter webpage URL here"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:522
+#: includes/admin-knowledge-page.php:568
 msgid "Direct URL"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:523
+#: includes/admin-knowledge-page.php:569
 msgid "Import content from any webpage."
 msgstr ""
 
-#: includes/admin-knowledge-page.php:533
+#: includes/admin-knowledge-page.php:579
 msgid "Direct Content"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:534
+#: includes/admin-knowledge-page.php:580
 msgid "Submit content to be vectorized."
 msgstr ""
 
-#: includes/admin-knowledge-page.php:539
+#: includes/admin-knowledge-page.php:585
 msgid "Enter PDF URL here"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:544
+#: includes/admin-knowledge-page.php:590
 msgid "PDF Import"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:545
+#: includes/admin-knowledge-page.php:591
 msgid "Import knowledge from PDF URL."
 msgstr ""
 
-#: includes/admin-knowledge-page.php:555
+#: includes/admin-knowledge-page.php:601
 msgid "PDF Upload"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:556
+#: includes/admin-knowledge-page.php:602
 msgid "Upload a PDF file from your computer."
 msgstr ""
 
-#: includes/admin-knowledge-page.php:566
+#: includes/admin-knowledge-page.php:612
 msgid "Document Upload"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:567
+#: includes/admin-knowledge-page.php:613
 msgid "Upload a Word document, text, or Markdown file (.docx, .txt, .md)."
 msgstr ""
 
-#: includes/admin-knowledge-page.php:577
+#: includes/admin-knowledge-page.php:623
 msgid "YouTube"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:578
+#: includes/admin-knowledge-page.php:624
 msgid "Index a video so the chat can surface it as a playable embed."
 msgstr ""
 
-#: includes/admin-knowledge-page.php:588
+#: includes/admin-knowledge-page.php:634
 msgid "Detected Sitemaps"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:607
+#: includes/admin-knowledge-page.php:653
 msgid "No sitemaps detected. You can manually enter a sitemap URL using the input field above."
 msgstr ""
 
-#: includes/admin-knowledge-page.php:614
+#: includes/admin-knowledge-page.php:660
 msgid "Detecting sitemaps..."
 msgstr ""
 
-#: includes/admin-knowledge-page.php:627
+#: includes/admin-knowledge-page.php:673
 msgid "Enter URL here"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:643
+#: includes/admin-knowledge-page.php:689
 msgid "Enter your content here..."
 msgstr ""
 
-#: includes/admin-knowledge-page.php:646
+#: includes/admin-knowledge-page.php:692
+#: includes/admin-knowledge-page.php:726
+#: includes/admin-knowledge-page.php:750
 msgid "Enter source URL (Optional)"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:650
+#: includes/admin-knowledge-page.php:696
 msgid "Generate unique URL for duplicate content"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:654
+#: includes/admin-knowledge-page.php:700
 msgid "Generate Unique"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:658
+#: includes/admin-knowledge-page.php:704
 msgid "Enable this option to submit multiple entries with the same base URL. A unique reference will be appended."
 msgstr ""
 
-#: includes/admin-knowledge-page.php:662
+#: includes/admin-knowledge-page.php:708
 msgid "Import Content"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:677
+#: includes/admin-knowledge-page.php:723
 msgid "Select a PDF file from your computer to import into the knowledge base. Maximum file size depends on your server settings."
 msgstr ""
 
-#: includes/admin-knowledge-page.php:680
+#: includes/admin-knowledge-page.php:728
+msgid "The page this PDF lives on. Answers drawn from it link to that page. Leave empty and answers name the file and page without a link."
+msgstr ""
+
+#: includes/admin-knowledge-page.php:732
 msgid "Import PDF"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:695
+#: includes/admin-knowledge-page.php:747
 msgid "Select a .docx, .txt, or .md file to import into the knowledge base. The text is extracted and indexed; the file itself is not stored. Re-uploading a file with the same name replaces its previous content."
 msgstr ""
 
-#: includes/admin-knowledge-page.php:698
+#: includes/admin-knowledge-page.php:752
+msgid "The page this document lives on. Answers drawn from it link to that page. Leave empty and answers name the file without a link."
+msgstr ""
+
+#: includes/admin-knowledge-page.php:756
 msgid "Import Document"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:718
+#: includes/admin-knowledge-page.php:776
 msgid "Paste a YouTube video URL (watch, youtu.be, or Shorts link)"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:721
+#: includes/admin-knowledge-page.php:779
 msgid "How should this video be described for matching?"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:726
+#: includes/admin-knowledge-page.php:784
 msgid "Auto-fetch"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:727
+#: includes/admin-knowledge-page.php:785
 msgid "We pull the video's title, channel, and captions (when available) to describe it."
 msgstr ""
 
-#: includes/admin-knowledge-page.php:733
+#: includes/admin-knowledge-page.php:791
 msgid "Write my own"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:734
+#: includes/admin-knowledge-page.php:792
 msgid "You write the description the chatbot matches against — best for curated guides."
 msgstr ""
 
-#: includes/admin-knowledge-page.php:740
+#: includes/admin-knowledge-page.php:798
 msgid "Describe what this video covers and the questions it answers..."
 msgstr ""
 
-#: includes/admin-knowledge-page.php:741
+#: includes/admin-knowledge-page.php:799
 msgid "This text is what gets matched against visitor questions. Importing the same video URL again updates its existing entry."
 msgstr ""
 
-#: includes/admin-knowledge-page.php:744
+#: includes/admin-knowledge-page.php:802
 msgid "Import Video"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:886
+#: includes/admin-knowledge-page.php:944
 msgid "View and manage your imported knowledge entries."
 msgstr ""
 
-#: includes/admin-knowledge-page.php:892
+#: includes/admin-knowledge-page.php:950
 msgid "OpenAI Vector Store is Active"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:892
+#: includes/admin-knowledge-page.php:950
 msgid "Your chatbot is using OpenAI's hosted Vector Store for knowledge retrieval. The entries below are stored locally and are not being searched. To use this local database, disable Vector Store in the Integrations settings."
 msgstr ""
 
-#: includes/admin-knowledge-page.php:899
+#: includes/admin-knowledge-page.php:957
 msgid "Knowledge Entries"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:901
+#: includes/admin-knowledge-page.php:959
 msgid "Pinecone reports vectors, not documents; a long entry is stored as several vectors."
 msgstr ""
 
-#: includes/admin-knowledge-page.php:901
+#: includes/admin-knowledge-page.php:959
 msgid "vectors"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:905
+#: includes/admin-knowledge-page.php:963
 msgid "Not in use"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:915
+#: includes/admin-knowledge-page.php:973
 msgid "WordPress DB"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:926
-#: includes/admin-knowledge-page.php:2253
+#: includes/admin-knowledge-page.php:984
+#: includes/admin-knowledge-page.php:2387
 msgid "Search..."
 msgstr ""
 
-#: includes/admin-knowledge-page.php:935
+#: includes/admin-knowledge-page.php:993
 msgid "PDFs"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:936
+#: includes/admin-knowledge-page.php:994
 msgid "URLs"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:944
+#: includes/admin-knowledge-page.php:1002
 msgid "Delete All"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:945
+#: includes/admin-knowledge-page.php:1003
 msgid "Are you sure you want to delete all knowledge?"
 msgstr ""
 
 #. translators: %s: content type label (e.g. "Pages", "PDFs")
-#: includes/admin-knowledge-page.php:958
+#: includes/admin-knowledge-page.php:1016
 #, php-format
 msgid "Delete All %s"
 msgstr ""
 
 #. translators: %s: content type label
-#: includes/admin-knowledge-page.php:960
+#: includes/admin-knowledge-page.php:1018
 #, php-format
 msgid "Are you sure you want to delete all %s from the knowledge base?"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:995
+#: includes/admin-knowledge-page.php:1053
 msgid "Changes may take up to 60 seconds to process in Pinecone. Click \"Refresh Entries\" to see updates."
 msgstr ""
 
-#: includes/admin-knowledge-page.php:999
+#: includes/admin-knowledge-page.php:1057
 msgid "Refresh Entries"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:1009
-#: includes/class-mxchat-admin.php:10482
+#: includes/admin-knowledge-page.php:1067
+#: includes/class-mxchat-admin.php:10560
 msgid "Select All"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:1011
+#: includes/admin-knowledge-page.php:1069
 msgid "ID"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:1013
-#: includes/admin-knowledge-page.php:2416
+#: includes/admin-knowledge-page.php:1071
+#: includes/admin-knowledge-page.php:2550
 msgid "Source"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:1344
+#: includes/admin-knowledge-page.php:1417
+msgid "Re-import affected entries"
+msgstr ""
+
+#: includes/admin-knowledge-page.php:1421
+msgid "Earlier versions stored some imported text incorrectly: currency signs and accents were dropped, HTML character codes were left in, and right-to-left PDF text was saved backwards. This finds the entries that still hold that text and rebuilds them from their source. Checking changes nothing."
+msgstr ""
+
+#: includes/admin-knowledge-page.php:1425
+msgid "Entries last written before"
+msgstr ""
+
+#: includes/admin-knowledge-page.php:1428
+msgid "Check knowledge base"
+msgstr ""
+
+#: includes/admin-knowledge-page.php:1430
+msgid "The date is the release that carried the last of these fixes. Choose a later one if this site was updated after that."
+msgstr ""
+
+#: includes/admin-knowledge-page.php:1451
+msgid "Never changed or removed by this tool"
+msgstr ""
+
+#: includes/admin-knowledge-page.php:1460
+#: includes/admin-settings-page.php:841
+msgid "Clear"
+msgstr ""
+
+#: includes/admin-knowledge-page.php:1461
+msgid "Each rewritten entry is embedded again with your embedding provider."
+msgstr ""
+
+#: includes/admin-knowledge-page.php:1474
 msgid "Auto-Sync Settings"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:1345
+#: includes/admin-knowledge-page.php:1475
 msgid "Automatically sync WordPress content to your knowledge base when published or updated."
 msgstr ""
 
-#: includes/admin-knowledge-page.php:1356
+#: includes/admin-knowledge-page.php:1486
 msgid "Auto-sync Posts"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:1363
+#: includes/admin-knowledge-page.php:1493
 msgid "Auto-sync Pages"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:1373
+#: includes/admin-knowledge-page.php:1503
 msgid "Extract text from PDFs in ACF fields on save"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:1375
+#: includes/admin-knowledge-page.php:1505
 msgid "When ON, editor saves re-extract every PDF referenced in ACF fields. Default OFF — saves stay fast and don't re-parse the same PDFs on every edit. The manual content selector has its own per-batch checkbox; this setting only controls the auto-sync path."
 msgstr ""
 
-#: includes/admin-knowledge-page.php:1380
+#: includes/admin-knowledge-page.php:1510
 msgid "Advanced Custom Post Sync Settings"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:1384
+#: includes/admin-knowledge-page.php:1514
 msgid "Sync Custom Post Types"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:1404
+#: includes/admin-knowledge-page.php:1534
 msgid "No custom post types found."
 msgstr ""
 
-#: includes/admin-knowledge-page.php:1426
+#: includes/admin-knowledge-page.php:1556
 msgid "Control how content is split for indexing and how the knowledge base is searched."
 msgstr ""
 
-#: includes/admin-knowledge-page.php:1431
+#: includes/admin-knowledge-page.php:1561
 msgid "Chunking"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:1436
+#: includes/admin-knowledge-page.php:1566
 msgid "Chunking improves retrieval quality for long documents. All chunks are reassembled before sending to the AI. Only applies to new submissions."
 msgstr ""
 
-#: includes/admin-knowledge-page.php:1445
+#: includes/admin-knowledge-page.php:1575
 msgid "Enable Content Chunking"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:1450
+#: includes/admin-knowledge-page.php:1580
 msgid "Chunk Size (characters)"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:1452
+#: includes/admin-knowledge-page.php:1582
 msgid "Recommended: 4000 characters (~1000 tokens). Range: 1000-10000. Larger chunks preserve more context."
 msgstr ""
 
-#: includes/admin-knowledge-page.php:1466
+#: includes/admin-knowledge-page.php:1596
 msgid "Retrieval"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:1475
+#: includes/admin-knowledge-page.php:1605
 msgid "Hybrid keyword boost (WordPress database and Pinecone document indexes)"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:1477
+#: includes/admin-knowledge-page.php:1607
 msgid "Combines keyword matching with vector similarity when searching your WordPress-database knowledge base or a Pinecone document index. Helps exact-token questions — product codes, SKUs, error codes, names — find the right document even when semantic similarity alone would miss it."
 msgstr ""
 
-#: includes/admin-knowledge-page.php:1478
+#: includes/admin-knowledge-page.php:1608
 msgid "Applies to the WordPress-database knowledge base and to Pinecone when the index type is Document index with full-text search; a classic Pinecone vector index is unaffected. Changes which sources are retrieved on existing installs, so test after enabling. The Transcripts sources panel labels how each match was found while this is on."
 msgstr ""
 
-#: includes/admin-knowledge-page.php:1497
+#: includes/admin-knowledge-page.php:1627
 msgid "Video Cards"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:1506
+#: includes/admin-knowledge-page.php:1636
 msgid "Show a video card when a YouTube source answers the question"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:1508
+#: includes/admin-knowledge-page.php:1638
 msgid "Adds a click-to-play card beneath the reply when the answer came from a YouTube video you imported. Turn this off to stop video cards entirely without removing the videos from your knowledge base."
 msgstr ""
 
-#: includes/admin-knowledge-page.php:1512
+#: includes/admin-knowledge-page.php:1642
 msgid "Video Card Match Threshold (%)"
 msgstr ""
 
 #. translators: %d is the site-wide Similarity Threshold percentage.
-#: includes/admin-knowledge-page.php:1525
+#: includes/admin-knowledge-page.php:1655
 #, php-format
 msgid "How closely the video must match the question before its card is shown. Higher means fewer, more relevant cards. This is separate from the site-wide Similarity Threshold (currently %d%%), which decides what the AI reads — a video is worth reading from at a lower score than it is worth putting on screen."
 msgstr ""
 
-#: includes/admin-knowledge-page.php:1527
+#: includes/admin-knowledge-page.php:1657
 msgid "Range 20-95. Raise this if visitors are shown videos unrelated to what they asked; lower it if a video that clearly answers the question is not appearing. The right number depends on your embedding model: older models such as text-embedding-ada-002 score even unrelated content around 70%, so those sites usually need 80 or higher before this has any effect. The Transcripts sources panel shows the match percentage of each source, which is the number to compare against."
 msgstr ""
 
-#: includes/admin-knowledge-page.php:1551
+#: includes/admin-knowledge-page.php:1681
 msgid "Role-Based Content Restrictions"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:1552
+#: includes/admin-knowledge-page.php:1682
 msgid "Automatically restrict tagged posts by role. Pages and untagged content are restricted per entry in the Knowledge list."
 msgstr ""
 
-#: includes/admin-knowledge-page.php:1559
+#: includes/admin-knowledge-page.php:1689
 msgid "How it works:"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:1559
+#: includes/admin-knowledge-page.php:1689
 msgid "Add a tag below and select which role should have access. Content with that tag will be restricted to that role level. Tags apply to posts — pages and other content have no tags, so restrict those from the role dropdown on the entry itself in the Knowledge list. Any role on this site can be chosen, including custom ones."
 msgstr ""
 
-#: includes/admin-knowledge-page.php:1562
+#: includes/admin-knowledge-page.php:1692
 msgid "Add Tag-Role Mapping"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:1565
+#: includes/admin-knowledge-page.php:1695
 msgid "Tag (name or slug)"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:1566
+#: includes/admin-knowledge-page.php:1696
 msgid "e.g., Premium Content or premium-content"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:1567
+#: includes/admin-knowledge-page.php:1697
 msgid "Enter an existing post tag by its display name or its slug."
 msgstr ""
 
-#: includes/admin-knowledge-page.php:1570
+#: includes/admin-knowledge-page.php:1700
 msgid "Required Role"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:1579
+#: includes/admin-knowledge-page.php:1709
 msgid "Add Mapping"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:1583
+#: includes/admin-knowledge-page.php:1713
 msgid "Current Tag-Role Mappings"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:1586
+#: includes/admin-knowledge-page.php:1716
 msgid "Loading mappings..."
 msgstr ""
 
-#: includes/admin-knowledge-page.php:1591
+#: includes/admin-knowledge-page.php:1721
 msgid "No tag-role mappings yet. Add your first mapping above."
 msgstr ""
 
-#: includes/admin-knowledge-page.php:1595
+#: includes/admin-knowledge-page.php:1725
 msgid "Bulk Update Existing Content"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:1596
+#: includes/admin-knowledge-page.php:1726
 msgid "Apply role restrictions to all existing content that has the mapped tags."
 msgstr ""
 
-#: includes/admin-knowledge-page.php:1599
+#: includes/admin-knowledge-page.php:1729
 msgid "Update All Existing Content"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:1605
+#: includes/admin-knowledge-page.php:1735
 msgid "Processing..."
 msgstr ""
 
-#: includes/admin-knowledge-page.php:1626
+#: includes/admin-knowledge-page.php:1756
 msgid "ACF Field Settings"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:1627
+#: includes/admin-knowledge-page.php:1757
 msgid "Control which Advanced Custom Fields are included in knowledge base embeddings."
 msgstr ""
 
-#: includes/admin-knowledge-page.php:1643
+#: includes/admin-knowledge-page.php:1773
 msgid "Extract text from PDFs linked in ACF File/Image fields during imports"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:1645
+#: includes/admin-knowledge-page.php:1775
 msgid "Applies to WordPress Content imports. Adds 200-500ms per post and ~30 KB to each knowledge base entry. Recommended only if your ACF setup uses PDF attachments for primary content. Editor-save extraction has its own toggle under Auto-Sync."
 msgstr ""
 
-#: includes/admin-knowledge-page.php:1650
+#: includes/admin-knowledge-page.php:1780
 msgid "Advanced Custom Fields (ACF) plugin is not detected. Install and activate ACF to use this feature."
 msgstr ""
 
-#: includes/admin-knowledge-page.php:1658
+#: includes/admin-knowledge-page.php:1788
 msgid "No ACF field groups found. Create field groups in ACF to control which fields are included in embeddings."
 msgstr ""
 
-#: includes/admin-knowledge-page.php:1663
+#: includes/admin-knowledge-page.php:1793
 msgid "Toggle fields ON to include them in knowledge base embeddings. Toggle OFF to exclude sensitive or irrelevant fields. Exclusions apply everywhere a field appears — ACF location rules (post types, templates) do not scope this list."
 msgstr ""
 
-#: includes/admin-knowledge-page.php:1684
+#: includes/admin-knowledge-page.php:1814
 msgid "Include or exclude every field in this group"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:1737
+#: includes/admin-knowledge-page.php:1867
 msgid "Custom Post Meta"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:1738
+#: includes/admin-knowledge-page.php:1868
 msgid "Include custom post meta fields (non-ACF) in knowledge base embeddings."
 msgstr ""
 
-#: includes/admin-knowledge-page.php:1745
+#: includes/admin-knowledge-page.php:1875
 msgid "Enter post meta keys to include in embeddings. This is useful for OptionTree fields, theme meta boxes, or any custom post meta that is not managed by ACF."
 msgstr ""
 
-#: includes/admin-knowledge-page.php:1751
+#: includes/admin-knowledge-page.php:1881
 msgid "Discover meta keys"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:1753
+#: includes/admin-knowledge-page.php:1883
 msgid "Scan your published content for custom meta keys, then click any you want to include. This gives non-ACF meta the same discover-and-click experience as the ACF picker."
 msgstr ""
 
-#: includes/admin-knowledge-page.php:1758
+#: includes/admin-knowledge-page.php:1888
 msgid "Scan my content for meta keys"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:1762
+#: includes/admin-knowledge-page.php:1892
 msgid "Include internal keys (underscore-prefixed)"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:1770
+#: includes/admin-knowledge-page.php:1900
 msgid "Meta Key Whitelist"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:1782
+#: includes/admin-knowledge-page.php:1912
 msgid "Enter one meta key per line. These fields will be appended to the content during embedding. Text values are added as-is; array or repeater values are flattened into a comma-separated list. Empty values are skipped."
 msgstr ""
 
-#: includes/admin-knowledge-page.php:1787
+#: includes/admin-knowledge-page.php:1917
 msgid "How to find meta keys:"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:1789
+#: includes/admin-knowledge-page.php:1919
 msgid "Check your theme documentation for meta key names"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:1790
+#: includes/admin-knowledge-page.php:1920
 msgid "Look in the wp_postmeta database table"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:1791
+#: includes/admin-knowledge-page.php:1921
 msgid "Use the Scan my content for meta keys button above to discover the keys on your published content automatically"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:1792
+#: includes/admin-knowledge-page.php:1922
 msgid "Meta keys starting with underscore (_) are usually hidden/internal"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:1810
+#: includes/admin-knowledge-page.php:1940
 msgid "Pinecone Vector Database"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:1811
+#: includes/admin-knowledge-page.php:1941
 msgid "Configure Pinecone for enhanced search performance with larger knowledge bases."
 msgstr ""
 
-#: includes/admin-knowledge-page.php:1818
+#: includes/admin-knowledge-page.php:1948
 msgid "Pinecone is optional."
 msgstr ""
 
-#: includes/admin-knowledge-page.php:1818
+#: includes/admin-knowledge-page.php:1948
 msgid "MxChat works without it. When enabled, content is stored in Pinecone for faster similarity searches."
 msgstr ""
 
-#: includes/admin-knowledge-page.php:1830
+#: includes/admin-knowledge-page.php:1960
 msgid "Enable Pinecone Database"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:1838
+#: includes/admin-knowledge-page.php:1968
 msgid "Pinecone is enabled. All new knowledge base content will be stored in Pinecone."
 msgstr ""
 
-#: includes/admin-knowledge-page.php:1844
+#: includes/admin-knowledge-page.php:1974
 msgid "Pinecone API Key"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:1848
+#: includes/admin-knowledge-page.php:1978
 msgid "Found in your Pinecone dashboard under API Keys."
 msgstr ""
 
-#: includes/admin-knowledge-page.php:1849
+#: includes/admin-knowledge-page.php:1979
 msgid "Open Pinecone Dashboard"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:1871
+#: includes/admin-knowledge-page.php:2001
 msgid "Index type"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:1876
+#: includes/admin-knowledge-page.php:2006
 msgid "Vector index (current)"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:1877
+#: includes/admin-knowledge-page.php:2007
 msgid "The classic Pinecone index. Nothing changes for existing setups."
 msgstr ""
 
-#: includes/admin-knowledge-page.php:1883
+#: includes/admin-knowledge-page.php:2013
 msgid "Document index with full-text search (new)"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:1884
+#: includes/admin-knowledge-page.php:2014
 msgid "A Pinecone document index keeps a keyword index of your content next to the vectors, so questions with part numbers, SKUs and codes find the exact record. It is a new index: create one below and copy your existing index into it, no re-embedding needed. Turn on the Hybrid keyword boost under Retrieval to use it."
 msgstr ""
 
-#: includes/admin-knowledge-page.php:1901
-msgid "Region"
-msgstr ""
-
-#: includes/admin-knowledge-page.php:1903
-msgid "Your Pinecone environment/region (e.g., gcp-starter, us-west1-gcp)"
-msgstr ""
-
-#: includes/admin-knowledge-page.php:1908
-msgid "Index Name"
-msgstr ""
-
-#: includes/admin-knowledge-page.php:1911
-msgid "The name of your Pinecone index. Must be created in your Pinecone dashboard first."
-msgstr ""
-
-#: includes/admin-knowledge-page.php:1916
-msgid "Pinecone Host"
-msgstr ""
-
-#: includes/admin-knowledge-page.php:1919
-msgid "The hostname from your Pinecone index URL (exclude https://). Found in index details."
-msgstr ""
-
-#: includes/admin-knowledge-page.php:1927
+#: includes/admin-knowledge-page.php:2024
+#: includes/admin-knowledge-page.php:2061
 #, php-format
 msgid "Document index checked: %1$s (%2$d dimensions)."
 msgstr ""
 
-#: includes/admin-knowledge-page.php:1929
+#: includes/admin-knowledge-page.php:2025
+#: includes/admin-knowledge-page.php:2063
 msgid "Not checked yet. Create a document index below, or enter its host above and click Check index. The index type only saves once the host has been checked."
 msgstr ""
 
-#: includes/admin-knowledge-page.php:1935
+#: includes/admin-knowledge-page.php:2035
+msgid "Region"
+msgstr ""
+
+#: includes/admin-knowledge-page.php:2037
+msgid "Your Pinecone environment/region (e.g., gcp-starter, us-west1-gcp)"
+msgstr ""
+
+#: includes/admin-knowledge-page.php:2042
+msgid "Index Name"
+msgstr ""
+
+#: includes/admin-knowledge-page.php:2045
+msgid "The name of your Pinecone index. Must be created in your Pinecone dashboard first."
+msgstr ""
+
+#: includes/admin-knowledge-page.php:2050
+msgid "Pinecone Host"
+msgstr ""
+
+#: includes/admin-knowledge-page.php:2053
+msgid "The hostname from your Pinecone index URL (exclude https://). Found in index details."
+msgstr ""
+
+#: includes/admin-knowledge-page.php:2069
 msgid "Cloud and region for a new index"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:1949
+#: includes/admin-knowledge-page.php:2083
 #, php-format
 msgid "Create index for me makes a new document index named after the Index Name field (a free name ending in -docs is suggested when you switch to this type), sized for your embedding model (%d dimensions, cosine), with full-text search on the content in the chosen language, then fills in the host. Check index confirms the host above points at a document index MxChat can use. Neither moves your chatbot — that happens when you save."
 msgstr ""
 
-#: includes/admin-knowledge-page.php:1953
+#: includes/admin-knowledge-page.php:2087
 msgid "Create index for me"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:1954
+#: includes/admin-knowledge-page.php:2088
 msgid "Check index"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:1957
+#: includes/admin-knowledge-page.php:2091
 msgid "Check the document index host before saving."
 msgstr ""
 
-#: includes/admin-knowledge-page.php:1962
+#: includes/admin-knowledge-page.php:2096
 msgid "Switch anyway — point the chatbot at the document index now and copy the rest afterwards"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:1967
+#: includes/admin-knowledge-page.php:2101
 msgid "Copy from vector index host"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:1969
+#: includes/admin-knowledge-page.php:2103
 msgid "Migrate copies every record of that index into the document index above — text, vector and metadata, same ids — with no embedding calls. It runs while your chatbot keeps answering from the vector index; save the Pinecone settings afterwards to switch. Safe to run again: records already copied are simply replaced, and an interrupted copy continues where it stopped. Both indexes must use the same embedding dimension."
 msgstr ""
 
-#: includes/admin-knowledge-page.php:1972
+#: includes/admin-knowledge-page.php:2106
 msgid "Migrate"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:1974
+#: includes/admin-knowledge-page.php:2108
 msgid "Copy the records of every namespace of the vector index, each into the same-named namespace of the document index, in one run."
 msgstr ""
 
-#: includes/admin-knowledge-page.php:1977
+#: includes/admin-knowledge-page.php:2111
 msgid "Copy every namespace"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:1987
-#: includes/admin-knowledge-page.php:1991
+#: includes/admin-knowledge-page.php:2121
+#: includes/admin-knowledge-page.php:2125
 msgid "Delete old index"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:1988
+#: includes/admin-knowledge-page.php:2122
 msgid "Available once the copy count matches. Type the old index name to confirm. This deletes the whole vector index at Pinecone and cannot be undone."
 msgstr ""
 
-#: includes/admin-knowledge-page.php:1990
+#: includes/admin-knowledge-page.php:2124
 msgid "old index name"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:1998
+#: includes/admin-knowledge-page.php:2132
 msgid "Results Per Query (topK)"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:2001
+#: includes/admin-knowledge-page.php:2135
 msgid "How many candidate matches each Pinecone query requests (1-1000, default 50). Higher values improve grouping of chunked content at the cost of slightly larger responses."
 msgstr ""
 
-#: includes/admin-knowledge-page.php:2005
+#: includes/admin-knowledge-page.php:2139
 msgid "Save Pinecone Settings"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:2034
+#: includes/admin-knowledge-page.php:2168
 msgid "Use OpenAI's hosted vector database for knowledge retrieval. Your documents are stored and searched directly on OpenAI's platform."
 msgstr ""
 
-#: includes/admin-knowledge-page.php:2041
+#: includes/admin-knowledge-page.php:2175
 msgid "Requires OpenAI Chat Model."
 msgstr ""
 
-#: includes/admin-knowledge-page.php:2041
+#: includes/admin-knowledge-page.php:2175
 msgid "Vector Store search only works with OpenAI models (gpt-5.6-sol, gpt-5.6-terra, etc.). Create Vector Stores in your OpenAI Dashboard."
 msgstr ""
 
-#: includes/admin-knowledge-page.php:2047
+#: includes/admin-knowledge-page.php:2181
 msgid "Model Incompatible:"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:2047
+#: includes/admin-knowledge-page.php:2181
 #, php-format
 msgid "Your current chat model (%s) is not an OpenAI model. Vector Store search will not work until you switch to an OpenAI model."
 msgstr ""
 
-#: includes/admin-knowledge-page.php:2060
+#: includes/admin-knowledge-page.php:2194
 msgid "Enable OpenAI Vector Store"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:2068
+#: includes/admin-knowledge-page.php:2202
 msgid "OpenAI Vector Store is enabled. Queries will search your Vector Store for relevant content."
 msgstr ""
 
-#: includes/admin-knowledge-page.php:2074
+#: includes/admin-knowledge-page.php:2208
 msgid "Vector Store ID(s)"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:2078
+#: includes/admin-knowledge-page.php:2212
 msgid "Enter your Vector Store ID from the OpenAI Dashboard. For multiple stores, separate with commas."
 msgstr ""
 
-#: includes/admin-knowledge-page.php:2079
+#: includes/admin-knowledge-page.php:2213
 msgid "Open OpenAI Vector Store Dashboard"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:2085
+#: includes/admin-knowledge-page.php:2219
 msgid "Max Results"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:2092
+#: includes/admin-knowledge-page.php:2226
 msgid "Maximum number of content chunks to retrieve from the Vector Store."
 msgstr ""
 
-#: includes/admin-knowledge-page.php:2102
+#: includes/admin-knowledge-page.php:2236
 msgid "Sync Knowledge Base to Vector Store"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:2105
+#: includes/admin-knowledge-page.php:2239
 msgid "Keeps your Vector Store up to date automatically: knowledge base additions, edits, and deletions are mirrored to the store (one file per entry, replaced on change). Without this, the store is frozen at whatever you uploaded manually. Role-restricted entries are never uploaded — OpenAI file search cannot filter by user role."
 msgstr ""
 
-#: includes/admin-knowledge-page.php:2109
+#: includes/admin-knowledge-page.php:2243
 msgid "Sync Target Vector Store ID"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:2113
+#: includes/admin-knowledge-page.php:2247
 msgid "Leave blank to use the first Vector Store ID above. Syncing writes to exactly one store."
 msgstr ""
 
-#: includes/admin-knowledge-page.php:2117
+#: includes/admin-knowledge-page.php:2251
 msgid "Save Vector Store Settings"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:2123
+#: includes/admin-knowledge-page.php:2257
 msgid "Import Existing Knowledge Base"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:2125
+#: includes/admin-knowledge-page.php:2259
 #, php-format
 msgid "One-time (re-runnable) import of every knowledge base entry into the sync target store. Runs in the background via WP-Cron; safe to interrupt and resume — already-imported, unchanged entries are skipped. Currently mirrored: %s files."
 msgstr ""
 
-#: includes/admin-knowledge-page.php:2128
+#: includes/admin-knowledge-page.php:2262
 msgid "Import Knowledge Base to Vector Store"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:2129
+#: includes/admin-knowledge-page.php:2263
 msgid "Resume Import"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:2160
+#: includes/admin-knowledge-page.php:2294
 msgid "Request failed — check the browser console."
 msgstr ""
 
-#: includes/admin-knowledge-page.php:2176
+#: includes/admin-knowledge-page.php:2310
 msgid "Import stalled (cron missed) — click Resume."
 msgstr ""
 
-#: includes/admin-knowledge-page.php:2176
+#: includes/admin-knowledge-page.php:2310
 msgid "Importing…"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:2177
+#: includes/admin-knowledge-page.php:2311
 msgid "Import complete."
 msgstr ""
 
-#: includes/admin-knowledge-page.php:2178
+#: includes/admin-knowledge-page.php:2312
 msgid "Import cancelled."
 msgstr ""
 
-#: includes/admin-knowledge-page.php:2179
+#: includes/admin-knowledge-page.php:2313
 msgid "Import error:"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:2182
+#: includes/admin-knowledge-page.php:2316
 msgid "uploaded"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:2183
+#: includes/admin-knowledge-page.php:2317
 msgid "unchanged"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:2184
+#: includes/admin-knowledge-page.php:2318
 msgid "skipped (role-restricted)"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:2185
+#: includes/admin-knowledge-page.php:2319
 msgid "failed"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:2206
+#: includes/admin-knowledge-page.php:2340
 msgid "Starting…"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:2210
+#: includes/admin-knowledge-page.php:2344
 msgid "Could not start the import."
 msgstr ""
 
-#: includes/admin-knowledge-page.php:2246
+#: includes/admin-knowledge-page.php:2380
 msgid "Select WordPress Content"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:2247
+#: includes/admin-knowledge-page.php:2381
 msgid "(Content imported here will be tagged \"In Knowledge Base\")"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:2257
+#: includes/admin-knowledge-page.php:2391
 msgid "All Content Types"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:2271
+#: includes/admin-knowledge-page.php:2405
 msgid "Drafts"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:2272
+#: includes/admin-knowledge-page.php:2406
 msgid "All Statuses"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:2275
+#: includes/admin-knowledge-page.php:2409
 msgid "All Content"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:2276
+#: includes/admin-knowledge-page.php:2410
 msgid "In Knowledge Base"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:2277
+#: includes/admin-knowledge-page.php:2411
 msgid "Not In Knowledge Base"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:2291
+#: includes/admin-knowledge-page.php:2425
 msgid "Media lists PDF, Word, text and Markdown files — the types MxChat can read text from. Images, audio and video are not shown."
 msgstr ""
 
-#: includes/admin-knowledge-page.php:2297
+#: includes/admin-knowledge-page.php:2431
 msgid "Select All on Page"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:2299
+#: includes/admin-knowledge-page.php:2433
 msgid "selected"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:2302
+#: includes/admin-knowledge-page.php:2436
 msgid "Selections persist across pages"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:2308
-#: includes/admin-knowledge-page.php:2342
+#: includes/admin-knowledge-page.php:2442
+#: includes/admin-knowledge-page.php:2476
 msgid "Loading content..."
 msgstr ""
 
-#: includes/admin-knowledge-page.php:2316
+#: includes/admin-knowledge-page.php:2450
 msgid "Process Selected Content"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:2337
+#: includes/admin-knowledge-page.php:2471
 msgid "Edit Knowledge Entry"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:2355
+#: includes/admin-knowledge-page.php:2489
 msgid "Save & Re-embed"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:2358
-#: includes/class-mxchat-admin.php:10253
+#: includes/admin-knowledge-page.php:2492
+#: includes/class-mxchat-admin.php:10331
 msgid "Saving..."
 msgstr ""
 
-#: includes/admin-knowledge-page.php:2380
-#: includes/admin-knowledge-page.php:2413
+#: includes/admin-knowledge-page.php:2514
+#: includes/admin-knowledge-page.php:2547
 msgid "Indexed Content"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:2386
-#: includes/admin-knowledge-page.php:2414
+#: includes/admin-knowledge-page.php:2520
+#: includes/admin-knowledge-page.php:2548
 msgid "Loading indexed content…"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:2417
+#: includes/admin-knowledge-page.php:2551
 msgid "Storage"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:2418
+#: includes/admin-knowledge-page.php:2552
 msgid "Content type"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:2419
+#: includes/admin-knowledge-page.php:2553
 msgid "Chunks"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:2420
+#: includes/admin-knowledge-page.php:2554
 msgid "Total indexed length"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:2421
+#: includes/admin-knowledge-page.php:2555
 msgid "Chunk"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:2422
+#: includes/admin-knowledge-page.php:2556
 msgid "Indexed"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:2423
+#: includes/admin-knowledge-page.php:2557
 msgid "chars"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:2424
+#: includes/admin-knowledge-page.php:2558
 msgid "Show indexed text"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:2425
+#: includes/admin-knowledge-page.php:2559
 msgid "Hide indexed text"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:2426
+#: includes/admin-knowledge-page.php:2560
 msgid "Local WordPress database"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:2428
+#: includes/admin-knowledge-page.php:2562
 msgid "Vector metadata"
 msgstr ""
 
-#: includes/admin-knowledge-page.php:2429
+#: includes/admin-knowledge-page.php:2563
 msgid "Failed to load indexed content."
 msgstr ""
 
-#: includes/admin-knowledge-page.php:2430
+#: includes/admin-knowledge-page.php:2564
 msgid "Network error: "
 msgstr ""
 
-#: includes/admin-knowledge-page.php:2648
+#: includes/admin-knowledge-page.php:2782
 msgid "Use a content-specific sub-sitemap (e.g., post-sitemap.xml), not the main sitemap index."
 msgstr ""
 
-#: includes/admin-knowledge-page.php:2649
+#: includes/admin-knowledge-page.php:2783
 msgid "Enter the URL of any webpage to import its content."
 msgstr ""
 
-#: includes/admin-knowledge-page.php:2650
+#: includes/admin-knowledge-page.php:2784
 msgid "Enter the URL of a publicly accessible PDF file."
 msgstr ""
 
-#: includes/admin-knowledge-page.php:2711
+#: includes/admin-knowledge-page.php:2845
 msgid "Discard your unsaved changes to this entry?"
 msgstr ""
 
@@ -4129,7 +4281,7 @@ msgstr ""
 
 #: includes/admin-settings-page.php:52
 #: includes/admin-settings-page.php:134
-#: includes/class-mxchat-privacy.php:309
+#: includes/class-mxchat-privacy.php:401
 msgid "Chatbot"
 msgstr ""
 
@@ -4766,10 +4918,6 @@ msgstr ""
 msgid "Debug Log"
 msgstr ""
 
-#: includes/admin-settings-page.php:841
-msgid "Clear"
-msgstr ""
-
 #: includes/admin-settings-page.php:849
 msgid "No log entries yet. Enable debug mode to start logging."
 msgstr ""
@@ -5231,7 +5379,7 @@ msgstr ""
 #: includes/admin-settings-page.php:1672
 #: includes/class-mxchat-admin.php:441
 #: includes/class-mxchat-admin.php:7691
-#: includes/class-mxchat-integrator.php:15191
+#: includes/class-mxchat-integrator.php:15327
 #: includes/class-mxchat-public.php:207
 msgid "Rate limit exceeded. Please try again later."
 msgstr ""
@@ -6559,8 +6707,9 @@ msgstr[0] ""
 msgstr[1] ""
 
 #: includes/class-mxchat-admin.php:189
-#: includes/class-mxchat-admin.php:9909
-#: includes/class-mxchat-admin.php:9932
+#: includes/class-mxchat-admin.php:9785
+#: includes/class-mxchat-admin.php:9937
+#: includes/class-mxchat-admin.php:9960
 msgid "unknown time"
 msgstr ""
 
@@ -6690,22 +6839,22 @@ msgstr ""
 
 #: includes/class-mxchat-admin.php:492
 #: includes/class-mxchat-admin.php:9547
-#: includes/class-mxchat-integrator.php:4389
+#: includes/class-mxchat-integrator.php:4414
 msgid "Please provide the URL to the PDF you'd like to discuss."
 msgstr ""
 
 #: includes/class-mxchat-admin.php:493
 #: includes/class-mxchat-admin.php:9564
-#: includes/class-mxchat-integrator.php:4390
-#: includes/class-mxchat-integrator.php:4787
+#: includes/class-mxchat-integrator.php:4415
+#: includes/class-mxchat-integrator.php:4817
 msgid "I've processed the PDF. What questions do you have about it?"
 msgstr ""
 
 #: includes/class-mxchat-admin.php:494
 #: includes/class-mxchat-admin.php:9581
-#: includes/class-mxchat-integrator.php:2322
-#: includes/class-mxchat-integrator.php:4391
-#: includes/class-mxchat-integrator.php:4798
+#: includes/class-mxchat-integrator.php:2347
+#: includes/class-mxchat-integrator.php:4416
+#: includes/class-mxchat-integrator.php:4828
 msgid "Sorry, I couldn't process the PDF. Please ensure it's a valid file."
 msgstr ""
 
@@ -6718,16 +6867,16 @@ msgid "I just checked, and it looks like our support team isn't personally avail
 msgstr ""
 
 #: includes/class-mxchat-admin.php:518
-#: includes/class-mxchat-admin.php:9985
-#: includes/class-mxchat-integrator.php:5497
+#: includes/class-mxchat-admin.php:10013
+#: includes/class-mxchat-integrator.php:5513
 msgid "I've notified our support team — they'll follow up with you soon. Meanwhile, I'm happy to keep helping."
 msgstr ""
 
 #: includes/class-mxchat-admin.php:519
 #: includes/class-mxchat-admin.php:9726
-#: includes/class-mxchat-admin.php:9871
-#: includes/class-mxchat-admin.php:9997
-#: includes/class-mxchat-integrator.php:5428
+#: includes/class-mxchat-admin.php:9899
+#: includes/class-mxchat-admin.php:10025
+#: includes/class-mxchat-integrator.php:5444
 msgid "Sorry, live agents are currently unavailable. I can continue helping you as an AI assistant."
 msgstr ""
 
@@ -8220,24 +8369,24 @@ msgid "Set the maximum number of document pages users can upload for processing.
 msgstr ""
 
 #: includes/class-mxchat-admin.php:9627
-#: includes/class-mxchat-admin.php:9852
-#: includes/class-mxchat-admin.php:9978
+#: includes/class-mxchat-admin.php:9880
+#: includes/class-mxchat-admin.php:10006
 msgid "Online"
 msgstr ""
 
 #: includes/class-mxchat-admin.php:9627
-#: includes/class-mxchat-admin.php:9852
-#: includes/class-mxchat-admin.php:9978
+#: includes/class-mxchat-admin.php:9880
+#: includes/class-mxchat-admin.php:10006
 msgid "Offline"
 msgstr ""
 
 #: includes/class-mxchat-admin.php:9678
-#: includes/class-mxchat-admin.php:10443
+#: includes/class-mxchat-admin.php:10521
 msgid "Scheduled hours"
 msgstr ""
 
 #: includes/class-mxchat-admin.php:9679
-#: includes/class-mxchat-admin.php:10444
+#: includes/class-mxchat-admin.php:10522
 msgid "Always available"
 msgstr ""
 
@@ -8258,7 +8407,7 @@ msgid "When on, visitors are only offered a %1$s human handoff during these hour
 msgstr ""
 
 #: includes/class-mxchat-admin.php:9732
-#: includes/class-mxchat-admin.php:9877
+#: includes/class-mxchat-admin.php:9905
 msgid "Message shown when live agents are offline."
 msgstr ""
 
@@ -8267,7 +8416,7 @@ msgid "Live agent has been notified."
 msgstr ""
 
 #: includes/class-mxchat-admin.php:9744
-#: includes/class-mxchat-admin.php:9865
+#: includes/class-mxchat-admin.php:9893
 msgid "Message shown when live transfer activated."
 msgstr ""
 
@@ -8283,248 +8432,406 @@ msgstr ""
 msgid "Your Slack Bot OAuth Token (starts with xoxb-). Keep this secure."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:9787
-msgid "Enter Slack User IDs of agents who should be automatically invited to chat channels (one per line). Find user IDs in Slack profiles under \"More\" → \"Copy member ID\". Example: U1234567890"
+#. translators: 1: Slack API error code, 2: Slack channel ID, 3: local date and time of the failure
+#: includes/class-mxchat-admin.php:9789
+#, php-format
+msgid "Slack said \"%1$s\" for channel %2$s (%3$s). The visitor was told the message could not be delivered. Check that the channel still exists and is not archived, that the bot is in it, and that the token above is still valid."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:9796
-msgid "Optional. Route ALL live agent handoffs into this one existing Slack channel — each conversation becomes its own thread there. Enter a channel ID (starts with C) or a #channel-name, and invite your bot to the channel first (/invite @YourBot). Agents reply inside a conversation's thread; !endchat inside the thread ends that chat. Leave blank to keep creating a separate chat- channel per conversation."
+#. translators: 1: Slack API error code, 2: local date and time of the failure
+#: includes/class-mxchat-admin.php:9797
+#, php-format
+msgid "Slack said \"%1$s\" (%2$s). The visitor was told the message could not be delivered. Check that the token above is still valid."
 msgstr ""
 
 #: includes/class-mxchat-admin.php:9802
+msgid "⚠ Last delivery error"
+msgstr ""
+
+#: includes/class-mxchat-admin.php:9815
+msgid "Enter Slack User IDs of agents who should be automatically invited to chat channels (one per line). Find user IDs in Slack profiles under \"More\" → \"Copy member ID\". Example: U1234567890"
+msgstr ""
+
+#: includes/class-mxchat-admin.php:9824
+msgid "Optional. Route ALL live agent handoffs into this one existing Slack channel — each conversation becomes its own thread there. Enter a channel ID (starts with C) or a #channel-name, and invite your bot to the channel first (/invite @YourBot). Agents reply inside a conversation's thread; !endchat inside the thread ends that chat. Leave blank to keep creating a separate chat- channel per conversation."
+msgstr ""
+
+#: includes/class-mxchat-admin.php:9830
 msgid "⚠ Last handoff could not reach this channel"
 msgstr ""
 
 #. translators: %s: Slack API error code
-#: includes/class-mxchat-admin.php:9805
+#: includes/class-mxchat-admin.php:9833
 #, php-format
 msgid "Slack said \"%s\". Handoffs are falling back to per-conversation channels until this is fixed. Check the channel name or ID and make sure the bot has been invited to it."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:9818
+#: includes/class-mxchat-admin.php:9846
 msgid "⚠ This is a private channel"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:9819
+#: includes/class-mxchat-admin.php:9847
 msgid "Slack sends replies from private channels as message.groups events. In your Slack app, add the groups:history scope and subscribe to the message.groups bot event (alongside message.channels), then reinstall the app — otherwise agent replies posted here never reach your visitors."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:9829
+#: includes/class-mxchat-admin.php:9857
 msgid "Archive the conversation's chat- channel when an agent ends the chat with !endchat"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:9830
+#: includes/class-mxchat-admin.php:9858
 msgid "Keeps your Slack sidebar tidy on busy sites — each ended conversation's channel is archived instead of living forever. Archived channels stay searchable in Slack, so the record is never lost. Only applies to per-conversation chat- channels; a Shared Handoff Channel is never archived. If a returning visitor requests an agent again, a fresh channel is created automatically."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:9837
+#: includes/class-mxchat-admin.php:9865
 msgid "Configure Telegram integration for live agent support."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:9859
+#: includes/class-mxchat-admin.php:9887
 msgid "I've notified a support agent. Please allow a moment for them to respond."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:9885
-#: includes/class-mxchat-admin.php:9955
-#: includes/class-mxchat-admin.php:10032
+#: includes/class-mxchat-admin.php:9913
+#: includes/class-mxchat-admin.php:9983
+#: includes/class-mxchat-admin.php:10060
 msgid "Hide"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:9886
+#: includes/class-mxchat-admin.php:9914
 msgid "Your Telegram Bot Token from @BotFather (e.g., 123456789:ABCdefGhIJKlmNoPQRsTUVwxyZ)."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:9894
+#: includes/class-mxchat-admin.php:9922
 msgid "Your Telegram supergroup ID (starts with -100). The group must have forum topics enabled."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:9903
+#: includes/class-mxchat-admin.php:9931
 msgid "⚠ Last Telegram API failure"
 msgstr ""
 
 #. translators: 1: Telegram API method name, 2: Telegram's error description, 3: local date and time of the failure
-#: includes/class-mxchat-admin.php:9906
+#: includes/class-mxchat-admin.php:9934
 #, php-format
 msgid "%1$s failed with \"%2$s\" (%3$s). If live agent chat is working now, this may be from an earlier misconfiguration."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:9922
+#: includes/class-mxchat-admin.php:9950
 msgid "⚠ Incoming Telegram webhook requests are being rejected"
 msgstr ""
 
 #. translators: 1: number of rejected requests, 2: local date and time of the most recent rejection
-#: includes/class-mxchat-admin.php:9925
+#: includes/class-mxchat-admin.php:9953
 #, php-format
 msgid "%1$s request rejected, most recently %2$s. Agent replies are not reaching visitors."
 msgid_plural "%1$s requests rejected, most recently %2$s. Agent replies are not reaching visitors."
 msgstr[0] ""
 msgstr[1] ""
 
-#: includes/class-mxchat-admin.php:9956
+#: includes/class-mxchat-admin.php:9984
 msgid "Secret token for webhook verification. Use this when setting up your Telegram webhook with the secret_token parameter."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:9963
+#: includes/class-mxchat-admin.php:9991
 msgid "Send live-agent handoffs to any URL you choose — your helpdesk, an automation flow, a CRM."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:9991
+#: includes/class-mxchat-admin.php:10019
 msgid "Message shown after the handoff is delivered. The chat stays in AI mode — your team follows up separately, so let the visitor know what to expect."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:10003
+#: includes/class-mxchat-admin.php:10031
 msgid "Message shown when this destination is offline or outside its scheduled hours."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:10012
+#: includes/class-mxchat-admin.php:10040
 msgid "Where handoffs are sent as a JSON POST. Must be https and publicly reachable (localhost and private-network hosts are rejected)."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:10018
+#: includes/class-mxchat-admin.php:10046
 msgid "⚠ Last handoff could not reach this URL"
 msgstr ""
 
 #. translators: %s: the delivery failure, e.g. an HTTP status or a transport error
-#: includes/class-mxchat-admin.php:10021
+#: includes/class-mxchat-admin.php:10049
 #, php-format
 msgid "the request failed with \"%s\". Until this is fixed, the chatbot answers these conversations itself instead of telling visitors a human was notified."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:10033
+#: includes/class-mxchat-admin.php:10061
 msgid "Optional. When set, each POST carries an X-MxChat-Signature header (sha256 HMAC of the body) so your endpoint can verify the sender. The secret itself is never sent."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:10207
-#: includes/class-mxchat-admin.php:10287
-#: includes/class-mxchat-admin.php:10301
-#: includes/class-mxchat-admin.php:10322
+#: includes/class-mxchat-admin.php:10235
+#: includes/class-mxchat-admin.php:10365
+#: includes/class-mxchat-admin.php:10379
+#: includes/class-mxchat-admin.php:10400
 msgid "Copied"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:10251
+#: includes/class-mxchat-admin.php:10246
+msgid "The request did not go through. Nothing is lost: try again."
+msgstr ""
+
+#. translators: %s: number of entries checked so far
+#: includes/class-mxchat-admin.php:10248
+#, php-format
+msgid "Checking, %s entries so far"
+msgstr ""
+
+#. translators: 1: entries rewritten so far, 2: entries to rewrite
+#: includes/class-mxchat-admin.php:10250
+#, php-format
+msgid "Rewriting, %1$s of %2$s"
+msgstr ""
+
+#. translators: %s: number of entries
+#: includes/class-mxchat-admin.php:10252
+#, php-format
+msgid "%s to rewrite"
+msgstr ""
+
+#. translators: %s: number of entries
+#: includes/class-mxchat-admin.php:10254
+#, php-format
+msgid "%s already correct"
+msgstr ""
+
+#. translators: %s: number of entries
+#: includes/class-mxchat-admin.php:10256
+#, php-format
+msgid "%s left alone"
+msgstr ""
+
+#. translators: %s: number of entries
+#: includes/class-mxchat-admin.php:10258
+#, php-format
+msgid "%s skipped"
+msgstr ""
+
+#. translators: %s: number of entries
+#: includes/class-mxchat-admin.php:10260
+#, php-format
+msgid "%s rewritten"
+msgstr ""
+
+#. translators: %s: number of entries
+#: includes/class-mxchat-admin.php:10262
+#, php-format
+msgid "%s not rewritten"
+msgstr ""
+
+#. translators: %s: number of further entries not shown in the list
+#: includes/class-mxchat-admin.php:10264
+#, php-format
+msgid "and %s more"
+msgstr ""
+
+#. translators: %s: number of entries
+#: includes/class-mxchat-admin.php:10266
+#, php-format
+msgid "Left alone or skipped (%s)"
+msgstr ""
+
+#: includes/class-mxchat-admin.php:10267
+msgid "Left alone"
+msgstr ""
+
+#: includes/class-mxchat-admin.php:10268
+msgid "Skipped"
+msgstr ""
+
+#: includes/class-mxchat-admin.php:10269
+msgid "Rewritten"
+msgstr ""
+
+#: includes/class-mxchat-admin.php:10270
+msgid "Not rewritten"
+msgstr ""
+
+#: includes/class-mxchat-admin.php:10271
+msgid "No longer needed"
+msgstr ""
+
+#. translators: %s: number of entries
+#: includes/class-mxchat-admin.php:10273
+#, php-format
+msgid "Rewrite %s entries"
+msgstr ""
+
+#. translators: %s: number of entries still to rewrite
+#: includes/class-mxchat-admin.php:10275
+#, php-format
+msgid "Continue, %s left"
+msgstr ""
+
+#. translators: %s: number of entries
+#: includes/class-mxchat-admin.php:10277
+#, php-format
+msgid "%s entries rewritten and embedded again."
+msgstr ""
+
+#. translators: 1: entries rewritten, 2: entries that could not be rewritten
+#: includes/class-mxchat-admin.php:10279
+#, php-format
+msgid "%1$s entries rewritten. %2$s could not be rewritten and were left as they were."
+msgstr ""
+
+#: includes/class-mxchat-admin.php:10280
+msgid "Every entry checked is already correct. Nothing to rewrite."
+msgstr ""
+
+#. translators: %s: the reason the check stopped
+#: includes/class-mxchat-admin.php:10282
+#, php-format
+msgid "The check stopped early: %s"
+msgstr ""
+
+#: includes/class-mxchat-admin.php:10284
+msgid "HTML character codes"
+msgstr ""
+
+#: includes/class-mxchat-admin.php:10285
+msgid "Currency signs"
+msgstr ""
+
+#: includes/class-mxchat-admin.php:10286
+msgid "Accents and marks"
+msgstr ""
+
+#: includes/class-mxchat-admin.php:10287
+msgid "Symbols"
+msgstr ""
+
+#: includes/class-mxchat-admin.php:10288
+msgid "Joined letters"
+msgstr ""
+
+#: includes/class-mxchat-admin.php:10289
+msgid "Right-to-left order"
+msgstr ""
+
+#: includes/class-mxchat-admin.php:10329
 msgid "Are you sure you want to delete this trigger phrase?"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:10252
+#: includes/class-mxchat-admin.php:10330
 msgid "Are you sure you want to delete the selected trigger phrases?"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:10254
+#: includes/class-mxchat-admin.php:10332
 msgid "Saved successfully!"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:10255
-#: includes/class-mxchat-admin.php:10552
+#: includes/class-mxchat-admin.php:10333
+#: includes/class-mxchat-admin.php:10630
 msgid "An error occurred. Please try again."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:10256
+#: includes/class-mxchat-admin.php:10334
 msgid "This feature requires MxChat Pro."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:10257
+#: includes/class-mxchat-admin.php:10335
 msgid "This feature requires an add-on."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:10440
+#: includes/class-mxchat-admin.php:10518
 msgid "Discard your unsaved changes?"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:10441
+#: includes/class-mxchat-admin.php:10519
 msgid "Unsaved"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:10481
+#: includes/class-mxchat-admin.php:10559
 msgid "Search posts and pages..."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:10483
+#: includes/class-mxchat-admin.php:10561
 msgid "Process Selected"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:10485
+#: includes/class-mxchat-admin.php:10563
 msgid "No content found."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:10486
+#: includes/class-mxchat-admin.php:10564
 #, php-format
 msgid "extracting %d PDF(s)..."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:10487
+#: includes/class-mxchat-admin.php:10565
 #, php-format
 msgid " (%d PDF(s) extracted)"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:10546
+#: includes/class-mxchat-admin.php:10624
 msgid "Generating..."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:10547
+#: includes/class-mxchat-admin.php:10625
 #: includes/class-mxchat-content-generator.php:430
 msgid "Planning content structure..."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:10548
+#: includes/class-mxchat-admin.php:10626
 #: includes/class-mxchat-content-generator.php:439
 msgid "Generating images..."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:10549
+#: includes/class-mxchat-admin.php:10627
 #: includes/class-mxchat-content-generator.php:444
 msgid "Writing full content..."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:10550
+#: includes/class-mxchat-admin.php:10628
 #: includes/class-mxchat-content-generator.php:453
 msgid "Creating WordPress post..."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:10551
+#: includes/class-mxchat-admin.php:10629
 #: includes/class-mxchat-content-generator.php:560
 msgid "Content generated successfully!"
 msgstr ""
 
-#: includes/class-mxchat-admin.php:10553
+#: includes/class-mxchat-admin.php:10631
 #: includes/class-mxchat-content-generator.php:684
 msgid "Content updated successfully."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:10554
+#: includes/class-mxchat-admin.php:10632
 #: includes/class-mxchat-content-generator.php:297
 msgid "Please enter a prompt."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:11483
+#: includes/class-mxchat-admin.php:11561
 msgid "You do not have sufficient permissions to delete all prompts."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:11568
+#: includes/class-mxchat-admin.php:11652
 msgid "You do not have sufficient permissions to delete prompts."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:11576
+#: includes/class-mxchat-admin.php:11660
 msgid "Invalid prompt ID."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:11600
+#: includes/class-mxchat-admin.php:11684
 msgid "Pinecone configuration is missing."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:11618
+#: includes/class-mxchat-admin.php:11702
 msgid "Vector deleted successfully from Pinecone."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:11622
+#: includes/class-mxchat-admin.php:11706
 msgid "Failed to delete from Pinecone: "
 msgstr ""
 
-#: includes/class-mxchat-admin.php:11643
+#: includes/class-mxchat-admin.php:11727
 msgid "Entry deleted successfully."
 msgstr ""
 
-#: includes/class-mxchat-admin.php:11646
+#: includes/class-mxchat-admin.php:11730
 msgid "Failed to delete entry from database."
 msgstr ""
 
@@ -8628,7 +8935,7 @@ msgid "Gemini image generation failed."
 msgstr ""
 
 #: includes/class-mxchat-content-generator.php:1284
-#: includes/class-mxchat-integrator.php:3436
+#: includes/class-mxchat-integrator.php:3461
 msgid "Failed to decode image data."
 msgstr ""
 
@@ -9041,7 +9348,7 @@ msgid "Not helpful"
 msgstr ""
 
 #: includes/class-mxchat-integrator.php:484
-#: includes/class-mxchat-integrator.php:6398
+#: includes/class-mxchat-integrator.php:6508
 #: includes/class-mxchat-public.php:453
 msgid "Send"
 msgstr ""
@@ -9051,9 +9358,9 @@ msgid "Skip"
 msgstr ""
 
 #: includes/class-mxchat-integrator.php:510
-#: includes/class-mxchat-integrator.php:4808
-#: includes/class-mxchat-integrator.php:4814
-#: includes/class-mxchat-integrator.php:4861
+#: includes/class-mxchat-integrator.php:4838
+#: includes/class-mxchat-integrator.php:4844
+#: includes/class-mxchat-integrator.php:4891
 #: includes/class-mxchat-word-handler.php:231
 #: includes/class-mxchat-word-handler.php:237
 #: includes/class-mxchat-word-handler.php:391
@@ -9087,8 +9394,8 @@ msgid ""
 msgstr ""
 
 #: includes/class-mxchat-integrator.php:1524
-#: includes/class-mxchat-integrator.php:4706
-#: includes/class-mxchat-integrator.php:4804
+#: includes/class-mxchat-integrator.php:4736
+#: includes/class-mxchat-integrator.php:4834
 #: includes/class-mxchat-word-handler.php:23
 msgid "Invalid nonce."
 msgstr ""
@@ -9153,7 +9460,7 @@ msgid "Your message is too long. Please keep it under %d characters."
 msgstr ""
 
 #: includes/class-mxchat-integrator.php:2178
-#: includes/class-mxchat-integrator.php:3291
+#: includes/class-mxchat-integrator.php:3316
 msgid "Please provide your email address."
 msgstr ""
 
@@ -9161,535 +9468,539 @@ msgstr ""
 msgid "Switched to AI chat mode"
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:2237
+#: includes/class-mxchat-integrator.php:2242
+msgid "We could not reach a live agent just now. Please try again in a moment, or leave your email and we will follow up."
+msgstr ""
+
+#: includes/class-mxchat-integrator.php:2262
 msgid "Message sent to live agent."
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:2246
+#: includes/class-mxchat-integrator.php:2271
 msgid "Failed to send message to agent"
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:2284
-#: includes/class-mxchat-integrator.php:4762
+#: includes/class-mxchat-integrator.php:2309
+#: includes/class-mxchat-integrator.php:4792
 #, php-format
 msgid "The provided PDF exceeds the maximum allowed limit of %d pages. Please provide a smaller document."
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:2458
-#: includes/class-mxchat-integrator.php:3059
+#: includes/class-mxchat-integrator.php:2483
+#: includes/class-mxchat-integrator.php:3084
 msgid "Unable to process your message. The embedding service is not responding correctly."
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:3307
-#: includes/class-mxchat-integrator.php:3366
+#: includes/class-mxchat-integrator.php:3332
+#: includes/class-mxchat-integrator.php:3391
 msgid "Create an image of "
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:3325
-#: includes/class-mxchat-integrator.php:3380
+#: includes/class-mxchat-integrator.php:3350
+#: includes/class-mxchat-integrator.php:3405
 msgid "Generated Image"
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:3326
-#: includes/class-mxchat-integrator.php:3381
+#: includes/class-mxchat-integrator.php:3351
+#: includes/class-mxchat-integrator.php:3406
 msgid "Here is the image I generated:"
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:3345
-#: includes/class-mxchat-integrator.php:3394
+#: includes/class-mxchat-integrator.php:3370
+#: includes/class-mxchat-integrator.php:3419
 msgid "I'm sorry, but I couldn't generate an image based on your request."
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:3370
+#: includes/class-mxchat-integrator.php:3395
 msgid "Gemini API key is not configured."
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:3487
-#: includes/class-mxchat-integrator.php:3574
+#: includes/class-mxchat-integrator.php:3512
+#: includes/class-mxchat-integrator.php:3599
 msgid "Error generating image: "
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:3500
-#: includes/class-mxchat-integrator.php:3588
+#: includes/class-mxchat-integrator.php:3525
+#: includes/class-mxchat-integrator.php:3613
 msgid "Failed to generate image."
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:3511
-#: includes/class-mxchat-integrator.php:7109
-#: includes/class-mxchat-integrator.php:11873
-#: includes/class-mxchat-integrator.php:12063
-#: includes/class-mxchat-utils.php:1203
+#: includes/class-mxchat-integrator.php:3536
+#: includes/class-mxchat-integrator.php:7213
+#: includes/class-mxchat-integrator.php:12009
+#: includes/class-mxchat-integrator.php:12199
+#: includes/class-mxchat-utils.php:1295
 msgid "Custom provider Base URL is not configured."
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:3530
+#: includes/class-mxchat-integrator.php:3555
 msgid "Error generating image (custom provider): "
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:3546
+#: includes/class-mxchat-integrator.php:3571
 msgid "Custom provider did not return an image."
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:3609
+#: includes/class-mxchat-integrator.php:3634
 msgid "I apologize, but could you please rephrase your search request?"
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:3621
+#: includes/class-mxchat-integrator.php:3646
 msgid "Search functionality is temporarily unavailable. Please try again later."
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:3657
+#: includes/class-mxchat-integrator.php:3682
 msgid "I encountered an error while searching. Please try again."
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:3666
+#: includes/class-mxchat-integrator.php:3691
 msgid "I received an invalid response from the search service."
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:3682
+#: includes/class-mxchat-integrator.php:3707
 #, php-format
 msgid "Here's what I found about '%s':"
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:3717
+#: includes/class-mxchat-integrator.php:3742
 #, php-format
 msgid "I searched for \"%s\" but couldn't find any relevant results. Would you like to try different search terms?"
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:3741
+#: includes/class-mxchat-integrator.php:3766
 msgid "I'm sorry, I couldn't interpret your search query. Please specify what you'd like to see images of."
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:3755
+#: includes/class-mxchat-integrator.php:3780
 msgid "API key is not configured. Please set it in the Brave Search Settings."
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:3789
-#: includes/class-mxchat-integrator.php:3837
+#: includes/class-mxchat-integrator.php:3814
+#: includes/class-mxchat-integrator.php:3862
 msgid "I'm sorry, I couldn't retrieve any images based on your request."
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:3811
+#: includes/class-mxchat-integrator.php:3836
 msgid "Image"
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:3825
+#: includes/class-mxchat-integrator.php:3850
 #, php-format
 msgid "Here are some images of %s:"
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:3856
+#: includes/class-mxchat-integrator.php:3881
 msgid "Interpret the user's request to provide only the essential keywords or phrases for image searching. Remove conversational language, politeness, or extra context. Return a concise search query that doesn't lose any of the original meaning."
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:4353
+#: includes/class-mxchat-integrator.php:4378
 msgid "MxChat AI Chatbot"
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:4554
+#: includes/class-mxchat-integrator.php:4584
 msgid "Page "
 msgstr ""
 
 #. translators: 1: skipped page count, 2: successfully embedded page count
-#: includes/class-mxchat-integrator.php:4586
+#: includes/class-mxchat-integrator.php:4616
 #, php-format
 msgid "PDF chat: %1$d page(s) skipped because embedding failed; %2$d page(s) stored."
 msgstr ""
 
 #. translators: %s: error reason reported by the embedding provider
-#: includes/class-mxchat-integrator.php:4632
+#: includes/class-mxchat-integrator.php:4662
 #, php-format
 msgid "(%s)"
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:4710
+#: includes/class-mxchat-integrator.php:4740
 #: includes/class-mxchat-word-handler.php:27
 msgid "Missing required parameters."
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:4719
+#: includes/class-mxchat-integrator.php:4749
 msgid "PDF uploads are currently disabled."
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:4737
+#: includes/class-mxchat-integrator.php:4767
 msgid "Invalid file type. Only PDF files are allowed."
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:4749
+#: includes/class-mxchat-integrator.php:4779
 #: includes/class-mxchat-word-handler.php:69
 msgid "Failed to upload file."
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:4772
+#: includes/class-mxchat-integrator.php:4802
 msgid "The uploaded PDF appears to be empty or contains unsupported content."
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:4847
+#: includes/class-mxchat-integrator.php:4877
 msgid "PDF removed successfully."
 msgstr ""
 
 #. translators: %d: number of chat messages included in the handoff context
-#: includes/class-mxchat-integrator.php:6090
+#: includes/class-mxchat-integrator.php:6106
 #, php-format
 msgid "Recent Conversation (last %d messages):"
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:6091
+#: includes/class-mxchat-integrator.php:6107
 msgid "Recent Conversation (continued):"
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:6380
+#: includes/class-mxchat-integrator.php:6490
 msgid "Bot token not configured"
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:6394
+#: includes/class-mxchat-integrator.php:6504
 msgid "Reply to User"
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:6410
+#: includes/class-mxchat-integrator.php:6520
 #, php-format
 msgid "Reply to session: %s"
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:6418
+#: includes/class-mxchat-integrator.php:6528
 msgid "Type your message here..."
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:6464
+#: includes/class-mxchat-integrator.php:6574
 msgid "Command text is required. Format: /reply session_id message"
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:6473
+#: includes/class-mxchat-integrator.php:6583
 msgid "Invalid format. Use: /reply session_id message"
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:6488
+#: includes/class-mxchat-integrator.php:6598
 msgid "Failed to save message"
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:6507
+#: includes/class-mxchat-integrator.php:6617
 msgid "You are now chatting with the AI chatbot."
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:7043
+#: includes/class-mxchat-integrator.php:7147
 msgid "Voyage AI API key is not configured"
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:7051
-#: includes/class-mxchat-integrator.php:10985
+#: includes/class-mxchat-integrator.php:7155
+#: includes/class-mxchat-integrator.php:11121
 msgid "Google Gemini API key is not configured"
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:7059
-#: includes/class-mxchat-integrator.php:11129
-#: includes/class-mxchat-integrator.php:11178
+#: includes/class-mxchat-integrator.php:7163
+#: includes/class-mxchat-integrator.php:11265
+#: includes/class-mxchat-integrator.php:11314
 msgid "OpenAI API key is not configured"
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:7068
-#: includes/class-mxchat-integrator.php:7106
+#: includes/class-mxchat-integrator.php:7172
+#: includes/class-mxchat-integrator.php:7210
 msgid "No text provided for embedding generation"
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:7084
+#: includes/class-mxchat-integrator.php:7188
 msgid "System error when generating embeddings: "
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:7117
+#: includes/class-mxchat-integrator.php:7221
 msgid "Invalid embedding response from custom provider."
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:7123
+#: includes/class-mxchat-integrator.php:7227
 msgid "Connection error when generating embeddings: "
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:7136
+#: includes/class-mxchat-integrator.php:7240
 msgid "Received invalid embedding data from the Gemini API."
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:7138
+#: includes/class-mxchat-integrator.php:7242
 msgid "Received invalid embedding data from the API."
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:7146
+#: includes/class-mxchat-integrator.php:7250
 msgid "Invalid API key for embedding generation. Please check your API key configuration."
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:7154
+#: includes/class-mxchat-integrator.php:7258
 msgid "Authentication failed for embedding generation. Please check your API key."
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:7160
+#: includes/class-mxchat-integrator.php:7264
 msgid "Rate limit exceeded for embedding generation. Please try again later."
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:7166
+#: includes/class-mxchat-integrator.php:7270
 msgid "API quota exceeded for embedding generation. Please check your billing details."
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:7173
+#: includes/class-mxchat-integrator.php:7277
 msgid "Embedding API error - check embedding API key.: "
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:7888
+#: includes/class-mxchat-integrator.php:8026
 msgid "YouTube video"
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:7891
+#: includes/class-mxchat-integrator.php:8029
 #, php-format
 msgid "Play video: %s"
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:7897
+#: includes/class-mxchat-integrator.php:8035
 msgid "Watch on YouTube"
 msgstr ""
 
 #. translators: 1: formatted local date and time, 2: site timezone name
-#: includes/class-mxchat-integrator.php:9701
+#: includes/class-mxchat-integrator.php:9837
 #, php-format
 msgid "Current date and time: %1$s (%2$s). Anything dated before today is in the past."
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:10366
+#: includes/class-mxchat-integrator.php:10502
 msgid "[A visual result has already been shown to the user in the chat. Do not repeat or describe it in detail — reply with at most a brief one-line caption.]"
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:10778
+#: includes/class-mxchat-integrator.php:10914
 msgid "I looked into that but could not put together a final answer. Please try rephrasing your request."
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:10905
+#: includes/class-mxchat-integrator.php:11041
 msgid "I couldn't find relevant information on that topic."
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:10927
+#: includes/class-mxchat-integrator.php:11063
 msgid "No OpenRouter model selected. Please select a model in settings."
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:10938
+#: includes/class-mxchat-integrator.php:11074
 msgid "OpenRouter API key is not configured"
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:11005
+#: includes/class-mxchat-integrator.php:11141
 msgid "Claude API key is not configured"
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:11036
+#: includes/class-mxchat-integrator.php:11172
 msgid "X.AI API key is not configured"
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:11067
-#: includes/class-mxchat-integrator.php:14414
+#: includes/class-mxchat-integrator.php:11203
+#: includes/class-mxchat-integrator.php:14550
 msgid "DeepSeek API key is not configured"
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:11100
+#: includes/class-mxchat-integrator.php:11236
 msgid "Custom provider is not configured. Set Base URL in MxChat → API Keys → Custom Provider."
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:11234
+#: includes/class-mxchat-integrator.php:11370
 #, php-format
 msgid "An error occurred: %s"
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:12052
+#: includes/class-mxchat-integrator.php:12188
 #, php-format
 msgid "Custom provider error: %s"
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:12112
+#: includes/class-mxchat-integrator.php:12248
 #, php-format
 msgid "Custom provider request failed: %s"
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:12116
+#: includes/class-mxchat-integrator.php:12252
 #, php-format
 msgid "Custom provider returned HTTP %d."
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:12122
+#: includes/class-mxchat-integrator.php:12258
 msgid "Custom provider returned an unexpected response shape."
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:12201
+#: includes/class-mxchat-integrator.php:12337
 #, php-format
 msgid "Web search error: %s"
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:12225
+#: includes/class-mxchat-integrator.php:12361
 msgid "Failed to connect to OpenAI web search API"
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:12240
+#: includes/class-mxchat-integrator.php:12376
 #, php-format
 msgid "OpenAI API error: %s"
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:12249
+#: includes/class-mxchat-integrator.php:12385
 msgid "Invalid response from OpenAI"
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:12385
-#: includes/class-mxchat-integrator.php:12460
+#: includes/class-mxchat-integrator.php:12521
+#: includes/class-mxchat-integrator.php:12596
 msgid "The AI provider returned an empty response. Please try again."
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:13245
+#: includes/class-mxchat-integrator.php:13381
 #, php-format
 msgid "response incomplete: %s"
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:13249
+#: includes/class-mxchat-integrator.php:13385
 #, php-format
 msgid "%1$s returned an empty response (%2$s). Please try again."
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:13250
+#: includes/class-mxchat-integrator.php:13386
 #, php-format
 msgid "%s returned an empty response. Please try again."
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:13333
+#: includes/class-mxchat-integrator.php:13469
 msgid "OpenRouter API error: "
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:13351
+#: includes/class-mxchat-integrator.php:13487
 msgid "Unexpected response format from OpenRouter."
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:13358
+#: includes/class-mxchat-integrator.php:13494
 msgid "System error when processing OpenRouter request: "
 msgstr ""
 
 #. translators: %s: raw provider error detail
-#: includes/class-mxchat-integrator.php:13427
+#: includes/class-mxchat-integrator.php:13563
 #, php-format
 msgid "The selected AI model isn't available on your API key. Choose another model in MxChat → Settings. (Details: %s)"
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:13430
+#: includes/class-mxchat-integrator.php:13566
 msgid "The selected AI model isn't available on your API key. Choose another model in MxChat → Settings."
 msgstr ""
 
 #. translators: 1: provider label, 2: raw provider error detail
-#: includes/class-mxchat-integrator.php:13435
+#: includes/class-mxchat-integrator.php:13571
 #, php-format
 msgid "The AI provider (%1$s) returned an error: %2$s. Check your model and API key in MxChat → Settings."
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:13436
+#: includes/class-mxchat-integrator.php:13572
 msgid "AI"
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:13439
+#: includes/class-mxchat-integrator.php:13575
 msgid "The AI provider returned an error. Check your model and API key in MxChat → Settings."
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:13443
+#: includes/class-mxchat-integrator.php:13579
 msgid "Sorry, I'm having trouble responding right now. Please try again in a moment."
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:13707
+#: includes/class-mxchat-integrator.php:13843
 msgid "Invalid OpenAI API key. Please check your API key configuration."
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:13716
+#: includes/class-mxchat-integrator.php:13852
 msgid "Authentication failed with OpenAI. Please check your API key."
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:13723
+#: includes/class-mxchat-integrator.php:13859
 msgid "OpenAI rate limit exceeded. Please try again later."
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:13730
+#: includes/class-mxchat-integrator.php:13866
 msgid "OpenAI API quota exceeded. Please check your billing details."
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:13758
+#: includes/class-mxchat-integrator.php:13894
 msgid "Unexpected response format from OpenAI."
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:13765
+#: includes/class-mxchat-integrator.php:13901
 msgid "System error when processing OpenAI request: "
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:13878
+#: includes/class-mxchat-integrator.php:14014
 msgid "Invalid X.AI API key. Please check your API key configuration."
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:13888
+#: includes/class-mxchat-integrator.php:14024
 msgid "Authentication failed with X.AI. Please check your API key."
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:13899
+#: includes/class-mxchat-integrator.php:14035
 msgid "Invalid model specified for X.AI. Please check your model configuration."
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:13910
+#: includes/class-mxchat-integrator.php:14046
 msgid "X.AI rate limit exceeded. Please try again later."
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:13920
+#: includes/class-mxchat-integrator.php:14056
 msgid "X.AI API quota exceeded. Please check your billing details."
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:13929
+#: includes/class-mxchat-integrator.php:14065
 msgid "X.AI service is currently unavailable. Please try again later."
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:13959
+#: includes/class-mxchat-integrator.php:14095
 msgid "Unexpected response format from X.AI."
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:13967
+#: includes/class-mxchat-integrator.php:14103
 msgid "System error when processing X.AI request: "
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:14072
+#: includes/class-mxchat-integrator.php:14208
 msgid "Authentication failed with DeepSeek. Please check your API key."
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:14080
+#: includes/class-mxchat-integrator.php:14216
 msgid "Invalid DeepSeek API key. Please check your API key configuration."
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:14090
+#: includes/class-mxchat-integrator.php:14226
 msgid "DeepSeek API quota exceeded. Please check your billing details."
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:14096
+#: includes/class-mxchat-integrator.php:14232
 msgid "DeepSeek rate limit exceeded. Please try again later."
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:14107
+#: includes/class-mxchat-integrator.php:14243
 msgid "DeepSeek service is currently unavailable. Please try again later."
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:14134
+#: includes/class-mxchat-integrator.php:14270
 msgid "Unexpected response format from DeepSeek."
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:14142
+#: includes/class-mxchat-integrator.php:14278
 msgid "System error when processing DeepSeek request: "
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:15090
+#: includes/class-mxchat-integrator.php:15226
 msgid "This chatbot has reached its message limit. Please try again later."
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:15197
+#: includes/class-mxchat-integrator.php:15333
 msgid "hour"
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:15200
+#: includes/class-mxchat-integrator.php:15336
 msgid "day"
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:15203
+#: includes/class-mxchat-integrator.php:15339
 msgid "week"
 msgstr ""
 
-#: includes/class-mxchat-integrator.php:15206
+#: includes/class-mxchat-integrator.php:15342
 msgid "month"
 msgstr ""
 
@@ -10067,97 +10378,100 @@ msgstr ""
 msgid "MxChat Chat Conversations"
 msgstr ""
 
-#: includes/class-mxchat-privacy.php:215
+#: includes/class-mxchat-privacy.php:227
+#: includes/class-mxchat-privacy.php:308
 msgid "Session ID"
 msgstr ""
 
-#: includes/class-mxchat-privacy.php:216
+#: includes/class-mxchat-privacy.php:228
 msgid "Conversation started"
 msgstr ""
 
-#: includes/class-mxchat-privacy.php:217
+#: includes/class-mxchat-privacy.php:229
 msgid "Last message"
 msgstr ""
 
-#: includes/class-mxchat-privacy.php:220
+#: includes/class-mxchat-privacy.php:232
 msgid "Started on page"
 msgstr ""
 
-#: includes/class-mxchat-privacy.php:223
+#: includes/class-mxchat-privacy.php:235
+#: includes/class-mxchat-privacy.php:311
 msgid "Email on record"
 msgstr ""
 
-#: includes/class-mxchat-privacy.php:226
+#: includes/class-mxchat-privacy.php:238
+#: includes/class-mxchat-privacy.php:314
 msgid "Name on record"
 msgstr ""
 
-#: includes/class-mxchat-privacy.php:229
+#: includes/class-mxchat-privacy.php:241
 msgid "Visitor identifier"
 msgstr ""
 
-#: includes/class-mxchat-privacy.php:238
+#: includes/class-mxchat-privacy.php:333
 msgid "Lead-capture consent"
 msgstr ""
 
-#: includes/class-mxchat-privacy.php:241
+#: includes/class-mxchat-privacy.php:336
 msgid "Consent recorded"
 msgstr ""
 
-#: includes/class-mxchat-privacy.php:245
+#: includes/class-mxchat-privacy.php:340
 msgid "Consent text shown"
 msgstr ""
 
 #. translators: %s: IP address recorded with a link click
-#: includes/class-mxchat-privacy.php:272
+#: includes/class-mxchat-privacy.php:366
 #, php-format
 msgid "IP address: %s"
 msgstr ""
 
 #. translators: %s: browser user-agent recorded with a link click
-#: includes/class-mxchat-privacy.php:276
+#: includes/class-mxchat-privacy.php:370
 #, php-format
 msgid "Browser: %s"
 msgstr ""
 
-#: includes/class-mxchat-privacy.php:282
+#: includes/class-mxchat-privacy.php:376
 msgid "Link clicked"
 msgstr ""
 
-#: includes/class-mxchat-privacy.php:290
+#: includes/class-mxchat-privacy.php:388
 msgid "Chat Conversations (MxChat)"
 msgstr ""
 
-#: includes/class-mxchat-privacy.php:291
+#: includes/class-mxchat-privacy.php:389
 msgid "Chatbot conversations recorded by the MxChat plugin."
 msgstr ""
 
-#: includes/class-mxchat-privacy.php:306
+#: includes/class-mxchat-privacy.php:398
 msgid "Visitor"
 msgstr ""
 
-#: includes/class-mxchat-privacy.php:311
+#: includes/class-mxchat-privacy.php:403
 msgid "Agent"
 msgstr ""
 
 #. translators: %s: chat session id
-#: includes/class-mxchat-privacy.php:356
+#: includes/class-mxchat-privacy.php:448
 #, php-format
 msgid "Chat conversation %s was retained by a site-specific policy (mxchat_privacy_erase_session filter)."
 msgstr ""
 
-#: includes/class-mxchat-privacy.php:635
+#: includes/class-mxchat-privacy.php:727
 msgid "This site uses MxChat to provide an AI chat assistant. When you use the chat, your messages and the assistant's replies are stored in this site's own database — they are not stored by a third-party chat service. If you provide your name or email address in the chat, those are stored with the conversation. Logged-in visitors are identified by their username; anonymous visitors are identified by their IP address. The page on which the conversation started is also recorded."
 msgstr ""
 
-#: includes/class-mxchat-privacy.php:636
+#: includes/class-mxchat-privacy.php:728
 msgid "Chat conversations are kept according to the retention period configured by the site administrator, and may be deleted automatically after that period. Documents uploaded to the chat for analysis are processed on this server and their temporary copies expire automatically."
 msgstr ""
 
-#: includes/class-mxchat-privacy.php:637
+#: includes/class-mxchat-privacy.php:729
 msgid "When you click a link suggested in the chat, the clicked address is recorded together with your IP address and browser information. The IP address and browser information are anonymized after a limited period, and click records are deleted entirely after at most one year."
 msgstr ""
 
-#: includes/class-mxchat-privacy.php:638
+#: includes/class-mxchat-privacy.php:730
 msgid "Chat data is included in WordPress's personal data export and erasure tools: if you request a copy or deletion of your personal data from this site, your chat conversations are included in that request automatically."
 msgstr ""
 
@@ -10341,8 +10655,12 @@ msgstr ""
 msgid "%s (custom provider)"
 msgstr ""
 
+#: includes/class-mxchat-utils.php:538
+msgid "The custom provider returned no embedding."
+msgstr ""
+
 #. translators: %s: embedding provider name
-#: includes/class-mxchat-utils.php:1228
+#: includes/class-mxchat-utils.php:1320
 #, php-format
 msgid "%s API key is not configured. Please add your API key in the settings before submitting content."
 msgstr ""
@@ -10480,65 +10798,61 @@ msgstr ""
 msgid "Invalid API token."
 msgstr ""
 
-#: includes/class-rest-api.php:332
-#: includes/class-rest-api.php:516
+#: includes/class-rest-api.php:335
+#: includes/class-rest-api.php:519
 msgid "Transcripts table does not exist on this site."
 msgstr ""
 
-#: includes/class-rest-api.php:352
+#: includes/class-rest-api.php:355
 msgid "Could not parse `since` parameter as a date."
 msgstr ""
 
-#: includes/class-rest-api.php:360
+#: includes/class-rest-api.php:363
 msgid "Could not parse `until` parameter as a date."
 msgstr ""
 
-#: includes/class-rest-api.php:475
+#: includes/class-rest-api.php:478
 msgid "session_ids is required and must be a non-empty array."
 msgstr ""
 
-#: includes/class-rest-api.php:483
+#: includes/class-rest-api.php:486
 msgid "Too many session_ids in a single request. Cap is 1000; split into multiple calls."
 msgstr ""
 
-#: includes/class-rest-api.php:503
+#: includes/class-rest-api.php:506
 msgid "session_ids must contain at least one valid non-empty string."
 msgstr ""
 
-#: includes/class-rest-api.php:574
-#: includes/class-rest-api.php:664
+#: includes/class-rest-api.php:577
+#: includes/class-rest-api.php:658
 msgid "MxChat_Utils is not loaded."
 msgstr ""
 
-#: includes/class-rest-api.php:592
+#: includes/class-rest-api.php:595
 msgid "content is required."
 msgstr ""
 
-#: includes/class-rest-api.php:595
+#: includes/class-rest-api.php:598
 msgid "source_url is required and must be a valid URL."
 msgstr ""
 
-#: includes/class-rest-api.php:618
-msgid "No embedding API key configured for the selected embedding model. Configure it in MxChat settings before pushing knowledge."
-msgstr ""
-
-#: includes/class-rest-api.php:692
+#: includes/class-rest-api.php:686
 msgid "source_url is required — a string, or a non-empty array of strings."
 msgstr ""
 
-#: includes/class-rest-api.php:700
+#: includes/class-rest-api.php:694
 msgid "Too many source_urls in a single request. Cap is 50; split into multiple calls."
 msgstr ""
 
-#: includes/class-rest-api.php:721
+#: includes/class-rest-api.php:715
 msgid "source_url must contain at least one valid non-empty URL."
 msgstr ""
 
-#: includes/class-rest-api.php:798
+#: includes/class-rest-api.php:792
 msgid "The leads reader is not available on this install."
 msgstr ""
 
-#: includes/class-rest-api.php:813
+#: includes/class-rest-api.php:807
 msgid "since could not be parsed as a date."
 msgstr ""
 

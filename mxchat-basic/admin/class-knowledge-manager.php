@@ -113,7 +113,11 @@ private function mxchat_init_hooks() {
         // In-place repair for RTL KB rows imported in visual order before the
         // 32bf9e normalizer existed: wp mxchat rtl-repair (plan d1e6f7)
         WP_CLI::add_command('mxchat rtl-repair', array($this, 'cli_rtl_repair'));
+        // One command for the entries that five import fixes left behind:
+        // wp mxchat kb-reimport (plan 89739b)
+        WP_CLI::add_command('mxchat kb-reimport', array($this, 'cli_kb_reimport'));
     }
+    add_action('wp_ajax_mxchat_kb_reimport', array($this, 'ajax_mxchat_kb_reimport'));
 
     add_action('wp_ajax_mxchat_mark_queue_complete', array($this, 'ajax_mxchat_mark_queue_complete'));
 
@@ -617,6 +621,16 @@ public function mxchat_handle_pdf_file_submission() {
         // Use original filename as the source identifier
         $source_label = 'upload://' . $original_filename;
 
+        // Optional page the PDF is cited as (plans 025ea2 / dcc19d). Kept
+        // beside the file's upload:// identity, which every page carries, so a
+        // re-upload still replaces the pages; leaving the field empty on a
+        // re-upload clears an earlier page.
+        MxChat_Utils::set_upload_source_url(
+            $source_label,
+            $bot_id,
+            isset($_POST['source_page_url']) ? wp_unslash($_POST['source_page_url']) : ''
+        );
+
         $queue_id = 'pdf_' . md5($source_label . time());
 
         $pages = array();
@@ -801,6 +815,16 @@ public function mxchat_handle_document_file_submission() {
     $source_label = 'upload://' . $original_filename;
     MxChat_Utils::delete_chunks_for_url($source_label, $bot_id);
     $result = MxChat_Utils::submit_content_to_db($text, $source_label, $api_key, null, $bot_id, 'document');
+
+    // Optional page the document is cited as (plan 025ea2). Stored beside the
+    // entry, not as its identity; an empty field on a re-upload clears it.
+    if (!is_wp_error($result)) {
+        MxChat_Utils::set_upload_source_url(
+            $source_label,
+            $bot_id,
+            isset($_POST['source_page_url']) ? wp_unslash($_POST['source_page_url']) : ''
+        );
+    }
 
     if (is_wp_error($result)) {
         set_transient('mxchat_admin_notice_error',
@@ -1305,13 +1329,19 @@ public function ajax_mxchat_inspect_entry() {
         wp_send_json_error( array( 'message' => esc_html__('Permission denied.', 'mxchat') ) );
     }
 
-    $source_url  = isset($_POST['source_url']) ? sanitize_text_field( wp_unslash($_POST['source_url']) ) : '';
+    // Same identity-preserving read the Edit path uses: sanitize_text_field()
+    // strips percent-encoded octets, so a non-ASCII permalink would look up a
+    // different string (WordPress DB) and md5 to a different id (Pinecone).
+    $source_url  = $this->sanitize_entry_source_url( isset($_POST['source_url']) ? wp_unslash($_POST['source_url']) : '' );
     $entry_id    = isset($_POST['entry_id']) ? absint($_POST['entry_id']) : 0;
     $data_source = isset($_POST['data_source']) ? sanitize_key($_POST['data_source']) : 'wordpress';
     $bot_id      = isset($_POST['bot_id']) ? sanitize_key($_POST['bot_id']) : 'default';
 
     if ( $data_source === 'pinecone' ) {
-        $result = $this->inspect_pinecone_entry( $source_url, $entry_id, $bot_id );
+        // Pinecone ids are strings (md5 hashes, manual_* ids) — absint() would
+        // destroy them, so re-read the raw value for this branch only.
+        $vector_id = isset($_POST['entry_id']) ? sanitize_text_field( wp_unslash($_POST['entry_id']) ) : '';
+        $result = $this->inspect_pinecone_entry( $source_url, $vector_id, $bot_id );
     } else {
         $result = $this->inspect_wordpress_entry( $source_url, $entry_id );
     }
@@ -1425,13 +1455,26 @@ private function inspect_pinecone_entry( $source_url, $entry_id, $bot_id ) {
 
     // Document index (plan 362c31): the documents API hands back the same
     // id => {metadata} map the classic fetch does, so the inspection below is shared.
+    // Manual entries carry no source_url (their vector id is a minted manual_* string,
+    // not md5 of anything the row can hand us) — fetch the exact vector instead, the
+    // way get_pinecone_entry_content() does. '_ungrouped_' is the table view's
+    // synthetic display key for such rows.
+    $exact_id = ( ( empty($source_url) || strpos($source_url, '_ungrouped_') === 0 ) && ! empty($entry_id) && is_string($entry_id) );
+
     if ( class_exists('MxChat_Pinecone_Documents') && MxChat_Pinecone_Documents::is_document_index( $bot_id ) ) {
         $docs_cfg   = array( 'api_key' => $api_key, 'host' => $host, 'namespace' => $namespace );
-        $vector_ids = array_merge( array( md5( $source_url ) ), MxChat_Pinecone_Documents::list_ids( md5( $source_url ) . '_chunk_', $docs_cfg ) );
+        if ( $exact_id ) {
+            $vector_ids = array( $entry_id );
+        } else {
+            $vector_ids = array_merge( array( md5( $source_url ) ), MxChat_Pinecone_Documents::list_ids( md5( $source_url ) . '_chunk_', $docs_cfg ) );
+        }
         $vectors    = MxChat_Pinecone_Documents::fetch( $vector_ids, $docs_cfg );
         if ( empty($vectors) ) {
             return new WP_Error( 'not_found', esc_html__('Entry not found in Pinecone.', 'mxchat') );
         }
+    } else {
+    if ( $exact_id ) {
+        $vector_ids = array( $entry_id );
     } else {
     $base_id    = md5( $source_url );
     $vector_ids = array( $base_id );
@@ -1457,6 +1500,7 @@ private function inspect_pinecone_entry( $source_url, $entry_id, $bot_id ) {
             }
         }
     }
+    } // end md5(source_url) + chunk-prefix ids
 
     // NOTE: /vectors/fetch is a GET endpoint too, and Pinecone expects the ids
     // repeated (ids=a&ids=b) — http_build_query would emit ids[0]=a, so build
@@ -4951,30 +4995,13 @@ public function mxchat_fetch_pinecone_vectors_by_ids($pinecone_options, $vector_
  * Get embedding dimensions based on the selected model.
  */
 private function mxchat_get_embedding_dimensions() {
+    // See MxChat_Pinecone_Manager::mxchat_get_embedding_dimensions() — same answer (plan 418afd).
     $options = get_option('mxchat_options', array());
-    $selected_model = $options['embedding_model'] ?? 'text-embedding-ada-002';
-
-    $model_dimensions = array(
-        'text-embedding-ada-002' => 1536,
-        'text-embedding-3-small' => 1536,
-        'text-embedding-3-large' => 3072,
-        'voyage-2' => 1024,
-        'voyage-large-2' => 1536,
-        'voyage-3-large' => 2048,
-        'gemini-embedding-001' => 1536,
-    );
-
-    if (strpos($selected_model, 'voyage-3-large') === 0) {
-        $custom_dimensions = $options['voyage_output_dimension'] ?? 2048;
-        return intval($custom_dimensions);
+    $dimension = MxChat_Utils::expected_embedding_dimension($options);
+    if (!is_wp_error($dimension) && (int) $dimension > 0) {
+        return (int) $dimension;
     }
-
-    if (strpos($selected_model, 'gemini-embedding') === 0) {
-        $custom_dimensions = $options['gemini_output_dimension'] ?? 1536;
-        return intval($custom_dimensions);
-    }
-
-    return $model_dimensions[$selected_model] ?? 1536;
+    return MxChat_Utils::standard_embedding_dimension($options);
 }
 
 /**
@@ -7198,7 +7225,7 @@ private function mxchat_prepare_product_content_for_indexing($product) {
 }
 
 /**
- * Pricing + SKU + categories lines for a product — shared by both assembler kinds
+ * Pricing + SKU + categories + tags lines for a product — shared by both assembler kinds
  * (the post-fields product enrichment and the WC-object assembler).
  */
 private function mxchat_woo_product_summary_lines($product) {
@@ -7214,6 +7241,14 @@ private function mxchat_woo_product_summary_lines($product) {
     $categories = wp_get_post_terms($product->get_id(), 'product_cat', array('fields' => 'names'));
     if (!empty($categories) && !is_wp_error($categories)) {
         $lines .= "Categories: " . implode(', ', $categories) . "\n";
+    }
+
+    // Product tags (plan 799cc4). A store's tags often carry the words a
+    // visitor asks with ("vegan", "gift") and none of them are in the
+    // description. No line at all when the product has no tags.
+    $tags = wp_get_post_terms($product->get_id(), 'product_tag', array('fields' => 'names'));
+    if (!empty($tags) && !is_wp_error($tags)) {
+        $lines .= "Tags: " . $this->mxchat_decode_entities_for_indexing(implode(', ', $tags)) . "\n";
     }
 
     return $lines;
@@ -7686,6 +7721,1011 @@ private function mxchat_rtl_repair_pinecone_enabled($bot_id) {
         && !empty($po['mxchat_pinecone_api_key']) && !empty($po['mxchat_pinecone_host']);
 }
 
+/* =========================================================================
+ * Re-import affected entries (plan 89739b)
+ *
+ * Several releases corrected how knowledge text is imported, each only for
+ * entries added afterwards: HTML entities (d2c92e), currency signs (7403ec),
+ * combining marks and symbols (a19914), joiner characters (209e57) and
+ * right-to-left PDF order (32bf9e). This walks the knowledge base, rebuilds
+ * each entry's text from its source with the CURRENT import chain, and
+ * rewrites an entry only when (a) the rebuilt text differs from the stored
+ * text in one of those ways and (b) the two are otherwise the same document.
+ * An entry whose source simply changed since it was imported is reported and
+ * left alone: that is a different question from "was it damaged at import".
+ *
+ * One engine, two callers: wp mxchat kb-reimport and the Knowledge screen's
+ * resumable action. A scan makes no embedding call and writes no entry.
+ * ====================================================================== */
+
+/** Release date of 3.2.20, the last release that changed how text is imported. */
+const REIMPORT_DEFAULT_BEFORE = '2026-08-28';
+const REIMPORT_STATE_OPTION   = 'mxchat_kb_reimport_state';
+
+/** Which store holds the entries for this bot: wordpress, pinecone or documents. */
+private function mxchat_reimport_store($bot_id) {
+    if (!$this->mxchat_rtl_repair_pinecone_enabled($bot_id)) {
+        return 'wordpress';
+    }
+    if (class_exists('MxChat_Pinecone_Documents') && MxChat_Pinecone_Documents::is_document_index($bot_id)) {
+        return 'documents';
+    }
+    return 'pinecone';
+}
+
+private function mxchat_reimport_pinecone_cfg($bot_id) {
+    $po = class_exists('MxChat_Pinecone_Manager')
+        ? MxChat_Pinecone_Manager::get_instance()->mxchat_get_bot_pinecone_options($bot_id)
+        : get_option('mxchat_pinecone_addon_options', array());
+    return array(
+        'api_key'   => (string) ($po['mxchat_pinecone_api_key'] ?? ''),
+        'host'      => (string) ($po['mxchat_pinecone_host'] ?? ''),
+        'namespace' => (string) ($po['mxchat_pinecone_namespace'] ?? ''),
+    );
+}
+
+private function mxchat_reimport_new_state($args) {
+    $bot_id = isset($args['bot']) ? sanitize_key($args['bot']) : 'default';
+    $before = isset($args['before']) ? (string) $args['before'] : self::REIMPORT_DEFAULT_BEFORE;
+    if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $before)) {
+        $before = self::REIMPORT_DEFAULT_BEFORE;
+    }
+    global $wpdb;
+    $store = $this->mxchat_reimport_store($bot_id);
+    return array(
+        'phase'      => 'scan',
+        'bot'        => $bot_id,
+        'store'      => $store,
+        'source'     => isset($args['source']) && $args['source'] !== '' ? (string) $args['source'] : 'all',
+        'before'     => $before,
+        'cap'        => isset($args['cap']) ? (int) $args['cap'] : 100,
+        'cursor'     => $store === 'wordpress' ? 0 : '',
+        'max_id'     => $store === 'wordpress' ? (int) $wpdb->get_var("SELECT MAX(id) FROM {$wpdb->prefix}mxchat_system_prompt_content") : 0,
+        'scan_done'  => false,
+        'scanned'    => 0,
+        'unchanged'  => 0,
+        'changed'    => 0,
+        'skipped'    => 0,
+        'candidates' => array(),
+        'notes'      => array(),
+        'pos'        => 0,
+        'repaired'   => 0,
+        'failed'     => 0,
+        'error'      => '',
+        'updated'    => time(),
+    );
+}
+
+/** True when the entry passes --source and --before. */
+private function mxchat_reimport_selected(array $entry, array $state) {
+    $url    = (string) $entry['source_url'];
+    $source = (string) $state['source'];
+    if ($source === 'upload') {
+        if (!MxChat_Utils::is_upload_source($url)) {
+            return false;
+        }
+    } elseif ($source === 'manual') {
+        if ($url !== '' && strpos($url, 'mxchat://') !== 0) {
+            return false;
+        }
+    } elseif ($source !== 'all' && $source !== '') {
+        if (strpos($url, $source) !== 0) {
+            return false;
+        }
+    }
+    $limit = strtotime($state['before'] . ' 00:00:00');
+    $when  = $entry['updated'];
+    if (is_string($when) && $when !== '' && !ctype_digit($when)) {
+        $when = strtotime($when);
+    }
+    $when = (int) $when;
+    // An entry with no date on record predates the date field: treat it as old.
+    return ($when === 0) || ($limit === false) || ($when < $limit);
+}
+
+/**
+ * One page of entries (not rows: a chunked entry is one entry).
+ * @return array{entries:array,done:bool}|WP_Error
+ */
+private function mxchat_reimport_list_page(array &$state, $limit) {
+    if ($state['store'] === 'wordpress') {
+        global $wpdb;
+        $table = $wpdb->prefix . 'mxchat_system_prompt_content';
+        $rows  = $wpdb->get_results($wpdb->prepare(
+            "SELECT MIN(id) AS first_id, MAX(source_url) AS source_url, MAX(content_type) AS content_type,
+                    MAX(`timestamp`) AS updated, COUNT(*) AS n
+             FROM {$table}
+             GROUP BY CASE WHEN source_url IS NULL OR source_url = '' THEN CONCAT('#', id) ELSE source_url END
+             HAVING first_id > %d AND first_id <= %d
+             ORDER BY first_id ASC LIMIT %d",
+            (int) $state['cursor'], (int) $state['max_id'], (int) $limit
+        ));
+        $entries = array();
+        foreach ((array) $rows as $row) {
+            $state['cursor'] = (int) $row->first_id;
+            $entries[] = array(
+                'store'        => 'wordpress',
+                'id'           => (int) $row->first_id,
+                'source_url'   => (string) $row->source_url,
+                'content_type' => (string) $row->content_type,
+                'updated'      => (string) $row->updated,
+                'chunked'      => ((int) $row->n) > 1,
+            );
+        }
+        return array('entries' => $entries, 'done' => count((array) $rows) < $limit);
+    }
+
+    $cfg = $this->mxchat_reimport_pinecone_cfg($state['bot']);
+    if ($cfg['api_key'] === '' || $cfg['host'] === '') {
+        return new WP_Error('pinecone_config', __('Pinecone is switched on but has no API key or host.', 'mxchat'));
+    }
+    $is_docs = ($state['store'] === 'documents');
+    $page = $is_docs
+        ? MxChat_Pinecone_Documents::list_page('', $limit, (string) $state['cursor'], $cfg)
+        : MxChat_Pinecone_Documents::classic_list_page($cfg['host'], $cfg['api_key'], $cfg['namespace'], $limit, (string) $state['cursor']);
+    if (is_wp_error($page)) {
+        return $page;
+    }
+    // A chunked entry is taken once, at its first chunk; the other chunk ids are passed over.
+    $anchors = array();
+    foreach ($page['ids'] as $id) {
+        if (preg_match('/_chunk_(\d+)$/', $id, $m) && (int) $m[1] !== 0) {
+            continue;
+        }
+        $anchors[] = $id;
+    }
+    $records = array();
+    if (!empty($anchors)) {
+        $records = $is_docs
+            ? MxChat_Pinecone_Documents::fetch($anchors, $cfg)
+            : MxChat_Pinecone_Documents::classic_fetch($cfg['host'], $cfg['api_key'], $cfg['namespace'], $anchors);
+        if (is_wp_error($records)) {
+            return $records;
+        }
+    }
+    $entries = array();
+    foreach ($anchors as $id) {
+        if (!isset($records[$id])) {
+            continue;
+        }
+        $meta = isset($records[$id]['metadata']) && is_array($records[$id]['metadata']) ? $records[$id]['metadata'] : array();
+        $entries[] = array(
+            'store'        => $state['store'],
+            'id'           => (string) $id,
+            'source_url'   => (string) ($meta['source_url'] ?? ''),
+            'content_type' => (string) ($meta['type'] ?? 'content'),
+            'updated'      => (int) ($meta['last_updated'] ?? 0),
+            'chunked'      => (bool) preg_match('/_chunk_0$/', $id),
+            'text'         => (string) ($meta['text'] ?? ''),
+        );
+    }
+    $state['cursor'] = (string) $page['next'];
+    return array('entries' => $entries, 'done' => ((string) $page['next'] === ''));
+}
+
+/** The entry's stored text, chunks joined. @return string|WP_Error */
+private function mxchat_reimport_stored_text(array $entry, $bot_id) {
+    if ($entry['store'] === 'wordpress') {
+        $got = $this->get_wordpress_entry_content($entry['source_url'], (int) $entry['id']);
+    } elseif (empty($entry['chunked']) && isset($entry['text'])) {
+        return (string) $entry['text'];
+    } else {
+        // A chunked entry, or one read back from a saved scan (which keeps no text).
+        $got = $this->get_pinecone_entry_content($entry['source_url'], (string) $entry['id'], $bot_id);
+    }
+    return is_wp_error($got) ? $got : (string) $got['content'];
+}
+
+private function mxchat_reimport_is_pdf(array $entry) {
+    $url = (string) $entry['source_url'];
+    return $entry['content_type'] === 'pdf'
+        || strpos($url, '#page=') !== false
+        || (MxChat_Utils::is_upload_source($url) && (bool) preg_match('/\.pdf$/i', (string) MxChat_Utils::upload_source_base($url)));
+}
+
+/** Text that came out of the PDF reader, page entry or whole file: reading order can apply. */
+private function mxchat_reimport_from_pdf(array $entry) {
+    return $this->mxchat_reimport_is_pdf($entry) || (bool) preg_match('/\.pdf(?:[?#]|$)/i', (string) $entry['source_url']);
+}
+
+private function mxchat_reimport_squash($text) {
+    $out = preg_replace('/[\s\p{Z}]+/u', '', (string) $text);
+    return is_string($out) ? $out : (string) $text;
+}
+
+/**
+ * Comparison form only, never stored. Both texts are reduced to what the
+ * oldest import chain kept (letters, numbers, punctuation, math symbols:
+ * the allowlist that shipped until 3.2.18), with entities decoded and
+ * right-to-left PDF text put in reading order. Two texts with the same form
+ * are the same document, differing only in what the fixes restored.
+ */
+private function mxchat_reimport_norm($text, $is_pdf) {
+    $text = (string) $text;
+    for ($i = 0; $i < 3; $i++) {
+        $decoded = html_entity_decode($text, ENT_QUOTES | ENT_HTML5, 'UTF-8');
+        if ($decoded === $text) {
+            break;
+        }
+        $text = $decoded;
+    }
+    if ($is_pdf) {
+        $logical = MxChat_Utils::normalize_pdf_rtl($text, 'kb-reimport compare');
+        if (is_string($logical)) {
+            $text = $logical;
+        }
+    }
+    $kept = preg_replace('/[^\p{L}\p{N}\p{P}\p{Sm}]+/u', '', $text);
+    return is_string($kept) ? $kept : $this->mxchat_reimport_squash($text);
+}
+
+private function mxchat_reimport_count($pattern, $text) {
+    $n = preg_match_all($pattern, (string) $text);
+    return $n ? (int) $n : 0;
+}
+
+private function mxchat_reimport_entity_count($text) {
+    if (!preg_match_all('/&(?:#[0-9]{1,7}|#x[0-9a-f]{1,6}|[a-z][a-z0-9]{1,31});/i', (string) $text, $m)) {
+        return 0;
+    }
+    $n = 0;
+    foreach ($m[0] as $entity) {
+        if (html_entity_decode($entity, ENT_QUOTES | ENT_HTML5, 'UTF-8') !== $entity) {
+            $n++;
+        }
+    }
+    return $n;
+}
+
+/** Why the rebuilt text differs from the stored text, in the fixes' own terms. */
+private function mxchat_reimport_reasons($stored, $fresh, $is_pdf) {
+    $reasons = array();
+    if ($this->mxchat_reimport_entity_count($stored) > $this->mxchat_reimport_entity_count($fresh)) {
+        $reasons[] = 'entities';
+    }
+    if ($this->mxchat_reimport_count('/\p{Sc}/u', $fresh) > $this->mxchat_reimport_count('/\p{Sc}/u', $stored)) {
+        $reasons[] = 'currency';
+    }
+    if ($this->mxchat_reimport_count('/\p{M}/u', $fresh) > $this->mxchat_reimport_count('/\p{M}/u', $stored)) {
+        $reasons[] = 'combining marks';
+    }
+    if ($this->mxchat_reimport_count('/\p{So}/u', $fresh) > $this->mxchat_reimport_count('/\p{So}/u', $stored)) {
+        $reasons[] = 'symbols';
+    }
+    if ($this->mxchat_reimport_count('/[\x{200C}\x{200D}]/u', $fresh) > $this->mxchat_reimport_count('/[\x{200C}\x{200D}]/u', $stored)) {
+        $reasons[] = 'joiners';
+    }
+    if ($is_pdf) {
+        $logical = MxChat_Utils::normalize_pdf_rtl($stored, 'kb-reimport detect');
+        if (is_string($logical) && $logical !== $stored) {
+            $reasons[] = 'RTL';
+        }
+    }
+    return $reasons;
+}
+
+/** A product price line written before 7403ec has no currency code; one written since has. */
+private function mxchat_reimport_price_code_missing($stored, $fresh) {
+    $coded = '/^(?:Price|Sale Price|Price Range): [A-Z]{3} /m';
+    return (bool) preg_match('/^(?:Price|Sale Price|Price Range): /m', $stored)
+        && !preg_match($coded, $stored)
+        && (bool) preg_match($coded, $fresh);
+}
+
+/** What submit_content_to_db() does to text before it stores it. */
+private function mxchat_reimport_storable($text) {
+    $text = wp_check_invalid_utf8((string) $text);
+    $out  = preg_replace('/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/u', '', $text);
+    return is_string($out) ? $out : $text;
+}
+
+/**
+ * Rebuild an entry's text from its source with the current import chain.
+ *
+ * @return array{mode:string,texts?:array,title?:string,post_id?:int,note?:string}
+ *   mode 'inplace' : no source to go back to (manual text, an uploaded file, a
+ *                    PDF page) - only reading order can be repaired, in place.
+ *   mode 'refetch' : 'texts' holds one rebuilt text per import route that could
+ *                    have written this entry (label => text).
+ *   mode 'skip'    : 'note' says why.
+ */
+private function mxchat_reimport_fresh(array $entry, $bot_id) {
+    $url  = (string) $entry['source_url'];
+    $type = (string) $entry['content_type'];
+
+    if (!preg_match('#^https?://#i', $url) || $this->mxchat_reimport_is_pdf($entry)) {
+        return array('mode' => 'inplace');
+    }
+    // The WordPress store files any mxchat.ai address as manual text and would
+    // add a second row instead of updating this one, so treat it as manual here too.
+    if ($entry['store'] === 'wordpress' && strpos($url, 'mxchat.ai') !== false) {
+        return array('mode' => 'inplace');
+    }
+    if ($type === 'youtube') {
+        return array('mode' => 'skip', 'note' => __('a video entry, not an imported page', 'mxchat'), 'quiet' => true);
+    }
+
+    // Imported by address (URL or sitemap import): fetch the page the way the importer does.
+    if ($type === 'url' || $type === 'product') {
+        $texts = array();
+        if (class_exists('WooCommerce') && (strpos($url, '/product/') !== false || strpos($url, '/shop/') !== false)) {
+            $product_text = $this->mxchat_extract_woocommerce_product_content($url);
+            if (!empty($product_text)) {
+                $texts['product'] = $product_text;
+            }
+        }
+        if ($type === 'url' || empty($texts)) {
+            $response = wp_remote_get($url, array(
+                'timeout'     => 30,
+                'redirection' => 5,
+                'user-agent'  => function_exists('mxchat_ingest_user_agent') ? mxchat_ingest_user_agent() : 'MxChat',
+            ));
+            if (is_wp_error($response)) {
+                if (empty($texts)) {
+                    return array('mode' => 'skip', 'note' => sprintf(__('the page could not be fetched (%s)', 'mxchat'), $response->get_error_message()));
+                }
+            } else {
+                $code = (int) wp_remote_retrieve_response_code($response);
+                if ($code !== 200) {
+                    if (empty($texts)) {
+                        return array('mode' => 'skip', 'note' => sprintf(__('the page is gone (HTTP %d)', 'mxchat'), $code));
+                    }
+                } elseif ($this->mxchat_is_pdf_url($url, $response)) {
+                    return array('mode' => 'inplace');
+                } else {
+                    $html = wp_remote_retrieve_body($response);
+                    $page = $this->mxchat_sanitize_content_for_api($this->mxchat_extract_main_content($html));
+                    if ($page !== '') {
+                        $texts['page'] = $page;
+                        $title = MxChat_Utils::extract_page_title($html);
+                    }
+                }
+            }
+        }
+        if ($type === 'product' && !isset($texts['bulk'])) {
+            $bulk = $this->mxchat_reimport_post_text($url, $bot_id, 'bulk');
+            if (is_array($bulk)) {
+                $texts['bulk'] = $bulk['text'];
+            }
+        }
+        if (empty($texts)) {
+            return array('mode' => 'skip', 'note' => __('the page has no readable text now', 'mxchat'));
+        }
+        return array('mode' => 'refetch', 'texts' => $texts, 'title' => isset($title) ? (string) $title : '');
+    }
+
+    // Everything else was built from a post, a product or a media file on this site.
+    $post_id = (int) $this->mxchat_url_to_post_id_improved($url);
+    $post    = $post_id ? get_post($post_id) : null;
+    if (!$post) {
+        if ($type === 'content' || $type === '') {
+            // Text an owner typed and gave an address to: there is no source to rebuild it from.
+            return array('mode' => 'inplace');
+        }
+        return array('mode' => 'skip', 'note' => __('its source is gone (no post or file on this site has this address)', 'mxchat'));
+    }
+    if ($post->post_type === 'attachment') {
+        $extracted = $this->mxchat_extract_attachment_text($post_id);
+        if ($extracted['text'] === '') {
+            return array('mode' => 'skip', 'note' => sprintf(__('the file could not be read (%s)', 'mxchat'), $extracted['reason']));
+        }
+        return array(
+            'mode'    => 'refetch',
+            'texts'   => array('file' => $this->mxchat_build_attachment_content($post, $extracted['text'])),
+            'post_id' => $post_id,
+            'is_file' => true,
+        );
+    }
+    if ($post->post_status !== 'publish') {
+        return array('mode' => 'skip', 'note' => __('its source is no longer published', 'mxchat'));
+    }
+
+    $texts = array();
+    $routes = ($type === 'content' || $type === '') ? array('sync', 'bulk') : array('bulk', 'sync');
+    foreach ($routes as $route) {
+        $built = $this->mxchat_reimport_post_text($url, $bot_id, $route, $post);
+        if (is_array($built)) {
+            $texts[$route] = $built['text'];
+        }
+    }
+    if ($post->post_type === 'product' && class_exists('WooCommerce') && function_exists('wc_get_product')) {
+        $product = wc_get_product($post_id);
+        if ($product) {
+            $from_product = array('product' => $this->mxchat_prepare_product_content_for_indexing($product));
+            // With the WooCommerce integration on, the product writer owns auto-synced product entries.
+            $owns = isset($this->options['enable_woocommerce_integration']) && in_array($this->options['enable_woocommerce_integration'], array('1', 'on'), true);
+            $texts = $owns ? $from_product + $texts : $texts + $from_product;
+        }
+    }
+    if (empty($texts)) {
+        return array('mode' => 'skip', 'note' => __('its source has no text now', 'mxchat'));
+    }
+    return array('mode' => 'refetch', 'texts' => $texts, 'post_id' => $post_id);
+}
+
+/** A post's text as the bulk import ('bulk') or auto-sync ('sync') builds it. @return array|null */
+private function mxchat_reimport_post_text($url, $bot_id, $route, $post = null) {
+    if (!$post) {
+        $post_id = (int) $this->mxchat_url_to_post_id_improved($url);
+        $post    = $post_id ? get_post($post_id) : null;
+    }
+    if (!$post || $post->post_status !== 'publish' || $post->post_type === 'attachment') {
+        return null;
+    }
+    $post_id  = (int) $post->ID;
+    $filtered = apply_filters('mxchat_before_process_post', $post, $route === 'sync' ? 'default' : $bot_id);
+    if (!($filtered instanceof WP_Post)) {
+        $filtered = $post;
+    }
+    $args = ($route === 'sync')
+        ? array('read_display' => true, 'extract_acf_pdfs' => get_option('mxchat_auto_sync_acf_pdfs', '0') === '1', 'include_product_tabs' => false)
+        : array('read_display' => false, 'extract_acf_pdfs' => get_option('mxchat_acf_pdf_extraction', '0') === '1', 'include_product_tabs' => true);
+    $prepared = $this->mxchat_prepare_post_content_for_indexing($post_id, $filtered, $args);
+    return array('text' => (string) $prepared['content']);
+}
+
+/**
+ * Decide what to do with one entry. Makes no embedding call and writes nothing.
+ *
+ * @return array{outcome:string,reasons:array,note:string,mode:string,fresh:string,title:string,post_id:int,is_file:bool}
+ *   outcome: repair | unchanged | changed | skipped
+ */
+private function mxchat_reimport_evaluate(array $entry, $bot_id) {
+    $result = array('outcome' => 'unchanged', 'reasons' => array(), 'note' => '', 'mode' => 'refetch', 'fresh' => '', 'title' => '', 'post_id' => 0, 'is_file' => false, 'quiet' => false);
+    $is_pdf = $this->mxchat_reimport_from_pdf($entry);
+
+    $fresh = $this->mxchat_reimport_fresh($entry, $bot_id);
+    $result['mode'] = $fresh['mode'];
+    if ($fresh['mode'] === 'skip') {
+        $result['outcome'] = 'skipped';
+        $result['note']    = $fresh['note'];
+        $result['quiet']   = !empty($fresh['quiet']);
+        return $result;
+    }
+
+    if ($fresh['mode'] === 'inplace') {
+        // Reading order is the one defect that can be repaired without the source.
+        if (!$this->mxchat_reimport_is_pdf($entry) && !$this->mxchat_reimport_has_pdf_header($entry)) {
+            return $result;
+        }
+        $rows = $this->mxchat_reimport_inplace_rows($entry, $bot_id);
+        if (is_wp_error($rows)) {
+            $result['outcome'] = 'skipped';
+            $result['note']    = $rows->get_error_message();
+            return $result;
+        }
+        foreach ($rows as $row) {
+            if ($row['new'] !== $row['old']) {
+                $result['outcome'] = 'repair';
+                $result['reasons'] = array('RTL');
+                return $result;
+            }
+        }
+        return $result;
+    }
+
+    $stored = $this->mxchat_reimport_stored_text($entry, $bot_id);
+    if (is_wp_error($stored)) {
+        $result['outcome'] = 'skipped';
+        $result['note']    = $stored->get_error_message();
+        return $result;
+    }
+    $stored_squash = $this->mxchat_reimport_squash($stored);
+    $stored_norm   = $this->mxchat_reimport_norm($stored, $is_pdf);
+    $stored_title  = $this->mxchat_reimport_norm(strtok($stored, "\n"), false);
+
+    // More than one import route can have written an entry (a product is built
+    // one way by auto-sync and another by the bulk import). Take the route whose
+    // text shares the most lines with what is stored.
+    $stored_lines = array_flip(array_filter(array_map('trim', explode("
+", $stored)), 'strlen'));
+    $repair = null;
+    $best   = -1;
+    foreach ($fresh['texts'] as $route => $text) {
+        $text = $this->mxchat_reimport_storable($text);
+        if ($this->mxchat_reimport_squash($text) === $stored_squash) {
+            return $result; // identical to what one import route builds today
+        }
+        $reasons  = $this->mxchat_reimport_reasons($stored, $text, $is_pdf);
+        $same_doc = ($this->mxchat_reimport_norm($text, $is_pdf) === $stored_norm);
+        if (!$same_doc && $route !== 'page' && $this->mxchat_reimport_price_code_missing($stored, $text)
+            && $this->mxchat_reimport_norm(strtok($text, "\n"), false) === $stored_title) {
+            // A product indexed before prices carried their currency code.
+            $same_doc = true;
+            if (!in_array('currency', $reasons, true)) {
+                $reasons[] = 'currency';
+            }
+        }
+        if ($same_doc && !empty($reasons)) {
+            $shared = count(array_intersect_key($stored_lines, array_flip(array_filter(array_map('trim', explode("
+", $text)), 'strlen'))));
+            if ($shared > $best) {
+                $best   = $shared;
+                $repair = array('reasons' => $reasons, 'fresh' => $text);
+            }
+        }
+    }
+
+    if ($repair === null) {
+        $result['outcome'] = 'changed';
+        $result['note']    = __('its source reads differently now, and not because of these fixes', 'mxchat');
+        return $result;
+    }
+    $result['outcome'] = 'repair';
+    $result['reasons'] = $repair['reasons'];
+    $result['fresh']   = $repair['fresh'];
+    $result['title']   = isset($fresh['title']) ? (string) $fresh['title'] : '';
+    $result['post_id'] = isset($fresh['post_id']) ? (int) $fresh['post_id'] : 0;
+    $result['is_file'] = !empty($fresh['is_file']);
+    return $result;
+}
+
+/** An uploaded PDF page stored before 3.2.24 has a manual identity; its header is what marks it as a PDF. */
+private function mxchat_reimport_has_pdf_header(array $entry) {
+    if ($entry['store'] !== 'wordpress') {
+        return false;
+    }
+    global $wpdb;
+    $head = (string) $wpdb->get_var($wpdb->prepare(
+        "SELECT LEFT(article_content, 400) FROM {$wpdb->prefix}mxchat_system_prompt_content WHERE id = %d",
+        (int) $entry['id']
+    ));
+    return $head !== '' && $head[0] === '{' && stripos($head, 'pdf') !== false && strpos($head, "\n---\n") !== false;
+}
+
+/**
+ * The stored pieces of an entry with reading order restored, piece by piece.
+ * WordPress rows keep their metadata header byte for byte (as rtl-repair does).
+ * @return array[]|WP_Error  each: id, old, new
+ */
+private function mxchat_reimport_inplace_rows(array $entry, $bot_id) {
+    $out = array();
+    if ($entry['store'] === 'wordpress') {
+        global $wpdb;
+        $table = $wpdb->prefix . 'mxchat_system_prompt_content';
+        $rows  = ($entry['source_url'] !== '')
+            ? $wpdb->get_results($wpdb->prepare("SELECT id, article_content FROM {$table} WHERE source_url = %s ORDER BY id ASC", $entry['source_url']))
+            : $wpdb->get_results($wpdb->prepare("SELECT id, article_content FROM {$table} WHERE id = %d", (int) $entry['id']));
+        foreach ((array) $rows as $row) {
+            list($header, $text) = $this->mxchat_rtl_repair_split((string) $row->article_content);
+            $logical = MxChat_Utils::normalize_pdf_rtl($text, 'kb-reimport row ' . $row->id);
+            $out[] = array(
+                'id'  => (int) $row->id,
+                'old' => (string) $row->article_content,
+                'new' => $header . (is_string($logical) ? $logical : $text),
+            );
+        }
+        return $out;
+    }
+    $stored = $this->mxchat_reimport_stored_text($entry, $bot_id);
+    if (is_wp_error($stored)) {
+        return $stored;
+    }
+    $logical = MxChat_Utils::normalize_pdf_rtl($stored, 'kb-reimport ' . $entry['id']);
+    $out[] = array('id' => (string) $entry['id'], 'old' => $stored, 'new' => is_string($logical) ? $logical : $stored);
+    return $out;
+}
+
+/** The role an entry is restricted to, read before a rewrite so it can be put back. */
+private function mxchat_reimport_role(array $entry) {
+    global $wpdb;
+    if ($entry['store'] === 'wordpress') {
+        $role = ($entry['source_url'] !== '')
+            ? $wpdb->get_var($wpdb->prepare("SELECT role_restriction FROM {$wpdb->prefix}mxchat_system_prompt_content WHERE source_url = %s AND role_restriction IS NOT NULL AND role_restriction <> '' AND role_restriction <> 'public' LIMIT 1", $entry['source_url']))
+            : $wpdb->get_var($wpdb->prepare("SELECT role_restriction FROM {$wpdb->prefix}mxchat_system_prompt_content WHERE id = %d", (int) $entry['id']));
+        return ($role === null || $role === '') ? 'public' : (string) $role;
+    }
+    $base  = preg_replace('/_chunk_\d+$/', '', (string) $entry['id']);
+    $table = $wpdb->prefix . 'mxchat_pinecone_roles';
+    if ($wpdb->get_var($wpdb->prepare('SHOW TABLES LIKE %s', $table)) !== $table) {
+        return 'public';
+    }
+    $role = $wpdb->get_var($wpdb->prepare(
+        "SELECT role_restriction FROM {$table} WHERE (vector_id = %s OR vector_id LIKE %s) AND role_restriction <> 'public' LIMIT 1",
+        $base, $wpdb->esc_like($base . '_chunk_') . '%'
+    ));
+    return ($role === null || $role === '') ? 'public' : (string) $role;
+}
+
+/** Put a restriction back on every piece of a rewritten entry. */
+private function mxchat_reimport_restore_role(array $entry, $role, $bot_id) {
+    if ($role === 'public' || $entry['source_url'] === '') {
+        return;
+    }
+    global $wpdb;
+    if ($entry['store'] === 'wordpress') {
+        $wpdb->update($wpdb->prefix . 'mxchat_system_prompt_content', array('role_restriction' => $role), array('source_url' => $entry['source_url']), array('%s'), array('%s'));
+        if (class_exists('MxChat_Vectorstore_Manager')) {
+            MxChat_Vectorstore_Manager::handle_role_change($entry['source_url'], $bot_id, $role);
+        }
+        return;
+    }
+    $base = md5($entry['source_url']);
+    $ids  = array($base);
+    $n    = MxChat_Utils::count_chunks_for_url($entry['source_url'], $bot_id);
+    for ($i = 0; $i < (int) $n; $i++) {
+        $ids[] = MxChat_Chunker::generate_chunk_vector_id($entry['source_url'], $i);
+    }
+    foreach (array_unique($ids) as $vector_id) {
+        $wpdb->replace($wpdb->prefix . 'mxchat_pinecone_roles', array(
+            'vector_id'        => $vector_id,
+            'role_restriction' => $role,
+            'updated_at'       => current_time('mysql'),
+        ), array('%s', '%s', '%s'));
+    }
+}
+
+/**
+ * Rewrite one entry. Re-evaluates first, so a second run (or a source that
+ * changed between the scan and the confirm) cannot write something the scan
+ * did not show.
+ * @return array{outcome:string,reasons:array,note:string}
+ */
+private function mxchat_reimport_apply_entry(array $entry, $bot_id, $api_key) {
+    $eval = $this->mxchat_reimport_evaluate($entry, $bot_id);
+    if ($eval['outcome'] !== 'repair') {
+        return array('outcome' => $eval['outcome'], 'reasons' => array(), 'note' => $eval['note']);
+    }
+    $role = $this->mxchat_reimport_role($entry);
+
+    if ($eval['mode'] === 'inplace') {
+        $rows = $this->mxchat_reimport_inplace_rows($entry, $bot_id);
+        if (is_wp_error($rows)) {
+            return array('outcome' => 'failed', 'reasons' => $eval['reasons'], 'note' => $rows->get_error_message());
+        }
+        if ($entry['store'] === 'wordpress') {
+            global $wpdb;
+            foreach ($rows as $row) {
+                if ($row['new'] === $row['old']) {
+                    continue;
+                }
+                $vector = $this->mxchat_reimport_with_backoff(function () use ($row, $api_key, $bot_id) {
+                    return MxChat_Utils::regenerate_embedding($row['new'], $api_key, $bot_id);
+                });
+                if (!is_array($vector)) {
+                    // Text and vector stay consistent: no repaired text beside a stale vector.
+                    return array('outcome' => 'failed', 'reasons' => $eval['reasons'], 'note' => is_wp_error($vector) ? $vector->get_error_message() : __('the embedding request failed', 'mxchat'));
+                }
+                $wpdb->update(
+                    $wpdb->prefix . 'mxchat_system_prompt_content',
+                    array('article_content' => $row['new'], 'embedding_vector' => maybe_serialize($vector)),
+                    array('id' => $row['id']),
+                    array('%s', '%s'),
+                    array('%d')
+                );
+            }
+            return array('outcome' => 'repaired', 'reasons' => $eval['reasons'], 'note' => '');
+        }
+        if ($entry['source_url'] === '') {
+            // A Pinecone record with no source has no stable id to write back to.
+            return array('outcome' => 'skipped', 'reasons' => array(), 'note' => __('a manual Pinecone entry: open it on the Knowledge screen and save it to repair it', 'mxchat'));
+        }
+        $eval['fresh'] = $rows[0]['new'];
+    }
+
+    $source_url = $entry['source_url'];
+    $type       = $entry['content_type'] !== '' ? $entry['content_type'] : 'content';
+    $fresh      = $eval['fresh'];
+    $title      = $eval['title'];
+    $result     = $this->mxchat_reimport_with_backoff(function () use ($fresh, $source_url, $api_key, $bot_id, $type, $title) {
+        return MxChat_Utils::submit_content_to_db($fresh, $source_url, $api_key, md5($source_url), $bot_id, $type, $title);
+    });
+    if ($result !== true) {
+        return array('outcome' => 'failed', 'reasons' => $eval['reasons'], 'note' => is_wp_error($result) ? $result->get_error_message() : __('the entry could not be stored', 'mxchat'));
+    }
+    $this->mxchat_reimport_restore_role($entry, $role, $bot_id);
+    if ($eval['is_file'] && $eval['post_id']) {
+        $this->mxchat_remember_attachment_signature($eval['post_id'], $source_url, $fresh);
+    }
+    return array('outcome' => 'repaired', 'reasons' => $eval['reasons'], 'note' => '');
+}
+
+/** Run a write; on a rate-limit answer wait and try again, twice at most. */
+private function mxchat_reimport_with_backoff(callable $call) {
+    $result = null;
+    for ($attempt = 0; $attempt < 3; $attempt++) {
+        $result = $call();
+        if (!is_wp_error($result) || !preg_match('/\b429\b|rate.?limit|too many requests/i', $result->get_error_message())) {
+            return $result;
+        }
+        if ($attempt < 2) {
+            sleep($attempt === 0 ? 2 : 5);
+        }
+    }
+    return $result;
+}
+
+private function mxchat_reimport_label(array $entry) {
+    if ($entry['source_url'] !== '' && strpos($entry['source_url'], 'mxchat://') !== 0) {
+        return $entry['source_url'];
+    }
+    return sprintf(__('Manual entry %s', 'mxchat'), $entry['id']);
+}
+
+private function mxchat_reimport_note(array &$state, $kind, array $entry, $note) {
+    if ($state['cap'] > 0 && count($state['notes']) >= $state['cap']) {
+        return;
+    }
+    $state['notes'][] = array('kind' => $kind, 'label' => $this->mxchat_reimport_label($entry), 'note' => $note);
+}
+
+/** Scan until the deadline: sort entries into repair / unchanged / changed / skipped. */
+private function mxchat_reimport_scan_step(array &$state, $deadline) {
+    while (!$state['scan_done'] && microtime(true) < $deadline) {
+        $page = $this->mxchat_reimport_list_page($state, 10);
+        if (is_wp_error($page)) {
+            $state['error'] = $page->get_error_message();
+            $state['scan_done'] = true;
+            break;
+        }
+        foreach ($page['entries'] as $entry) {
+            if (!$this->mxchat_reimport_selected($entry, $state)) {
+                continue;
+            }
+            $state['scanned']++;
+            $eval = $this->mxchat_reimport_evaluate($entry, $state['bot']);
+            if ($eval['outcome'] === 'repair') {
+                unset($entry['text']);
+                $entry['reasons'] = $eval['reasons'];
+                $entry['label']   = $this->mxchat_reimport_label($entry);
+                $state['candidates'][] = $entry;
+            } elseif ($eval['outcome'] === 'unchanged') {
+                $state['unchanged']++;
+            } elseif ($eval['outcome'] === 'changed') {
+                $state['changed']++;
+                $this->mxchat_reimport_note($state, 'changed', $entry, $eval['note']);
+            } elseif (!empty($eval['quiet'])) {
+                $state['unchanged']++;
+            } else {
+                $state['skipped']++;
+                $this->mxchat_reimport_note($state, 'skipped', $entry, $eval['note']);
+            }
+        }
+        if ($page['done']) {
+            $state['scan_done'] = true;
+        }
+    }
+    if ($state['scan_done'] && $state['phase'] === 'scan') {
+        $state['phase'] = 'scanned';
+    }
+    $state['updated'] = time();
+}
+
+/** Rewrite scanned candidates until the deadline (or $limit repairs). */
+private function mxchat_reimport_apply_step(array &$state, $deadline, $api_key, $sleep_ms = 0, $limit = 0) {
+    $total = count($state['candidates']);
+    while ($state['pos'] < $total && microtime(true) < $deadline) {
+        if ($limit > 0 && $state['repaired'] >= $limit) {
+            break;
+        }
+        $i     = $state['pos'];
+        $entry = $state['candidates'][$i];
+        $done  = $this->mxchat_reimport_apply_entry($entry, $state['bot'], $api_key);
+        $state['candidates'][$i]['result'] = $done['outcome'];
+        $state['candidates'][$i]['note']   = $done['note'];
+        if ($done['outcome'] === 'repaired') {
+            $state['repaired']++;
+            if ($sleep_ms > 0) {
+                usleep($sleep_ms * 1000);
+            }
+        } elseif ($done['outcome'] === 'failed') {
+            $state['failed']++;
+        }
+        $state['pos']++;
+    }
+    if ($state['pos'] >= $total || ($limit > 0 && $state['repaired'] >= $limit)) {
+        $state['phase'] = 'done';
+    }
+    $state['updated'] = time();
+}
+
+/** Embedding key for a bot, or WP_Error with the reason in plain words. */
+private function mxchat_reimport_api_key($bot_id) {
+    $bot_options = $this->get_bot_options($bot_id);
+    $options     = !empty($bot_options) ? $bot_options : get_option('mxchat_options');
+    $preflight   = MxChat_Utils::embedding_preflight($options);
+    if (!$preflight['ok']) {
+        return new WP_Error('embedding_config', $preflight['reason']);
+    }
+    return $preflight['api_key'];
+}
+
+/**
+ * WP-CLI: re-import knowledge entries that were damaged by an import defect
+ * fixed in a later release (HTML entities left in the text, currency signs,
+ * accents and other marks removed, joiner characters turned into spaces,
+ * right-to-left PDF text stored backwards).
+ *
+ * Each entry's text is rebuilt from its source with the current importer and
+ * compared with what is stored. An entry is rewritten and re-embedded only
+ * when the difference is one of those defects. An entry whose source has
+ * simply changed since it was imported is listed and left alone, and so is
+ * an entry whose source is gone. Nothing is ever deleted.
+ *
+ * ## OPTIONS
+ *
+ * [--dry-run]
+ * : List what would be rewritten, with the reason, without changing anything.
+ * No embedding request is made.
+ *
+ * [--source=<source>]
+ * : Which entries to check: all (default), upload, manual, or the start of an
+ * address (for example https://example.com/docs/).
+ *
+ * [--before=<date>]
+ * : Only entries last written before this date (YYYY-MM-DD). Default
+ * 2026-08-28, the release date of the last of these fixes.
+ *
+ * [--bot=<id>]
+ * : The bot whose knowledge base and embedding settings to use. Default: default.
+ *
+ * [--limit=<n>]
+ * : Rewrite at most this many entries, then stop.
+ *
+ * [--sleep=<ms>]
+ * : Pause this many milliseconds after each rewritten entry.
+ *
+ * [--yes]
+ * : Proceed when more than 25 entries need re-embedding (API cost gate).
+ *
+ * ## EXAMPLES
+ *
+ *     wp mxchat kb-reimport --dry-run
+ *     wp mxchat kb-reimport --source=https://example.com/docs/ --limit=50
+ *     wp mxchat kb-reimport --before=2026-10-01 --yes
+ */
+public function cli_kb_reimport($args, $assoc_args) {
+    $dry_run = !empty($assoc_args['dry-run']);
+    $yes     = !empty($assoc_args['yes']);
+    $limit   = isset($assoc_args['limit']) ? max(0, (int) $assoc_args['limit']) : 0;
+    $sleep   = isset($assoc_args['sleep']) ? max(0, (int) $assoc_args['sleep']) : 0;
+    if (isset($assoc_args['before']) && !preg_match('/^\d{4}-\d{2}-\d{2}$/', (string) $assoc_args['before'])) {
+        WP_CLI::error('--before takes a date as YYYY-MM-DD.');
+    }
+
+    $state = $this->mxchat_reimport_new_state(array(
+        'bot'    => isset($assoc_args['bot']) ? $assoc_args['bot'] : 'default',
+        'source' => isset($assoc_args['source']) ? $assoc_args['source'] : 'all',
+        'before' => isset($assoc_args['before']) ? $assoc_args['before'] : self::REIMPORT_DEFAULT_BEFORE,
+        'cap'    => 0,
+    ));
+    $stores = array('wordpress' => 'the WordPress database', 'pinecone' => 'Pinecone', 'documents' => 'a Pinecone document index');
+    WP_CLI::log(sprintf('Checking entries in %s last written before %s (source: %s).', $stores[$state['store']], $state['before'], $state['source']));
+
+    while (!$state['scan_done']) {
+        $this->mxchat_reimport_scan_step($state, microtime(true) + 20);
+    }
+    if ($state['error'] !== '') {
+        WP_CLI::error('The scan stopped: ' . $state['error'] . ' Nothing was changed.');
+    }
+
+    foreach ($state['notes'] as $note) {
+        WP_CLI::log(sprintf('%s  %s (%s)', $note['kind'] === 'changed' ? 'Left alone' : 'Skipped', $note['label'], $note['note']));
+    }
+    foreach ($state['candidates'] as $c) {
+        WP_CLI::log(sprintf('%s  %s (%s)', $dry_run ? 'Would rewrite' : 'Will rewrite', $c['label'], implode(', ', $c['reasons'])));
+    }
+    $count   = count($state['candidates']);
+    $summary = sprintf('%d checked: %d to rewrite, %d already correct, %d left alone (source changed), %d skipped.', $state['scanned'], $count, $state['unchanged'], $state['changed'], $state['skipped']);
+    if ($dry_run) {
+        WP_CLI::success('Dry run. ' . $summary . ' Nothing was changed.');
+        return;
+    }
+    if ($count === 0) {
+        WP_CLI::success($summary . ' Nothing to rewrite.');
+        return;
+    }
+    $planned = ($limit > 0) ? min($limit, $count) : $count;
+    if ($planned > 25 && !$yes) {
+        WP_CLI::error(sprintf('%d entries need re-embedding (more than 25). Re-run with --yes to confirm the API cost, or with --limit. Nothing was changed.', $planned));
+    }
+    $api_key = $this->mxchat_reimport_api_key($state['bot']);
+    if (is_wp_error($api_key)) {
+        WP_CLI::error('Embedding configuration problem: ' . $api_key->get_error_message());
+    }
+
+    $state['phase'] = 'apply';
+    $shown = 0;
+    while ($state['phase'] === 'apply') {
+        $this->mxchat_reimport_apply_step($state, microtime(true) + 20, $api_key, $sleep, $limit);
+        for (; $shown < $state['pos']; $shown++) {
+            $c = $state['candidates'][$shown];
+            if ($c['result'] === 'repaired') {
+                WP_CLI::log(sprintf('Rewritten  %s (%s)', $c['label'], implode(', ', $c['reasons'])));
+            } elseif ($c['result'] === 'failed') {
+                WP_CLI::warning(sprintf('Not rewritten  %s: %s. Entry left unchanged.', $c['label'], $c['note']));
+            } else {
+                WP_CLI::log(sprintf('No longer needed  %s', $c['label']));
+            }
+        }
+    }
+    $remaining = $count - $state['pos'];
+    WP_CLI::success(sprintf('Rewrote and re-embedded %d entr%s; %d failed%s. %s', $state['repaired'], $state['repaired'] === 1 ? 'y' : 'ies', $state['failed'], $remaining > 0 ? sprintf('; %d left for the next run', $remaining) : '', $summary));
+}
+
+/** What the Knowledge screen is shown of a state: counts, a capped list, no entry text. */
+private function mxchat_reimport_public_state(array $state) {
+    $list = array();
+    foreach (array_slice($state['candidates'], 0, 100) as $c) {
+        $list[] = array(
+            'label'   => $c['label'],
+            'reasons' => $c['reasons'],
+            'result'  => isset($c['result']) ? $c['result'] : '',
+            'note'    => isset($c['note']) ? $c['note'] : '',
+        );
+    }
+    return array(
+        'phase'     => $state['phase'],
+        'before'    => $state['before'],
+        'store'     => $state['store'],
+        'scanned'   => (int) $state['scanned'],
+        'to_repair' => count($state['candidates']),
+        'unchanged' => (int) $state['unchanged'],
+        'changed'   => (int) $state['changed'],
+        'skipped'   => (int) $state['skipped'],
+        'pos'       => (int) $state['pos'],
+        'repaired'  => (int) $state['repaired'],
+        'failed'    => (int) $state['failed'],
+        'error'     => (string) $state['error'],
+        'list'      => $list,
+        'notes'     => array_slice($state['notes'], 0, 100),
+    );
+}
+
+/**
+ * AJAX: the Knowledge screen's "Re-import affected entries" action, in
+ * resumable steps. op = scan (restart=1 begins a new scan), apply, cancel,
+ * status. A scan step and an apply step each run for a few seconds and save
+ * where they stopped, so a closed tab or a timeout loses nothing.
+ */
+public function ajax_mxchat_kb_reimport() {
+    check_ajax_referer('mxchat_kb_reimport', 'nonce');
+    if (!current_user_can('manage_options')) {
+        wp_send_json_error(array('message' => __('Permission denied.', 'mxchat')));
+    }
+    $op    = isset($_POST['op']) ? sanitize_key($_POST['op']) : 'status';
+    $state = get_option(self::REIMPORT_STATE_OPTION, array());
+    if (!is_array($state) || empty($state['phase'])) {
+        $state = array();
+    }
+
+    if ($op === 'cancel') {
+        delete_option(self::REIMPORT_STATE_OPTION);
+        wp_send_json_success(array('state' => array('phase' => 'idle')));
+    }
+    if ($op === 'status') {
+        wp_send_json_success(array('state' => empty($state) ? array('phase' => 'idle') : $this->mxchat_reimport_public_state($state)));
+    }
+
+    if ($op === 'scan') {
+        if (!empty($_POST['restart']) || empty($state) || $state['phase'] !== 'scan') {
+            $state = $this->mxchat_reimport_new_state(array(
+                'bot'    => isset($_POST['bot_id']) ? sanitize_key($_POST['bot_id']) : 'default',
+                'before' => isset($_POST['before']) ? sanitize_text_field(wp_unslash($_POST['before'])) : self::REIMPORT_DEFAULT_BEFORE,
+            ));
+        }
+        $this->mxchat_reimport_scan_step($state, microtime(true) + 8);
+        update_option(self::REIMPORT_STATE_OPTION, $state, false);
+        wp_send_json_success(array('state' => $this->mxchat_reimport_public_state($state)));
+    }
+
+    if ($op === 'apply') {
+        if (empty($state) || !in_array($state['phase'], array('scanned', 'apply'), true)) {
+            wp_send_json_error(array('message' => __('Check the knowledge base first.', 'mxchat')));
+        }
+        $api_key = $this->mxchat_reimport_api_key($state['bot']);
+        if (is_wp_error($api_key)) {
+            wp_send_json_error(array('message' => $api_key->get_error_message()));
+        }
+        $state['phase'] = 'apply';
+        $this->mxchat_reimport_apply_step($state, microtime(true) + 8, $api_key);
+        update_option(self::REIMPORT_STATE_OPTION, $state, false);
+        wp_send_json_success(array('state' => $this->mxchat_reimport_public_state($state)));
+    }
+
+    wp_send_json_error(array('message' => __('Unknown request.', 'mxchat')));
+}
+
 public function mxchat_handle_post_delete($post_id) {
     // Get post data before it's deleted
     $post = get_post($post_id);
@@ -7888,6 +8928,7 @@ public function mxchat_handle_pinecone_prompt_delete() {
         if (class_exists('MxChat_Vectorstore_Manager')) {
             MxChat_Vectorstore_Manager::sync_delete_by_key($vector_id, 'default');
         }
+        MxChat_Utils::forget_attachment_signature_by_key($vector_id, 'default');
         // No cache clearing needed since we removed caching
         set_transient('mxchat_admin_notice_success',
             esc_html__('Entry deleted successfully from Pinecone.', 'mxchat'),
@@ -7950,6 +8991,9 @@ public function ajax_mxchat_delete_pinecone_prompt() {
         if (class_exists('MxChat_Vectorstore_Manager')) {
             MxChat_Vectorstore_Manager::sync_delete_by_key($vector_id, $bot_id);
         }
+        // A media entry removed here must lose its auto-sync signature too,
+        // or the file is skipped as "unchanged" on every later save (b0ae54).
+        MxChat_Utils::forget_attachment_signature_by_key($vector_id, $bot_id);
         // No cache clearing needed since we removed caching
         wp_send_json_success(array(
             'message' => 'Entry deleted successfully from Pinecone',
@@ -7980,7 +9024,10 @@ public function ajax_mxchat_delete_chunks_by_url() {
         exit;
     }
 
-    $source_url = isset($_POST['source_url']) ? esc_url_raw($_POST['source_url']) : '';
+    // Identity-preserving (plan dcc19d): esc_url_raw() empties upload:// and
+    // mxchat:// identities, so a chunked uploaded file or manual entry could
+    // not be deleted from its group row ("Missing source URL").
+    $source_url = $this->sanitize_entry_source_url(isset($_POST['source_url']) ? wp_unslash($_POST['source_url']) : '');
     $data_source = isset($_POST['data_source']) ? sanitize_text_field($_POST['data_source']) : 'wordpress';
     $bot_id = isset($_POST['bot_id']) ? sanitize_text_field($_POST['bot_id']) : 'default';
 
@@ -8021,6 +9068,7 @@ public function ajax_mxchat_delete_chunks_by_url() {
             if (class_exists('MxChat_Vectorstore_Manager')) {
                 MxChat_Vectorstore_Manager::sync_delete_entry($source_url, $bot_id);
             }
+            MxChat_Utils::forget_attachment_signature($source_url, $bot_id);
             wp_send_json_success(array(
                 'message' => 'All chunks deleted successfully from Pinecone',
                 'source_url' => $source_url,
@@ -8076,6 +9124,7 @@ public function ajax_mxchat_delete_chunks_by_url() {
             if (class_exists('MxChat_Vectorstore_Manager')) {
                 MxChat_Vectorstore_Manager::sync_delete_entry($source_url, $bot_id);
             }
+            MxChat_Utils::forget_attachment_signature($source_url, $bot_id);
             wp_send_json_success(array(
                 'message' => 'No vectors found to delete',
                 'source_url' => $source_url
@@ -8122,6 +9171,7 @@ public function ajax_mxchat_delete_chunks_by_url() {
         if (class_exists('MxChat_Vectorstore_Manager')) {
             MxChat_Vectorstore_Manager::sync_delete_entry($source_url, $bot_id);
         }
+        MxChat_Utils::forget_attachment_signature($source_url, $bot_id);
 
         wp_send_json_success(array(
             'message' => 'All chunks deleted successfully from Pinecone',
@@ -8150,6 +9200,8 @@ public function ajax_mxchat_delete_chunks_by_url() {
         if (class_exists('MxChat_Vectorstore_Manager')) {
             MxChat_Vectorstore_Manager::sync_delete_entry($source_url, $bot_id);
         }
+        // The delete above removed every bot's rows for this URL.
+        MxChat_Utils::forget_attachment_signature($source_url, 'default');
 
         wp_send_json_success(array(
             'message' => 'All chunks deleted successfully from database',
@@ -8208,15 +9260,21 @@ public function ajax_mxchat_delete_wordpress_prompt() {
         // Mirror to the Vector Store: if sibling rows remain (this was one
         // chunk of a larger entry) the entry's file is REFRESHED from what's
         // left; if none remain, the file is removed.
-        if (!empty($source_url) && class_exists('MxChat_Vectorstore_Manager')) {
+        if (!empty($source_url)) {
             $remaining = (int) $wpdb->get_var($wpdb->prepare(
                 "SELECT COUNT(*) FROM {$table_name} WHERE source_url = %s",
                 $source_url
             ));
-            if ($remaining > 0) {
-                MxChat_Vectorstore_Manager::sync_upsert_entry($source_url, '', 'default');
-            } else {
-                MxChat_Vectorstore_Manager::sync_delete_entry($source_url, 'default');
+            if (class_exists('MxChat_Vectorstore_Manager')) {
+                if ($remaining > 0) {
+                    MxChat_Vectorstore_Manager::sync_upsert_entry($source_url, '', 'default');
+                } else {
+                    MxChat_Vectorstore_Manager::sync_delete_entry($source_url, 'default');
+                }
+            }
+            // Last row of a media entry gone: drop its auto-sync signature (b0ae54).
+            if ($remaining === 0) {
+                MxChat_Utils::forget_attachment_signature($source_url, 'default');
             }
         }
 
@@ -8419,6 +9477,15 @@ public function ajax_mxchat_bulk_delete_knowledge() {
                 MxChat_Vectorstore_Manager::sync_delete_by_key($vs_key, $bot_id);
             }
         }
+        // Media entries removed here lose their auto-sync signature (b0ae54).
+        if ($pinecone_success) {
+            foreach (array_unique($vs_mirror_urls) as $vs_url) {
+                MxChat_Utils::forget_attachment_signature($vs_url, $bot_id);
+            }
+            foreach (array_unique($vs_mirror_keys) as $vs_key) {
+                MxChat_Utils::forget_attachment_signature_by_key($vs_key, $bot_id);
+            }
+        }
     }
 
     // =============================================
@@ -8459,15 +9526,20 @@ public function ajax_mxchat_bulk_delete_knowledge() {
                 $success_ids[] = $entry_id;
                 // Mirror to the Vector Store: refresh the entry's file when
                 // sibling chunk rows survive, remove it when none do.
-                if (!empty($row_url) && class_exists('MxChat_Vectorstore_Manager')) {
+                if (!empty($row_url)) {
                     $remaining = (int) $wpdb->get_var($wpdb->prepare(
                         "SELECT COUNT(*) FROM {$table_name} WHERE source_url = %s",
                         $row_url
                     ));
-                    if ($remaining > 0) {
-                        MxChat_Vectorstore_Manager::sync_upsert_entry($row_url, '', $bot_id);
-                    } else {
-                        MxChat_Vectorstore_Manager::sync_delete_entry($row_url, $bot_id);
+                    if (class_exists('MxChat_Vectorstore_Manager')) {
+                        if ($remaining > 0) {
+                            MxChat_Vectorstore_Manager::sync_upsert_entry($row_url, '', $bot_id);
+                        } else {
+                            MxChat_Vectorstore_Manager::sync_delete_entry($row_url, $bot_id);
+                        }
+                    }
+                    if ($remaining === 0) {
+                        MxChat_Utils::forget_attachment_signature($row_url, 'default');
                     }
                 }
             } else {
@@ -9964,7 +11036,7 @@ private function mxchat_process_pdf_url_inline($pdf_url, $response, $api_key, $b
             );
 
             $content_with_metadata = wp_json_encode($metadata) . "\n---\n" . $sanitized;
-            $page_url = esc_url($pdf_url . '#page=' . $page_num);
+            $page_url = MxChat_Utils::pdf_page_identity($pdf_url, $page_num);
 
             MxChat_Utils::submit_content_to_db(
                 $content_with_metadata,
@@ -10089,7 +11161,7 @@ private function mxchat_process_queue_pdf_page($item_data, $bot_id = 'default') 
         );
         
         $content_with_metadata = wp_json_encode($metadata) . "\n---\n" . $sanitized;
-        $page_url = esc_url($pdf_url . "#page=" . $page_number);
+        $page_url = MxChat_Utils::pdf_page_identity($pdf_url, $page_number);
         
         // Get bot-specific embedding decision — custom-provider-aware
         // (plan cbd5fd). Error code preserved.

@@ -9773,6 +9773,34 @@ public function mxchat_live_agent_bot_token_callback() {
     );
     echo '<button type="button" id="toggleBotTokenVisibility">' . esc_html__('Show', 'mxchat') . '</button>';
     echo '<p class="description">' . esc_html__('Your Slack Bot OAuth Token (starts with xoxb-). Keep this secure.', 'mxchat') . '</p>';
+
+    // Surface the last live-agent post Slack refused (plan 2a4ab7). Slack
+    // answers a refused post with HTTP 200, so before this existed a deleted
+    // or archived channel or a revoked token failed with no trace anywhere.
+    // The next successful post clears it.
+    $slack_error = get_option('mxchat_slack_last_error');
+    if (is_array($slack_error) && !empty($slack_error['error'])) {
+        $slack_error_time = !empty($slack_error['time'])
+            ? wp_date(get_option('date_format') . ' ' . get_option('time_format'), (int) $slack_error['time'])
+            : __('unknown time', 'mxchat');
+        if (!empty($slack_error['channel'])) {
+            $slack_error_text = sprintf(
+                /* translators: 1: Slack API error code, 2: Slack channel ID, 3: local date and time of the failure */
+                __('Slack said "%1$s" for channel %2$s (%3$s). The visitor was told the message could not be delivered. Check that the channel still exists and is not archived, that the bot is in it, and that the token above is still valid.', 'mxchat'),
+                $slack_error['error'],
+                $slack_error['channel'],
+                $slack_error_time
+            );
+        } else {
+            $slack_error_text = sprintf(
+                /* translators: 1: Slack API error code, 2: local date and time of the failure */
+                __('Slack said "%1$s" (%2$s). The visitor was told the message could not be delivered. Check that the token above is still valid.', 'mxchat'),
+                $slack_error['error'],
+                $slack_error_time
+            );
+        }
+        echo '<p class="description"><strong>' . esc_html__('⚠ Last delivery error', 'mxchat') . '</strong> — ' . esc_html($slack_error_text) . '</p>';
+    }
 }
 
 public function mxchat_live_agent_user_ids_callback() {
@@ -10211,6 +10239,56 @@ private function enqueue_page_specific_assets($current_page, $plugin_url, $versi
             wp_enqueue_script('mxchat-content-selector-js', $plugin_url . 'js/content-selector.js', array('jquery'), $version, true);
             //  Add the knowledge processing script (common script needed for WordPress dismiss functionality)
             wp_enqueue_script('mxchat-knowledge-processing', $plugin_url . 'js/knowledge-processing.js', array('jquery', 'common'), $version, true);
+            // "Re-import affected entries" card (plan 89739b)
+            wp_enqueue_script('mxchat-kb-reimport', $plugin_url . 'js/knowledge-reimport.js', array(), $version, true);
+            wp_localize_script('mxchat-kb-reimport', 'mxchatKbReimport', array(
+                'ajaxUrl'          => admin_url('admin-ajax.php'),
+                'requestFailed'    => __('The request did not go through. Nothing is lost: try again.', 'mxchat'),
+                /* translators: %s: number of entries checked so far */
+                'checking'         => __('Checking, %s entries so far', 'mxchat'),
+                /* translators: 1: entries rewritten so far, 2: entries to rewrite */
+                'rewriting'        => __('Rewriting, %1$s of %2$s', 'mxchat'),
+                /* translators: %s: number of entries */
+                'countRepair'      => __('%s to rewrite', 'mxchat'),
+                /* translators: %s: number of entries */
+                'countCorrect'     => __('%s already correct', 'mxchat'),
+                /* translators: %s: number of entries */
+                'countChanged'     => __('%s left alone', 'mxchat'),
+                /* translators: %s: number of entries */
+                'countSkipped'     => __('%s skipped', 'mxchat'),
+                /* translators: %s: number of entries */
+                'countRewritten'   => __('%s rewritten', 'mxchat'),
+                /* translators: %s: number of entries */
+                'countFailed'      => __('%s not rewritten', 'mxchat'),
+                /* translators: %s: number of further entries not shown in the list */
+                'andMore'          => __('and %s more', 'mxchat'),
+                /* translators: %s: number of entries */
+                'othersTitle'      => __('Left alone or skipped (%s)', 'mxchat'),
+                'leftAlone'        => __('Left alone', 'mxchat'),
+                'skipped'          => __('Skipped', 'mxchat'),
+                'rewritten'        => __('Rewritten', 'mxchat'),
+                'notRewritten'     => __('Not rewritten', 'mxchat'),
+                'noLongerNeeded'   => __('No longer needed', 'mxchat'),
+                /* translators: %s: number of entries */
+                'apply'            => __('Rewrite %s entries', 'mxchat'),
+                /* translators: %s: number of entries still to rewrite */
+                'resume'           => __('Continue, %s left', 'mxchat'),
+                /* translators: %s: number of entries */
+                'done'             => __('%s entries rewritten and embedded again.', 'mxchat'),
+                /* translators: 1: entries rewritten, 2: entries that could not be rewritten */
+                'doneWithFailures' => __('%1$s entries rewritten. %2$s could not be rewritten and were left as they were.', 'mxchat'),
+                'nothingToDo'      => __('Every entry checked is already correct. Nothing to rewrite.', 'mxchat'),
+                /* translators: %s: the reason the check stopped */
+                'scanStopped'      => __('The check stopped early: %s', 'mxchat'),
+                'reasons'          => array(
+                    'entities'        => __('HTML character codes', 'mxchat'),
+                    'currency'        => __('Currency signs', 'mxchat'),
+                    'combining marks' => __('Accents and marks', 'mxchat'),
+                    'symbols'         => __('Symbols', 'mxchat'),
+                    'joiners'         => __('Joined letters', 'mxchat'),
+                    'RTL'             => __('Right-to-left order', 'mxchat'),
+                ),
+            ));
             // Per-entry "View indexed content" inspector (plan-d8cb4b) reuses the
             // Testing tab's match-card / chunk-detail components, which are scoped
             // under .mxch-testing-results. Load that stylesheet here so the inspector
@@ -11540,6 +11618,12 @@ public function mxchat_handle_delete_all_prompts() {
         }
     }
 
+    // Every media entry in scope is gone: their auto-sync signatures go too,
+    // or each file is skipped as "unchanged" on its next save (b0ae54).
+    if ($success && (empty($content_type_filter) || $content_type_filter === 'attachment')) {
+        MxChat_Utils::forget_all_attachment_signatures($bot_id);
+    }
+
     // Redirect back with a success message and bot_id
     $redirect_url = add_query_arg(array(
         'page' => 'mxchat-prompts',
@@ -11695,6 +11779,15 @@ public function mxchat_handle_delete_all_prompts() {
          //error_log('[MXCHAT-EMBED] Text preview: ' . substr($text, 0, 100) . '...');
 
          $options = get_option('mxchat_options');
+
+         // Custom Provider embeddings first, as the chat and the knowledge
+         // importers do (plan 418afd): a phrase embedded with another model
+         // can never match a question embedded with the custom one. Returns
+         // the vector, or the error string this function returns on failure.
+         if (is_array($options) && isset($options['custom_provider_for_embeddings']) && $options['custom_provider_for_embeddings'] === 'on') {
+             return MxChat_Utils::generate_embedding_custom($text, $options);
+         }
+
          $selected_model = $options['embedding_model'] ?? 'text-embedding-ada-002';
          //error_log('[MXCHAT-EMBED] Selected embedding model: ' . $selected_model);
 

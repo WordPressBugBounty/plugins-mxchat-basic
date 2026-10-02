@@ -285,6 +285,15 @@ private function mxchat_semantic_search_pinecone($pinecone_options, $search_quer
  */
 private function mxchat_get_search_embedding($search_query) {
     $options = get_option('mxchat_options', array());
+
+    // Custom Provider embeddings first, as everywhere else (plan 418afd): the
+    // records were embedded with the custom model, so the query must be too.
+    // A failure returns null, which sends the caller to its text search.
+    if (isset($options['custom_provider_for_embeddings']) && $options['custom_provider_for_embeddings'] === 'on') {
+        $custom = MxChat_Utils::generate_embedding_custom($search_query, $options);
+        return is_array($custom) ? $custom : null;
+    }
+
     $embedding_model = $options['embedding_model'] ?? 'text-embedding-ada-002';
 
     // Determine which API to use based on model
@@ -985,34 +994,16 @@ private function mxchat_get_recent_entries_safe($pinecone_options, $bot_id = 'de
      * ADD THIS NEW FUNCTION
      */
     private function mxchat_get_embedding_dimensions() {
+        // One answer for every caller (plan 418afd): the size of the model the
+        // site really embeds with, Custom Provider included. If a custom
+        // model cannot be asked, the dropdown's number is the old behaviour
+        // and still better than no listing at all.
         $options = get_option('mxchat_options', array());
-        $selected_model = $options['embedding_model'] ?? 'text-embedding-ada-002';
-        
-        // Define dimensions for different models
-        $model_dimensions = array(
-            'text-embedding-ada-002' => 1536,
-            'text-embedding-3-small' => 1536,
-            'text-embedding-3-large' => 3072,
-            'voyage-2' => 1024,
-            'voyage-large-2' => 1536,
-            'voyage-3-large' => 2048,
-            'gemini-embedding-001' => 1536,
-        );
-        
-        // Check if it's a voyage model with custom dimensions
-        if (strpos($selected_model, 'voyage-3-large') === 0) {
-            $custom_dimensions = $options['voyage_output_dimension'] ?? 2048;
-            return intval($custom_dimensions);
+        $dimension = MxChat_Utils::expected_embedding_dimension($options);
+        if (!is_wp_error($dimension) && (int) $dimension > 0) {
+            return (int) $dimension;
         }
-        
-        // Check if it's a gemini model with custom dimensions
-        if (strpos($selected_model, 'gemini-embedding') === 0) {
-            $custom_dimensions = $options['gemini_output_dimension'] ?? 1536;
-            return intval($custom_dimensions);
-        }
-        
-        // Return known dimensions or default to 1536
-        return $model_dimensions[$selected_model] ?? 1536;
+        return MxChat_Utils::standard_embedding_dimension($options);
     }
 
     /**

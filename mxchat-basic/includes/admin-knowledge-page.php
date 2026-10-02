@@ -284,6 +284,25 @@ function mxchat_render_knowledge_page($admin_instance, $knowledge_manager, $page
 }
 
 /**
+ * Whether the selected bot answers from the WordPress database (plan 1f39d9).
+ * That store is one table every bot reads. A bot has knowledge of its own only
+ * on Pinecone (its own host or namespace) or an OpenAI Vector Store, so the
+ * selector must not promise a per-bot knowledge base here.
+ */
+function mxchat_knowledge_bot_uses_shared_database($bot_id) {
+    $pinecone = class_exists('MxChat_Pinecone_Documents') ? MxChat_Pinecone_Documents::config($bot_id) : array();
+    if (!empty($pinecone['use_pinecone'])) {
+        return false;
+    }
+    $vectorstore_options = get_option('mxchat_openai_vectorstore_options', array());
+    $vectorstore = apply_filters('mxchat_get_bot_vectorstore_config', array(
+        'use_vectorstore' => (is_array($vectorstore_options) ? ($vectorstore_options['mxchat_use_openai_vectorstore'] ?? '0') : '0') === '1',
+        'vectorstore_ids' => is_array($vectorstore_options) ? ($vectorstore_options['mxchat_vectorstore_ids'] ?? '') : '',
+    ), $bot_id);
+    return empty($vectorstore['use_vectorstore']);
+}
+
+/**
  * Render Multi-Bot Selector
  */
 function mxchat_render_knowledge_bot_selector($multibot_active, $current_bot_id) {
@@ -308,7 +327,13 @@ function mxchat_render_knowledge_bot_selector($multibot_active, $current_bot_id)
                     <?php endforeach; ?>
                 </select>
                 <span style="color: var(--mxch-text-secondary); font-size: 13px;">
-                    <?php esc_html_e('Content will be added to the selected bot\'s knowledge base', 'mxchat'); ?>
+                    <?php
+                    if (mxchat_knowledge_bot_uses_shared_database($current_bot_id)) {
+                        esc_html_e('This bot answers from the WordPress database, which is shared with all bots: content added here is available to every bot that uses it. A bot gets a knowledge base of its own on Pinecone (its own host or namespace) or an OpenAI Vector Store.', 'mxchat');
+                    } else {
+                        esc_html_e('Content will be added to the selected bot\'s knowledge base', 'mxchat');
+                    }
+                    ?>
                 </span>
                 <span id="mxchat-bot-save-status" style="display: none; color: var(--mxch-success); font-size: 13px;">
                     ✓ <?php esc_html_e('Saved', 'mxchat'); ?>
@@ -440,6 +465,18 @@ function mxchat_render_import_options_section($admin_instance, $knowledge_manage
     } elseif (strpos($embedding_model, 'gemini-embedding-') !== false) {
         $required_key_type = 'Google Gemini';
     }
+
+    // Custom Provider embeddings (plan 418afd): the dropdown above is disabled
+    // on such a site and no OpenAI, Voyage or Gemini key is needed. Ask the
+    // same pre-flight the importers ask, so this notice cannot disagree with them.
+    $embeds_with_custom_provider = is_array($options) && isset($options['custom_provider_for_embeddings']) && $options['custom_provider_for_embeddings'] === 'on';
+    $custom_embedding_blocker = '';
+    if ($embeds_with_custom_provider) {
+        $custom_preflight         = MxChat_Utils::embedding_preflight($options);
+        $has_required_key         = !empty($custom_preflight['ok']);
+        $required_key_type        = 'Custom Provider';
+        $custom_embedding_blocker = (string) ($custom_preflight['reason'] ?? '');
+    }
     ?>
     <div id="import-options" class="mxch-section active">
         <div class="mxch-content-header">
@@ -457,7 +494,16 @@ function mxchat_render_import_options_section($admin_instance, $knowledge_manage
                 <?php endif; ?>
             </svg>
             <div>
-                <?php if ($has_required_key): ?>
+                <?php if ($embeds_with_custom_provider && $has_required_key): ?>
+                    <?php
+                    /* translators: %s: the embedding model name configured on the Custom Provider */
+                    printf(esc_html__('Knowledge is embedded through your Custom Provider (model: %s). No OpenAI, Voyage AI or Google Gemini key is needed for imports.', 'mxchat'), esc_html(MxChat_Utils::resolve_custom_embedding_model($options)));
+                    ?>
+                <?php elseif ($embeds_with_custom_provider): ?>
+                    <strong><?php esc_html_e('Important:', 'mxchat'); ?></strong>
+                    <?php echo esc_html($custom_embedding_blocker); ?>
+                    <a href="<?php echo admin_url('admin.php?page=mxchat-max#api-keys'); ?>"><?php esc_html_e('Go to API Key Settings', 'mxchat'); ?></a>
+                <?php elseif ($has_required_key): ?>
                     <?php echo wp_kses_post(sprintf(__('We detected your %s API key. <strong>Remember to add credits to your %s account</strong> before using the knowledgebase.', 'mxchat'), $required_key_type, $required_key_type)); ?>
                 <?php else: ?>
                     <strong><?php esc_html_e('Important:', 'mxchat'); ?></strong>
@@ -676,6 +722,12 @@ function mxchat_render_import_options_section($admin_instance, $knowledge_manage
                         <p class="mxch-field-description">
                             <?php esc_html_e('Select a PDF file from your computer to import into the knowledge base. Maximum file size depends on your server settings.', 'mxchat'); ?>
                         </p>
+                        <div class="mxch-field">
+                            <input type="url" name="source_page_url" id="mxchat-pdf-source-url" class="mxch-input" placeholder="<?php esc_attr_e('Enter source URL (Optional)', 'mxchat'); ?>">
+                            <p class="mxch-field-description">
+                                <?php esc_html_e('The page this PDF lives on. Answers drawn from it link to that page. Leave empty and answers name the file and page without a link.', 'mxchat'); ?>
+                            </p>
+                        </div>
                         <button type="submit" name="submit_pdf_file" class="mxch-btn mxch-btn-primary">
                             <?php esc_html_e('Import PDF', 'mxchat'); ?>
                         </button>
@@ -694,6 +746,12 @@ function mxchat_render_import_options_section($admin_instance, $knowledge_manage
                         <p class="mxch-field-description">
                             <?php esc_html_e('Select a .docx, .txt, or .md file to import into the knowledge base. The text is extracted and indexed; the file itself is not stored. Re-uploading a file with the same name replaces its previous content.', 'mxchat'); ?>
                         </p>
+                        <div class="mxch-field">
+                            <input type="url" name="source_page_url" id="mxchat-document-source-url" class="mxch-input" placeholder="<?php esc_attr_e('Enter source URL (Optional)', 'mxchat'); ?>">
+                            <p class="mxch-field-description">
+                                <?php esc_html_e('The page this document lives on. Answers drawn from it link to that page. Leave empty and answers name the file without a link.', 'mxchat'); ?>
+                            </p>
+                        </div>
                         <button type="submit" name="submit_document_file" class="mxch-btn mxch-btn-primary">
                             <?php esc_html_e('Import Document', 'mxchat'); ?>
                         </button>
@@ -1330,6 +1388,78 @@ function mxchat_render_knowledge_base_section($admin_instance, $knowledge_manage
                 </div>
             </div>
         </div>
+
+        <?php mxchat_render_kb_reimport_card(!empty($current_bot_id) ? $current_bot_id : 'default'); ?>
+    </div>
+    <?php
+}
+
+/**
+ * "Re-import affected entries" card (plan 89739b).
+ *
+ * The owner-facing side of wp mxchat kb-reimport: check first (no embedding
+ * request, nothing written), read the list, then confirm. Both halves run in
+ * resumable steps through the mxchat_kb_reimport AJAX action; the script is
+ * js/knowledge-reimport.js. Everything dynamic is drawn there; this is the
+ * resting markup.
+ */
+function mxchat_render_kb_reimport_card($current_bot_id = 'default') {
+    if (!class_exists('MxChat_Knowledge_Manager')) {
+        return;
+    }
+    ?>
+    <div class="mxch-card mxch-kb-reimport" id="mxchat-kb-reimport"
+         data-nonce="<?php echo esc_attr(wp_create_nonce('mxchat_kb_reimport')); ?>"
+         data-bot="<?php echo esc_attr($current_bot_id); ?>">
+        <div class="mxch-card-header">
+            <h3 class="mxch-card-title">
+                <svg class="mxch-card-title-icon" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+                <?php esc_html_e('Re-import affected entries', 'mxchat'); ?>
+            </h3>
+        </div>
+        <div class="mxch-card-body">
+            <p class="mxch-field-description"><?php esc_html_e('Earlier versions stored some imported text incorrectly: currency signs and accents were dropped, HTML character codes were left in, and right-to-left PDF text was saved backwards. This finds the entries that still hold that text and rebuilds them from their source. Checking changes nothing.', 'mxchat'); ?></p>
+
+            <div class="mxch-kb-reimport-controls">
+                <div class="mxch-field">
+                    <label class="mxch-field-label" for="mxchat-kb-reimport-before"><?php esc_html_e('Entries last written before', 'mxchat'); ?></label>
+                    <input type="date" id="mxchat-kb-reimport-before" class="mxch-input mxch-input-sm" value="<?php echo esc_attr(MxChat_Knowledge_Manager::REIMPORT_DEFAULT_BEFORE); ?>" max="<?php echo esc_attr(gmdate('Y-m-d', time() + DAY_IN_SECONDS)); ?>" />
+                </div>
+                <button type="button" class="mxch-btn mxch-btn-secondary" id="mxchat-kb-reimport-check"><?php esc_html_e('Check knowledge base', 'mxchat'); ?></button>
+            </div>
+            <p class="mxch-field-hint"><?php esc_html_e('The date is the release that carried the last of these fixes. Choose a later one if this site was updated after that.', 'mxchat'); ?></p>
+
+            <div class="mxch-kb-reimport-progress" hidden>
+                <div class="mxch-progress-bar" hidden><div class="mxch-progress-bar-fill"></div></div>
+                <p class="mxch-progress-label" aria-live="polite"></p>
+            </div>
+
+            <div class="mxch-notice mxch-notice-error mxch-kb-reimport-error" role="alert" hidden>
+                <svg class="mxch-notice-icon" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+                <span></span>
+            </div>
+
+            <div class="mxch-kb-reimport-results" hidden>
+                <div class="mxch-notice mxch-notice-success mxch-kb-reimport-done" hidden>
+                    <svg class="mxch-notice-icon" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+                    <span></span>
+                </div>
+                <div class="mxch-kb-reimport-counts"></div>
+                <ul class="mxch-kb-reimport-list mxch-kb-reimport-entries" hidden></ul>
+                <p class="mxch-field-hint mxch-kb-reimport-more" hidden></p>
+                <details class="mxch-disclosure mxch-kb-reimport-others" hidden>
+                    <summary class="mxch-disclosure-summary"><span class="mxch-disclosure-summary-text"></span><span class="mxch-disclosure-summary-hint"><?php esc_html_e('Never changed or removed by this tool', 'mxchat'); ?></span></summary>
+                    <div class="mxch-disclosure-body">
+                        <ul class="mxch-kb-reimport-list mxch-kb-reimport-notes"></ul>
+                    </div>
+                </details>
+            </div>
+        </div>
+        <div class="mxch-card-footer mxch-kb-reimport-footer" hidden>
+            <button type="button" class="mxch-btn mxch-btn-primary" id="mxchat-kb-reimport-apply"></button>
+            <button type="button" class="mxch-btn mxch-btn-ghost" id="mxchat-kb-reimport-clear"><?php esc_html_e('Clear', 'mxchat'); ?></button>
+            <span class="mxch-field-hint mxch-kb-reimport-cost"><?php esc_html_e('Each rewritten entry is embedded again with your embedding provider.', 'mxchat'); ?></span>
+        </div>
     </div>
     <?php
 }
@@ -1889,6 +2019,10 @@ function mxchat_render_pinecone_section() {
                         <script type="application/json" id="mxchat-pinecone-docs-state"><?php echo wp_json_encode(array(
                             'verified_host' => $pc_verified,
                             'expected_dimension' => (int) $pc_expected_dim,
+                            // 47c61f: the status notice's two texts, so the page can
+                            // keep it in step with the host typed in the field.
+                            'status_checked'   => __('Document index checked: %1$s (%2$d dimensions).', 'mxchat'),
+                            'status_unchecked' => __('Not checked yet. Create a document index below, or enter its host above and click Check index. The index type only saves once the host has been checked.', 'mxchat'),
                             'migration' => $pc_migration,
                             // 3e83e4: what the LIVE chatbot is on right now, so the
                             // page can tell a copy-in-progress from a switch.

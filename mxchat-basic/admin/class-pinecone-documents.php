@@ -736,22 +736,31 @@ class MxChat_Pinecone_Documents {
      */
     private static function code_runs($text) {
         $runs = array();
+        $text = (string) $text;
         $pattern = '/(?<![A-Za-z0-9])([A-Za-z0-9]+(?:[.\-][A-Za-z0-9]+)*)((?:[ .\-]\d{2,6}(?![A-Za-z0-9])){1,3})?(?![A-Za-z0-9])/u';
-        if (!preg_match_all($pattern, (string) $text, $m, PREG_SET_ORDER)) {
-            return $runs;
-        }
-        foreach ($m as $match) {
-            $head = rtrim($match[1], '.');
-            if (strlen($head) < self::CODE_MIN_LEN || !preg_match('/\d/', $head)) {
+        $offset = 0;
+        $length = strlen($text);
+        // 0d7bd4: walked one match at a time. Only a head that IS a code keeps
+        // its trailing digit groups; a plain word ("part 4471-AB-12") used to
+        // take "4471" as its tail and the digit-led number was never stored.
+        while ($offset < $length && preg_match($pattern, $text, $match, PREG_OFFSET_CAPTURE, $offset)) {
+            $head     = rtrim($match[1][0], '.');
+            $head_end = $match[1][1] + strlen($match[1][0]);
+            $is_code  = strlen($head) >= self::CODE_MIN_LEN && preg_match('/\d/', $head);
+            if ($is_code) {
+                $has_letter = (bool) preg_match('/[A-Za-z]/', $head);
+                $separators = preg_match_all('/[.\-]/', $head);
+                if (!$has_letter && $separators < 2) {
+                    $is_code = false; // 2024, 26.5, 10-20
+                }
+            }
+            if (!$is_code) {
+                $offset = $head_end;
                 continue;
             }
-            $has_letter = (bool) preg_match('/[A-Za-z]/', $head);
-            $separators = preg_match_all('/[.\-]/', $head);
-            if (!$has_letter && $separators < 2) {
-                continue; // 2024, 26.5, 10-20
-            }
-            $tail = isset($match[2]) ? $match[2] : '';
+            $tail   = isset($match[2]) && $match[2][1] >= 0 ? $match[2][0] : '';
             $runs[] = array($head, $head . $tail);
+            $offset = $match[0][1] + strlen($match[0][0]);
         }
         return $runs;
     }
@@ -781,7 +790,9 @@ class MxChat_Pinecone_Documents {
                 break;
             }
         }
-        return array_slice(array_keys($codes), 0, self::CODES_MAX);
+        // 0d7bd4: strval — PHP turns an all-digit array key into an int, and
+        // Pinecone refuses a list that mixes strings and numbers.
+        return array_slice(array_map('strval', array_keys($codes)), 0, self::CODES_MAX);
     }
 
     /**
@@ -810,7 +821,7 @@ class MxChat_Pinecone_Documents {
                 break;
             }
         }
-        return array_slice(array_keys($codes), 0, 200);
+        return array_slice(array_map('strval', array_keys($codes)), 0, 200);
     }
 
     /**
@@ -1090,25 +1101,51 @@ class MxChat_Pinecone_Documents {
 
     /** Dimension of the active embedding model (same table the KB screen uses). */
     public static function expected_dimension() {
+        $dimension = self::expected_dimension_checked();
+        return is_wp_error($dimension) ? 0 : (int) $dimension;
+    }
+
+    /**
+     * 418afd: the dimension the site's embeddings really have, or why it is
+     * not known. A Custom Provider embedding model is asked for its size
+     * (MxChat_Utils::expected_embedding_dimension()); the standard dropdown is
+     * disabled on such a site and used to size the index anyway. The filter
+     * still has the last word, and can supply a number when the model could
+     * not be asked.
+     *
+     * @param bool $force Ask a custom model again even after a recent failure (the card's buttons).
+     * @return int|WP_Error
+     */
+    public static function expected_dimension_checked($force = false) {
         $options = get_option('mxchat_options', array());
-        $selected_model = $options['embedding_model'] ?? 'text-embedding-ada-002';
-        $model_dimensions = array(
-            'text-embedding-ada-002' => 1536,
-            'text-embedding-3-small' => 1536,
-            'text-embedding-3-large' => 3072,
-            'voyage-2'               => 1024,
-            'voyage-large-2'         => 1536,
-            'voyage-3-large'         => 2048,
-            'gemini-embedding-001'   => 1536,
+        $options = is_array($options) ? $options : array();
+        $custom  = isset($options['custom_provider_for_embeddings']) && $options['custom_provider_for_embeddings'] === 'on';
+        $selected_model = $custom
+            ? MxChat_Utils::get_selected_embedding_model($options)
+            : ($options['embedding_model'] ?? 'text-embedding-ada-002');
+        $dimension = MxChat_Utils::expected_embedding_dimension($options, $force);
+        if (is_wp_error($dimension)) {
+            $supplied = (int) apply_filters('mxchat_pinecone_expected_dimension', 0, $selected_model);
+            return $supplied > 0 ? $supplied : $dimension;
+        }
+        if (!$custom && (strpos($selected_model, 'voyage-3-large') === 0 || strpos($selected_model, 'gemini-embedding') === 0)) {
+            return (int) $dimension; // adjustable-size models: the owner's own setting, never filtered (as before)
+        }
+        return (int) apply_filters('mxchat_pinecone_expected_dimension', $dimension, $selected_model);
+    }
+
+    /** Plain-language refusal for the card when a custom model's size is unknown. (Plain __(): the card's JS text-escapes it.) */
+    public static function dimension_unknown_message(WP_Error $error, $action) {
+        $reason = trim($error->get_error_message());
+        $tail = $action === 'create'
+            ? __('The index was not created.', 'mxchat')
+            : __('The index was not checked.', 'mxchat');
+        return sprintf(
+            /* translators: 1: the error the embedding endpoint returned, 2: what did not happen */
+            __('Could not determine the dimension of your Custom Provider embedding model (%1$s). %2$s Check the Custom Provider embedding settings, then try again.', 'mxchat'),
+            $reason !== '' ? $reason : __('no answer from the embedding endpoint', 'mxchat'),
+            $tail
         );
-        if (strpos($selected_model, 'voyage-3-large') === 0) {
-            return intval($options['voyage_output_dimension'] ?? 2048);
-        }
-        if (strpos($selected_model, 'gemini-embedding') === 0) {
-            return intval($options['gemini_output_dimension'] ?? 1536);
-        }
-        $dimension = apply_filters('mxchat_pinecone_expected_dimension', $model_dimensions[$selected_model] ?? 1536, $selected_model);
-        return (int) $dimension;
     }
 
     // =====================================================================
@@ -1498,9 +1535,11 @@ class MxChat_Pinecone_Documents {
                 $total = 0;
             }
             $per_namespace[self::ns_key($namespace)] = self::new_namespace_entry($namespace, $total, 'running');
-            foreach ($ns_counts as $ns_name => $ns_count) {
-                if ($ns_name !== $namespace && $ns_count > 0) {
-                    $other_namespaces[self::ns_key($ns_name)] = $ns_count;
+            // 47c61f: in the copy order (default first, then by name). Pinecone's
+            // stats object lists namespaces in a different order call to call.
+            foreach (self::namespace_queue($ns_counts) as $ns_name) {
+                if ((string) $ns_name !== (string) $namespace) {
+                    $other_namespaces[self::ns_key($ns_name)] = (int) $ns_counts[$ns_name];
                 }
             }
         }
@@ -1756,6 +1795,46 @@ class MxChat_Pinecone_Documents {
         );
     }
 
+    /**
+     * 5872ef: bots that still keep the given Pinecone host as their own (the
+     * Multi-Bot add-on stores a host per bot). Core knows nothing about the
+     * bots table — the add-on answers the filter, and with it inactive the
+     * list is empty. Delete old index refuses while this is not empty.
+     *
+     * @return array bot id → bot name
+     */
+    public static function bots_on_host($host) {
+        $host = strtolower(trim(str_replace(array('https://', 'http://'), '', (string) $host), '/'));
+        if ($host === '') {
+            return array();
+        }
+        $bots = apply_filters('mxchat_pinecone_bots_on_host', array(), $host);
+        if (!is_array($bots)) {
+            return array();
+        }
+        $named = array();
+        foreach ($bots as $bot_id => $name) {
+            $name = is_scalar($name) ? trim((string) $name) : '';
+            $named[(string) $bot_id] = $name !== '' ? $name : (string) $bot_id;
+        }
+        return $named;
+    }
+
+    /** Plain-language refusal naming every bot still on the old index. (Plain __(): the card's JS text-escapes it.) */
+    public static function bots_on_host_message(array $bots) {
+        return sprintf(
+            /* translators: 1: number of bots, 2: comma-separated bot names */
+            _n(
+                '%1$s bot still uses the old index: %2$s. Move it to the new index first (Multi-Bot, All Bots, Move these bots to the new index), or it will stop answering. The old index stays.',
+                '%1$s bots still use the old index: %2$s. Move them to the new index first (Multi-Bot, All Bots, Move these bots to the new index), or they will stop answering. The old index stays.',
+                count($bots),
+                'mxchat'
+            ),
+            number_format_i18n(count($bots)),
+            implode(', ', $bots)
+        );
+    }
+
     /** Record a step failure without ending the copy: status stays running, the cursor stays put. */
     private static function migration_fail(array $state, $message) {
         $state['error']        = (string) $message;
@@ -1843,7 +1922,11 @@ class MxChat_Pinecone_Documents {
         if ($name === '') {
             wp_send_json_error(array('message' => esc_html__('Enter an index name first — the new document index will be created under that name.', 'mxchat')));
         }
-        $dimension = self::expected_dimension();
+        $dimension = self::expected_dimension_checked(true);
+        if (is_wp_error($dimension)) {
+            // 418afd: never size an index from a guess
+            wp_send_json_error(array('message' => self::dimension_unknown_message($dimension, 'create'), 'code' => 'dimension_unknown'));
+        }
         $index = self::create_document_index($name, $dimension, $cloud, $region, $language, $api_key);
         if (is_wp_error($index)) {
             $data = $index->get_error_data();
@@ -1908,7 +1991,11 @@ class MxChat_Pinecone_Documents {
         if ($api_key === '' || $host === '') {
             wp_send_json_error(array('message' => esc_html__('Enter the Pinecone API key and host first.', 'mxchat')));
         }
-        $check = self::check_document_index($host, $api_key, self::expected_dimension());
+        $dimension = self::expected_dimension_checked(true);
+        if (is_wp_error($dimension)) {
+            wp_send_json_error(array('ok' => false, 'message' => self::dimension_unknown_message($dimension, 'check'), 'code' => 'dimension_unknown'));
+        }
+        $check = self::check_document_index($host, $api_key, $dimension);
         if (!$check['ok']) {
             wp_send_json_error($check);
         }
@@ -1960,7 +2047,11 @@ class MxChat_Pinecone_Documents {
             if ($target_host === '') {
                 wp_send_json_error(array('message' => esc_html__('Enter the host of the document index to copy into (or create one with Create index for me).', 'mxchat')));
             }
-            $check = self::check_document_index($target_host, $api_key, self::expected_dimension());
+            $dimension = self::expected_dimension_checked(true);
+            if (is_wp_error($dimension)) {
+                wp_send_json_error(array('message' => self::dimension_unknown_message($dimension, 'check'), 'code' => 'dimension_unknown'));
+            }
+            $check = self::check_document_index($target_host, $api_key, $dimension);
             if (!$check['ok']) {
                 wp_send_json_error(array('message' => $check['message']));
             }
@@ -2023,6 +2114,19 @@ class MxChat_Pinecone_Documents {
         // Before this, a Multi-Bot or legacy-namespace site could delete
         // records that were never copied.
         $missing = self::uncopied_namespaces($state, $target['api_key']);
+        // 5872ef: a bot that still keeps the old index as its own host stops
+        // answering the moment that index is deleted, however complete the
+        // copy is. Refuse and name the bots; when namespaces are uncopied too,
+        // say both in one answer.
+        $bots = self::bots_on_host((string) ($state['source_host'] ?? ''));
+        if (!empty($bots)) {
+            $refusal = array('message' => self::bots_on_host_message($bots), 'bots' => $bots);
+            if (is_array($missing) && !empty($missing)) {
+                $refusal['message'] .= ' ' . self::uncopied_message($missing);
+                $refusal['uncopied'] = $missing;
+            }
+            wp_send_json_error($refusal);
+        }
         if (is_wp_error($missing)) {
             wp_send_json_error(array('message' => sprintf(__('Could not read the old index before deleting it (%s). The old index stays.', 'mxchat'), $missing->get_error_message())));
         }

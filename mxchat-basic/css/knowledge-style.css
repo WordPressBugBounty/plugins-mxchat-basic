@@ -1480,6 +1480,7 @@ input:indeterminate + .mxchat-toggle-slider:before {
     display: flex;
     justify-content: space-between;
     align-items: center;
+    gap: var(--mxch-spacing-md, 16px);
     padding: 15px 20px;
     background-color: #f8f9fa;
     border-bottom: 1px solid #eee;
@@ -4107,5 +4108,127 @@ tr.mxchat-row-error td:first-child::before {
 @media (max-width: 782px) {
     .mxchat-meta-chip-grid {
         grid-template-columns: 1fr;
+    }
+}
+
+/* ==========================================================================
+   Re-import affected entries (plan 89739b)
+   Layout only. Every colour, radius and space is a shell token; the badges,
+   notices, progress bar and disclosure are the shell's own.
+   ========================================================================== */
+.mxch-kb-reimport [hidden] {
+    display: none;
+}
+.mxch-kb-reimport-controls {
+    display: flex;
+    align-items: flex-end;
+    flex-wrap: wrap;
+    gap: var(--mxch-spacing-md);
+    margin-top: var(--mxch-spacing-lg);
+}
+.mxch-kb-reimport-controls .mxch-field {
+    flex: 0 0 220px;
+    margin-bottom: 0;
+}
+.mxch-kb-reimport .mxch-btn[disabled] {
+    opacity: 0.55;
+    cursor: default;
+}
+.mxch-kb-reimport-progress,
+.mxch-kb-reimport-error {
+    margin-top: var(--mxch-spacing-lg);
+}
+.mxch-kb-reimport-progress .mxch-progress-label {
+    margin-bottom: 0;
+}
+.mxch-kb-reimport-results {
+    margin-top: var(--mxch-spacing-lg);
+    padding-top: var(--mxch-spacing-lg);
+    border-top: 1px solid var(--mxch-card-border);
+}
+.mxch-kb-reimport-done {
+    margin-bottom: var(--mxch-spacing-md);
+}
+.mxch-kb-reimport-counts {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--mxch-spacing-sm);
+}
+.mxch-kb-reimport-list {
+    list-style: none;
+    margin: var(--mxch-spacing-md) 0 0;
+    padding: 0;
+    max-height: 336px;
+    overflow-y: auto;
+    border: 1px solid var(--mxch-card-border);
+    border-radius: var(--mxch-radius-md);
+}
+.mxch-kb-reimport-list li {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--mxch-spacing-md);
+    margin: 0;
+    padding: var(--mxch-spacing-sm) var(--mxch-spacing-md);
+    border-top: 1px solid var(--mxch-card-border);
+    font-size: 13px;
+    line-height: 1.5;
+}
+.mxch-kb-reimport-list li:first-child {
+    border-top: 0;
+}
+.mxch-kb-reimport-source {
+    min-width: 0;
+    overflow-wrap: anywhere;
+    color: var(--mxch-text-primary);
+}
+.mxch-kb-reimport-note {
+    display: block;
+    font-size: 12px;
+    color: var(--mxch-text-secondary);
+}
+.mxch-kb-reimport-reasons {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: var(--mxch-spacing-xs);
+    flex-shrink: 0;
+}
+.mxch-kb-reimport-notes {
+    margin-top: var(--mxch-spacing-sm);
+    border: 0;
+    border-radius: 0;
+}
+.mxch-kb-reimport-notes li {
+    padding-left: 0;
+    padding-right: 0;
+}
+.mxch-kb-reimport-footer {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: var(--mxch-spacing-sm) var(--mxch-spacing-md);
+}
+.mxch-kb-reimport-footer .mxch-field-hint {
+    margin-top: 0;
+}
+@media (max-width: 600px) {
+    .mxch-kb-reimport-controls .mxch-field {
+        flex-basis: 100%;
+    }
+    .mxch-kb-reimport-controls .mxch-btn {
+        width: 100%;
+        justify-content: center;
+    }
+    .mxch-kb-reimport-list li {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: var(--mxch-spacing-xs);
+    }
+    .mxch-kb-reimport-reasons {
+        justify-content: flex-start;
+    }
+    .mxch-kb-reimport-list {
+        max-height: 480px;
     }
 }

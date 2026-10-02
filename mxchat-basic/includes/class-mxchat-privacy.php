@@ -177,7 +177,11 @@ class MxChat_Privacy {
         $page   = max(1, (int) $page);
         $offset = ($page - 1) * self::EXPORT_SESSIONS_PER_PAGE;
 
-        $session_ids = self::get_session_ids($email_address, self::EXPORT_SESSIONS_PER_PAGE, $offset);
+        // Every session held for the subject: conversations first, then the
+        // pre-chat captures that never became one (fb8877). Computed whole on
+        // each call and sliced, so the pages stay stable.
+        $all_session_ids = self::get_export_session_ids($email_address);
+        $session_ids     = array_slice($all_session_ids, $offset, self::EXPORT_SESSIONS_PER_PAGE);
 
         $items = array();
         foreach ($session_ids as $sid) {
@@ -189,6 +193,14 @@ class MxChat_Privacy {
                 $sid
             ));
             if (empty($rows)) {
+                // No conversation: a visitor who submitted the pre-chat form
+                // and never sent a message. The plugin still holds their
+                // email, name and consent record (shown on the Leads tab,
+                // removed by the eraser), so the export must disclose them.
+                $item = self::export_store_only_item($sid);
+                if ($item !== null) {
+                    $items[] = $item;
+                }
                 continue;
             }
 
@@ -232,20 +244,7 @@ class MxChat_Privacy {
             // Lead-capture consent record (b062c4). If we hold a consent
             // decision about the subject, the export must show it — same
             // Article 15 parity rule as the click rows below.
-            if (class_exists('MxChat_Session_Store')) {
-                $consent_state = MxChat_Session_Store::get($sid, 'consent', '');
-                if ($consent_state !== '' && $consent_state !== false) {
-                    $data[] = array('name' => __('Lead-capture consent', 'mxchat'), 'value' => (string) $consent_state);
-                    $consent_at = MxChat_Session_Store::get($sid, 'consent_at', '');
-                    if (!empty($consent_at)) {
-                        $data[] = array('name' => __('Consent recorded', 'mxchat'), 'value' => (string) $consent_at);
-                    }
-                    $consent_label = MxChat_Session_Store::get($sid, 'consent_label', '');
-                    if (!empty($consent_label)) {
-                        $data[] = array('name' => __('Consent text shown', 'mxchat'), 'value' => wp_strip_all_tags((string) $consent_label));
-                    }
-                }
-            }
+            $data = array_merge($data, self::export_consent_fields($sid));
 
             foreach ($rows as $row) {
                 $data[] = array(
@@ -256,47 +255,140 @@ class MxChat_Privacy {
 
             // Link-click rows for this session (Article 15 parity with the
             // eraser — same subject, same session set, plan 23c4a1).
-            if (self::url_clicks_table_exists()) {
-                $clicks_table = $wpdb->prefix . 'mxchat_url_clicks';
-                $clicks       = $wpdb->get_results($wpdb->prepare(
-                    "SELECT clicked_url, click_timestamp, user_ip, user_agent
-                     FROM {$clicks_table} WHERE session_id = %s
-                     ORDER BY click_timestamp ASC, id ASC",
-                    $sid
-                ));
-                foreach ($clicks as $click) {
-                    $details = $click->clicked_url;
-                    $meta    = array();
-                    if (!empty($click->user_ip)) {
-                        /* translators: %s: IP address recorded with a link click */
-                        $meta[] = sprintf(__('IP address: %s', 'mxchat'), $click->user_ip);
-                    }
-                    if (!empty($click->user_agent)) {
-                        /* translators: %s: browser user-agent recorded with a link click */
-                        $meta[] = sprintf(__('Browser: %s', 'mxchat'), $click->user_agent);
-                    }
-                    if (!empty($meta)) {
-                        $details .= ' (' . implode('; ', $meta) . ')';
-                    }
-                    $data[] = array(
-                        'name'  => sprintf('[%s] %s', $click->click_timestamp, __('Link clicked', 'mxchat')),
-                        'value' => $details,
-                    );
-                }
-            }
+            $data = array_merge($data, self::export_click_fields($sid));
 
-            $items[] = array(
-                'group_id'          => 'mxchat-chat-transcripts',
-                'group_label'       => __('Chat Conversations (MxChat)', 'mxchat'),
-                'group_description' => __('Chatbot conversations recorded by the MxChat plugin.', 'mxchat'),
-                'item_id'           => 'mxchat-session-' . $sid,
-                'data'              => $data,
-            );
+            $items[] = self::export_item($sid, $data);
         }
 
         return array(
             'data' => $items,
-            'done' => count($session_ids) < self::EXPORT_SESSIONS_PER_PAGE,
+            'done' => ($offset + self::EXPORT_SESSIONS_PER_PAGE) >= count($all_session_ids),
+        );
+    }
+
+    /**
+     * The subject's full session set for the exporter: transcript sessions in
+     * their existing order (oldest conversation first), then sessions that
+     * exist only in the session store — a pre-chat capture with no messages —
+     * ordered by session id. The eraser already unions the store the same way
+     * (erase_lingering_options). The store-only set is bounded by lead count.
+     */
+    private static function get_export_session_ids($email_address) {
+        $session_ids = self::get_session_ids($email_address, PHP_INT_MAX, 0);
+        if (!is_array($session_ids)) {
+            $session_ids = array();
+        }
+
+        if (class_exists('MxChat_Session_Store') && method_exists('MxChat_Session_Store', 'find_by_email')) {
+            $store_only = array_diff(MxChat_Session_Store::find_by_email($email_address), $session_ids);
+            $store_only = array_values(array_unique(array_map('strval', $store_only)));
+            sort($store_only, SORT_STRING);
+            $session_ids = array_merge($session_ids, $store_only);
+        }
+
+        return $session_ids;
+    }
+
+    /**
+     * Export item for a session with no transcript rows. Only what is held:
+     * the identity the visitor typed, the consent record, and any link-click
+     * rows. No conversation dates (there is no conversation) and no capture
+     * time of its own — the store does not expose one, and the consent record
+     * carries its own timestamp. Null when the store holds nothing to show.
+     */
+    private static function export_store_only_item($sid) {
+        if (!class_exists('MxChat_Session_Store')) {
+            return null;
+        }
+
+        $email = MxChat_Session_Store::get($sid, 'email', '');
+        $name  = MxChat_Session_Store::get($sid, 'name', '');
+
+        $data = array(
+            array('name' => __('Session ID', 'mxchat'), 'value' => $sid),
+        );
+        if (!empty($email)) {
+            $data[] = array('name' => __('Email on record', 'mxchat'), 'value' => (string) $email);
+        }
+        if (!empty($name)) {
+            $data[] = array('name' => __('Name on record', 'mxchat'), 'value' => (string) $name);
+        }
+
+        $data = array_merge($data, self::export_consent_fields($sid), self::export_click_fields($sid));
+
+        if (count($data) < 2) {
+            return null;
+        }
+
+        return self::export_item($sid, $data);
+    }
+
+    /** Lead-capture consent fields for one session (empty when none recorded). */
+    private static function export_consent_fields($sid) {
+        $fields = array();
+
+        if (class_exists('MxChat_Session_Store')) {
+            $consent_state = MxChat_Session_Store::get($sid, 'consent', '');
+            if ($consent_state !== '' && $consent_state !== false) {
+                $fields[] = array('name' => __('Lead-capture consent', 'mxchat'), 'value' => (string) $consent_state);
+                $consent_at = MxChat_Session_Store::get($sid, 'consent_at', '');
+                if (!empty($consent_at)) {
+                    $fields[] = array('name' => __('Consent recorded', 'mxchat'), 'value' => (string) $consent_at);
+                }
+                $consent_label = MxChat_Session_Store::get($sid, 'consent_label', '');
+                if (!empty($consent_label)) {
+                    $fields[] = array('name' => __('Consent text shown', 'mxchat'), 'value' => wp_strip_all_tags((string) $consent_label));
+                }
+            }
+        }
+
+        return $fields;
+    }
+
+    /** Link-click fields for one session (empty when none, or no clicks table). */
+    private static function export_click_fields($sid) {
+        global $wpdb;
+        $fields = array();
+
+        if (self::url_clicks_table_exists()) {
+            $clicks_table = $wpdb->prefix . 'mxchat_url_clicks';
+            $clicks       = $wpdb->get_results($wpdb->prepare(
+                "SELECT clicked_url, click_timestamp, user_ip, user_agent
+                 FROM {$clicks_table} WHERE session_id = %s
+                 ORDER BY click_timestamp ASC, id ASC",
+                $sid
+            ));
+            foreach ($clicks as $click) {
+                $details = $click->clicked_url;
+                $meta    = array();
+                if (!empty($click->user_ip)) {
+                    /* translators: %s: IP address recorded with a link click */
+                    $meta[] = sprintf(__('IP address: %s', 'mxchat'), $click->user_ip);
+                }
+                if (!empty($click->user_agent)) {
+                    /* translators: %s: browser user-agent recorded with a link click */
+                    $meta[] = sprintf(__('Browser: %s', 'mxchat'), $click->user_agent);
+                }
+                if (!empty($meta)) {
+                    $details .= ' (' . implode('; ', $meta) . ')';
+                }
+                $fields[] = array(
+                    'name'  => sprintf('[%s] %s', $click->click_timestamp, __('Link clicked', 'mxchat')),
+                    'value' => $details,
+                );
+            }
+        }
+
+        return $fields;
+    }
+
+    private static function export_item($sid, array $data) {
+        return array(
+            'group_id'          => 'mxchat-chat-transcripts',
+            'group_label'       => __('Chat Conversations (MxChat)', 'mxchat'),
+            'group_description' => __('Chatbot conversations recorded by the MxChat plugin.', 'mxchat'),
+            'item_id'           => 'mxchat-session-' . $sid,
+            'data'              => $data,
         );
     }
 

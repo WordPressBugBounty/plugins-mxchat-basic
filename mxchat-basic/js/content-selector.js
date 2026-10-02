@@ -875,8 +875,23 @@ var initPineconeFeatures, initVectorStoreFeatures;
             }
             $submit.prop('disabled', blocked);
         }
+        // 47c61f: the status notice follows the host in the FIELD, the same
+        // comparison the Save gate makes. The server paints it from the saved
+        // host, which is the classic index for the whole length of a copy, so a
+        // checked document host typed here used to sit under "Not checked yet".
+        // Kept out of refreshGate(): a failed Check sets its own text first and
+        // then calls refreshGate(), and that text must survive until the host changes.
+        function refreshStatus() {
+            var typed = hostValue();
+            if (typed !== '' && typed === verifiedHost) {
+                var dim = parseInt(state.expected_dimension, 10) || 0;
+                setStatus(true, String(state.status_checked || 'Document index checked: %1$s (%2$d dimensions).').replace('%1$s', typed).replace('%2$d', dim));
+            } else {
+                setStatus(false, String(state.status_unchecked || 'Not checked yet. Create a document index below, or enter its host above and click Check index. The index type only saves once the host has been checked.'));
+            }
+        }
         $('#mxchat_pinecone_docs_switch_anyway').off('change.pineconeDocs').on('change.pineconeDocs', refreshGate);
-        $('#mxchat_pinecone_host').off('input.pineconeDocs change.pineconeDocs').on('input.pineconeDocs change.pineconeDocs', refreshGate);
+        $('#mxchat_pinecone_host').off('input.pineconeDocs change.pineconeDocs').on('input.pineconeDocs change.pineconeDocs', function () { refreshStatus(); refreshGate(); });
 
         function post(data) {
             data.nonce = nonce;
@@ -1026,8 +1041,19 @@ var initPineconeFeatures, initVectorStoreFeatures;
         }
         function otherNamespacesText(st) {
             var other = st.other_namespaces || {};
+            // 47c61f: default namespace first, then by name. The server writes them
+            // in that order now; this covers states written before it did, and
+            // namespaces named like numbers, which a JSON object reorders.
+            var names = [];
+            $.each(other, function (name) { names.push(String(name)); });
+            names.sort(function (a, b) {
+                if (a === b) { return 0; }
+                if (a === '__default__') { return -1; }
+                if (b === '__default__') { return 1; }
+                return a < b ? -1 : 1;
+            });
             var parts = [];
-            $.each(other, function (name, count) { parts.push(name + ' (' + fmt(count) + ')'); });
+            $.each(names, function (i, name) { parts.push(name + ' (' + fmt(other[name]) + ')'); });
             return parts.join(', ');
         }
         function otherNamespacesSummary(st) {

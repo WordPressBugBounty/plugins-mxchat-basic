@@ -1307,8 +1307,23 @@ function callMxChatStream(message, callback, botId) {
     let streamingStarted = false;
     // Server-pushed html to append as its OWN bot bubble once the stream
     // finishes (e.g. the consent-safe YouTube embed, plan 03ba33). Rendering is
-    // deferred to [DONE] so the embed always lands BELOW the streamed text.
+    // deferred to the end of the stream so the embed always lands BELOW the
+    // streamed text.
     let pendingAppendHtml = '';
+
+    // Render the stashed appendix as its own bot bubble below the streamed
+    // text — mirrors how it is saved in the transcript, so history replays
+    // identically. Called from BOTH ends of a stream: the [DONE] line and
+    // the stream simply closing (the OpenAI Responses path and Gemini end
+    // without a [DONE] line). The stash is cleared, so a stream that sends
+    // [DONE] and then closes renders it once. Any future appendix-type
+    // event belongs in here, not in one of the two branches.
+    function flushAppendHtml() {
+        if (pendingAppendHtml) {
+            appendMessage("bot", "", pendingAppendHtml, [], false, botId);
+            pendingAppendHtml = '';
+        }
+    }
 
     // Abortable stream: a fresh controller per turn, keyed by bot instance.
     // The Stop control (send button swapped in place) aborts both the read
@@ -1392,6 +1407,8 @@ function callMxChatStream(message, callback, botId) {
                     // Re-enable chat input when stream ends with content
                     enableChatInput(botId);
 
+                    flushAppendHtml();
+
                     // Scroll the user's last message to the top now that the
                     // bot's full reply has rendered (gives max reading room).
                     var $chatBoxDone = getElement(botId, 'chat-box');
@@ -1424,14 +1441,7 @@ function callMxChatStream(message, callback, botId) {
                             // Re-enable chat input after streaming completes
                             enableChatInput(botId);
 
-                            // Render any server-pushed appendix html (e.g. the
-                            // YouTube embed) as its own bot bubble below the
-                            // streamed text — mirrors how it is saved in the
-                            // transcript, so history replays identically.
-                            if (pendingAppendHtml) {
-                                appendMessage("bot", "", pendingAppendHtml, [], false, botId);
-                                pendingAppendHtml = '';
-                            }
+                            flushAppendHtml();
 
                             // Scroll the user's last message to the top now
                             // that the bot's full reply has rendered.
@@ -2252,6 +2262,54 @@ function appendMessage(sender, messageText = '', messageHtml = '', images = [], 
     }
 }
 
+// Link clicks in bot and agent messages: the click is recorded, the browser
+// follows the anchor itself. Navigation must not wait for the tracking
+// request: a window.open() made from that request's callback is outside the
+// visitor's tap, and Safari's pop-up blocker drops it without a message.
+
+// Give a tracked anchor the target it should open in, and noopener on a new tab.
+function prepareTrackedLink($link) {
+    if (linkTarget === '_blank' && $link.attr('target') !== '_blank') {
+        $link.attr('target', '_blank');
+    }
+    if ($link.attr('target') === '_blank') {
+        var rel = $link.attr('rel') || '';
+        if (!/(^|\s)noopener(\s|$)/.test(rel)) {
+            $link.attr('rel', $.trim(rel + ' noopener'));
+        }
+    }
+}
+
+// Record one click, fire-and-forget. sendBeacon survives the page unloading
+// when the link opens in the same tab.
+function trackLinkClick(href, messageContext, botId) {
+    var fields = {
+        action: 'mxchat_track_url_click',
+        session_id: getChatSession(botId),
+        url: href,
+        message_context: messageContext,
+        nonce: mxchatChat.nonce
+    };
+    try {
+        if (navigator.sendBeacon && typeof FormData !== 'undefined') {
+            var body = new FormData();
+            $.each(fields, function(name, value) {
+                body.append(name, value == null ? '' : value);
+            });
+            if (navigator.sendBeacon(mxchatChat.ajax_url, body)) {
+                return;
+            }
+        }
+    } catch (error) {
+        // Fall through to the plain request
+    }
+    $.ajax({
+        url: mxchatChat.ajax_url,
+        type: 'POST',
+        data: fields
+    });
+}
+
 //   Helper function to attach link tracking with proper event handling
 function attachLinkTracking(messageDiv, messageText, botId) {
     botId = botId || 'default';
@@ -2271,37 +2329,19 @@ function attachLinkTracking(messageDiv, messageText, botId) {
                 // Remove any existing click handlers first
                 $link.off('click.tracking');
 
+                // The anchor carries its own target: the browser follows it
+                prepareTrackedLink($link);
+
                 // Add new click handler with namespace
                 $link.on('click.tracking', function(e) {
-                    e.preventDefault();
                     e.stopPropagation();
 
                     const messageContext = typeof messageText === 'string'
                         ? messageText.substring(0, 200)
                         : '';
 
-                    // Track the click
-                    $.ajax({
-                        url: mxchatChat.ajax_url,
-                        type: 'POST',
-                        data: {
-                            action: 'mxchat_track_url_click',
-                            session_id: getChatSession(botId),
-                            url: originalHref,
-                            message_context: messageContext,
-                            nonce: mxchatChat.nonce
-                        },
-                        complete: function() {
-                            // Always redirect, even if tracking fails
-                            if ($link.attr('target') === '_blank' || linkTarget === '_blank') {
-                                window.open(originalHref, '_blank');
-                            } else {
-                                window.location.href = originalHref;
-                            }
-                        }
-                    });
-
-                    return false; // Extra insurance to prevent default
+                    prepareTrackedLink($link);
+                    trackLinkClick(originalHref, messageContext, botId);
                 });
             }
         });
@@ -4551,38 +4591,16 @@ $(document).on('click', '.chat-box a[href]:not([data-tracked])', function(e) {
         const originalHref = $link.attr('href');
 
         if (originalHref && (originalHref.startsWith('http://') || originalHref.startsWith('https://'))) {
-            e.preventDefault();
-            e.stopPropagation();
-
-            // Mark as tracked
-            $link.attr('data-tracked', 'true');
-
             // Get bot ID from the chat box context
             var botId = getBotIdFromElement(this);
 
             // Get message context from the message div
             const messageText = messageDiv.text().substring(0, 200);
 
-            $.ajax({
-                url: mxchatChat.ajax_url,
-                type: 'POST',
-                data: {
-                    action: 'mxchat_track_url_click',
-                    session_id: getChatSession(botId),
-                    url: originalHref,
-                    message_context: messageText,
-                    nonce: mxchatChat.nonce
-                },
-                complete: function() {
-                    if ($link.attr('target') === '_blank' || linkTarget === '_blank') {
-                        window.open(originalHref, '_blank');
-                    } else {
-                        window.location.href = originalHref;
-                    }
-                }
-            });
-
-            return false;
+            // Same path as attachLinkTracking(): set the target, record the
+            // click, and let the browser follow the anchor.
+            prepareTrackedLink($link);
+            trackLinkClick(originalHref, messageText, botId);
         }
     }
 });
