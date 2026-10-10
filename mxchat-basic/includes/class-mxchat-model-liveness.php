@@ -213,6 +213,7 @@ class MxChat_Model_Liveness {
             'does not exist',
             'is not found',
             'unknown model',
+            'no longer available',   // Gemini: "This model ... is no longer available to new users" (plan 1bcd1c)
         );
         foreach ($markers as $marker) {
             if (strpos($body, $marker) !== false) {

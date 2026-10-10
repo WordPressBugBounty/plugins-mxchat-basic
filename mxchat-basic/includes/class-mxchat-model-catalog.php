@@ -65,9 +65,9 @@ class MxChat_Model_Catalog {
                     'gemini-3.5-flash-lite'         => array('label' => 'Gemini 3.5 Flash-Lite',     'description' => __('Stable — cheapest Gemini, no thinking', 'mxchat')),
                     'gemini-3.1-flash-lite'         => array('label' => 'Gemini 3.1 Flash-Lite',     'description' => __('Stable — cost-efficient, high throughput', 'mxchat')),
                     'gemini-3.1-flash-lite-preview' => array('label' => 'Gemini 3.1 Flash-Lite (Preview)', 'description' => __('Preview — latest cost-efficient model', 'mxchat')),
-                    'gemini-2.5-pro'                => array('label' => 'Gemini 2.5 Pro',            'description' => __('Stable — advanced thinking, code, math & long context', 'mxchat')),
-                    'gemini-2.5-flash'              => array('label' => 'Gemini 2.5 Flash',          'description' => __('Stable — strong price-performance with thinking', 'mxchat')),
-                    'gemini-2.5-flash-lite'         => array('label' => 'Gemini 2.5 Flash-Lite',     'description' => __('Stable — ultra fast and low cost', 'mxchat')),
+                    'gemini-2.5-pro'                => array('label' => 'Gemini 2.5 Pro',            'description' => __('No longer offered by Google to new API users — pick Gemini 3.1 Pro', 'mxchat')),
+                    'gemini-2.5-flash'              => array('label' => 'Gemini 2.5 Flash',          'description' => __('No longer offered by Google to new API users — pick Gemini 3.8 Flash', 'mxchat')),
+                    'gemini-2.5-flash-lite'         => array('label' => 'Gemini 2.5 Flash-Lite',     'description' => __('No longer offered by Google to new API users — pick Gemini 3.5 Flash-Lite', 'mxchat')),
                 ),
             ),
             'openai' => array(
@@ -269,6 +269,20 @@ class MxChat_Model_Catalog {
             'deepseek-chat'              => array('to' => 'deepseek-v4-flash',        'label' => 'DeepSeek V4 Flash', 'reason' => 'because DeepSeek retired its older API models on July 24, 2026'),
             'deepseek-reasoner'          => array('to' => 'deepseek-v4-flash',        'label' => 'DeepSeek V4 Flash', 'reason' => 'because DeepSeek retired its older API models on July 24, 2026'),
         );
+    }
+
+    /**
+     * The current replacement for a retired chat model id, or the id unchanged
+     * when it is not in retired_model_map(). Static, no I/O, no option read.
+     * Every request-time remap goes through here (plan 8c4eb4), so a newly
+     * retired id needs one map row and nothing else.
+     */
+    public static function resolve_retired($model_id) {
+        $map = self::retired_model_map();
+        if (is_string($model_id) && isset($map[$model_id]['to']) && $map[$model_id]['to'] !== '') {
+            return $map[$model_id]['to'];
+        }
+        return $model_id;
     }
 
     /**

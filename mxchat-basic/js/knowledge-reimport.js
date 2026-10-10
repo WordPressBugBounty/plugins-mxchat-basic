@@ -17,6 +17,7 @@
     var find = function (selector) { return card.querySelector(selector); };
 
     var before     = find('#mxchat-kb-reimport-before');
+    var edited     = find('#mxchat-kb-reimport-edited');
     var checkBtn   = find('#mxchat-kb-reimport-check');
     var applyBtn   = find('#mxchat-kb-reimport-apply');
     var clearBtn   = find('#mxchat-kb-reimport-clear');
@@ -108,6 +109,9 @@
         applyBtn.disabled = state;
         clearBtn.disabled = state;
         before.disabled = state;
+        if (edited) {
+            edited.disabled = state;
+        }
     }
 
     function render(state) {
@@ -124,6 +128,9 @@
         }
         if (state.before && !busy) {
             before.value = state.before;
+        }
+        if (edited && !busy && typeof state.with_edited !== 'undefined') {
+            edited.checked = !!state.with_edited;
         }
 
         // Progress: a check has no total to measure against, a rewrite has.
@@ -160,6 +167,9 @@
         if (state.changed > 0) {
             counts.appendChild(badge(fmt(L.countChanged, state.changed)));
         }
+        if (state.edited > 0) {
+            counts.appendChild(badge(fmt(L.countEdited, state.edited), 'warning'));
+        }
         if (state.skipped > 0) {
             counts.appendChild(badge(fmt(L.countSkipped, state.skipped)));
         }
@@ -185,10 +195,11 @@
 
         othersList.textContent = '';
         (state.notes || []).forEach(function (note) {
-            othersList.appendChild(row(note.label, note.note, [badge(note.kind === 'changed' ? L.leftAlone : L.skipped)]));
+            var kind = note.kind === 'changed' ? L.leftAlone : (note.kind === 'edited' ? L.editedNotRewritten : L.skipped);
+            othersList.appendChild(row(note.label, note.note, [badge(kind, note.kind === 'edited' ? 'warning' : '')]));
         });
         others.hidden = !(state.notes && state.notes.length);
-        othersText.textContent = fmt(L.othersTitle, state.changed + state.skipped);
+        othersText.textContent = fmt(L.othersTitle, state.changed + state.skipped + (state.edited || 0));
 
         if (state.error) {
             showError(fmt(L.scanStopped, state.error));
@@ -242,7 +253,7 @@
         progress.hidden = false;
         bar.hidden = true;
         label.textContent = fmt(L.checking, 0);
-        run({ op: 'scan', restart: '1', before: before.value }, 'scan');
+        run({ op: 'scan', restart: '1', before: before.value, edited: (edited && edited.checked) ? '1' : '0' }, 'scan');
     });
 
     applyBtn.addEventListener('click', function () {

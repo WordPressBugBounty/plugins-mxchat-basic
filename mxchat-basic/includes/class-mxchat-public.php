@@ -12,6 +12,21 @@ class MxChat_Public {
     // Auto-Display instance (plan 95dd1e).
     private static $floating_instance_rendered = false;
 
+    // Bot ids already placed on this page (plan 977cad), floating and inline
+    // alike. Two copies of one bot share every element id (chat-input-<bot>,
+    // send-button-<bot>, ...) and chat-script.js looks elements up by id, so
+    // the second copy's Send reads the FIRST copy's empty box and sends
+    // nothing. One copy of a bot per page: append_chatbot_to_body() stands
+    // down for a bot the content already shows, and a second explicit
+    // placement of the same bot renders an administrator-only note instead.
+    // Only page renders count: a render in wp-admin, admin-ajax, cron, REST,
+    // WP-CLI, a feed, or inside wp_head (a plugin building meta tags from the
+    // content) is not on the page and must not suppress the real one. Note
+    // that a block theme renders the body BEFORE wp_head (template-canvas
+    // builds the template first so blocks can enqueue), so "after wp_head"
+    // is not the test.
+    private static $rendered_bot_ids = array();
+
     public function __construct() {
         // Simply get the options without defining duplicated defaults
         $this->options = get_option('mxchat_options', array());
@@ -80,6 +95,15 @@ public function append_chatbot_to_body() {
     if ($bot_to_show === false) {
         return;
     }
+
+    // The bot is already on this page as an explicit placement (an inline
+    // shortcode or block in the content). A second, floating copy would share
+    // its element ids and could be opened but not send; the embedded one wins
+    // (plan 977cad). A page whose embedded chatbot is a DIFFERENT bot keeps
+    // both, their ids differ.
+    if (self::is_bot_on_page($bot_to_show)) {
+        return;
+    }
     
     // Handle consent for display
     $consent_category = 'marketing';
@@ -102,6 +126,54 @@ public function append_chatbot_to_body() {
         echo do_shortcode('[mxchat_chatbot floating="yes" has_consent="' . ($has_consent ? 'yes' : 'no') . '"]');
     }
 }
+
+    /**
+     * Is this render on the page a visitor sees? (plan 977cad) False in
+     * wp-admin, admin-ajax, cron, REST, WP-CLI, a feed, and inside wp_head.
+     * Not "after wp_head": block themes render the body content first.
+     */
+    private static function is_page_render() {
+        if (is_admin() || wp_doing_ajax() || wp_doing_cron()
+            || (defined('REST_REQUEST') && REST_REQUEST)
+            || (defined('WP_CLI') && WP_CLI)) {
+            return false;
+        }
+        return !doing_action('wp_head') && !is_feed();
+    }
+
+    private static function record_bot_on_page($bot_id) {
+        if (!self::is_page_render()) {
+            return;
+        }
+        $bot_id = sanitize_key($bot_id);
+        if ($bot_id !== '' && !in_array($bot_id, self::$rendered_bot_ids, true)) {
+            self::$rendered_bot_ids[] = $bot_id;
+        }
+    }
+
+    /**
+     * Has a placement of this bot already rendered in the page body on this
+     * request? (plan 977cad)
+     */
+    public static function is_bot_on_page($bot_id) {
+        if (!self::is_page_render()) {
+            return false;
+        }
+        return in_array(sanitize_key($bot_id), self::$rendered_bot_ids, true);
+    }
+
+    /**
+     * What a second placement of an already-shown bot renders: nothing for
+     * visitors, one line for a logged-in administrator (plan 977cad).
+     */
+    private static function duplicate_placement_notice() {
+        if (!current_user_can('manage_options')) {
+            return '';
+        }
+        return '<p class="mxchat-placement-notice" data-nosnippet>'
+            . esc_html__('MxChat: this page already shows this chatbot, so a second copy of the same bot is not displayed. Only administrators see this note.', 'mxchat')
+            . '</p>';
+    }
 
     private function mxchat_get_user_identifier() {
         return sanitize_text_field($_SERVER['REMOTE_ADDR']);
@@ -133,7 +205,16 @@ public function render_chatbot_shortcode($atts) {
     ), $atts);
     
     // Determine which bot to use
-    $bot_id = $this->determine_bot_for_shortcode($attributes['bot_id']);
+    $bot_id = sanitize_key($this->determine_bot_for_shortcode($attributes['bot_id']));
+
+    // A second placement of a bot already on this page is not rendered
+    // (plan 977cad, see $rendered_bot_ids): it could be opened but never
+    // sent. Administrators get a one-line note in its place so the
+    // duplicate is visible to the person who can remove it.
+    if (self::is_bot_on_page($bot_id)) {
+        return self::duplicate_placement_notice();
+    }
+    self::record_bot_on_page($bot_id);
     
     // A floating shortcode always renders; what it does is suppress the LATER
     // auto-append instance (see append_chatbot_to_body), so a page never gets
@@ -147,7 +228,6 @@ public function render_chatbot_shortcode($atts) {
     // This allows embedded chatbots even when floating is hidden
     
     $is_floating = $attributes['floating'] === 'yes';
-    $bot_id = sanitize_key($bot_id); // Sanitize bot ID
     
     // Rest of your existing shortcode rendering logic continues unchanged...
     // [All the existing HTML generation code remains the same]

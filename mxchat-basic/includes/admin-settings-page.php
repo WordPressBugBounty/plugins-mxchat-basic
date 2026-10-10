@@ -698,6 +698,19 @@ function mxchat_render_settings_page($admin_instance) {
                                 </ul>
                             </div>
                         </div>
+
+                        <?php
+                        // Plan b76ed6 (Support Ticket 468): the floating launcher is rendered hidden
+                        // and revealed by chat-script.js, so a cache plugin's "Delay JavaScript"
+                        // that holds the script until the visitor interacts shows no chatbot at all.
+                        ?>
+                        <div class="mxch-notice mxch-notice-warning" style="margin-top: 16px;">
+                            <svg class="mxch-notice-icon" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+                            <div>
+                                <strong><?php esc_html_e('Using Delay JavaScript in a cache or performance plugin?', 'mxchat'); ?></strong>
+                                <?php esc_html_e('Leave chat-script.js out of the delay (FlyingPress, WP Rocket, LiteSpeed Cache and Perfmatters all have an exclusion list). The chat launcher stays hidden until that script runs, so a page that holds it back until the visitor interacts shows no chatbot. If you want the script delayed, pick a strategy above instead: MxChat then loads it on interaction or after a short wait.', 'mxchat'); ?>
+                            </div>
+                        </div>
                     </div>
                 </div>
 
@@ -709,7 +722,17 @@ function mxchat_render_settings_page($admin_instance) {
                             <?php esc_html_e('Page Cache Compatibility', 'mxchat'); ?>
                         </h3>
                     </div>
-                    <div class="mxch-card-body">
+                    <div class="mxch-card-body mxchat-autosave-section">
+                        <?php
+                        // Page-cache purge on settings save (plan b76ed6, Support Ticket 468).
+                        // Standalone option, default ON — never part of mxchat_options, so
+                        // mxchat_sanitize() cannot strip it. Read by MxChat_Cache_Purge.
+                        mxchat_render_field_wrapper('mxchat_cache_purge_enabled', __('Clear page cache when MxChat settings change', 'mxchat'), function() use ($admin_instance) {
+                            $admin_instance->mxchat_cache_purge_toggle_callback();
+                        }, __('On, MxChat clears the page caches it can reach (WP Rocket, LiteSpeed Cache, W3 Total Cache, WP Super Cache, FlyingPress) after its settings are saved, at most once every 30 seconds, so visitors do not keep seeing the old chatbot. Off, nothing is cleared: clear your page cache yourself after changing the chatbot. Turn it off on a large site where every save would throw away the whole cache.', 'mxchat'),
+                           __('Developers can narrow which settings trigger the clear with the mxchat_cache_purge_watched_options filter.', 'mxchat'));
+                        ?>
+
                         <p class="mxch-field-description" style="margin-top: 0;"><?php esc_html_e('MxChat\'s chat send (and stream send, plus PDF / Word upload) all POST to /wp-admin/admin-ajax.php. Page-cache plugins occasionally cache those responses, which breaks the per-session nonce flow on the first message. MxChat auto-tells the five most common cache plugins to never cache chat AJAX via their own filter APIs — no setup needed for those. For other cache plugins (or Cloudflare APO), copy the manual exclusion string into your cache plugin\'s exclusion list.', 'mxchat'); ?></p>
 
                         <?php

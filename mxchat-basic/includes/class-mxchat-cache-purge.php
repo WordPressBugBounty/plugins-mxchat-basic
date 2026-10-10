@@ -33,6 +33,20 @@ class MxChat_Cache_Purge {
     const DEBOUNCE_SECONDS   = 30;
     const DEFERRED_EVENT     = 'mxchat_deferred_cache_purge';
 
+    /**
+     * Owner switch (plan b76ed6, Support Ticket 468: a 1,400-page FlyingPress
+     * site lost its whole preload on every settings save). Standalone option,
+     * 'on' / 'off'; absent means ON so existing sites keep today's behaviour.
+     * Rendered on Settings → Optimization → Page Cache Compatibility and saved
+     * by the mxchat_cache_purge_enabled case in class-ajax-handler.php.
+     *
+     * The switch is read when a watched option is actually written (and when
+     * a deferred purge fires), not at plugin load: the hooks below cost
+     * nothing until a save happens, and a site that never touches the switch
+     * never pays a get_option() for it on a visitor request.
+     */
+    const OPTION_NAME = 'mxchat_cache_purge_enabled';
+
     private static $instance = null;
 
     /**
@@ -47,6 +61,16 @@ class MxChat_Cache_Purge {
             self::$instance = new self();
         }
         return self::$instance;
+    }
+
+    /**
+     * Whether MxChat clears page caches when its settings are saved.
+     * Default ON; only an explicit 'off' switches it off.
+     *
+     * @return bool
+     */
+    public static function is_enabled() {
+        return get_option(self::OPTION_NAME, 'on') !== 'off';
     }
 
     private function __construct() {
@@ -80,7 +104,7 @@ class MxChat_Cache_Purge {
      * Coalesce all option writes in this request into one shutdown purge.
      */
     public function queue_purge() {
-        if ($this->purge_queued) {
+        if ($this->purge_queued || !self::is_enabled()) {
             return;
         }
         $this->purge_queued = true;
@@ -107,6 +131,12 @@ class MxChat_Cache_Purge {
      * guarded so installs without that plugin skip it silently.
      */
     public function purge_page_caches() {
+        // The owner may have switched the purge off after a deferred purge was
+        // scheduled; off means off.
+        if (!self::is_enabled()) {
+            return;
+        }
+
         // WP Rocket — public helper, clears the whole domain's page cache.
         if (function_exists('rocket_clean_domain')) {
             rocket_clean_domain();

@@ -2638,7 +2638,15 @@ function replaceLastMessage(sender, responseText, responseHtml = '', images = []
     
     // Process standalone URLs - but NOT if they're already in <a> tags or brackets
     // Updated pattern to be more careful about what it matches
-    const urlPattern = /(^|[^">=\[\]])(https?:\/\/[^\s<"\[\]]+)(?![^<]*<\/a>)(?!\])/gim;
+    //
+    // The prefix group (plan 78618d) is the start of a line, an ordinary
+    // character, OR a tag this formatter itself opened or closed (paragraph,
+    // list item, table cell, heading, emphasis, line break), so an address
+    // that opens a paragraph or sits inside **bold** is linked too. Never
+    // an anchor (its text would be linked twice; the lookahead guards that
+    // as well) and never a code span, which stays as typed. No lookbehind,
+    // for Safari.
+    const urlPattern = /(^|[^">=\[\]]|<\/?(?:p|li|td|th|h[1-6]|strong|em|b|i|del|br)(?:\s[^<>]*)?\/?>)(https?:\/\/[^\s<"\[\]]+)(?![^<]*<\/a>)(?!\])/gim;
     processedText = processedText.replace(urlPattern, (match, prefix, url) => {
         // Extra check: make sure this isn't already linked
         if (match.includes('href=') || match.includes('</a>')) {
@@ -2651,8 +2659,12 @@ function replaceLastMessage(sender, responseText, responseHtml = '', images = []
         return `${prefix}<a href="${safeUrl}" target="${linkTarget}">${cleanUrl}</a>`;
     });
     
-    // Process www. URLs - but NOT if they're already in <a> tags or brackets
-    const wwwPattern = /(^|[^">/\[\]])(www\.[\S]+)(?![^<]*<\/a>)(?!\])/gim;
+    // Process www. URLs - but NOT if they're already in <a> tags or brackets.
+    // The address stops at the same characters the https pattern stops at
+    // (plan 78618d): it used to run through the closing paragraph tag, so
+    // "Try www.example.com/page." linked to www.example.com/page.%3C/p%3E.
+    // Same prefix group as the https pattern, same reasons.
+    const wwwPattern = /(^|[^">/\[\]]|<\/?(?:p|li|td|th|h[1-6]|strong|em|b|i|del|br)(?:\s[^<>]*)?\/?>)(www\.[^\s<"\[\]]+)(?![^<]*<\/a>)(?!\])/gim;
     processedText = processedText.replace(wwwPattern, (match, prefix, url) => {
         // Extra check: make sure this isn't already linked
         if (match.includes('href=') || match.includes('</a>')) {
@@ -2718,11 +2730,17 @@ function formatTextStyling(text) {
         return placeholder;
     });
     
-    // Step 1c: Also protect bare URLs that might exist
+    // Step 1c: Also protect bare URLs that might exist. Trailing emphasis
+    // markers are not part of the address (plan 78618d): **https://x.com**
+    // used to protect "https://x.com**", so the bold never paired and the
+    // asterisks ended up inside the link. The markers stay outside the
+    // placeholder so the styling rules below can pair them.
     protectedText = protectedText.replace(/(https?:\/\/[^\s<>"]+)/gi, function(match) {
+        const markers = match.match(/[*_~]+$/);
+        const url = markers ? match.slice(0, match.length - markers[0].length) : match;
         const placeholder = `__PROTECTED_${protectedSegments.length}__`;
-        protectedSegments.push(match);
-        return placeholder;
+        protectedSegments.push(url);
+        return placeholder + (markers ? markers[0] : '');
     });
     
     // Step 2: Now apply text styling to the protected text

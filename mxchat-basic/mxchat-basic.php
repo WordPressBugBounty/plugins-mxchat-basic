@@ -3,7 +3,7 @@
  * Plugin Name: MxChat
  * Plugin URI: https://mxchat.ai/
  * Description: AI chatbot for WordPress with OpenAI, Claude, xAI, DeepSeek, live agent, PDF uploads, WooCommerce, and training on website data.
- * Version: 3.2.24
+ * Version: 3.2.25
  * Author: MxChat
  * Author URI: https://mxchat.ai
  * License: GPLv2 or later
@@ -481,6 +481,7 @@ function mxchat_include_classes() {
     $class_files = array(
         'includes/class-mxchat-model-catalog.php',
         'includes/class-mxchat-model-liveness.php',
+        'includes/class-mxchat-license-check.php',
         'includes/class-mxchat-session-store.php',
         'includes/class-mxchat-live-agent-schedule.php',
         'includes/class-mxchat-tool-registry.php',
@@ -536,6 +537,13 @@ function mxchat_include_classes() {
     // when no key is stored.
     if (class_exists('MxChat_Model_Liveness')) {
         MxChat_Model_Liveness::init();
+    }
+
+    // Licence domain check (c93ede): once a day asks mxchat.ai whether this
+    // site's domain is still switched on for its key, honours an explicit
+    // "off" after a three-day grace period, and fails open on everything else.
+    if (class_exists('MxChat_License_Check')) {
+        MxChat_License_Check::init();
     }
 
     // Gutenberg chatbot block (plan-95dd1e): a click-to-place wrapper over the
@@ -1550,7 +1558,8 @@ function mxchat_deactivate() {
     wp_clear_scheduled_hook('mxchat_cleanup_old_transcripts');
     wp_clear_scheduled_hook('mxchat_send_delayed_transcript');
     wp_clear_scheduled_hook('mxchat_model_liveness_check');
-    
+    wp_clear_scheduled_hook('mxchat_license_check');
+
     // Clear fallback options
     delete_option('mxchat_use_fallback_rate_limits');
     delete_option('mxchat_next_rate_limit_check');

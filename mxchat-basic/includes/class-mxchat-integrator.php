@@ -2276,21 +2276,31 @@ public function mxchat_handle_chat_request() {
 
         // Step 1: Check for new PDF URL in the message
         if (!isset($_POST['vision_processed']) && preg_match('/https?:\/\/[^\s"]+/i', $message, $matches)) {
-            $new_pdf_url = $matches[0];
+            // Trailing punctuation belongs to the sentence, not to the address (plan f7ab5a):
+            // "see https://x/guide.pdf, thanks" used to fetch "guide.pdf,".
+            $new_pdf_url = rtrim($matches[0], ".,;:!?)'\"");
 
-            // Check if this is likely a PDF-related request
-            $pdf_keywords = ['pdf', 'document', 'read', 'analyze'];
-            $is_pdf_request = false;
-
-            foreach ($pdf_keywords as $keyword) {
-                if (stripos($message, $keyword) !== false) {
-                    $is_pdf_request = true;
-                    break;
-                }
+            // Decide the PDF branch in this order (plan f7ab5a; the old test was a substring
+            // match on pdf / document / read / analyze, so "already", "documentation" or
+            // "thread" plus any web link downloaded that page and answered with a PDF error):
+            //   (a) the address path ends in .pdf;
+            //   (b) the bot asked for a PDF and is waiting for its address;
+            //   (c) the message carries one of the four words as a WHOLE word AND the
+            //       downloaded body is a PDF (sniffed once; the body is reused below, so the
+            //       file is downloaded once).
+            // Anything else falls through to intent detection and the model untouched.
+            $pdf_body = null;
+            $url_path = (string) parse_url($new_pdf_url, PHP_URL_PATH);
+            $is_pdf_request = (bool) preg_match('/\.pdf$/i', $url_path)
+                || (bool) get_transient('mxchat_waiting_for_pdf_url_' . $session_id);
+            if (!$is_pdf_request && preg_match('/\b(pdf|document|read|analyze)\b/i', $message)
+                && wp_http_validate_url($new_pdf_url) && parse_url($new_pdf_url, PHP_URL_SCHEME) === 'https') {
+                $pdf_body = $this->mxchat_fetch_pdf_body($new_pdf_url);
+                $is_pdf_request = is_string($pdf_body) && preg_match('/^\s*%PDF-/', substr($pdf_body, 0, 16)) === 1;
             }
 
-            // If it looks like a PDF request or we're waiting for a PDF URL
-            if ($is_pdf_request || get_transient('mxchat_waiting_for_pdf_url_' . $session_id)) {
+            // If it is a PDF request (or we're waiting for a PDF URL)
+            if ($is_pdf_request) {
                 // Validate HTTPS
                 if (wp_http_validate_url($new_pdf_url) && parse_url($new_pdf_url, PHP_URL_SCHEME) === 'https') {
                     // Extract filename from URL
@@ -2301,7 +2311,7 @@ public function mxchat_handle_chat_request() {
 
                     // Process new PDF using current_options
                     $max_pages = $current_options['pdf_max_pages'] ?? 69;
-                    $embeddings = $this->fetch_and_split_pdf_pages($new_pdf_url, $max_pages);
+                    $embeddings = $this->fetch_and_split_pdf_pages($new_pdf_url, $max_pages, $pdf_body);
 
                     if ($embeddings === 'too_many_pages') {
                         $error_text = sprintf(
@@ -4188,9 +4198,8 @@ private function mxchat_anthropic_system_blocks($system_prompt) {
  */
 private function interpret_query_with_claude($user_query, $system_prompt, $api_key, $model) {
     // Anthropic retired claude-opus-4-20250514 / claude-sonnet-4-20250514 on 2026-06-15.
-    // Read-time rescue: remap a saved dead ID to the current equivalent before the API call.
-    if ($model === 'claude-opus-4-20250514') { $model = 'claude-opus-4-8'; }
-    elseif ($model === 'claude-sonnet-4-20250514') { $model = 'claude-sonnet-4-6'; }
+    // Read-time rescue: a saved retired id is remapped to the catalog's replacement before the API call.
+    $model = MxChat_Model_Catalog::resolve_retired($model); // plan 8c4eb4: the catalog's one map
     $url = 'https://api.anthropic.com/v1/messages';
 
     $payload = [
@@ -4239,11 +4248,28 @@ private function interpret_query_with_gemini($user_query, $system_prompt, $api_k
     if ($model === 'gemini-3-pro-preview') {
         $model = 'gemini-3.1-pro-preview';
     }
-    // Use v1beta for preview models, v1 for stable models
-    $api_version = (strpos($model, 'preview') !== false || strpos($model, 'exp') !== false) ? 'v1beta' : 'v1';
+    // v1beta for every model (plan be6cbb): thinkingConfig is accepted there, and
+    // the chat path already sends every Gemini request to v1beta.
+    $url = "https://generativelanguage.googleapis.com/v1beta/models/{$model}:generateContent?key=" . urlencode($api_key);
 
-    $url = "https://generativelanguage.googleapis.com/{$api_version}/models/{$model}:generateContent?key=" . urlencode($api_key);
-    
+    // A thinking model spends its output budget on thoughts first. With a 20-token
+    // cap and no thinking setting, every Gemini 3 Flash and Pro id answered
+    // MAX_TOKENS with 0 answer tokens, so the visitor's whole sentence was sent to
+    // the search provider and quoted back (plan be6cbb; measured on nine ids).
+    // 256 tokens leaves room for the thoughts and a short query; the thinking
+    // level is the catalog's for the model, as on the chat path (none for the
+    // Flash-Lite ids).
+    $generation_config = [
+        'temperature'     => 0.2,
+        'maxOutputTokens' => 256,
+    ];
+    if (class_exists('MxChat_Model_Catalog') && method_exists('MxChat_Model_Catalog', 'gemini_thinking_config')) {
+        $thinking_config = MxChat_Model_Catalog::gemini_thinking_config($model);
+        if (is_array($thinking_config) && !empty($thinking_config)) {
+            $generation_config['thinkingConfig'] = $thinking_config;
+        }
+    }
+
     $args = [
         'headers' => [
             'Content-Type' => 'application/json',
@@ -4257,25 +4283,30 @@ private function interpret_query_with_gemini($user_query, $system_prompt, $api_k
                     ]
                 ]
             ],
-            'generationConfig' => [
-                'temperature' => 0.2,
-                'maxOutputTokens' => 20,
-            ],
+            'generationConfig' => $generation_config,
         ]),
         'method' => 'POST',
         'timeout' => 15,
     ];
-    
+
     $response = wp_remote_post($url, $args);
     if (is_wp_error($response)) {
         return sanitize_text_field($user_query);
     }
-    
+
     $body = json_decode(wp_remote_retrieve_body($response), true);
-    if (!empty($body['candidates'][0]['content']['parts'][0]['text'])) {
-        return sanitize_text_field(trim($body['candidates'][0]['content']['parts'][0]['text']));
+    // A reply the cap cut off is never used: "red" would pass the not-empty test
+    // below and be searched in place of the visitor's sentence (plan be6cbb).
+    $finish_reason = isset($body['candidates'][0]['finishReason']) ? (string) $body['candidates'][0]['finishReason'] : '';
+    if ($finish_reason === 'MAX_TOKENS') {
+        return sanitize_text_field($user_query);
     }
-    
+    // plan 781afd: every text part, not only parts[0] (a thought part may come first).
+    $interpreted = $this->mxchat_gemini_join_text_parts($body);
+    if ($interpreted !== '') {
+        return sanitize_text_field($interpreted);
+    }
+
     return sanitize_text_field($user_query);
 }
 
@@ -4447,7 +4478,27 @@ public function mxchat_handle_pdf_discussion($message, $user_id, $session_id) {
 /**
  * Enhanced fetch_and_split_pdf_pages with SSRF protection
  */
-private function fetch_and_split_pdf_pages($pdf_source, $max_pages) {
+/**
+ * Download a PDF candidate once (plan f7ab5a). Same guard, User-Agent and timeout as
+ * the download inside fetch_and_split_pdf_pages(); returns the body on HTTP 200,
+ * false otherwise. The caller sniffs the first bytes and hands the body back in,
+ * so a sniffed file is not downloaded a second time.
+ */
+private function mxchat_fetch_pdf_body($pdf_url) {
+    if (!$this->mxchat_is_safe_pdf_url($pdf_url)) {
+        return false;
+    }
+    $response = wp_safe_remote_get($pdf_url, [
+        'timeout' => 60,
+        'headers' => ['User-Agent' => function_exists('mxchat_ingest_user_agent') ? mxchat_ingest_user_agent() : 'MxChat PDF Processor']
+    ]);
+    if (is_wp_error($response) || wp_remote_retrieve_response_code($response) !== 200) {
+        return false;
+    }
+    return (string) wp_remote_retrieve_body($response);
+}
+
+private function fetch_and_split_pdf_pages($pdf_source, $max_pages, $prefetched_body = null) {
     // Reset the per-call embedding-failure reason (104a75) — callers read it via
     // get_last_pdf_embedding_error() when zero pages come back.
     $this->last_pdf_embedding_error = null;
@@ -4520,28 +4571,21 @@ private function fetch_and_split_pdf_pages($pdf_source, $max_pages) {
             }
             $temp_file = wp_tempnam($pdf_source);
             
-            // SECURITY FIX: Changed from wp_remote_get to wp_safe_remote_get
-            // Route through the shared MXChat crawler identity (plan bae78f/b6d93c) so
-            // every remote-content fetch presents one honest, versioned, filterable,
-            // allowlistable User-Agent. function_exists guard keeps the front-end/nopriv
-            // path safe if the helper (in the always-loaded main file) is ever unavailable.
-            $response = wp_safe_remote_get($pdf_source, [
-                'timeout' => 60,
-                'headers' => ['User-Agent' => function_exists('mxchat_ingest_user_agent') ? mxchat_ingest_user_agent() : 'MxChat PDF Processor']
-            ]);
-            
-            if (is_wp_error($response) || wp_remote_retrieve_response_code($response) !== 200) {
-                $error_message = is_wp_error($response) ? $response->get_error_message() : 'HTTP ' . wp_remote_retrieve_response_code($response);
-                //error_log("❌ BASIC PROCESSING: Failed to download PDF: " . $error_message);
+            // The body may already be in hand: the chat handler downloads a candidate once to
+            // sniff it (plan f7ab5a). Otherwise download it here: wp_safe_remote_get with the
+            // shared MXChat crawler identity (plan bae78f/b6d93c), see mxchat_fetch_pdf_body().
+            $body = is_string($prefetched_body) ? $prefetched_body : $this->mxchat_fetch_pdf_body($pdf_source);
+            if ($body === false) {
+                //error_log("BASIC PROCESSING: Failed to download PDF");
                 return false;
             }
-            
+
             global $wp_filesystem;
             if (empty($wp_filesystem)) {
                 require_once ABSPATH . 'wp-admin/includes/file.php';
                 WP_Filesystem();
             }
-            $wp_filesystem->put_contents($temp_file, wp_remote_retrieve_body($response), FS_CHMOD_FILE);
+            $wp_filesystem->put_contents($temp_file, $body, FS_CHMOD_FILE);
             //error_log("✅ PDF downloaded successfully");
         } else {
             $temp_file = $pdf_source;
@@ -10012,9 +10056,8 @@ private function mxchat_fc_log($msg) {
  */
 private function mxchat_fc_resolve_provider($selected_model, $opts) {
     // Anthropic retired claude-opus-4-20250514 / claude-sonnet-4-20250514 on 2026-06-15.
-    // Read-time rescue: remap a saved dead ID to the current equivalent before the API call.
-    if ($selected_model === 'claude-opus-4-20250514') { $selected_model = 'claude-opus-4-8'; }
-    elseif ($selected_model === 'claude-sonnet-4-20250514') { $selected_model = 'claude-sonnet-4-6'; }
+    // Read-time rescue: a saved retired id is remapped to the catalog's replacement before the API call.
+    $selected_model = MxChat_Model_Catalog::resolve_retired($selected_model); // plan 8c4eb4: the catalog's one map
     if ($selected_model === 'openrouter') {
         $model = isset($opts['openrouter_selected_model']) ? $opts['openrouter_selected_model'] : '';
         $key   = isset($opts['openrouter_api_key']) ? $opts['openrouter_api_key'] : '';
@@ -11605,7 +11648,7 @@ private function mxchat_generate_response_openai_stream($selected_model, $api_ke
     // OpenAI retires gpt-5.1-chat-latest / gpt-5.3-chat-latest on 2026-08-10
     // (replacement gpt-5.6-sol). Read-time rescue mirrors the non-streaming
     // path (plan e46b8f).
-    if ($selected_model === 'gpt-5.1-chat-latest' || $selected_model === 'gpt-5.3-chat-latest') { $selected_model = 'gpt-5.6-sol'; }
+    $selected_model = MxChat_Model_Catalog::resolve_retired($selected_model); // plan 8c4eb4: the catalog's one map
     try {
         $bot_id = $this->get_current_bot_id($session_id);
         
@@ -12266,7 +12309,7 @@ private function mxchat_generate_response_openai_web_search($selected_model, $ap
     // OpenAI retires gpt-5.1-chat-latest / gpt-5.3-chat-latest on 2026-08-10
     // (replacement gpt-5.6-sol). Read-time rescue mirrors the chat paths
     // (plan e46b8f).
-    if ($selected_model === 'gpt-5.1-chat-latest' || $selected_model === 'gpt-5.3-chat-latest') { $selected_model = 'gpt-5.6-sol'; }
+    $selected_model = MxChat_Model_Catalog::resolve_retired($selected_model); // plan 8c4eb4: the catalog's one map
     try {
         $bot_id = $this->get_current_bot_id($session_id);
         $system_prompt_instructions = $this->get_system_instructions($bot_id, $session_id);
@@ -12614,9 +12657,8 @@ private function mxchat_web_search_streaming_response($request_body, $api_key, $
 
 private function mxchat_generate_response_claude_stream($selected_model, $claude_api_key, $conversation_history, $relevant_content, $session_id, $testing_data = null) {
     // Anthropic retired claude-opus-4-20250514 / claude-sonnet-4-20250514 on 2026-06-15.
-    // Read-time rescue: remap a saved dead ID to the current equivalent before the API call.
-    if ($selected_model === 'claude-opus-4-20250514') { $selected_model = 'claude-opus-4-8'; }
-    elseif ($selected_model === 'claude-sonnet-4-20250514') { $selected_model = 'claude-sonnet-4-6'; }
+    // Read-time rescue: a saved retired id is remapped to the catalog's replacement before the API call.
+    $selected_model = MxChat_Model_Catalog::resolve_retired($selected_model); // plan 8c4eb4: the catalog's one map
     try {
         // Get bot ID from session or request
         $bot_id = $this->get_current_bot_id($session_id);
@@ -13528,6 +13570,7 @@ private function mxchat_friendly_chat_error($http_code, $error_message, $provide
     // choosing a different model. (Anthropic phrasing + the common API shapes.)
     $low = strtolower($raw);
     $is_model_access = (strpos($low, 'not available') !== false)
+        || (strpos($low, 'no longer available') !== false)    // Gemini: "This model ... is no longer available to new users" (plan 1bcd1c)
         || (strpos($low, 'does not have access') !== false)
         || (strpos($low, 'do not have access') !== false)
         || (strpos($low, 'does not exist') !== false)          // OpenAI: "model `x` does not exist or you do not have access"
@@ -13581,9 +13624,8 @@ private function mxchat_friendly_chat_error($http_code, $error_message, $provide
 
 private function mxchat_generate_response_claude($selected_model, $claude_api_key, $conversation_history, $relevant_content, $session_id = '') {
     // Anthropic retired claude-opus-4-20250514 / claude-sonnet-4-20250514 on 2026-06-15.
-    // Read-time rescue: remap a saved dead ID to the current equivalent before the API call.
-    if ($selected_model === 'claude-opus-4-20250514') { $selected_model = 'claude-opus-4-8'; }
-    elseif ($selected_model === 'claude-sonnet-4-20250514') { $selected_model = 'claude-sonnet-4-6'; }
+    // Read-time rescue: a saved retired id is remapped to the catalog's replacement before the API call.
+    $selected_model = MxChat_Model_Catalog::resolve_retired($selected_model); // plan 8c4eb4: the catalog's one map
 
         // Get bot ID from session or request
         $bot_id = $this->get_current_bot_id($session_id);
@@ -13715,7 +13757,7 @@ private function mxchat_generate_response_openai($selected_model, $api_key, $con
     // OpenAI retires gpt-5.1-chat-latest / gpt-5.3-chat-latest on 2026-08-10
     // (replacement gpt-5.6-sol). Read-time rescue for saved / bot-level ids
     // that missed mxchat_migrate_deprecated_models() (plan e46b8f).
-    if ($selected_model === 'gpt-5.1-chat-latest' || $selected_model === 'gpt-5.3-chat-latest') { $selected_model = 'gpt-5.6-sol'; }
+    $selected_model = MxChat_Model_Catalog::resolve_retired($selected_model); // plan 8c4eb4: the catalog's one map
     try {
         // Ensure conversation_history is an array
         if (!is_array($conversation_history)) {
@@ -14382,25 +14424,14 @@ private function mxchat_generate_response_gemini($selected_model, $gemini_api_ke
             'topK' => 40,
             'maxOutputTokens' => 8192,
         ],
-        'safetySettings' => [
-            [
-                'category' => 'HARM_CATEGORY_HARASSMENT',
-                'threshold' => 'BLOCK_MEDIUM_AND_ABOVE'
-            ],
-            [
-                'category' => 'HARM_CATEGORY_HATE_SPEECH',
-                'threshold' => 'BLOCK_MEDIUM_AND_ABOVE'
-            ],
-            [
-                'category' => 'HARM_CATEGORY_SEXUALLY_EXPLICIT',
-                'threshold' => 'BLOCK_MEDIUM_AND_ABOVE'
-            ],
-            [
-                'category' => 'HARM_CATEGORY_DANGEROUS_CONTENT',
-                'threshold' => 'BLOCK_MEDIUM_AND_ABOVE'
-            ]
-        ]
     ];
+    // plan 781afd: BLOCK_ONLY_HIGH on the four harm categories, through the
+    // mxchat_gemini_safety_settings filter (see the helper). An empty filtered
+    // list omits the key so Gemini's own defaults apply.
+    $gemini_safety = $this->mxchat_gemini_safety_settings($selected_model);
+    if (!empty($gemini_safety)) {
+        $request_payload['safetySettings'] = $gemini_safety;
+    }
     // plan a9774b: thinking level from the catalog (Gemini 3.x → low; Flash-Lite → none).
     $gemini_thinking = MxChat_Model_Catalog::gemini_thinking_config($selected_model);
     if ($gemini_thinking !== null) {
@@ -14467,17 +14498,167 @@ private function mxchat_generate_response_gemini($selected_model, $gemini_api_ke
         return $this->mxchat_friendly_chat_error($gemini_http_code, $gemini_error_message, 'Gemini', $selected_model);
     }
     
-    // Extract the response text
-    if (isset($response_body['candidates'][0]['content']['parts'][0]['text'])) {
-        $text = trim($response_body['candidates'][0]['content']['parts'][0]['text']);
-        if ($text !== '') {
-            return $text;
-        }
-        return $this->mxchat_empty_completion_error($response_body, 'Gemini');
-    } else {
-        //error_log('Unexpected Gemini API response format: ' . json_encode($response_body));
-        return "Sorry, I couldn't process that request. The response format was unexpected.";
+    // Extract the response text: every text part, not only parts[0] (plan 781afd).
+    $text = $this->mxchat_gemini_join_text_parts($response_body);
+    if ($text !== '') {
+        return $text;
     }
+    // No text came back: a withheld reply (safety / recitation / blocklist),
+    // an empty candidate, or a body that was not JSON at all.
+    return $this->mxchat_gemini_no_text_error($response_body, wp_remote_retrieve_response_code($response), $selected_model);
+}
+
+/**
+ * Gemini safetySettings for the plain chat dispatch (plan 781afd).
+ *
+ * BLOCK_ONLY_HIGH on all four harm categories. The earlier medium-and-above
+ * threshold withheld ordinary answers on medical / body-related
+ * stores: "Where is the medical reimbursement form?" on a prosthetics shop was
+ * rated HARASSMENT=MEDIUM and came back with no content in 5 of 12 tries; the
+ * same question at BLOCK_ONLY_HIGH answered 8 of 8 (measured 2026-10-05). A
+ * withheld reply then fell into a generic unexpected-format branch whose log
+ * line was commented out, so nobody could see why.
+ *
+ * Filter `mxchat_gemini_safety_settings` (array $settings, string $model) lets
+ * a site tighten or loosen it; mxchat-woo applies the same filter name to its
+ * own inline array so one callback governs both. Return an empty array to send
+ * no safetySettings at all.
+ *
+ * @param string $model Gemini model id.
+ * @return array<int, array{category:string, threshold:string}>
+ */
+private function mxchat_gemini_safety_settings($model) {
+    $settings = array();
+    foreach (array('HARM_CATEGORY_HARASSMENT', 'HARM_CATEGORY_HATE_SPEECH', 'HARM_CATEGORY_SEXUALLY_EXPLICIT', 'HARM_CATEGORY_DANGEROUS_CONTENT') as $category) {
+        $settings[] = array('category' => $category, 'threshold' => 'BLOCK_ONLY_HIGH');
+    }
+    $filtered = apply_filters('mxchat_gemini_safety_settings', $settings, $model);
+    return is_array($filtered) ? array_values($filtered) : $settings;
+}
+
+/**
+ * Join every text part of the first Gemini candidate (plan 781afd). Skips
+ * thought parts and parts without text (a thoughtSignature-only part, a
+ * functionCall). Returns '' when there is nothing to read, including for a
+ * null / non-array body.
+ */
+private function mxchat_gemini_join_text_parts($response_body) {
+    if (!is_array($response_body) || !isset($response_body['candidates'][0]['content']['parts']) || !is_array($response_body['candidates'][0]['content']['parts'])) {
+        return '';
+    }
+    $text = '';
+    foreach ($response_body['candidates'][0]['content']['parts'] as $part) {
+        if (!is_array($part) || !isset($part['text']) || !is_string($part['text'])) {
+            continue;
+        }
+        if (!empty($part['thought'])) {
+            continue;
+        }
+        $text .= $part['text'];
+    }
+    return trim($text);
+}
+
+/**
+ * A Gemini reply with no text in it (plan 781afd). Three shapes land here:
+ *  - withheld: promptFeedback.blockReason set, a candidate whose finishReason
+ *    is not STOP (SAFETY, RECITATION, PROHIBITED_CONTENT, BLOCKLIST, SPII,
+ *    MAX_TOKENS, OTHER), or a safetyRating with blocked=true;
+ *  - empty: finishReason STOP and no text, the existing empty-completion contract;
+ *  - not JSON: a null / non-array body (an HTML 5xx page), a provider error.
+ *
+ * Visitors get one short generic line. An administrator who is chatting sees
+ * the reason. The log line (WP_DEBUG_LOG or MXCHAT_DEV_MODE only) carries the
+ * model, HTTP code, finishReason, blockReason and the non-NEGLIGIBLE ratings,
+ * never the key, the prompt or any conversation text.
+ *
+ * @return string|array Chat bubble text, or the ['error','error_code'] array.
+ */
+private function mxchat_gemini_no_text_error($response_body, $http_code, $model) {
+    $http_code = (int) $http_code;
+    if (!is_array($response_body)) {
+        $this->mxchat_gemini_log_no_text($model, $http_code, 'body-not-json', '', array());
+        return $this->mxchat_friendly_chat_error($http_code, sprintf('HTTP %d, the response body was not JSON', $http_code), 'Gemini', $model);
+    }
+
+    $finish_reason = isset($response_body['candidates'][0]['finishReason']) && is_string($response_body['candidates'][0]['finishReason'])
+        ? $response_body['candidates'][0]['finishReason'] : '';
+    $block_reason = isset($response_body['promptFeedback']['blockReason']) && is_string($response_body['promptFeedback']['blockReason'])
+        ? $response_body['promptFeedback']['blockReason'] : '';
+
+    $ratings = array();
+    $blocked_rating = false;
+    $rating_sources = array();
+    if (isset($response_body['candidates'][0]['safetyRatings']) && is_array($response_body['candidates'][0]['safetyRatings'])) {
+        $rating_sources[] = $response_body['candidates'][0]['safetyRatings'];
+    }
+    if (isset($response_body['promptFeedback']['safetyRatings']) && is_array($response_body['promptFeedback']['safetyRatings'])) {
+        $rating_sources[] = $response_body['promptFeedback']['safetyRatings'];
+    }
+    foreach ($rating_sources as $source) {
+        foreach ($source as $rating) {
+            if (!is_array($rating) || !isset($rating['category'], $rating['probability'])) {
+                continue;
+            }
+            if (!empty($rating['blocked'])) {
+                $blocked_rating = true;
+            }
+            if ($rating['probability'] === 'NEGLIGIBLE') {
+                continue;
+            }
+            $ratings[] = str_replace('HARM_CATEGORY_', '', (string) $rating['category']) . '=' . (string) $rating['probability'];
+        }
+    }
+    $ratings = array_values(array_unique($ratings));
+
+    $this->mxchat_gemini_log_no_text($model, $http_code, $finish_reason, $block_reason, $ratings);
+
+    $withheld = ($block_reason !== '') || $blocked_rating || ($finish_reason !== '' && $finish_reason !== 'STOP');
+    if (!$withheld) {
+        // The candidate finished normally with nothing in it.
+        return $this->mxchat_empty_completion_error($response_body, 'Gemini');
+    }
+
+    if (current_user_can('manage_options')) {
+        $detail_parts = array();
+        if ($block_reason !== '') {
+            $detail_parts[] = 'blockReason ' . $block_reason;
+        }
+        if ($finish_reason !== '') {
+            $detail_parts[] = 'finishReason ' . $finish_reason;
+        }
+        if (!empty($ratings)) {
+            $detail_parts[] = implode(', ', $ratings);
+        }
+        $detail = !empty($detail_parts) ? implode(', ', $detail_parts) : 'no reason given';
+        return sprintf(
+            /* translators: %s: Gemini's finish reason, block reason and safety ratings, e.g. "finishReason SAFETY, HARASSMENT=MEDIUM" */
+            esc_html__('Gemini withheld this reply: %s. Visitors see a generic message instead. Google\'s safety filter made this call; the mxchat_gemini_safety_settings filter adjusts its thresholds.', 'mxchat'),
+            esc_html($detail)
+        );
+    }
+
+    // Visitors: short, generic, nothing about the provider.
+    return esc_html__('Sorry, I can\'t answer that one. Could you try rephrasing your question?', 'mxchat');
+}
+
+/**
+ * Debug-only log line for a Gemini reply with no text (plan 781afd). Fires
+ * when WP_DEBUG_LOG or MXCHAT_DEV_MODE is on. Carries no key, prompt or text.
+ */
+private function mxchat_gemini_log_no_text($model, $http_code, $finish_reason, $block_reason, $ratings) {
+    $debug_log_on = (defined('WP_DEBUG_LOG') && WP_DEBUG_LOG) || (defined('MXCHAT_DEV_MODE') && MXCHAT_DEV_MODE);
+    if (!$debug_log_on) {
+        return;
+    }
+    error_log(sprintf(
+        'MxChat: Gemini returned no text [model=%s http=%d finishReason=%s blockReason=%s ratings=%s]',
+        (string) $model,
+        (int) $http_code,
+        $finish_reason !== '' ? $finish_reason : '-',
+        $block_reason !== '' ? $block_reason : '-',
+        !empty($ratings) ? implode(',', $ratings) : '-'
+    ));
 }
 
 

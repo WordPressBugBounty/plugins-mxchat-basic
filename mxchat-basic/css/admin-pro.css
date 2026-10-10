@@ -177,6 +177,36 @@
     background: #e0f2fe;
 }
 
+/* Domain check row + the Check-license-now feedback (plan c93ede). The pill is
+   the shell's status pill; the sentence sits beside it in the secondary tone. */
+.mxch-license-check-sentence {
+    font-size: 13px;
+    color: var(--mxch-text-secondary);
+    line-height: 1.5;
+    flex: 1 1 240px;
+}
+
+.mxch-license-footer-actions .mxchat-license-check-msg,
+.mxch-license-check-panel .mxchat-license-check-msg {
+    font-size: 13px;
+    color: var(--mxch-text-secondary);
+}
+
+.mxchat-license-check-msg.is-error {
+    color: var(--mxch-error);
+}
+
+.mxch-license-check-panel-body p {
+    margin: var(--mxch-spacing-xs) 0 var(--mxch-spacing-sm);
+}
+
+.mxch-license-check-panel-actions {
+    display: flex;
+    align-items: center;
+    gap: var(--mxch-spacing-sm);
+    flex-wrap: wrap;
+}
+
 .mxch-license-key-code {
     background: #f1f5f9;
     padding: 6px 12px;

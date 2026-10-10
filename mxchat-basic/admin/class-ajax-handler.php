@@ -440,6 +440,20 @@ public function mxchat_save_setting_callback() {
             wp_send_json_success(['message' => esc_html__('Setting saved', 'mxchat')]);
             return;
 
+        // Page-cache purge on settings save (plan b76ed6, Support Ticket 468).
+        // STANDALONE option, same pattern. Default ON — the purge already ships
+        // (3.2.9), so this is an opt-OUT for large sites. Switching it off also
+        // drops a deferred purge the debounce may have scheduled seconds ago,
+        // so "off" takes effect at once rather than after one more purge.
+        case 'mxchat_cache_purge_enabled':
+            $cpe_value = ($value === 'on' || $value === '1') ? 'on' : 'off';
+            update_option('mxchat_cache_purge_enabled', $cpe_value);
+            if ($cpe_value === 'off' && class_exists('MxChat_Cache_Purge')) {
+                wp_clear_scheduled_hook(MxChat_Cache_Purge::DEFERRED_EVENT);
+            }
+            wp_send_json_success(['message' => esc_html__('Setting saved', 'mxchat')]);
+            return;
+
         // Clamped to the same 20-95 the field advertises. An out-of-range or
         // non-numeric POST is corrected rather than refused, and the corrected
         // value is echoed back so the field can reconcile — a silently stored
@@ -1528,7 +1542,8 @@ public function mxchat_handle_activate_license() {
     
     $product_id = 'MxChatPRO';
     $domain = parse_url(home_url(), PHP_URL_HOST); // Get the current domain
-    
+    $was_active = (get_option('mxchat_license_status', 'inactive') === 'active');
+
     // Call WooCommerce Software API for activation (not just validation)
     $response = wp_remote_get(
         add_query_arg(
@@ -1576,7 +1591,14 @@ public function mxchat_handle_activate_license() {
         update_option('mxchat_pro_email', $customer_email);
         update_option('mxchat_activation_key', $license_key);
         delete_option('mxchat_license_error');
-        
+
+        // A fresh activation starts the licence domain check (c93ede) from a
+        // clean slate: no grace streak carried over, first daily check at a
+        // random time within the day.
+        if (class_exists('MxChat_License_Check')) {
+            MxChat_License_Check::reset(true);
+        }
+
         // Also track on your website (this is your existing domain tracking)
         $this->track_domain_on_website($license_key, $customer_email, $domain);
         
@@ -1585,7 +1607,15 @@ public function mxchat_handle_activate_license() {
         $error_message = isset($data->error) ? $data->error : esc_html__('Activation failed', 'mxchat');
         update_option('mxchat_license_status', 'inactive');
         update_option('mxchat_license_error', $error_message);
-        
+
+        // c93ede: a refusal by the licence owner (domain switched off, new sites
+        // blocked) or a revoked key is an explicit "off" from mxchat.ai. Remember
+        // who controls it so Pro & Extensions says so, and keep checking so the
+        // owner's switch-on restores Pro without another click here.
+        if (class_exists('MxChat_License_Check')) {
+            MxChat_License_Check::note_activation_refusal(isset($data->code) ? (string) $data->code : '', (string) $error_message, $was_active);
+        }
+
         //error_log('MxChat Activation failed: ' . $error_message);
         wp_send_json_error($error_message);
     }
@@ -1672,7 +1702,13 @@ function mxchat_deactivate_license() {
     delete_option('mxchat_pro_email');
     delete_option('mxchat_activation_key');
     delete_option('mxchat_license_error');
-    
+
+    // Nothing left to check: drop the licence domain check's state and its
+    // scheduled event (c93ede).
+    if (class_exists('MxChat_License_Check')) {
+        MxChat_License_Check::reset(false);
+    }
+
     //error_log('MxChat deactivate: Local data cleared');
     
     // Notify your website's API to properly deactivate

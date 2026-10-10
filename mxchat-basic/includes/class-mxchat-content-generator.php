@@ -2414,9 +2414,8 @@ article .entry-content,
      */
     private function call_claude($model, $api_key, $system_prompt, $messages, $max_tokens) {
         // Anthropic retired claude-opus-4-20250514 / claude-sonnet-4-20250514 on 2026-06-15.
-        // Read-time rescue: remap a saved dead ID to the current equivalent before the API call.
-        if ($model === 'claude-opus-4-20250514') { $model = 'claude-opus-4-8'; }
-        elseif ($model === 'claude-sonnet-4-20250514') { $model = 'claude-sonnet-4-6'; }
+        // Read-time rescue: a saved retired id is remapped to the catalog's replacement before the API call.
+        $model = MxChat_Model_Catalog::resolve_retired($model); // plan 8c4eb4: the catalog's one map
         if (empty($api_key)) {
             return new WP_Error('no_api_key', __('Claude API key not configured.', 'mxchat'));
         }
@@ -2557,10 +2556,27 @@ article .entry-content,
             return new WP_Error('gemini_error', $error_msg);
         }
 
-        if (isset($decoded['candidates'][0]['content']['parts'][0]['text'])) {
-            return trim($decoded['candidates'][0]['content']['parts'][0]['text']);
+        // plan 781afd: join every text part (skip thought parts), not only parts[0].
+        $text = '';
+        if (isset($decoded['candidates'][0]['content']['parts']) && is_array($decoded['candidates'][0]['content']['parts'])) {
+            foreach ($decoded['candidates'][0]['content']['parts'] as $part) {
+                if (is_array($part) && isset($part['text']) && is_string($part['text']) && empty($part['thought'])) {
+                    $text .= $part['text'];
+                }
+            }
+        }
+        $text = trim($text);
+        if ($text !== '') {
+            return $text;
         }
 
+        $no_text_reason = isset($decoded['candidates'][0]['finishReason']) && is_string($decoded['candidates'][0]['finishReason'])
+            ? $decoded['candidates'][0]['finishReason']
+            : (isset($decoded['promptFeedback']['blockReason']) && is_string($decoded['promptFeedback']['blockReason']) ? $decoded['promptFeedback']['blockReason'] : '');
+        if ($no_text_reason !== '') {
+            /* translators: %s: Gemini's finish or block reason, e.g. SAFETY */
+            return new WP_Error('gemini_no_text', sprintf(__('Gemini returned no text (%s).', 'mxchat'), $no_text_reason));
+        }
         return new WP_Error('unexpected_response', __('Unexpected Gemini response format.', 'mxchat'));
     }
 

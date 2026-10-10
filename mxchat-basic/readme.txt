@@ -5,7 +5,7 @@ Tags: ai chatbot, chatgpt, woocommerce, customer support, content generation
 Requires at least: 5.3
 Tested up to: 7.1
 Requires PHP: 7.4
-Stable tag: 3.2.24
+Stable tag: 3.2.25
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -270,44 +270,26 @@ Yes. MxChat's Custom Provider setting accepts any OpenAI-compatible API endpoint
 
 Yes. MxChat is available for free on the WordPress plugin repository with full AI chatbot functionality. Premium add-ons are available for advanced features such as the Theme Customizer with its AI Theme Generator, and come with priority support.
 
+= Can a license holder turn MxChat Pro off for one of their sites? =
+
+Yes. On the Licenses page of their mxchat.ai account, the license holder can turn each site on or off and block new sites from activating the key. A site that is turned off shows its admin a notice and pauses Pro after three days, with settings and knowledge left as they are; turning it back on restores Pro within the hour, or straight away with Check license now on Pro & Extensions. Only the license holder can turn a site back on. Sites on a version older than 3.2.25 do not check in, so turning one off takes effect after it updates.
+
 == Developer Hooks & Filters ==
 
-MxChat provides WordPress filter hooks so developers can extend and customize chatbot behavior without modifying core plugin files. [View full documentation with code examples](https://mxchat.ai/mxchat-developer-hooks-filters/).
+MxChat has filter hooks for developers who want to extend it without editing plugin files, including mxchat_before_process_post (change a post before it is indexed), mxchat_system_instructions (adjust the system prompt for each reply), mxchat_gemini_safety_settings (Gemini safety thresholds) and mxchat_reference_shortcodes (shortcodes whose referenced content is imported). Every hook is documented with code examples at [mxchat.ai](https://mxchat.ai/mxchat-developer-hooks-filters/).
 
-= mxchat_before_process_post =
+== External services ==
 
-Runs during knowledge base indexing and lets you modify a post's data before MxChat processes it. Use this to include custom field data (e.g. product specifications or ACF fields), strip internal content you don't want the chatbot to learn, or transform posts based on bot ID. Receives the WP_Post object and the bot ID.
+To answer chats and generate content, MxChat sends requests with your own API key to the AI provider you choose: the visitor's message, the recent conversation and the matching knowledge-base text.
 
-= mxchat_system_instructions =
-
-Dynamically modify the system prompt before every AI response. Use this to inject live data such as business hours, inventory status, or user-specific context into the prompt at runtime. Receives the instructions text, bot ID, and session ID. MxChat also supports WordPress shortcodes directly in the system prompt field — any registered shortcodes are automatically expanded before being sent to the AI.
-
-= Added in 3.2.22 =
-
-mxchat_client_ip (the visitor address behind a trusted proxy), mxchat_current_datetime_line (the date and time line sent with each message), mxchat_transcript_user_message and mxchat_ai_conversation_history (what humans and the model each see of a transcript), mxchat_chat_toolbar_items with the mxchat:toolbar-ready and mxchat:opened browser events (toolbar buttons from an add-on), mxchat_handoff_card_sections (extra sections on the Telegram and Slack handoff card), and the MxChat_Utils::save_session_message helper for writing to a transcript. Each is documented with examples on the page linked above.
-
-## ✅ Get Started with MxChat AI Chatbot Today
-
-Installing MxChat for WordPress takes just a few clicks. Get started with our free plan and upgrade anytime to access our complete add-on ecosystem and premium features.
-
-## 💰 Pricing
-
-Most powerful features are included in the free plan. Upgrade to Pro for the complete add-on ecosystem and advanced capabilities.  
-[View all pricing options](https://mxchat.ai/)
-
-== Use of Third-Party Services ==
-
-This plugin connects to AI service providers to generate responses:
-
-**Service Providers:**
-- [OpenRouter](https://openrouter.ai/) - [Terms](https://openrouter.ai/terms) | [Privacy](https://openrouter.ai/privacy)
 - [OpenAI](https://openai.com/) - [Terms](https://openai.com/policies/terms-of-use/) | [Privacy](https://openai.com/policies/privacy-policy/)
 - [Anthropic](https://anthropic.com/) - [Terms](https://www.anthropic.com/terms) | [Privacy](https://www.anthropic.com/privacy)
 - [Google](https://ai.google.dev/) - [Terms](https://ai.google.dev/terms) | [Privacy](https://policies.google.com/privacy)
-- [X.AI](https://x.ai/) - [Terms](https://x.ai/terms-of-service) | [Privacy](https://x.ai/privacy-policy)
+- [xAI](https://x.ai/) - [Terms](https://x.ai/terms-of-service) | [Privacy](https://x.ai/privacy-policy)
 - [DeepSeek](https://deepseek.com/) - [Terms](https://deepseek.com/terms) | [Privacy](https://deepseek.com/privacy)
+- [OpenRouter](https://openrouter.ai/) - [Terms](https://openrouter.ai/terms) | [Privacy](https://openrouter.ai/privacy)
 
-Please ensure compliance with applicable terms and data privacy laws.
+Pro license management uses mxchat.ai, the plugin's own website, and only on sites where a Pro license key has been entered. Activate License and Deactivate License send the key, the purchase email and the site's domain when the administrator clicks them; the Pro & Extensions page checks whether the domain is linked; and once a day the site asks whether its domain is still switched on, also sending the plugin version. No visitor data or site content is sent, and a network error or outage never changes anything on the site. mxchat.ai - [Terms](https://mxchat.ai/terms-of-service/) | [Privacy](https://mxchat.ai/privacy-policy/)
 
 == Screenshots ==
 
@@ -321,6 +303,24 @@ Please ensure compliance with applicable terms and data privacy laws.
 *(Note: Screenshots will be added in future updates)*
 
 == Changelog ==
+
+= 3.2.25 - October 10, 2026 =
+* New: License holders can turn MxChat Pro on or off for each of their sites from the Licenses page of their mxchat.ai account. The site checks once a day, warns its admin and pauses Pro after three days unless it is turned back on.
+* New: A switch on the Page Cache Compatibility card turns off the automatic page-cache clear that runs when MxChat settings are saved, for large sites that manage their own cache.
+* New: Re-import affected entries can also refresh entries whose page was edited after it was imported, for sites that keep auto-sync off.
+* Fixed: Gemini chatbots no longer stop with "The response format was unexpected" when Google's safety filter flags an ordinary answer. The filter now blocks only high-risk content.
+* Fixed: A visitor message with a web link and a word like "read" or "documentation" is no longer treated as a PDF and answered with a PDF error.
+* Fixed: MxChat's chat styles no longer change the rest of your site, such as code blocks on your own pages turning black.
+* Fixed: On a page with an embedded chatbot, the floating bubble of the same bot is no longer added. It opened but could not send messages.
+* Fixed: Links in the chat widget are correct for a www address at the end of a paragraph and for a web address written in bold.
+* Fixed: WordPress Content import and auto-sync now include text from synced patterns and WoodMart HTML Blocks. Save or import a page again to update its entry.
+* Fixed: Saving a product no longer removes its Custom Product Tabs text from the chatbot's knowledge.
+* Fixed: With a Gemini 3 model, web search and image search use the key words of the visitor's request instead of the whole sentence.
+* Fixed: The Knowledge list's PDF filter shows PDF pages again, and uploaded files appear by name instead of a View Source link that led nowhere.
+* Fixed: Opening the Leads tab no longer writes a notice to the debug log when WordPress debugging is on.
+* Improved: Gemini 2.5 Pro, Flash and Flash-Lite are marked as no longer offered to new Google API users, and the admin is warned by name if Google refuses the selected model.
+* Improved: A chatbot still set to a retired AI model now uses that model's current replacement on every request.
+* Improved: The Script Loading card explains that a cache plugin's Delay JavaScript setting must leave MxChat's chat script out, or the chatbot stays hidden until the visitor interacts.
 
 = 3.2.24 - October 2, 2026 =
 * Fixed: A live-agent message Slack refuses (deleted or archived channel, revoked token) now tells the visitor instead of being reported as sent, ends the handoff so the chatbot takes over again, and shows the error on the Slack tab. Slack messages also no longer begin with stray characters.
@@ -351,7 +351,6 @@ Please ensure compliance with applicable terms and data privacy laws.
 * Improved: When AI Tools are on, the model is now told how many tool calls it may make for a message, is told how many remain after each round, and is asked for a single call when only one is left. Before, a model could request several lookups at once when only one was allowed, have the rest refused, and answer from partial results.
 * Fixed: Delete old index now checks every namespace of the old vector index, not just the one copied last. It refuses, and names the namespace, while any namespace with records has no finished copy whose count matches. Before, a site with several namespaces (one per bot, or a namespace from an earlier setup) could delete records that were never copied.
 * New: Migrate can copy every namespace of the vector index in one run. When the source index holds records in other namespaces, the Pinecone card offers a Copy every namespace switch beside Migrate. Each namespace is copied into the same-named namespace of the document index, so every bot keeps reading its own; the progress line shows which namespace is being copied and the counts for each, an interrupted copy continues with the right namespace, and a namespace already copied is kept rather than copied again.
-
 
 = 3.2.22 - September 20, 2026 =
 * New: An opt-in Pinecone Document index with full-text search, so a question carrying a part number, SKU or code finds the record that holds it. Create index for me, Check index and Migrate move an existing index across with no re-embedding, and classic vector indexes are untouched.
@@ -749,12 +748,14 @@ Older releases are archived in the plugin's full version history on WordPress.or
 
 == Upgrade Notice ==
 
+= 3.2.25 =
+Fixes Gemini chatbots stopping with "The response format was unexpected" on ordinary answers, chat links and PDF detection, and chat styles changing the rest of your site. License holders can now turn MxChat Pro on or off for each site from their mxchat.ai account. Also adds a page-cache switch and better imports for synced patterns, WoodMart blocks and product tabs.
+
 = 3.2.24 =
 Fixes links in chatbot replies not opening in Safari on iPhone, iPad and Mac, and live-agent messages being reported as sent when Slack refused them. Uploaded documents and PDFs are now named properly in answers, can carry a Source URL, and no longer duplicate when re-uploaded, and part numbers starting with digits work again on a Pinecone document index. Adds Re-import affected entries, which rebuilds knowledge entries that earlier versions stored with missing accents, HTML character codes or reversed right-to-left text.
 
 = 3.2.23 =
 Fixes the chat input locking up for good when a visitor pressed Enter on an empty message. On a Pinecone document index, Delete old index now refuses while any namespace is still uncopied, Migrate can copy every namespace in one run and continues where it stopped, part numbers typed without spaces find their records, and Create index for me suggests a free name instead of failing on an existing one. Adds the GPT-6 models (Astra, Sol and Luna) to the model picker, and tells the chatbot its AI Tools call budget so it no longer answers from partial results when only one call is allowed.
-
 
 = 3.2.22 =
 Adds the current date and time to every chat, knowledge restrictions for custom roles and single pages, media library imports with auto-sync, and an optional Pinecone full-text document index. Also hardens chat links and rate limiting, fixes function calling and underscore rendering, and adds Gemini 3.8 Flash. Now requires WordPress 5.3 and PHP 7.4.

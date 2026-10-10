@@ -1941,9 +1941,12 @@ function checkForActiveQueues() {
                 return;
             }
 
-            const sourceHtml = entry.has_link
+            // The Source cell comes from the server (plan b339c0): a link for a
+            // web source, the file name for an uploaded file, the muted label
+            // for manual content. The old two-way build stays as the fallback.
+            const sourceHtml = entry.source_html || (entry.has_link
                 ? '<a href="' + entry.source_url + '" target="_blank" style="color: var(--mxch-primary); text-decoration: none;"><span class="dashicons dashicons-external" style="font-size: 14px;"></span> View</a>'
-                : '<span style="color: var(--mxch-text-muted);">Manual</span>';
+                : '<span style="color: var(--mxch-text-muted);">Manual</span>');
 
             const deleteUrl = mxchatAdmin.admin_url + 'admin-post.php?action=mxchat_delete_prompt&id=' + entry.id + '&bot_id=' + encodeURIComponent(mxchatAdmin.bot_id || 'default') + '&_wpnonce=' + entry.delete_nonce;
 

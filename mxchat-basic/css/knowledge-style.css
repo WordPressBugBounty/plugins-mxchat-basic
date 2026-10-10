@@ -4134,6 +4134,24 @@ tr.mxchat-row-error td:first-child::before {
     opacity: 0.55;
     cursor: default;
 }
+/* Also rewrite edited entries: the toggle beside its label (plan a00ef8) */
+.mxch-kb-reimport-edited {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--mxch-spacing-sm);
+    margin-top: var(--mxch-spacing-md);
+}
+.mxch-kb-reimport-edited .toggle-switch {
+    flex: 0 0 auto;
+    margin-top: 2px;
+}
+.mxch-kb-reimport-edited .mxch-field-label {
+    margin-bottom: 2px;
+    cursor: pointer;
+}
+.mxch-kb-reimport-edited .mxch-field-description {
+    margin: 0;
+}
 .mxch-kb-reimport-progress,
 .mxch-kb-reimport-error {
     margin-top: var(--mxch-spacing-lg);

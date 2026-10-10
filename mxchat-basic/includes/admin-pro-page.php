@@ -23,7 +23,13 @@ function mxchat_render_pro_page($admin_instance, $addons_config) {
     $license_key = get_option('mxchat_activation_key', '');
     $current_domain = parse_url(home_url(), PHP_URL_HOST);
     $is_domain_linked = $admin_instance->is_current_activation_linked($current_domain);
-    $license_management_url = 'https://mxchat.ai/my-account/orders/';
+    $license_management_url = 'https://mxchat.ai/my-account/licenses/';
+
+    // Licence domain check (c93ede): what mxchat.ai last said about this domain,
+    // and whether Pro is paused because the licence holder switched it off.
+    $has_license_check = class_exists('MxChat_License_Check');
+    $license_check     = $has_license_check ? MxChat_License_Check::view_model() : null;
+    $license_revoked   = $has_license_check && MxChat_License_Check::is_revoked();
 
     // Mask the license key for display
     $masked_key = '';
@@ -217,6 +223,15 @@ function mxchat_render_pro_page($admin_instance, $addons_config) {
                                         <code class="mxch-license-key-code"><?php echo esc_html($license_key); ?></code>
                                     </span>
                                 </div>
+                                <?php if ($license_check) : ?>
+                                <div class="mxch-license-info-item mxch-license-check-item">
+                                    <span class="mxch-license-info-label"><?php esc_html_e('Domain check', 'mxchat'); ?></span>
+                                    <span class="mxch-license-info-value">
+                                        <span id="mxchat-license-check-pill" class="mxch-status-pill <?php echo esc_attr($license_check['pill_class']); ?>"><span class="mxch-status-dot"></span><span class="mxchat-license-check-pill-text"><?php echo esc_html($license_check['pill_text']); ?></span></span>
+                                        <span id="mxchat-license-check-msg" class="mxch-license-check-sentence mxchat-license-check-msg" role="status"><?php echo esc_html($license_check['sentence']); ?></span>
+                                    </span>
+                                </div>
+                                <?php endif; ?>
                             </div>
 
                             <div class="mxch-license-footer-actions">
@@ -224,6 +239,12 @@ function mxchat_render_pro_page($admin_instance, $addons_config) {
                                     <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
                                     <?php esc_html_e('Manage Account', 'mxchat'); ?>
                                 </a>
+                                <?php if ($license_check) : ?>
+                                <button type="button" id="mxchat-license-check-button" class="mxch-btn mxch-btn-secondary mxchat-license-check-now">
+                                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+                                    <?php esc_html_e('Check license now', 'mxchat'); ?>
+                                </button>
+                                <?php endif; ?>
                                 <button type="button" id="deactivate-license-button" class="mxch-btn mxch-btn-danger">
                                     <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
                                     <?php esc_html_e('Deactivate License', 'mxchat'); ?>
@@ -231,6 +252,21 @@ function mxchat_render_pro_page($admin_instance, $addons_config) {
                                 <span id="deactivate-status"></span>
                             </div>
                         <?php else: ?>
+                            <?php if ($license_revoked && $license_check) : ?>
+                            <!-- Pro paused by the licence domain check (c93ede): the licence holder switched this domain off -->
+                            <div class="mxch-notice mxch-notice-warning mxch-notice-block mxch-license-check-panel">
+                                <svg class="mxch-notice-icon" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+                                <div class="mxch-license-check-panel-body">
+                                    <strong><?php esc_html_e('Pro is paused on this site', 'mxchat'); ?></strong>
+                                    <p><?php echo esc_html($license_check['sentence']); ?></p>
+                                    <div class="mxch-license-check-panel-actions">
+                                        <button type="button" class="mxch-btn mxch-btn-secondary mxch-btn-sm mxchat-license-check-now"><?php esc_html_e('Check license now', 'mxchat'); ?></button>
+                                        <a href="<?php echo esc_url($license_management_url); ?>" target="_blank" class="mxch-btn mxch-btn-ghost mxch-btn-sm"><?php esc_html_e('Open My Account', 'mxchat'); ?></a>
+                                        <span class="mxchat-license-check-msg" role="status"></span>
+                                    </div>
+                                </div>
+                            </div>
+                            <?php endif; ?>
                             <!-- Activation Form -->
                             <form id="mxchat-activation-form" class="mxch-activation-form">
                                 <div class="mxch-form-row">
@@ -253,6 +289,13 @@ function mxchat_render_pro_page($admin_instance, $addons_config) {
                                     </button>
                                     <div id="mxchat-activation-spinner" class="mxch-spinner" style="display: none;"></div>
                                 </div>
+                                <?php if ($has_license_check && !$license_revoked && ($license_refusal = MxChat_License_Check::last_refusal()) !== '') : ?>
+                                <!-- The last Activate click was refused by the licence owner (c93ede): say who controls it -->
+                                <p class="mxch-field-hint mxch-license-refusal" data-mxchat-license-refusal="1">
+                                    <strong><?php esc_html_e('Managed by the licence owner.', 'mxchat'); ?></strong>
+                                    <?php echo esc_html($license_refusal); ?>
+                                </p>
+                                <?php endif; ?>
                                 <p class="mxch-field-hint">
                                     <?php esc_html_e("Don't have a license?", 'mxchat'); ?>
                                     <a href="https://mxchat.ai/" target="_blank"><?php esc_html_e('Get MxChat Pro', 'mxchat'); ?></a>

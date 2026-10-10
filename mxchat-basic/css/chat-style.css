@@ -784,7 +784,11 @@
 /* ========================================
    CORE CHATBOT UI
    ======================================== */
-.invisible {
+/* This stylesheet loads on every page where the widget shows, so generic class names must
+   stay inside MxChat's own containers: a bare .invisible hit the site's own elements (and
+   Bootstrap / Tailwind give that class the opposite meaning, visibility hidden with the layout
+   kept). :where() keeps the specificity of the bare class. */
+:where(.floating-chatbot, .mxchat-chatbot-wrapper) .invisible {
     display: none;
     opacity: 0;
     pointer-events: none;
@@ -1205,7 +1209,10 @@
 .chatbot-top-bar button.exit-chat:hover {
     background: rgba(255, 255, 255, 0.12);
 }
-.visible {
+/* The floating window is the only element MxChat toggles .visible on (core, the Trigger
+   and Multi-Bot add-ons and MxChat Anywhere all use .floating-chatbot). Unscoped, this turned
+   any site element with class "visible" into a flex container. */
+:where(.floating-chatbot).visible {
     display: flex;
 }
 
@@ -1604,7 +1611,10 @@
 
 
 
-pre {
+/* Code blocks inside the chat only (a bare pre turned every code sample on the site black with
+   white text). :where() keeps the specificity of the bare element selector, so .mxchat-code-block
+   still wins where it sets a property and the look inside the chat is unchanged. */
+:where(.mxchat-chatbot-wrapper) pre {
     background-color: #000;
     border: 1px solid #ddd;
     border-radius: 20px;
@@ -1620,23 +1630,6 @@ pre {
     padding: 1em 1.5em;
     display: block;
     word-wrap: break-word;
-}
-
-.copy-btn {
-    padding: 10px 20px;
-    border: none;
-    border-radius: 4px;
-    background-color: #9e7aff;
-    transition: background-color 0.3s;
-    color: #fff;
-    font-size: 1rem;
-    cursor: pointer;
-    font-weight: 700;
-    margin-bottom: 10px;
-}
-
-.copy-btn:hover {
-    opacity: 0.8;
 }
 
 .mxchat-product-card {

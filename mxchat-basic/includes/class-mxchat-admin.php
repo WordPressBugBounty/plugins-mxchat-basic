@@ -982,7 +982,9 @@ public function register_pinecone_settings() {
 public function sanitize_pinecone_settings($input) {
     $sanitized = array();
 
-    $sanitized['mxchat_use_pinecone'] = isset($input['mxchat_use_pinecone']) ? '1' : '0';
+    // The form posts value="1" for a ticked box and no key for an unticked one; a caller
+    // that passes '0' explicitly must not switch Pinecone ON (plan 95b2da).
+    $sanitized['mxchat_use_pinecone'] = (isset($input['mxchat_use_pinecone']) && (string) $input['mxchat_use_pinecone'] === '1') ? '1' : '0';
     $sanitized['mxchat_pinecone_api_key'] = sanitize_text_field($input['mxchat_pinecone_api_key'] ?? '');
     $sanitized['mxchat_pinecone_host'] = sanitize_text_field($input['mxchat_pinecone_host'] ?? '');
     $sanitized['mxchat_pinecone_index'] = sanitize_text_field($input['mxchat_pinecone_index'] ?? '');
@@ -2286,10 +2288,13 @@ public static function mxchat_collect_leads(array $args = []) {
     $transcript_rows = $wpdb->get_results($transcripts_sql);
 
     // Count of unique transcript-based leads under the same filters.
-    $count_sql = $wpdb->prepare(
-        "SELECT COUNT(DISTINCT {$lead_key_sql}) FROM {$table} {$where_sql}",
-        $where_params
-    );
+    // With no date / page / search filter there is nothing to bind: the base WHERE is
+    // static and $lead_key_sql comes from mxchat_leads_key_sql(), so prepare() would
+    // only raise "must have a placeholder" on every Leads tab open (plan 95b2da).
+    $count_sql = "SELECT COUNT(DISTINCT {$lead_key_sql}) FROM {$table} {$where_sql}";
+    if (!empty($where_params)) {
+        $count_sql = $wpdb->prepare($count_sql, $where_params);
+    }
     $transcripts_lead_count = (int) $wpdb->get_var($count_sql);
 
     // Hydrate each row: name, latest_session_id, top page.
@@ -3505,9 +3510,8 @@ private function translate_with_openai($api_key, $model, $system_prompt, $text) 
  */
 private function translate_with_claude($api_key, $model, $system_prompt, $text) {
     // Anthropic retired claude-opus-4-20250514 / claude-sonnet-4-20250514 on 2026-06-15.
-    // Read-time rescue: remap a saved dead ID to the current equivalent before the API call.
-    if ($model === 'claude-opus-4-20250514') { $model = 'claude-opus-4-8'; }
-    elseif ($model === 'claude-sonnet-4-20250514') { $model = 'claude-sonnet-4-6'; }
+    // Read-time rescue: a saved retired id is remapped to the catalog's replacement before the API call.
+    $model = MxChat_Model_Catalog::resolve_retired($model); // plan 8c4eb4: the catalog's one map
     $response = wp_remote_post('https://api.anthropic.com/v1/messages', [
         'timeout' => 60,
         'headers' => [
@@ -3662,11 +3666,23 @@ private function translate_with_gemini($api_key, $model, $system_prompt, $text) 
         return new WP_Error('api_error', $body['error']['message']);
     }
 
-    if (isset($body['candidates'][0]['content']['parts'][0]['text'])) {
-        return $body['candidates'][0]['content']['parts'][0]['text'];
+    // plan 781afd: join every text part (skip thought parts), not only parts[0].
+    $translated = '';
+    if (isset($body['candidates'][0]['content']['parts']) && is_array($body['candidates'][0]['content']['parts'])) {
+        foreach ($body['candidates'][0]['content']['parts'] as $part) {
+            if (is_array($part) && isset($part['text']) && is_string($part['text']) && empty($part['thought'])) {
+                $translated .= $part['text'];
+            }
+        }
+    }
+    if (trim($translated) !== '') {
+        return $translated;
     }
 
-    return new WP_Error('api_error', 'Invalid API response');
+    $no_text_reason = isset($body['candidates'][0]['finishReason']) && is_string($body['candidates'][0]['finishReason'])
+        ? $body['candidates'][0]['finishReason']
+        : (isset($body['promptFeedback']['blockReason']) && is_string($body['promptFeedback']['blockReason']) ? $body['promptFeedback']['blockReason'] : '');
+    return new WP_Error('api_error', $no_text_reason !== '' ? 'Gemini returned no text (' . $no_text_reason . ')' : 'Invalid API response');
 }
 
 /**
@@ -9206,6 +9222,26 @@ public function mxchat_editor_assistant_toggle_callback() {
 }
 
 /**
+ * Page-cache purge on save toggle (plan b76ed6, Support Ticket 468). Standalone
+ * option, NOT in mxchat_options. Default ON: an absent option renders checked,
+ * only an explicit 'off' renders unchecked (MxChat_Cache_Purge::is_enabled()).
+ * Saved by the mxchat_cache_purge_enabled case in class-ajax-handler.php.
+ * Renders on Settings → Optimization → Page Cache Compatibility.
+ */
+public function mxchat_cache_purge_toggle_callback() {
+    $enabled = get_option('mxchat_cache_purge_enabled', 'on');
+    $checked = ($enabled !== 'off') ? 'checked' : '';
+
+    echo '<label class="toggle-switch">';
+    echo sprintf(
+        '<input type="checkbox" id="mxchat_cache_purge_enabled" name="mxchat_cache_purge_enabled" value="on" %s />',
+        esc_attr($checked)
+    );
+    echo '<span class="slider"></span>';
+    echo '</label>';
+}
+
+/**
  * Hybrid keyword boost toggle (plan-38ffa1; rebuilt on the house toggle pattern
  * in plan-64d34f — the hand-rolled .mxch-toggle markup matched neither selector
  * the autosave JS uses to place its save confirmation, so the control looked
@@ -10254,6 +10290,9 @@ private function enqueue_page_specific_assets($current_page, $plugin_url, $versi
                 'countCorrect'     => __('%s already correct', 'mxchat'),
                 /* translators: %s: number of entries */
                 'countChanged'     => __('%s left alone', 'mxchat'),
+                /* translators: %s: number of entries whose page was edited after they were imported */
+                'countEdited'      => __('%s edited since import', 'mxchat'),
+                'editedNotRewritten' => __('Edited since import', 'mxchat'),
                 /* translators: %s: number of entries */
                 'countSkipped'     => __('%s skipped', 'mxchat'),
                 /* translators: %s: number of entries */
@@ -10287,6 +10326,7 @@ private function enqueue_page_specific_assets($current_page, $plugin_url, $versi
                     'symbols'         => __('Symbols', 'mxchat'),
                     'joiners'         => __('Joined letters', 'mxchat'),
                     'RTL'             => __('Right-to-left order', 'mxchat'),
+                    'edited'          => __('Edited since import', 'mxchat'),
                 ),
             ));
             // Per-entry "View indexed content" inspector (plan-d8cb4b) reuses the

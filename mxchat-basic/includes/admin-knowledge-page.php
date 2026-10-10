@@ -1128,14 +1128,7 @@ function mxchat_render_knowledge_base_section($admin_instance, $knowledge_manage
                                                 </div>
                                             </td>
                                             <td class="mxchat-url-cell" style="padding: 12px 16px; font-size: 13px;">
-                                                <?php if (!empty($source_url) && strpos($source_url, 'mxchat://') !== 0 && strpos($source_url, '_ungrouped_') !== 0) : ?>
-                                                    <a href="<?php echo esc_url($source_url); ?>" target="_blank" style="color: var(--mxch-primary); text-decoration: none;">
-                                                        <span class="dashicons dashicons-external" style="font-size: 14px;"></span>
-                                                        <?php esc_html_e('View Source', 'mxchat'); ?>
-                                                    </a>
-                                                <?php else : ?>
-                                                    <span style="color: var(--mxch-text-muted);"><?php esc_html_e('Manual Content', 'mxchat'); ?></span>
-                                                <?php endif; ?>
+                                                <?php echo MxChat_Knowledge_Manager::mxchat_source_cell_html($source_url, $current_bot_id, true); ?>
                                             </td>
                                             <td class="mxchat-actions-cell" style="padding: 12px 16px; white-space: nowrap;">
                                                 <button type="button"
@@ -1286,14 +1279,8 @@ function mxchat_render_knowledge_base_section($admin_instance, $knowledge_manage
                                             if (strpos($source_url, '_ungrouped_') === 0) {
                                                 $actual_source = $prompt->source_url ?? '';
                                             }
-                                            if (!empty($actual_source) && strpos($actual_source, 'mxchat://') !== 0) : ?>
-                                                <a href="<?php echo esc_url($actual_source); ?>" target="_blank" style="color: var(--mxch-primary); text-decoration: none;">
-                                                    <span class="dashicons dashicons-external" style="font-size: 14px;"></span>
-                                                    <?php esc_html_e('View', 'mxchat'); ?>
-                                                </a>
-                                            <?php else : ?>
-                                                <span style="color: var(--mxch-text-muted);"><?php esc_html_e('Manual', 'mxchat'); ?></span>
-                                            <?php endif; ?>
+                                            echo MxChat_Knowledge_Manager::mxchat_source_cell_html($actual_source, $current_bot_id, false);
+                                            ?>
                                         </td>
                                         <td style="padding: 12px 16px; white-space: nowrap;">
                                             <button type="button"
@@ -1428,6 +1415,18 @@ function mxchat_render_kb_reimport_card($current_bot_id = 'default') {
                 <button type="button" class="mxch-btn mxch-btn-secondary" id="mxchat-kb-reimport-check"><?php esc_html_e('Check knowledge base', 'mxchat'); ?></button>
             </div>
             <p class="mxch-field-hint"><?php esc_html_e('The date is the release that carried the last of these fixes. Choose a later one if this site was updated after that.', 'mxchat'); ?></p>
+
+            <!-- Also offer entries whose page was edited after they were imported (plan a00ef8); off by default -->
+            <div class="mxch-field mxch-kb-reimport-edited">
+                <label class="toggle-switch">
+                    <input type="checkbox" id="mxchat-kb-reimport-edited" name="mxchat_kb_reimport_edited" value="1" />
+                    <span class="slider"></span>
+                </label>
+                <div class="mxch-kb-reimport-edited-text">
+                    <label class="mxch-field-label" for="mxchat-kb-reimport-edited"><?php esc_html_e('Also rewrite entries whose page was edited after they were imported', 'mxchat'); ?></label>
+                    <p class="mxch-field-description"><?php esc_html_e('An entry older than its post, page, product or media file is rebuilt from it as it reads today. A site with auto-sync on does not need this.', 'mxchat'); ?></p>
+                </div>
+            </div>
 
             <div class="mxch-kb-reimport-progress" hidden>
                 <div class="mxch-progress-bar" hidden><div class="mxch-progress-bar-fill"></div></div>
