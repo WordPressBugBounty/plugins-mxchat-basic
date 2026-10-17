@@ -255,6 +255,15 @@ function mxchat_render_settings_page($admin_instance) {
                 if (class_exists('MxChat_Model_Liveness')) {
                     MxChat_Model_Liveness::render_inline_notice();
                 }
+                // Direct task M4: which discontinued models were replaced (until
+                // dismissed), and a discontinued embedding model (until changed).
+                // Same reason as above for rendering here, not via admin_notices.
+                if (function_exists('mxchat_render_model_migration_inline_notice')) {
+                    mxchat_render_model_migration_inline_notice();
+                }
+                if (function_exists('mxchat_render_retired_embedding_inline_notice')) {
+                    mxchat_render_retired_embedding_inline_notice();
+                }
                 ?>
 
                 <div class="mxch-card">
@@ -700,15 +709,16 @@ function mxchat_render_settings_page($admin_instance) {
                         </div>
 
                         <?php
-                        // Plan b76ed6 (Support Ticket 468): the floating launcher is rendered hidden
-                        // and revealed by chat-script.js, so a cache plugin's "Delay JavaScript"
-                        // that holds the script until the visitor interacts shows no chatbot at all.
+                        // Plan b76ed6 (Support Ticket 468) documented that a cache plugin's "Delay
+                        // JavaScript" left the page with no chatbot, because the launcher was
+                        // revealed by chat-script.js. Since plan 332252 the launcher is rendered
+                        // visible on the server, so this is information, not a warning.
                         ?>
-                        <div class="mxch-notice mxch-notice-warning" style="margin-top: 16px;">
-                            <svg class="mxch-notice-icon" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+                        <div class="mxch-notice mxch-notice-info" style="margin-top: 16px;">
+                            <svg class="mxch-notice-icon" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
                             <div>
                                 <strong><?php esc_html_e('Using Delay JavaScript in a cache or performance plugin?', 'mxchat'); ?></strong>
-                                <?php esc_html_e('Leave chat-script.js out of the delay (FlyingPress, WP Rocket, LiteSpeed Cache and Perfmatters all have an exclusion list). The chat launcher stays hidden until that script runs, so a page that holds it back until the visitor interacts shows no chatbot. If you want the script delayed, pick a strategy above instead: MxChat then loads it on interaction or after a short wait.', 'mxchat'); ?>
+                                <?php esc_html_e('The chat launcher shows as soon as the page loads, even while that plugin holds chat-script.js back until the visitor interacts. The chat opens once the script has run; a click that lands before then does nothing. If you want the very first tap to open the chat, leave chat-script.js out of the delay.', 'mxchat'); ?>
                             </div>
                         </div>
                     </div>
@@ -794,24 +804,15 @@ function mxchat_render_settings_page($admin_instance) {
                         </span>
                     </div>
                     <div class="mxch-card-body mxchat-autosave-section">
-                        <div class="mxch-field">
-                            <label class="mxch-field-label" for="auto_retry_on_transient_error">
-                                <?php esc_html_e('Auto-retry on provider overload', 'mxchat'); ?>
-                            </label>
-                            <div class="mxch-field-control">
-                                <label class="mxch-toggle">
-                                    <input type="checkbox"
-                                           id="auto_retry_on_transient_error"
-                                           name="mxchat_options[auto_retry_on_transient_error]"
-                                           class="mxchat-autosave-field"
-                                           value="1"
-                                           <?php checked($auto_retry_enabled); ?> />
-                                    <span class="mxch-toggle-slider"></span>
-                                </label>
-                            </div>
-                            <p class="mxch-field-description"><?php esc_html_e('When the AI provider returns a transient error (rate-limit / overload / 429 / 503 / Gemini "model overloaded"), MxChat retries the chat-send up to twice before surfacing the error. Visitors see a brief pause instead of a raw provider error in the bot bubble.', 'mxchat'); ?></p>
-                            <p class="mxch-field-hint"><?php esc_html_e('Configuration errors (invalid API key, 401/403/404/422) still surface immediately — never retried.', 'mxchat'); ?></p>
-                        </div>
+                        <?php
+                        // Plan 4ac3e1: the house toggle pattern (was a hand-rolled .mxch-toggle
+                        // block that rendered as a bare checkbox). Key lives in mxchat_options,
+                        // default ON; saved by the auto_retry_on_transient_error autosave case.
+                        mxchat_render_field_wrapper('auto_retry_on_transient_error', __('Auto-retry on provider overload', 'mxchat'), function() use ($admin_instance) {
+                            $admin_instance->mxchat_auto_retry_toggle_callback();
+                        }, __('When the AI provider returns a transient error (rate-limit / overload / 429 / 503 / Gemini "model overloaded"), MxChat retries the chat-send up to twice before surfacing the error. Visitors see a brief pause instead of a raw provider error in the bot bubble.', 'mxchat'),
+                           __('Configuration errors (invalid API key, 401/403/404/422) still surface immediately — never retried.', 'mxchat'));
+                        ?>
                     </div>
                 </div>
 

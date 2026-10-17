@@ -8,6 +8,8 @@ class MxChat_Admin {
     private $chat_count;
     private $is_activated;
     private $knowledge_manager;
+    // Hook suffix WordPress returned for the Transcripts submenu (plan 93999a).
+    private $transcripts_page_hook = '';
 
     /**
      * Get whether the license is activated
@@ -15,6 +17,49 @@ class MxChat_Admin {
      */
     public function is_activated() {
         return $this->is_activated;
+    }
+
+    /**
+     * Capability that opens the Transcripts screen read-only (plan 93999a).
+     *
+     * Defaults to the dedicated mxchat_view_transcripts capability, which
+     * activation grants to administrators. A site that would rather reuse a
+     * capability its staff already have can return it from the
+     * mxchat_transcripts_capability filter.
+     *
+     * @return string
+     */
+    public static function mxchat_transcripts_capability() {
+        $cap = apply_filters('mxchat_transcripts_capability', 'mxchat_view_transcripts');
+        return (is_string($cap) && $cap !== '') ? $cap : 'mxchat_view_transcripts';
+    }
+
+    /**
+     * Whether the current user may READ transcripts: list, open, search and
+     * export conversations and leads (plan 93999a). Administrators always can,
+     * whether or not the capability was granted to their role. Every write on
+     * the Transcripts screen (delete, translate, notification and retention
+     * settings) keeps requiring manage_options.
+     *
+     * @return bool
+     */
+    public static function mxchat_can_view_transcripts() {
+        return current_user_can('manage_options') || current_user_can(self::mxchat_transcripts_capability());
+    }
+
+    /**
+     * woocommerce_prevent_admin_access: a user who holds the transcripts
+     * capability reaches wp-admin, as they would on a site without WooCommerce
+     * (plan 93999a). Every other user keeps WooCommerce's decision.
+     *
+     * @param bool $prevent
+     * @return bool
+     */
+    public function mxchat_let_transcripts_readers_into_admin($prevent) {
+        if ($prevent && current_user_can(self::mxchat_transcripts_capability())) {
+            return false;
+        }
+        return $prevent;
     }
 
     /**
@@ -77,6 +122,10 @@ class MxChat_Admin {
         add_action('wp_ajax_mxchat_export_leads', array($this, 'mxchat_export_leads'));
 
         add_action('admin_init', array($this, 'mxchat_transcripts_page_init'));
+        // WooCommerce sends anyone without edit_posts from wp-admin to My
+        // Account, which would lock the read-only transcripts role out of the
+        // only screen it is for (plan 93999a).
+        add_filter('woocommerce_prevent_admin_access', array($this, 'mxchat_let_transcripts_readers_into_admin'));
         add_action('wp_ajax_dismiss_live_agent_notice', array($this, 'dismiss_live_agent_notice'));
         add_action('wp_ajax_dismiss_theme_migration_notice', array($this, 'dismiss_theme_migration_notice'));
         add_action('mxchat_cleanup_old_transcripts', array($this, 'cleanup_old_transcripts'));
@@ -613,11 +662,14 @@ public function mxchat_add_plugin_page() {
         array($this, 'mxchat_create_prompts_page')
     );
 
-    add_submenu_page(
+    // Transcripts opens for administrators exactly as before, and read-only for
+    // a role holding the transcripts capability (plan 93999a). Every other
+    // MxChat submenu keeps manage_options, so that role sees only this item.
+    $this->transcripts_page_hook = (string) add_submenu_page(
         'mxchat-max',
         esc_html__('Chat Transcripts', 'mxchat'),
         esc_html__('Transcripts', 'mxchat'),
-        'manage_options',
+        current_user_can('manage_options') ? 'manage_options' : self::mxchat_transcripts_capability(),
         'mxchat-transcripts',
         array($this, 'mxchat_create_transcripts_page')
     );
@@ -1470,6 +1522,10 @@ public function add_theme_migration_nonce() {
 }
 
 public function mxchat_create_transcripts_page() {
+    if (!self::mxchat_can_view_transcripts()) {
+        wp_die(esc_html__('Sorry, you are not allowed to access this page.', 'mxchat'), '', array('response' => 403));
+    }
+
     global $wpdb;
     $table_name = $wpdb->prefix . 'mxchat_chat_transcripts';
 
@@ -2107,12 +2163,18 @@ public function cleanup_old_transcripts() {
     }
     // phpcs:enable
 
+    // The satisfaction rating and its feedback go with the conversation (79c1be).
+    if (function_exists('mxchat_delete_session_ratings')) {
+        mxchat_delete_session_ratings($sessions_to_delete);
+    }
+
     update_option('mxchat_retention_last_swept_at', time(), false);
     update_option('mxchat_retention_rows_last_deleted', $deleted_transcripts, false);
 }
 
 public function export_chat_transcripts() {
-    if (!current_user_can('manage_options')) {
+    // A read: open to the read-only transcripts role (plan 93999a).
+    if (!self::mxchat_can_view_transcripts()) {
         wp_die(esc_html__('You do not have sufficient permissions to access this page.', 'mxchat'));
     }
 
@@ -2185,7 +2247,8 @@ public function export_chat_transcripts() {
  * Fetch leads: dedup-by-email rows, stats strip, and top pages in one call.
  */
 public function mxchat_fetch_leads() {
-    if (!current_user_can('manage_options')) {
+    // A read: open to the read-only transcripts role (plan 93999a).
+    if (!self::mxchat_can_view_transcripts()) {
         wp_send_json_error(['message' => 'Insufficient permissions']);
         wp_die();
     }
@@ -2456,9 +2519,9 @@ public static function mxchat_collect_leads(array $args = []) {
  * mxchat_history_{sid}) and any orphan option entries matching the email.
  */
 public function mxchat_delete_leads() {
+    // A write: administrators only, refused with 403 (plan 93999a).
     if (!current_user_can('manage_options')) {
-        wp_send_json_error(['message' => 'Insufficient permissions']);
-        wp_die();
+        wp_send_json_error(['message' => 'Insufficient permissions'], 403);
     }
     check_ajax_referer('mxchat_delete_leads', 'security');
 
@@ -2593,6 +2656,11 @@ private static function mxchat_wipe_leads_by_email(array $emails) {
                 $wpdb->delete($translations_table, ['session_id' => $sid], ['%s']);
             }
         }
+
+        // Ratings go with their conversations (79c1be).
+        if (!empty($session_ids) && function_exists('mxchat_delete_session_ratings')) {
+            mxchat_delete_session_ratings($session_ids);
+        }
     }
 
     // Table-side twin of the option sweep below (5658f2): orphan pre-chat
@@ -2644,7 +2712,8 @@ private static function mxchat_wipe_leads_by_email(array $emails) {
  * specific set of selected emails.
  */
 public function mxchat_export_leads() {
-    if (!current_user_can('manage_options')) {
+    // A read: open to the read-only transcripts role (plan 93999a).
+    if (!self::mxchat_can_view_transcripts()) {
         wp_die(esc_html__('You do not have sufficient permissions to access this page.', 'mxchat'));
     }
     check_ajax_referer('mxchat_export_leads', 'security');
@@ -3228,10 +3297,13 @@ private static function mxchat_leads_format_relative($timestamp) {
  * Handle translation of chat messages via AJAX
  */
 public function mxchat_translate_messages() {
+    // A write (spends the site's API key, stores the result): administrators
+    // only, refused with 403 (plan 93999a), and only from the Transcripts page
+    // (M7b): no valid nonce, 403 and nothing translated.
     if (!current_user_can('manage_options')) {
-        wp_send_json_error(['error' => 'Insufficient permissions']);
-        wp_die();
+        wp_send_json_error(['error' => 'Insufficient permissions'], 403);
     }
+    check_ajax_referer('mxchat_translate_messages', 'security');
 
     $session_id = isset($_POST['session_id']) ? MxChat_Utils::sanitize_session_id(wp_unslash($_POST['session_id'])) : '';
     $target_lang = isset($_POST['target_lang']) ? sanitize_text_field($_POST['target_lang']) : 'en';
@@ -3405,7 +3477,9 @@ private function save_transcript_translation($session_id, $language_code, $trans
  * Get saved translation for a session
  */
 public function mxchat_get_transcript_translation() {
-    if (!current_user_can('manage_options')) {
+    // A read of a translation already saved: open to the read-only
+    // transcripts role (plan 93999a).
+    if (!self::mxchat_can_view_transcripts()) {
         wp_send_json_error(['error' => 'Insufficient permissions']);
         wp_die();
     }
@@ -3729,7 +3803,8 @@ public function mxchat_fetch_chat_history() {
     $table_name = $wpdb->prefix . 'mxchat_chat_transcripts';
     $url_clicks_table = $wpdb->prefix . 'mxchat_url_clicks';
 
-    if (!current_user_can('manage_options')) {
+    // A read: open to the read-only transcripts role (plan 93999a).
+    if (!self::mxchat_can_view_transcripts()) {
         wp_send_json_error(['message' => 'Insufficient permissions']);
         wp_die();
     }
@@ -3922,7 +3997,8 @@ public function mxchat_fetch_conversation() {
     $table_name = $wpdb->prefix . 'mxchat_chat_transcripts';
     $url_clicks_table = $wpdb->prefix . 'mxchat_url_clicks';
 
-    if (!current_user_can('manage_options')) {
+    // A read: open to the read-only transcripts role (plan 93999a).
+    if (!self::mxchat_can_view_transcripts()) {
         wp_send_json_error(['message' => 'Insufficient permissions']);
         wp_die();
     }
@@ -3982,6 +4058,11 @@ public function mxchat_fetch_conversation() {
     $display_name = $user_name ?: ($user_email ? explode('@', $user_email)[0] : $user_identifier);
     $display_sub = $user_email ?: ('ID: ' . $user_identifier);
 
+    // The guest's address, when that is what the identifier holds (79c1be).
+    // A logged-in visitor is identified by their login, so the drawer's IP
+    // row stays hidden for them.
+    $user_ip = filter_var($user_identifier, FILTER_VALIDATE_IP) ? $user_identifier : '';
+
     // Get initials
     $initials = strtoupper(substr($display_name, 0, 2));
     if (strlen($display_name) > 2 && strpos($display_name, ' ') !== false) {
@@ -3997,7 +4078,35 @@ public function mxchat_fetch_conversation() {
     }
 
     // Format messages for output
+    $transcript_allowed_html = [
+        'b' => [], 'strong' => [], 'i' => [], 'em' => [], 'u' => [],
+        'br' => [], 'p' => [], 'ul' => [], 'ol' => [], 'li' => [],
+        'a' => ['href' => [], 'title' => [], 'target' => [], 'class' => []],
+        'div' => ['class' => [], 'id' => [], 'data-nonce' => []],
+        'img' => ['src' => [], 'alt' => [], 'class' => []],
+        'h3' => ['class' => []],
+        'h4' => ['class' => []],
+        'button' => ['type' => [], 'class' => [], 'data-product-id' => [], 'data-nonce' => [], 'data-product-type' => [], 'data-original-text' => [], 'data-mxchat-action' => []],
+        'select' => ['class' => [], 'data-attribute' => []],
+        'option' => ['value' => []],
+        'span' => ['class' => []],
+        'del' => [], 'ins' => [],
+    ];
+    // format_transcript_message() turns URLs and [text](url) into links with
+    // regexes that cannot tell text from an attribute value, so a URL inside an
+    // allowed attribute (a visitor's span class, an AI reply's title) came out
+    // as a link whose quotes closed that attribute. The formatted message is
+    // filtered again, with the tags the formatter itself writes added, and its
+    // tags balanced so a message can never close the bubble it is shown in.
+    $formatted_allowed_html = array_merge($transcript_allowed_html, [
+        'a' => ['href' => [], 'title' => [], 'target' => [], 'class' => [], 'rel' => []],
+        'h1' => [], 'h2' => [], 'h5' => [], 'h6' => [],
+        'pre' => [], 'code' => ['class' => []],
+    ]);
     $formatted_messages = [];
+    // plan 705b6c: per-reply usage and the chat's total. Rows saved before
+    // 3.2.26 (and replies no AI provider wrote) carry none: no line, no total.
+    $usage_total = ['in' => null, 'cached' => null, 'out' => null, 'replies' => 0];
     foreach ($messages as $msg) {
         $is_user  = ($msg->role === 'user');
         // Live-agent replies (Slack/Telegram handoff) persist with role 'agent'.
@@ -4005,26 +4114,32 @@ public function mxchat_fetch_conversation() {
         $is_agent = ($msg->role === 'agent');
         $is_bot   = ($msg->role === 'bot' || $msg->role === 'assistant');
 
-        $content = wp_kses(
-            stripslashes($msg->message),
-            [
-                'b' => [], 'strong' => [], 'i' => [], 'em' => [], 'u' => [],
-                'br' => [], 'p' => [], 'ul' => [], 'ol' => [], 'li' => [],
-                'a' => ['href' => [], 'title' => [], 'target' => [], 'class' => []],
-                'div' => ['class' => [], 'id' => [], 'data-nonce' => []],
-                'img' => ['src' => [], 'alt' => [], 'class' => []],
-                'h3' => ['class' => []],
-                'h4' => ['class' => []],
-                'button' => ['type' => [], 'class' => [], 'data-product-id' => [], 'data-nonce' => [], 'data-product-type' => [], 'data-original-text' => [], 'data-mxchat-action' => []],
-                'select' => ['class' => [], 'data-attribute' => []],
-                'option' => ['value' => []],
-                'span' => ['class' => []],
-                'del' => [], 'ins' => [],
-            ]
-        );
-        $formatted_content = $this->format_transcript_message($content);
+        $content = wp_kses(stripslashes($msg->message), $transcript_allowed_html);
+        $formatted_content = force_balance_tags(wp_kses($this->format_transcript_message($content), $formatted_allowed_html));
 
         $has_rag = $is_bot && !empty($msg->rag_context);
+
+        $usage = null;
+        if ($is_bot) {
+            $u_in     = isset($msg->tokens_in) ? (int) $msg->tokens_in : null;
+            $u_cached = isset($msg->tokens_cached) ? (int) $msg->tokens_cached : null;
+            $u_out    = isset($msg->tokens_out) ? (int) $msg->tokens_out : null;
+            if ($u_in !== null || $u_out !== null) {
+                $usage = [
+                    'model'  => isset($msg->model) ? (string) $msg->model : '',
+                    'in'     => $u_in,
+                    'cached' => $u_cached,
+                    'out'    => $u_out,
+                    'label'  => $this->mxchat_transcript_usage_label($u_in, $u_cached, $u_out),
+                ];
+                foreach (['in' => $u_in, 'cached' => $u_cached, 'out' => $u_out] as $k => $v) {
+                    if ($v !== null) {
+                        $usage_total[$k] = (int) $usage_total[$k] + $v;
+                    }
+                }
+                $usage_total['replies']++;
+            }
+        }
 
         $formatted_messages[] = [
             'id' => $msg->id,
@@ -4035,7 +4150,20 @@ public function mxchat_fetch_conversation() {
             'content' => $formatted_content,
             'timestamp' => wp_date('g:i A', strtotime($msg->timestamp . ' UTC')),
             'full_timestamp' => wp_date('F j, Y g:i A', strtotime($msg->timestamp . ' UTC')),
-            'has_rag' => $has_rag
+            'has_rag' => $has_rag,
+            'usage' => $usage
+        ];
+    }
+    $usage_summary = null;
+    if ($usage_total['replies'] > 0) {
+        $usage_summary = [
+            'in'      => $usage_total['in'],
+            'cached'  => $usage_total['cached'],
+            'out'     => $usage_total['out'],
+            'replies' => $usage_total['replies'],
+            'label'   => $this->mxchat_transcript_usage_label($usage_total['in'], $usage_total['cached'], $usage_total['out']),
+            /* translators: %s: number of AI replies that recorded token usage */
+            'title'   => html_entity_decode(sprintf(_n('Tokens the AI provider reported for %s reply in this chat', 'Tokens the AI provider reported for %s replies in this chat', $usage_total['replies'], 'mxchat'), number_format_i18n($usage_total['replies'])), ENT_QUOTES, 'UTF-8'),
         ];
     }
 
@@ -4060,7 +4188,8 @@ public function mxchat_fetch_conversation() {
             'sub' => $display_sub,
             'initials' => $initials,
             'email' => $user_email,
-            'identifier' => $user_identifier
+            'identifier' => $user_identifier,
+            'ip' => $user_ip
         ],
         'page' => [
             'url' => $page_url,
@@ -4070,9 +4199,40 @@ public function mxchat_fetch_conversation() {
         'messages' => $formatted_messages,
         'message_count' => count($messages),
         'started' => $started,
-        'rating_feedback' => $rating_feedback
+        'rating_feedback' => $rating_feedback,
+        'usage_total' => $usage_summary
     ]);
     wp_die();
+}
+
+/**
+ * plan 705b6c: "1,240 in (1,024 cached), 310 out" for a reply or a chat
+ * total; the cached part only when the provider read any from its cache.
+ */
+private function mxchat_transcript_usage_label($in, $cached, $out) {
+    // Plain text for the script's text APIs: some locales' thousands separator
+    // is an entity (&nbsp;), decoded here rather than shown literally.
+    return html_entity_decode($this->mxchat_transcript_usage_label_raw($in, $cached, $out), ENT_QUOTES, 'UTF-8');
+}
+
+private function mxchat_transcript_usage_label_raw($in, $cached, $out) {
+    $has_cached =($in !== null && $cached !== null && (int) $cached > 0);
+    if ($in !== null && $out !== null) {
+        return $has_cached
+            /* translators: token counts of an AI reply. 1: input tokens, 2: of those, read from the prompt cache, 3: output tokens */
+            ? sprintf(__('%1$s in (%2$s cached), %3$s out', 'mxchat'), number_format_i18n($in), number_format_i18n($cached), number_format_i18n($out))
+            /* translators: token counts of an AI reply. 1: input tokens, 2: output tokens */
+            : sprintf(__('%1$s in, %2$s out', 'mxchat'), number_format_i18n($in), number_format_i18n($out));
+    }
+    if ($in !== null) {
+        return $has_cached
+            /* translators: token counts of an AI reply. 1: input tokens, 2: of those, read from the prompt cache */
+            ? sprintf(__('%1$s in (%2$s cached)', 'mxchat'), number_format_i18n($in), number_format_i18n($cached))
+            /* translators: %s: input tokens of an AI reply */
+            : sprintf(__('%s in', 'mxchat'), number_format_i18n($in));
+    }
+    /* translators: %s: output tokens of an AI reply */
+    return sprintf(__('%s out', 'mxchat'), number_format_i18n((int) $out));
 }
 
 
@@ -4532,9 +4692,10 @@ private function get_bot_pinecone_config($bot_id = 'default') {
 }
 
 public function mxchat_delete_chat_history() {
+    // A write: administrators only, refused with 403 (plan 93999a). Same body
+    // shape as before; wp_send_json() keeps the status wp_die() would reset.
     if (!current_user_can('manage_options')) {
-        echo wp_json_encode(['error' => esc_html__('You do not have sufficient permissions.', 'mxchat')]);
-        wp_die();
+        wp_send_json(['error' => esc_html__('You do not have sufficient permissions.', 'mxchat')], 403);
     }
     check_ajax_referer('mxchat_delete_chat_history', 'security');
 
@@ -4556,6 +4717,7 @@ public function mxchat_delete_chat_history() {
     $deleted_count = 0;
     $preserved_as_deleted_leads = 0;
     $emails_to_fully_wipe = [];
+    $deleted_session_ids = [];
 
     foreach ((array) $_POST['delete_session_ids'] as $session_id) {
         $session_id_sanitized = MxChat_Utils::sanitize_session_id($session_id);
@@ -4575,6 +4737,7 @@ public function mxchat_delete_chat_history() {
 
         wp_cache_delete('chat_session_' . $session_id_sanitized, 'mxchat_chat_sessions');
         $wpdb->delete($table_name, ['session_id' => $session_id_sanitized]);
+        $deleted_session_ids[] = $session_id_sanitized;
 
         if ($has_translations) {
             $wpdb->delete($translations_table, ['session_id' => $session_id_sanitized]);
@@ -4635,6 +4798,12 @@ public function mxchat_delete_chat_history() {
         }
 
         $deleted_count++;
+    }
+
+    // The satisfaction rating and its feedback go with the conversation,
+    // for Delete Chat and bulk delete alike (79c1be).
+    if (!empty($deleted_session_ids) && function_exists('mxchat_delete_session_ratings')) {
+        mxchat_delete_session_ratings($deleted_session_ids);
     }
 
     // Opt-in full-lead wipe: sweep every remaining row + every option key (including
@@ -4765,8 +4934,9 @@ private function format_transcript_message($text) {
  * Used by the transcript viewer to show retrieved documents
  */
 public function mxchat_get_rag_context() {
-    // Check permissions
-    if (!current_user_can('manage_options')) {
+    // A read (the Sources link on a transcript message): open to the
+    // read-only transcripts role (plan 93999a).
+    if (!self::mxchat_can_view_transcripts()) {
         wp_send_json_error(['message' => esc_html__('You do not have sufficient permissions.', 'mxchat')]);
         wp_die();
     }
@@ -8591,6 +8761,7 @@ public function embedding_model_callback() {
         ),
         esc_html__('Google Gemini Embeddings', 'mxchat') => array(
             'gemini-embedding-001' => esc_html__('Gemini Embedding (1536, Stable)', 'mxchat'),
+            'gemini-embedding-2'   => esc_html__('Gemini Embedding 2 (1536, Newest)', 'mxchat'),
         )
     );
     $selected_model = isset($this->options['embedding_model']) ? esc_attr($this->options['embedding_model']) : 'text-embedding-ada-002';
@@ -9275,6 +9446,29 @@ public function mxchat_smart_asset_loading_toggle_callback() {
     echo '<label class="toggle-switch">';
     echo sprintf(
         '<input type="checkbox" id="mxchat_smart_asset_loading" name="mxchat_smart_asset_loading" value="on" %s />',
+        esc_attr($checked)
+    );
+    echo '<span class="slider"></span>';
+    echo '</label>';
+}
+
+/**
+ * Provider Reliability auto-retry toggle (plan 4ac3e1; was a hand-rolled .mxch-toggle
+ * block that rendered as a bare checkbox). Lives in mxchat_options. Default ON: an
+ * absent key renders checked, only a stored '0' renders unchecked — the same test as
+ * MxChat_Integrator::mxchat_retry_enabled(). Saved by the auto_retry_on_transient_error
+ * case in class-ajax-handler.php ('1'/'0'); kept by its isset-handler in mxchat_sanitize().
+ * Renders on Settings → Optimization → Provider Reliability.
+ */
+public function mxchat_auto_retry_toggle_callback() {
+    $options = get_option('mxchat_options', []);
+    $enabled = !isset($options['auto_retry_on_transient_error']) ||
+               (string) $options['auto_retry_on_transient_error'] !== '0';
+    $checked = $enabled ? 'checked' : '';
+
+    echo '<label class="toggle-switch">';
+    echo sprintf(
+        '<input type="checkbox" id="auto_retry_on_transient_error" name="auto_retry_on_transient_error" value="on" %s />',
         esc_attr($checked)
     );
     echo '<span class="slider"></span>';
@@ -10219,6 +10413,13 @@ public function mxchat_enqueue_admin_assets($hook_suffix = '') {
     // 'manage_options' (see mxchat_add_admin_menu), so this is a no-op for
     // legitimate users.
     if (!current_user_can('manage_options')) {
+        // The one exception: the read-only transcripts role on the Transcripts
+        // screen itself, matched on the hook suffix WordPress returned when the
+        // submenu was registered (never on $_GET). It gets the page's own CSS
+        // and script and the export nonce only (plan 93999a).
+        if ($this->transcripts_page_hook !== '' && $hook_suffix === $this->transcripts_page_hook && self::mxchat_can_view_transcripts()) {
+            $this->mxchat_enqueue_transcripts_readonly_assets();
+        }
         return;
     }
 
@@ -10260,6 +10461,42 @@ private function enqueue_core_admin_assets($plugin_url, $version) {
 
     // Core admin scripts
     wp_enqueue_script('mxchat-admin-js', $plugin_url . 'js/mxchat-admin.js', array('jquery'), $version, true);
+}
+
+/**
+ * Assets for the read-only transcripts role on the Transcripts screen
+ * (plan 93999a). The same stylesheets an administrator gets, so the page looks
+ * identical, and the page's own script — but not mxchat-admin.js (settings
+ * autosave) and none of the settings, licence or knowledge nonces. The script
+ * object carries only what a reader can use: the export nonce, and can_manage
+ * = '0' so the script leaves out the delete controls it would otherwise draw.
+ */
+private function mxchat_enqueue_transcripts_readonly_assets() {
+    $version = MXCHAT_VERSION;
+    if (defined('WP_DEBUG') && WP_DEBUG) {
+        $version = filemtime(plugin_dir_path(__FILE__) . '../mxchat-basic.php');
+    }
+    $plugin_url = plugin_dir_url(__FILE__) . '../';
+
+    wp_enqueue_style('mxchat-admin-css', $plugin_url . 'css/admin-style.css', array(), $version);
+    wp_enqueue_style('mxchat-knowledge-css', $plugin_url . 'css/knowledge-style.css', array(), $version);
+    wp_enqueue_style('mxchat-admin-sidebar-css', $plugin_url . 'css/admin-sidebar.css', array(), $version);
+    wp_enqueue_style('mxchat-chat-transcripts-css', $plugin_url . 'css/chat-transcripts.css', array('mxchat-admin-sidebar-css'), $version);
+    wp_enqueue_script('mxchat-transcripts-js', $plugin_url . 'js/mxchat_transcripts.js', array('jquery'), $version, true);
+
+    wp_localize_script('mxchat-transcripts-js', 'mxchatAdmin', array(
+        'ajax_url'     => admin_url('admin-ajax.php'),
+        'ajaxurl'      => admin_url('admin-ajax.php'),
+        'export_nonce' => wp_create_nonce('mxchat_export_transcripts'),
+        'can_manage'   => '0',
+    ));
+
+    $chart_data = $this->get_transcripts_chart_data();
+    wp_localize_script('mxchat-transcripts-js', 'mxchatChartData', array(
+        'labels'   => array_values($chart_data['labels']),
+        'chats'    => array_values($chart_data['chats']),
+        'messages' => array_values($chart_data['messages']),
+    ));
 }
 private function enqueue_page_specific_assets($current_page, $plugin_url, $version) {
     switch ($current_page) {
@@ -10310,10 +10547,12 @@ private function enqueue_page_specific_assets($current_page, $plugin_url, $versi
                 'noLongerNeeded'   => __('No longer needed', 'mxchat'),
                 /* translators: %s: number of entries */
                 'apply'            => __('Rewrite %s entries', 'mxchat'),
+                'applyOne'         => __('Rewrite 1 entry', 'mxchat'),
                 /* translators: %s: number of entries still to rewrite */
                 'resume'           => __('Continue, %s left', 'mxchat'),
                 /* translators: %s: number of entries */
                 'done'             => __('%s entries rewritten and embedded again.', 'mxchat'),
+                'doneOne'          => __('1 entry rewritten and embedded again.', 'mxchat'),
                 /* translators: 1: entries rewritten, 2: entries that could not be rewritten */
                 'doneWithFailures' => __('%1$s entries rewritten. %2$s could not be rewritten and were left as they were.', 'mxchat'),
                 'nothingToDo'      => __('Every entry checked is already correct. Nothing to rewrite.', 'mxchat'),
@@ -10327,6 +10566,10 @@ private function enqueue_page_specific_assets($current_page, $plugin_url, $versi
                     'joiners'         => __('Joined letters', 'mxchat'),
                     'RTL'             => __('Right-to-left order', 'mxchat'),
                     'edited'          => __('Edited since import', 'mxchat'),
+                    // Plan e77da7: a product entry saved before 3.2.25 without its custom product tabs
+                    'tabs_missing'    => __('Custom tabs missing', 'mxchat'),
+                    // M6: a page-builder (or very short) page stored before 3.2.26 without its published page's text
+                    'page_text_missing' => __('Page text missing', 'mxchat'),
                 ),
             ));
             // Per-entry "View indexed content" inspector (plan-d8cb4b) reuses the
@@ -10602,7 +10845,17 @@ private function localize_page_specific_scripts($current_page) {
                     'cancel' => __('Cancel', 'mxchat'),
                     'noResults' => __('No content found.', 'mxchat'),
                     'extractingPdfs' => __('extracting %d PDF(s)...', 'mxchat'),
-                    'pdfExtractedSuffix' => __(' (%d PDF(s) extracted)', 'mxchat')
+                    'pdfExtractedSuffix' => __(' (%d PDF(s) extracted)', 'mxchat'),
+                    // Posts a developer filter leaves out of the knowledge base (plan 9dd0da).
+                    /* translators: 1: post title, 2: reason the post was skipped */
+                    'skippedItem'        => __('Skipped "%1$s": %2$s', 'mxchat'),
+                    'skippedHeading'     => __('Skipped', 'mxchat'),
+                    // M6: shown while a page-builder page's word count is read from its published page.
+                    'countingWords'      => __('Counting words…', 'mxchat'),
+                    /* translators: %d: number of items skipped */
+                    'skippedCount'       => __('%d skipped', 'mxchat'),
+                    /* translators: %d: number of items skipped */
+                    'onlySkipped'        => __('Nothing was imported: %d skipped', 'mxchat')
                 )
             ));
 
@@ -11336,6 +11589,15 @@ if (isset($input['openrouter_selected_model_name'])) {
     // Sanitize debug mode
     if (isset($input['debug_mode'])) {
         $new_input['debug_mode'] = ($input['debug_mode'] === 'on') ? 'on' : 'off';
+    }
+
+    // Provider Reliability auto-retry (plan 4ac3e1). Default ON, so NO else-clause:
+    // an absent key stays absent and reads as on. Stored '1'/'0', the same values
+    // the autosave case writes and the integrator reads (only '0' turns it off).
+    // Without this handler every save stripped the key, so "off" never stuck.
+    if (isset($input['auto_retry_on_transient_error'])) {
+        $retry = $input['auto_retry_on_transient_error'];
+        $new_input['auto_retry_on_transient_error'] = ($retry === '1' || $retry === 'on' || $retry === 1 || $retry === true) ? '1' : '0';
     }
 
     // Content Generator Settings

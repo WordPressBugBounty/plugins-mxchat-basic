@@ -3,6 +3,12 @@
  * Split-panel layout with chat list and conversation view
  */
 jQuery(document).ready(function($) {
+    // Read-only transcripts role (plan 93999a): the server sends can_manage '0'
+    // and the delete controls this script draws (chat-list selection boxes, the
+    // per-lead Delete button) are left out. Administrators get no flag and keep
+    // every control.
+    const canManage = !(typeof mxchatAdmin !== 'undefined' && mxchatAdmin && mxchatAdmin.can_manage === '0');
+
     // ==========================================================================
     // Sidebar Navigation
     // ==========================================================================
@@ -258,19 +264,33 @@ jQuery(document).ready(function($) {
 
     // Render a rating badge for a session row. Uses inline SVG so the glyph
     // renders the same across OSes (emoji fonts vary). Tooltip surfaces the
-    // optional feedback text.
+    // optional feedback text. The badge is built with DOM APIs so visitor
+    // feedback only ever reaches the page through setAttribute(), never through
+    // an HTML string (CVE-2026-110662).
+    const RATING_ICON_UP = '<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 10v12"/><path d="M15 5.88 14 10h5.83a2 2 0 0 1 1.92 2.56l-2.33 8A2 2 0 0 1 17.5 22H7"/><path d="M3 10h4"/></svg>';
+    const RATING_ICON_DOWN = '<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 14V2"/><path d="M9 18.12 10 14H4.17a2 2 0 0 1-1.92-2.56l2.33-8A2 2 0 0 1 6.5 2H17"/><path d="M21 14h-4"/></svg>';
+
     function renderRatingBadge(session) {
         const value = (session && typeof session.rating_value === 'number') ? session.rating_value : null;
-        const feedback = (session && session.rating_feedback) ? session.rating_feedback : '';
+        const feedback = (session && session.rating_feedback) ? String(session.rating_feedback) : '';
+        const badge = document.createElement('span');
+        let title;
         if (value === 1) {
-            const title = feedback ? ('Visitor: ' + feedback) : 'Visitor rated this chat positively';
-            return '<span class="mxch-chat-rating mxch-chat-rating-up" title="' + escapeHtml(title) + '" aria-label="' + escapeHtml(title) + '"><svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 10v12"/><path d="M15 5.88 14 10h5.83a2 2 0 0 1 1.92 2.56l-2.33 8A2 2 0 0 1 17.5 22H7"/><path d="M3 10h4"/></svg></span>';
+            badge.className = 'mxch-chat-rating mxch-chat-rating-up';
+            title = feedback ? ('Visitor: ' + feedback) : 'Visitor rated this chat positively';
+            badge.innerHTML = RATING_ICON_UP;
+        } else if (value === -1) {
+            badge.className = 'mxch-chat-rating mxch-chat-rating-down';
+            title = feedback ? ('Visitor: ' + feedback) : 'Visitor rated this chat negatively';
+            badge.innerHTML = RATING_ICON_DOWN;
+        } else {
+            badge.className = 'mxch-chat-rating mxch-chat-rating-empty';
+            title = 'No rating yet';
+            badge.textContent = '—';
         }
-        if (value === -1) {
-            const title = feedback ? ('Visitor: ' + feedback) : 'Visitor rated this chat negatively';
-            return '<span class="mxch-chat-rating mxch-chat-rating-down" title="' + escapeHtml(title) + '" aria-label="' + escapeHtml(title) + '"><svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 14V2"/><path d="M9 18.12 10 14H4.17a2 2 0 0 1-1.92-2.56l2.33-8A2 2 0 0 1 6.5 2H17"/><path d="M21 14h-4"/></svg></span>';
-        }
-        return '<span class="mxch-chat-rating mxch-chat-rating-empty" title="No rating yet" aria-label="No rating yet">—</span>';
+        badge.setAttribute('title', title);
+        badge.setAttribute('aria-label', title);
+        return badge.outerHTML;
     }
 
     // Delete selected button — opens the shared confirm modal with the "also delete lead" checkbox.
@@ -407,7 +427,7 @@ jQuery(document).ready(function($) {
             const isChecked = selectedSessions.has(session.session_id) ? ' checked' : '';
             html += `
                 <div class="mxch-chat-item${isActive}${isSelected}" data-session-id="${escapeHtml(session.session_id)}">
-                    <input type="checkbox" class="mxch-chat-checkbox"${isChecked}>
+                    ${canManage ? `<input type="checkbox" class="mxch-chat-checkbox"${isChecked}>` : ''}
                     <div class="mxch-chat-avatar">
                         <span>${escapeHtml(session.initials)}</span>
                     </div>
@@ -564,6 +584,16 @@ jQuery(document).ready(function($) {
             $('#mxch-detail-page').text('-');
         }
 
+        // IP row — the server sends user.ip only when the guest's identifier is a
+        // valid address; a logged-in visitor (identified by login) keeps it hidden.
+        if (data.user && data.user.ip) {
+            $('#mxch-detail-ip').text(data.user.ip);
+            $('#mxch-detail-ip-row').show();
+        } else {
+            $('#mxch-detail-ip').text('-');
+            $('#mxch-detail-ip-row').hide();
+        }
+
         if (data.user.email) {
             $('#mxch-detail-email').text(data.user.email);
             $('#mxch-detail-email-row').show();
@@ -593,6 +623,17 @@ jQuery(document).ready(function($) {
             $('#mxch-clicked-section').hide();
         }
 
+        // Chat token total (plan 705b6c): text APIs only; hidden when no reply
+        // recorded usage (every chat saved before 3.2.26).
+        const usageTotal = (data && data.usage_total && data.usage_total.label) ? data.usage_total : null;
+        if (usageTotal) {
+            $('#mxch-conversation-usage-value').text(String(usageTotal.label));
+            $('#mxch-conversation-usage').attr('title', String(usageTotal.title || '')).prop('hidden', false);
+        } else {
+            $('#mxch-conversation-usage-value').text('');
+            $('#mxch-conversation-usage').removeAttr('title').prop('hidden', true);
+        }
+
         // Render messages
         let messagesHtml = '';
         data.messages.forEach(function(msg) {
@@ -615,6 +656,16 @@ jQuery(document).ready(function($) {
                 const senderLabel = isAgent
                     ? '<span class="mxch-agent-label">Live Agent</span>'
                     : '<span class="mxch-bot-label">AI Assistant</span>';
+                // Model and tokens of this reply (plan 705b6c), beside the time.
+                // Replies without recorded usage keep the time line alone.
+                const usage = (!isAgent && msg.usage && msg.usage.label) ? msg.usage : null;
+                const timeLine = `<div class="mxch-message-time">${escapeHtml(msg.timestamp)}</div>`;
+                const footer = usage
+                    ? `<div class="mxch-message-foot">
+                            ${timeLine}
+                            <div class="mxch-message-usage">${usage.model ? `<span class="mxch-message-usage-model">${escapeHtml(usage.model)}</span> ` : ''}<span class="mxch-message-usage-tokens">${escapeHtml(usage.label)}</span></div>
+                        </div>`
+                    : timeLine;
                 messagesHtml += `
                     <div class="mxch-message mxch-message-bot${isAgent ? ' mxch-message-agent' : ''}" data-message-id="${msg.id}">
                         <div class="mxch-message-header">
@@ -626,7 +677,7 @@ jQuery(document).ready(function($) {
                                 ${msg.content}
                             </div>
                         </div>
-                        <div class="mxch-message-time">${escapeHtml(msg.timestamp)}</div>
+                        ${footer}
                     </div>
                 `;
             }
@@ -771,7 +822,9 @@ jQuery(document).ready(function($) {
         translations.forEach(function(item) {
             const $bubble = $('#mxch-messages-area .mxch-message-bubble').eq(item.index);
             if ($bubble.length) {
-                $bubble.html(item.translated);
+                // A translation is model output from the messages' plain text
+                // (visitor-written), so it is shown as text; line breaks kept.
+                $bubble.html(escapeHtml(item.translated).replace(/\r?\n/g, '<br>'));
                 $bubble.addClass('translated');
             }
         });
@@ -1249,11 +1302,16 @@ jQuery(document).ready(function($) {
         $container.html(html);
     }
 
+    // Escapes for both text and attribute contexts (quotes included), so a value
+    // can never break out of title="", href="" or data-*="" (CVE-2026-110662).
     function escapeHtml(text) {
-        if (!text) return '';
-        const div = document.createElement('div');
-        div.textContent = text;
-        return div.innerHTML;
+        if (!text && text !== 0) return '';
+        return String(text)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#039;');
     }
 
     // Close RAG modal
@@ -1725,7 +1783,7 @@ jQuery(document).ready(function($) {
                         <span>View convo</span>
                     </button>`
                 : '';
-            const deleteBtn = `<button type="button" class="mxch-btn mxch-btn-ghost mxch-btn-sm mxch-btn-danger-ghost mxch-leads-delete-row" data-email="${escapeHtmlLeads(emailKey)}" title="Delete lead">
+            const deleteBtn = !canManage ? '' : `<button type="button" class="mxch-btn mxch-btn-ghost mxch-btn-sm mxch-btn-danger-ghost mxch-leads-delete-row" data-email="${escapeHtmlLeads(emailKey)}" title="Delete lead">
                     <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
                 </button>`;
 

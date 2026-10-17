@@ -205,7 +205,7 @@
             showError(fmt(L.scanStopped, state.error));
         }
         if (phase === 'done') {
-            doneText.textContent = state.failed > 0 ? fmt(L.doneWithFailures, state.repaired, state.failed) : fmt(L.done, state.repaired);
+            doneText.textContent = state.failed > 0 ? fmt(L.doneWithFailures, state.repaired, state.failed) : (state.repaired === 1 && L.doneOne ? L.doneOne : fmt(L.done, state.repaired));
             doneBox.hidden = false;
         } else if (phase === 'scanned' && state.to_repair === 0 && !state.error) {
             doneText.textContent = L.nothingToDo;
@@ -216,7 +216,7 @@
         var canApply = (phase === 'scanned' || phase === 'apply') && state.to_repair > 0 && !state.error;
         applyBtn.hidden = !canApply;
         find('.mxch-kb-reimport-cost').hidden = !canApply;
-        applyBtn.textContent = phase === 'apply' && state.pos > 0 ? fmt(L.resume, state.to_repair - state.pos) : fmt(L.apply, state.to_repair);
+        applyBtn.textContent = phase === 'apply' && state.pos > 0 ? fmt(L.resume, state.to_repair - state.pos) : (state.to_repair === 1 && L.applyOne ? L.applyOne : fmt(L.apply, state.to_repair));
     }
 
     function loop(params, running) {

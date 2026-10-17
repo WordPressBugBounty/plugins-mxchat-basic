@@ -257,6 +257,10 @@ class MxChat_Privacy {
             // eraser — same subject, same session set, plan 23c4a1).
             $data = array_merge($data, self::export_click_fields($sid));
 
+            // The satisfaction rating and the feedback the visitor typed
+            // (plan 79c1be) — the eraser removes them, so the export shows them.
+            $data = array_merge($data, self::export_rating_fields($sid));
+
             $items[] = self::export_item($sid, $data);
         }
 
@@ -314,7 +318,7 @@ class MxChat_Privacy {
             $data[] = array('name' => __('Name on record', 'mxchat'), 'value' => (string) $name);
         }
 
-        $data = array_merge($data, self::export_consent_fields($sid), self::export_click_fields($sid));
+        $data = array_merge($data, self::export_consent_fields($sid), self::export_click_fields($sid), self::export_rating_fields($sid));
 
         if (count($data) < 2) {
             return null;
@@ -377,6 +381,48 @@ class MxChat_Privacy {
                     'value' => $details,
                 );
             }
+        }
+
+        return $fields;
+    }
+
+    /**
+     * Satisfaction rating fields for one session: the thumbs-up/down, the
+     * free-text feedback when the visitor left any, and when it was given.
+     * Empty when the session was never rated or the table does not exist
+     * (plan 79c1be).
+     */
+    private static function export_rating_fields($sid) {
+        global $wpdb;
+        static $table_exists = null;
+
+        $table = $wpdb->prefix . 'mxchat_session_ratings';
+        if ($table_exists === null) {
+            $table_exists = ($wpdb->get_var($wpdb->prepare("SHOW TABLES LIKE %s", $table)) === $table);
+        }
+        if (!$table_exists) {
+            return array();
+        }
+
+        $row = $wpdb->get_row($wpdb->prepare(
+            "SELECT rating_value, rating_feedback, created_at FROM {$table} WHERE session_id = %s LIMIT 1",
+            $sid
+        ));
+        if (!$row) {
+            return array();
+        }
+
+        $fields = array(
+            array(
+                'name'  => __('Satisfaction rating', 'mxchat'),
+                'value' => ((int) $row->rating_value === 1) ? __('Positive', 'mxchat') : __('Negative', 'mxchat'),
+            ),
+        );
+        if ($row->rating_feedback !== null && $row->rating_feedback !== '') {
+            $fields[] = array('name' => __('Rating feedback', 'mxchat'), 'value' => (string) $row->rating_feedback);
+        }
+        if (!empty($row->created_at)) {
+            $fields[] = array('name' => __('Rated on', 'mxchat'), 'value' => (string) $row->created_at);
         }
 
         return $fields;
@@ -451,8 +497,9 @@ class MxChat_Privacy {
                 continue;
             }
 
-            self::erase_session($sid);
-            $items_removed++;
+            // One item for the conversation, plus one for its satisfaction
+            // rating when there was one (plan 79c1be).
+            $items_removed += 1 + self::erase_session($sid);
             $deleted_this_batch++;
         }
 
@@ -476,7 +523,10 @@ class MxChat_Privacy {
      * rows, translation rows, per-session options (history, pre-chat capture,
      * chat-deleted lead preservation, agent name, session owner), per-session
      * upload transients, any uploaded PDF/Word temp file those transients
-     * still point at, and the session's row cache.
+     * still point at, the satisfaction rating with its feedback (79c1be), and
+     * the session's row cache.
+     *
+     * @return int Rating rows removed (0 or 1), reported as erased items.
      */
     private static function erase_session($sid) {
         global $wpdb;
@@ -517,6 +567,12 @@ class MxChat_Privacy {
             $wpdb->delete($wpdb->prefix . 'mxchat_url_clicks', array('session_id' => $sid), array('%s'));
         }
 
+        // The thumbs-up/down and the free-text feedback the visitor typed
+        // (up to 1,000 characters) are personal data about this conversation.
+        $ratings_removed = function_exists('mxchat_delete_session_ratings')
+            ? (int) mxchat_delete_session_ratings(array($sid))
+            : 0;
+
         foreach (self::$session_option_prefixes as $prefix) {
             delete_option($prefix . $sid);
         }
@@ -528,6 +584,8 @@ class MxChat_Privacy {
         }
 
         wp_cache_delete('chat_session_' . $sid, 'mxchat_chat_sessions');
+
+        return $ratings_removed;
     }
 
     /**

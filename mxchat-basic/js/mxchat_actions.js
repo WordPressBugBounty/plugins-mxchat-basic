@@ -153,7 +153,7 @@ jQuery(document).ready(function($) {
             var FC_BTN_ADD    = $fcSaveBtn.data('add-label') || 'Add Tool';
             var FC_BTN_SAVE   = $fcSaveBtn.data('save-label') || 'Save Changes';
 
-            function fcEsc(s) { return $('<div>').text(s == null ? '' : String(s)).html(); }
+            function fcEsc(s) { return $('<div>').text(s == null ? '' : String(s)).html().replace(/"/g, '&quot;').replace(/'/g, '&#039;'); }
             function fcEntry(cb) {
                 return $fcStore.find('.mxch-fc-tool').filter(function () {
                     return String($(this).data('fc-callback')) === String(cb);
@@ -1550,6 +1550,6 @@ jQuery(document).ready(function($) {
         if (!text) return '';
         const div = document.createElement('div');
         div.appendChild(document.createTextNode(text));
-        return div.innerHTML;
+        return div.innerHTML.replace(/"/g, '&quot;').replace(/'/g, '&#039;');
     }
 });

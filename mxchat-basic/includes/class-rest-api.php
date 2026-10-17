@@ -535,6 +535,7 @@ class MxChat_Rest_Api {
 
         $deleted_translations = 0;
         $deleted_url_clicks   = 0;
+        $deleted_ratings      = 0;
 
         if ($cascade) {
             if ($wpdb->get_var($wpdb->prepare("SHOW TABLES LIKE %s", $translations_table)) === $translations_table) {
@@ -553,11 +554,16 @@ class MxChat_Rest_Api {
                     )
                 );
             }
+            // The satisfaction rating and its feedback go with the conversation (79c1be).
+            if (function_exists('mxchat_delete_session_ratings')) {
+                $deleted_ratings = (int) mxchat_delete_session_ratings($session_ids);
+            }
         }
         // phpcs:enable
 
         return rest_ensure_response(array(
             'session_ids_requested' => count($session_ids),
+            'deleted_ratings'       => $deleted_ratings,
             'transcripts_deleted'   => $deleted_transcripts,
             'translations_deleted'  => $deleted_translations,
             'url_clicks_deleted'    => $deleted_url_clicks,

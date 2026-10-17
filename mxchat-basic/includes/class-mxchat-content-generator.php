@@ -700,6 +700,11 @@ class MxChat_Content_Generator {
 
         check_ajax_referer('mxchat_content_nonce', 'nonce');
 
+        // The Content screen requires manage_options; so does reading its progress (plan 66cfef).
+        if (!current_user_can('manage_options')) {
+            wp_send_json_error(array('message' => __('Unauthorized', 'mxchat')), 403);
+        }
+
         $progress_key = sanitize_text_field($_POST['progress_key'] ?? '');
         if (empty($progress_key)) {
             wp_send_json_error(array('message' => __('Invalid progress key.', 'mxchat')));
@@ -826,7 +831,7 @@ class MxChat_Content_Generator {
         );
 
         // Build cURL requests for all images
-        $image_model = $options['content_image_model'] ?? 'gpt-image-1.5';
+        $image_model = $options['content_image_model'] ?? 'gpt-image-2.5-flare';
         $curl_configs = array();
 
         foreach ($image_sections as $img) {
@@ -958,7 +963,7 @@ class MxChat_Content_Generator {
      */
     private function generate_single_image($prompt) {
         $options     = get_option('mxchat_options', array());
-        $image_model = $options['content_image_model'] ?? 'gpt-image-1.5';
+        $image_model = $options['content_image_model'] ?? 'gpt-image-2.5-flare';
 
         if (strpos($image_model, 'gpt-image') === 0) {
             return $this->generate_openai_image($prompt, $options);
@@ -975,12 +980,18 @@ class MxChat_Content_Generator {
      * Build a cURL-ready request config for a single image generation.
      * Used by the parallel image pipeline.
      *
+     * Plan d9da28: static, and an optional $shape asks for a size / aspect
+     * (mxchat_generate_media_image()). Without one the body is exactly what
+     * the content pipeline has always sent (1536x1024, 16:9).
+     *
      * @param string $prompt      Image generation prompt.
      * @param string $image_model The configured image model ID.
      * @param array  $options     Plugin options (contains API keys).
+     * @param array  $shape       Optional: 'size' (OpenAI WxH), 'aspect' (xAI / Gemini ratio),
+     *                            'resolution' (xAI 1k / 2k), 'image_size' (Gemini 1K / 2K).
      * @return array|WP_Error     Array with 'url', 'headers', 'body' keys, or WP_Error.
      */
-    private function build_image_request($prompt, $image_model, $options) {
+    private static function build_image_request($prompt, $image_model, $options, $shape = array()) {
         if (strpos($image_model, 'gpt-image') === 0) {
             $api_key = $options['api_key'] ?? '';
             if (empty($api_key)) {
@@ -993,10 +1004,10 @@ class MxChat_Content_Generator {
                     'Content-Type: application/json',
                 ),
                 'body' => wp_json_encode(array(
-                    'model'         => 'gpt-image-1.5',
+                    'model'         => self::openai_image_model($image_model),
                     'prompt'        => $prompt,
                     'n'             => 1,
-                    'size'          => '1536x1024',
+                    'size'          => isset($shape['size']) ? (string) $shape['size'] : '1536x1024',
                     'quality'       => $options['content_image_quality'] ?? 'auto',
                     'output_format' => 'png',
                 )),
@@ -1014,12 +1025,13 @@ class MxChat_Content_Generator {
                     'Authorization: Bearer ' . $api_key,
                     'Content-Type: application/json',
                 ),
-                'body' => wp_json_encode(array(
+                'body' => wp_json_encode(array_merge(array(
                     'model'           => $image_model,
                     'prompt'          => $prompt,
                     'n'               => 1,
                     'response_format' => 'url',
-                )),
+                ), isset($shape['aspect']) ? array('aspect_ratio' => (string) $shape['aspect']) : array(),
+                   isset($shape['resolution']) ? array('resolution' => (string) $shape['resolution']) : array())),
             );
         }
 
@@ -1030,7 +1042,7 @@ class MxChat_Content_Generator {
             }
             $api_version = (strpos($image_model, 'preview') !== false) ? 'v1beta' : 'v1beta';
             return array(
-                'url'     => "https://generativelanguage.googleapis.com/{$api_version}/models/{$image_model}:generateContent?key={$api_key}",
+                'url'     => "https://generativelanguage.googleapis.com/{$api_version}/models/" . self::gemini_image_model($image_model) . ":generateContent?key={$api_key}",
                 'headers' => array(
                     'Content-Type: application/json',
                 ),
@@ -1044,7 +1056,10 @@ class MxChat_Content_Generator {
                     ),
                     'generationConfig' => array(
                         'responseModalities' => array('TEXT', 'IMAGE'),
-                        'imageConfig'        => array('aspectRatio' => '16:9'),
+                        'imageConfig'        => array_merge(
+                            array('aspectRatio' => isset($shape['aspect']) ? (string) $shape['aspect'] : '16:9'),
+                            isset($shape['image_size']) ? array('imageSize' => (string) $shape['image_size']) : array()
+                        ),
                     ),
                 )),
             );
@@ -1060,9 +1075,10 @@ class MxChat_Content_Generator {
      * @param string $response_body Raw JSON response body.
      * @param string $image_model   The image model used (determines response format).
      * @param array  $options       Plugin options.
+     * @param array  $save          Optional attachment details, see save_image_to_media_library().
      * @return array|WP_Error       Array with 'url' and 'attachment_id', or WP_Error.
      */
-    private function process_image_response($response_body, $image_model, $options = array()) {
+    private static function process_image_response($response_body, $image_model, $options = array(), $save = array()) {
         $decoded = json_decode($response_body, true);
         if (json_last_error() !== JSON_ERROR_NONE || empty($decoded)) {
             return new WP_Error('json_error', __('Invalid image API response.', 'mxchat'));
@@ -1072,11 +1088,11 @@ class MxChat_Content_Generator {
         if (strpos($image_model, 'gpt-image') === 0) {
             $b64_data = $decoded['data'][0]['b64_json'] ?? '';
             if (!empty($b64_data)) {
-                return $this->save_image_to_media_library($b64_data, 'image/png');
+                return self::save_image_to_media_library($b64_data, 'image/png', $save);
             }
             $url = $decoded['data'][0]['url'] ?? '';
             if (!empty($url)) {
-                return $this->save_image_url_to_media_library($url);
+                return self::save_image_url_to_media_library($url, $save);
             }
             return new WP_Error('no_image_data', __('No image data in OpenAI response.', 'mxchat'));
         }
@@ -1085,7 +1101,7 @@ class MxChat_Content_Generator {
         if (strpos($image_model, 'grok') === 0) {
             $url = $decoded['data'][0]['url'] ?? '';
             if (!empty($url)) {
-                return $this->save_image_url_to_media_library($url);
+                return self::save_image_url_to_media_library($url, $save);
             }
             return new WP_Error('no_image_data', __('No image data in xAI response.', 'mxchat'));
         }
@@ -1097,7 +1113,7 @@ class MxChat_Content_Generator {
                     $inline_data = $part['inlineData'] ?? $part['inline_data'] ?? null;
                     if ($inline_data && !empty($inline_data['data'])) {
                         $mime_type = $inline_data['mimeType'] ?? $inline_data['mime_type'] ?? 'image/png';
-                        return $this->save_image_to_media_library($inline_data['data'], $mime_type);
+                        return self::save_image_to_media_library($inline_data['data'], $mime_type, $save);
                     }
                 }
             }
@@ -1108,7 +1124,67 @@ class MxChat_Content_Generator {
     }
 
     /**
-     * Generate image via OpenAI GPT Image 1.5
+     * The OpenAI image model to send for the configured content image model.
+     *
+     * Direct task M2 (2026-10-16): the request used to hardcode gpt-image-1.5
+     * whatever the picker said, so choosing GPT Image 2 still sent 1.5. Now the
+     * chosen gpt-image id is sent. Ids OpenAI has shut down (per its
+     * deprecations page) are sent as gpt-image-2.5-flare, OpenAI's named
+     * replacement, once their shutdown date has passed, so a saved choice keeps
+     * producing images.
+     *
+     * @param string $image_model Saved content_image_model.
+     * @return string
+     */
+    public static function openai_image_model($image_model) {
+        $image_model = (string) $image_model;
+        // Direct task M4: retirements live in the catalog's one image-model
+        // lifecycle list (MxChat_Model_Catalog::retired_image_model_map()). The
+        // dated list below is the frozen fallback for a partial upgrade.
+        if (class_exists('MxChat_Model_Catalog') && method_exists('MxChat_Model_Catalog', 'resolve_retired_image')) {
+            $image_model = (string) MxChat_Model_Catalog::resolve_retired_image($image_model);
+        }
+        if (strpos($image_model, 'gpt-image') !== 0 && strpos($image_model, 'chatgpt-image') !== 0) {
+            return 'gpt-image-2.5-flare';
+        }
+        $shutdown = array(
+            'gpt-image-1'          => '2026-10-23',
+            'gpt-image-1-mini'     => '2026-12-01',
+            'gpt-image-1.5'        => '2026-12-01',
+            'chatgpt-image-latest' => '2026-12-01',
+        );
+        if (isset($shutdown[$image_model]) && time() >= strtotime($shutdown[$image_model] . ' 00:00:00 UTC')) {
+            return 'gpt-image-2.5-flare';
+        }
+        return $image_model;
+    }
+
+    /**
+     * Gemini image ids Google has shut down (its deprecations page: the 3.x
+     * image previews on 2026-06-25, the 2.5 preview on 2026-01-15) are sent as
+     * their GA successor, so a saved preview choice keeps producing images.
+     * Direct task M2 (2026-10-16).
+     *
+     * @param string $model Saved content_image_model.
+     * @return string
+     */
+    public static function gemini_image_model($model) {
+        // Direct task M4: the catalog's image-model lifecycle list first (it
+        // also covers the Nano Banana / Imagen ids shut down or dated since M2);
+        // the map below is the frozen fallback for a partial upgrade.
+        if (class_exists('MxChat_Model_Catalog') && method_exists('MxChat_Model_Catalog', 'resolve_retired_image')) {
+            return (string) MxChat_Model_Catalog::resolve_retired_image((string) $model);
+        }
+        $ga = array(
+            'gemini-3-pro-image-preview'     => 'gemini-3-pro-image',
+            'gemini-3.1-flash-image-preview' => 'gemini-3.1-flash-image',
+            'gemini-2.5-flash-image-preview' => 'gemini-2.5-flash-image',
+        );
+        return isset($ga[$model]) ? $ga[$model] : (string) $model;
+    }
+
+    /**
+     * Generate image via OpenAI GPT Image (the configured gpt-image model)
      */
     private function generate_openai_image($prompt, $options) {
         $api_key = $options['api_key'] ?? '';
@@ -1117,7 +1193,7 @@ class MxChat_Content_Generator {
         }
 
         $body = array(
-            'model'           => 'gpt-image-1.5',
+            'model'           => self::openai_image_model($options['content_image_model'] ?? 'gpt-image-2.5-flare'),
             'prompt'          => $prompt,
             'n'               => 1,
             'size'            => '1536x1024',
@@ -1233,6 +1309,7 @@ class MxChat_Content_Generator {
             ),
         );
 
+        $model = self::gemini_image_model($model); // direct task M2: retired preview ids -> GA
         $url = 'https://generativelanguage.googleapis.com/v1beta/models/' . $model . ':generateContent?key=' . $api_key;
 
         $response = wp_remote_post($url, array(
@@ -1269,12 +1346,74 @@ class MxChat_Content_Generator {
         return new WP_Error('no_image_data', __('No image data in Gemini response.', 'mxchat'));
     }
 
+    /**
+     * Generate ONE image with $image_model and save it to the Media Library
+     * (plan d9da28, used by mxchat_generate_media_image()). The same request
+     * builder and response handling as the content pipeline, sent with
+     * wp_remote_post(), so every engine, its key and its retired-id handling
+     * stay in one place.
+     *
+     * @param string $prompt      Image prompt.
+     * @param string $image_model Image model id (gpt-image*, grok*, gemini*).
+     * @param array  $options     mxchat_options (API keys, content_image_quality).
+     * @param array  $shape       See build_image_request().
+     * @param array  $save        See save_image_to_media_library().
+     * @return array|WP_Error     array('url' => ..., 'attachment_id' => ...) or WP_Error.
+     */
+    public static function generate_image_to_library($prompt, $image_model, $options, $shape = array(), $save = array()) {
+        $config = self::build_image_request((string) $prompt, (string) $image_model, (array) $options, (array) $shape);
+        if (is_wp_error($config)) {
+            return $config;
+        }
+        $headers = array();
+        foreach ((array) $config['headers'] as $line) {
+            $parts = explode(':', (string) $line, 2);
+            if (count($parts) === 2) {
+                $headers[trim($parts[0])] = trim($parts[1]);
+            }
+        }
+        $response = wp_remote_post($config['url'], array(
+            'headers' => $headers,
+            'body'    => $config['body'],
+            'timeout' => 150,
+        ));
+        if (is_wp_error($response)) {
+            return new WP_Error('image_request_failed', self::redact_key($response->get_error_message()));
+        }
+        $code = (int) wp_remote_retrieve_response_code($response);
+        $raw  = (string) wp_remote_retrieve_body($response);
+        if ($code !== 200) {
+            $decoded = json_decode($raw, true);
+            $message = '';
+            if (is_array($decoded) && isset($decoded['error'])) {
+                $message = is_array($decoded['error']) ? (string) ($decoded['error']['message'] ?? '') : (string) $decoded['error'];
+            }
+            if ($message === '') {
+                /* translators: %d: HTTP status code */
+                $message = sprintf(__('The image provider answered HTTP %d.', 'mxchat'), $code);
+            }
+            return new WP_Error('image_provider_error', self::redact_key($message), array('status' => $code));
+        }
+        return self::process_image_response($raw, (string) $image_model, (array) $options, (array) $save);
+    }
+
+    /** Remove an API key a provider message or transport error might echo (Gemini sends the key in the URL). */
+    private static function redact_key($message) {
+        return preg_replace('/([?&]key=)[^&\s"\']+/', '$1***', (string) $message);
+    }
+
     // ─── Media Library Helpers ──────────────────────────────────────────
 
     /**
      * Save base64 image data to WordPress media library
+     *
+     * Plan d9da28: static, with optional $save details for
+     * mxchat_generate_media_image(): 'parent' (post id to attach to),
+     * 'post_data' (merged into the attachment by media_handle_sideload(), so
+     * its meta_input is stored before wp_generate_attachment_metadata() runs)
+     * and 'prefix' (file name prefix). Without them nothing changes.
      */
-    private function save_image_to_media_library($base64_data, $mime_type = 'image/png') {
+    private static function save_image_to_media_library($base64_data, $mime_type = 'image/png', $save = array()) {
         require_once(ABSPATH . 'wp-admin/includes/media.php');
         require_once(ABSPATH . 'wp-admin/includes/file.php');
         require_once(ABSPATH . 'wp-admin/includes/image.php');
@@ -1291,7 +1430,8 @@ class MxChat_Content_Generator {
             $extension = 'webp';
         }
 
-        $filename  = 'mxchat-content-' . time() . '-' . wp_generate_password(6, false) . '.' . $extension;
+        $prefix    = !empty($save['prefix']) ? sanitize_file_name((string) $save['prefix']) : 'mxchat-content';
+        $filename  = $prefix . '-' . time() . '-' . wp_generate_password(6, false) . '.' . $extension;
         $temp_file = wp_tempnam($filename);
 
         if (!$temp_file) {
@@ -1310,7 +1450,7 @@ class MxChat_Content_Generator {
             'type'     => $mime_type,
         );
 
-        $attachment_id = media_handle_sideload($file_array, 0);
+        $attachment_id = media_handle_sideload($file_array, isset($save['parent']) ? (int) $save['parent'] : 0, null, isset($save['post_data']) && is_array($save['post_data']) ? $save['post_data'] : array());
 
         if (is_wp_error($attachment_id)) {
             @unlink($temp_file);
@@ -1326,7 +1466,7 @@ class MxChat_Content_Generator {
     /**
      * Download an image from URL and save to WordPress media library
      */
-    private function save_image_url_to_media_library($image_url) {
+    private static function save_image_url_to_media_library($image_url, $save = array()) {
         require_once(ABSPATH . 'wp-admin/includes/media.php');
         require_once(ABSPATH . 'wp-admin/includes/file.php');
         require_once(ABSPATH . 'wp-admin/includes/image.php');
@@ -1336,14 +1476,15 @@ class MxChat_Content_Generator {
             return $tmp;
         }
 
-        $filename = 'mxchat-content-' . time() . '-' . wp_generate_password(6, false) . '.jpg';
+        $prefix   = !empty($save['prefix']) ? sanitize_file_name((string) $save['prefix']) : 'mxchat-content';
+        $filename = $prefix . '-' . time() . '-' . wp_generate_password(6, false) . '.jpg';
 
         $file_array = array(
             'name'     => $filename,
             'tmp_name' => $tmp,
         );
 
-        $attachment_id = media_handle_sideload($file_array, 0);
+        $attachment_id = media_handle_sideload($file_array, isset($save['parent']) ? (int) $save['parent'] : 0, null, isset($save['post_data']) && is_array($save['post_data']) ? $save['post_data'] : array());
 
         if (is_wp_error($attachment_id)) {
             @unlink($tmp);
@@ -2290,7 +2431,7 @@ article .entry-content,
         if ($model === 'gpt-5.1-2025-11-13') return 'low';
         if ($model === 'gpt-5.5') return 'low';
         if ($model === 'gpt-5.4') return 'low';
-        if (in_array($model, array('gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna'), true)) return 'low'; // plan 45c22d
+        if (in_array($model, array('gpt-6-astra', 'gpt-6.1-sol', 'gpt-6-sol', 'gpt-6-luna'), true)) return 'low'; // plan 45c22d; gpt-6.1-sol plan 6945f6
         if (in_array($model, array('gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna'), true)) return 'low';
         return 'minimal';
     }
@@ -2449,7 +2590,7 @@ article .entry-content,
         // sourced from the core model catalog (plan-dcb71c); frozen list fallback.
         $omit_temp = (class_exists('MxChat_Model_Catalog') && method_exists('MxChat_Model_Catalog', 'supports_temperature'))
             ? !MxChat_Model_Catalog::supports_temperature($model)
-            : in_array($model, array('claude-opus-5', 'claude-opus-4-7', 'claude-opus-4-8', 'claude-fable-5', 'claude-sonnet-5'), true);
+            : in_array($model, array('claude-opus-5', 'claude-opus-4-7', 'claude-opus-4-8', 'claude-fable-5', 'claude-sonnet-5', 'claude-haiku-5-5', 'claude-sonnet-5-5', 'claude-opus-5-5', 'claude-fable-5-1'), true); // 5.5 + Fable 5.1: direct task M2
         if ($omit_temp) {
             unset($body['temperature']);
         }
@@ -3316,6 +3457,11 @@ article .entry-content,
      */
     public function handle_seo_list_posts() {
         check_ajax_referer('mxchat_content_nonce', 'nonce');
+
+        // Same capability as the Content screen that lists them (plan 66cfef).
+        if (!current_user_can('manage_options')) {
+            wp_send_json_error(array('message' => __('Unauthorized', 'mxchat')), 403);
+        }
 
         $page      = max(1, intval($_POST['page'] ?? 1));
         $per_page  = 50;

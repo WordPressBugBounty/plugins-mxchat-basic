@@ -4250,3 +4250,54 @@ tr.mxchat-row-error td:first-child::before {
         max-height: 480px;
     }
 }
+/* ===== Auto-Sync: "Keep imported entries up to date only" (plan 9dd0da) =====
+   Each post type's switch carries its sub-switch beneath it. The rule drops from the
+   centre of the parent switch (50px wide) and the sub-switch lines up with the parent's
+   label (50px switch + its 10px margin + 12px gap = 72px), so the pair reads as one setting. The sub-switch dims
+   while its Auto-sync switch is off: it is kept, it just has nothing to act on. */
+.mxch-autosync-types .mxch-autosync-type + .mxch-autosync-type {
+    margin-top: 18px;
+}
+.mxch-autosync-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+.mxch-autosync-label {
+    color: var(--mxch-text-primary);
+}
+.mxch-autosync-label-strong {
+    font-weight: 500;
+}
+.mxch-autosync-sub {
+    margin-inline-start: 24px;
+    padding-top: 10px;
+    padding-inline-start: 46px;
+    border-inline-start: 2px solid var(--mxch-card-border);
+    transition: opacity 0.2s ease;
+}
+.mxch-autosync-sub-label {
+    font-size: 13px;
+    color: var(--mxch-text-secondary);
+}
+.mxch-autosync-type:has(.mxch-autosync-main input:not(:checked)) .mxch-autosync-sub {
+    opacity: 0.55;
+}
+.mxch-autosync-help {
+    margin-top: var(--mxch-spacing-md);
+    max-width: 640px;
+}
+@media (prefers-reduced-motion: reduce) {
+    .mxch-autosync-sub {
+        transition: none;
+    }
+}
+
+/* Importer results: posts a developer filter left out (plan 9dd0da). A skip is not a
+   failure, so its heading is neutral rather than the failure red. */
+.mxchat-kb-results-details h5.mxchat-kb-results-skipped {
+    color: var(--mxch-text-secondary);
+}
+.mxchat-kb-results-details h5.mxchat-kb-results-skipped:not(:first-child) {
+    margin-top: 12px;
+}

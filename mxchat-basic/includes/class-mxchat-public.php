@@ -241,14 +241,34 @@ public function render_chatbot_shortcode($atts) {
     // [Rest of your existing rendering code stays exactly the same]
     // Just remove the old should_hide_chatbot() check from the beginning
     
-    // Check for Complianz consent if the toggle is enabled
+    // The chat window always starts closed ("hidden"; chat-script.js opens it).
+    // The floating LAUNCHER is rendered visible (plan 332252), so it paints
+    // from this HTML and chat-style.css before any script runs: a cache or
+    // optimisation plugin that delays JavaScript until the visitor interacts
+    // (Delay JavaScript in WP Rocket, LiteSpeed, FlyingPress, Perfmatters,
+    // Flying Scripts) no longer leaves the page with no chatbot at all. Until
+    // the script has bound its handler a click on it does nothing; the window
+    // never half-opens. The launcher starts hidden only where something must
+    // be decided in the browser:
+    //  (a) Complianz consent (complianz_toggle on): hidden + no-consent for
+    //      every render, revealed by chat-script.js when the visitor has
+    //      consented. Not decided from the consent cookie here: consent is
+    //      per visitor, and a page cache would hand one visitor's state to
+    //      the next. Fails closed, exactly as before.
+    //  (b) Open on load: core has no auto-open. Add-ons that open the chat
+    //      (Trigger, the Multi-Bot handoff) click this launcher, and core's
+    //      open handler hides it as it opens the window.
+    //  (c) Multi-Bot page rules: the bot is chosen on the server (the
+    //      router's shortcode filter and compute_display_bot()), so there is
+    //      nothing left to decide in the browser.
     $initial_visibility = 'hidden';
     $additional_class = '';
-    
+    $launcher_class = '';
+
     if (isset($current_options['complianz_toggle']) && $current_options['complianz_toggle'] === 'on') {
         $additional_class = ' no-consent';
+        $launcher_class = ' hidden no-consent';
     }
-    $visibility_class = $initial_visibility . $additional_class;
     
     $theme_options = get_option('mxchat_theme_options', array());
     $custom_send_image = isset($theme_options['custom_send_button_image']) ? esc_url($theme_options['custom_send_button_image']) : '';
@@ -643,9 +663,9 @@ public function render_chatbot_shortcode($atts) {
                     echo '</div>';
                 }
 
-                $is_initially_hidden = (strpos($visibility_class, 'hidden') !== false);
-                $aria_expanded = $is_initially_hidden ? 'false' : 'true';
-                echo '<div class="floating-chatbot-button ' . esc_attr($visibility_class) . '" id="floating-chatbot-button-' . esc_attr($bot_id) . '" role="button" tabindex="0" aria-label="' . esc_attr__('Open chat', 'mxchat') . '" aria-expanded="' . esc_attr($aria_expanded) . '" aria-controls="floating-chatbot-' . esc_attr($bot_id) . '"' . ($skip_inline_colors ? '' : ' style="background: ' . esc_attr($chatbot_background_color) . '; color: ' . esc_attr($send_button_font_color) . ';"') . '>';
+                // aria-expanded describes the window, which always starts closed
+                // (it used to be derived from the launcher's own hidden class).
+                echo '<div class="floating-chatbot-button' . esc_attr($launcher_class) . '" id="floating-chatbot-button-' . esc_attr($bot_id) . '" role="button" tabindex="0" aria-label="' . esc_attr__('Open chat', 'mxchat') . '" aria-expanded="false" aria-controls="floating-chatbot-' . esc_attr($bot_id) . '"' . ($skip_inline_colors ? '' : ' style="background: ' . esc_attr($chatbot_background_color) . '; color: ' . esc_attr($send_button_font_color) . ';"') . '>';
                 echo '<div id="chat-notification-badge-' . esc_attr($bot_id) . '" class="chat-notification-badge" style="display: none; position: absolute; top: -8px; right: -8px; background-color: #ff4444; color: white; border-radius: 50%; padding: 4px 8px; font-size: 12px; font-weight: bold; z-index: 10001;">1</div>';
 
                 if (!empty($custom_icon)) {

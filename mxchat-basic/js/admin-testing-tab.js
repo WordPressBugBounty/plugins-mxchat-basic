@@ -7,6 +7,19 @@
 (function($) {
     'use strict';
 
+    // Knowledge-base titles and URLs (imported pages, sitemaps, files), action
+    // labels and the URL guard's results are stored text: escape everything put
+    // into the panel as HTML. Same quote-safe helper as mxchat_transcripts.js.
+    function escapeHtml(text) {
+        if (!text && text !== 0) return '';
+        return String(text)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#039;');
+    }
+
     var AdminTestingPanel = {
         initialized: false,
         lastQueryData: null,
@@ -269,9 +282,11 @@
                     displayUrl = urlObj.hostname + urlObj.pathname;
                 } catch (e) {}
 
+                var link = /^https?:\/\//i.test(String(url))
+                    ? '<a href="' + escapeHtml(url) + '" target="_blank" rel="noopener noreferrer" class="url-link" title="' + escapeHtml(url) + '">' + escapeHtml(displayUrl) + '</a>'
+                    : '<span class="url-link">' + escapeHtml(displayUrl) + '</span>';
                 html += '<div class="url-card"><div class="url-line">' +
-                    '<span class="url-icon">&#128279;</span>' +
-                    '<a href="' + url + '" target="_blank" rel="noopener noreferrer" class="url-link" title="' + url + '">' + displayUrl + '</a>' +
+                    '<span class="url-icon">&#128279;</span>' + link +
                     '</div></div>';
             });
 
@@ -308,7 +323,7 @@
                 html += '<div class="action-card ' + cardClass + '">' +
                     '<div class="action-line">' +
                         '<span class="action-icon">' + statusIcon + '</span>' +
-                        '<span class="action-name">' + action.intent_label + '</span>' +
+                        '<span class="action-name">' + escapeHtml(action.intent_label) + '</span>' +
                         '<span class="action-score">' + action.similarity_percentage + '%</span>' +
                     '</div>' +
                     '<div class="action-details">' +
@@ -428,8 +443,8 @@
                     '</div>' +
                     '<div class="match-source">' +
                         (group.isUrl ?
-                            '<span class="source-icon link-icon">&#128279;</span> ' + group.url :
-                            '<span class="source-icon doc-icon">&#128196;</span> ' + group.url
+                            '<span class="source-icon link-icon">&#128279;</span> ' + escapeHtml(group.url) :
+                            '<span class="source-icon doc-icon">&#128196;</span> ' + escapeHtml(group.url)
                         ) +
                     '</div>' +
                     expandToggle +
@@ -485,7 +500,7 @@
                 nonce: mxchatAdminTestData.nonce
             }).done(function(data) {
                 if (data.success) {
-                    $('#mxch-testing-threshold').html('<code>' + data.data.threshold_percentage + '</code>');
+                    $('#mxch-testing-threshold').html('<code>' + escapeHtml(data.data.threshold_percentage) + '</code>');
                 } else {
                     $('#mxch-testing-threshold').html('<span class="error-text">Error loading threshold</span>');
                 }
@@ -535,7 +550,7 @@
             }).done(function(data) {
                 if (data.success) {
                     var kbData = data.data;
-                    el.html('<span class="success-text">&#10003; ' + kbData.status + '</span> (' + kbData.type + ' - ' + kbData.documents + ')');
+                    el.html('<span class="success-text">&#10003; ' + escapeHtml(kbData.status) + '</span> (' + escapeHtml(kbData.type) + ' - ' + escapeHtml(kbData.documents) + ')');
                 } else {
                     el.html('<span class="error-text">Error loading KB status</span>');
                 }
@@ -640,7 +655,7 @@
             var timestamp = new Date().toLocaleTimeString();
             var entry = document.createElement('div');
             entry.className = 'mxch-testing-debug-entry';
-            entry.innerHTML = '<span class="mxch-testing-debug-timestamp">[' + timestamp + ']</span> ' + message;
+            entry.innerHTML = '<span class="mxch-testing-debug-timestamp">[' + escapeHtml(timestamp) + ']</span> ' + escapeHtml(message);
             consoleEl.appendChild(entry);
             consoleEl.scrollTop = consoleEl.scrollHeight;
 

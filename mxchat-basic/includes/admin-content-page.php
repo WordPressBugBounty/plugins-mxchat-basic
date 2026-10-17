@@ -562,20 +562,45 @@ function mxchat_render_content_page($admin_instance) {
                         <div class="mxch-field">
                             <label class="mxch-field-label" for="mxch-image-model"><?php esc_html_e('Image Model', 'mxchat'); ?></label>
                             <div class="mxch-field-control">
-                                <?php $image_model = $options['content_image_model'] ?? 'gpt-image-1.5'; ?>
+                                <?php $image_model = $options['content_image_model'] ?? 'gpt-image-2.5-flare'; ?>
+                                <?php
+                                // Direct task M4 (2026-10-16): only current image models are
+                                // offered. A saved model whose provider has shut it down, or
+                                // announced a date, still shows as this site's value with its
+                                // status (MxChat_Model_Catalog::image_model_lifecycle()) so a
+                                // save never changes it silently; the generator sends the
+                                // replacement once the date passes and the upgrade moves it.
+                                // Plan d9da28: the offered list comes from the catalog, the
+                                // same list mxchat_generate_media_image() accepts.
+                                $mxch_image_groups = array();
+                                if (method_exists('MxChat_Model_Catalog', 'image_generation_models')) {
+                                    foreach (MxChat_Model_Catalog::image_generation_models() as $mxch_provider) {
+                                        $mxch_image_groups[$mxch_provider['label']] = $mxch_provider['models'];
+                                    }
+                                }
+                                $mxch_image_offered = false;
+                                foreach ($mxch_image_groups as $mxch_g) {
+                                    if (isset($mxch_g[$image_model])) {
+                                        $mxch_image_offered = true;
+                                    }
+                                }
+                                if (!$mxch_image_offered && $image_model !== '') {
+                                    $mxch_rows = method_exists('MxChat_Model_Catalog', 'image_model_lifecycle') ? MxChat_Model_Catalog::image_model_lifecycle() : array();
+                                    $mxch_name = isset($mxch_rows[$image_model]['from_label']) ? $mxch_rows[$image_model]['from_label'] : $image_model;
+                                    $mxch_status = method_exists('MxChat_Model_Catalog', 'image_model_status_label') ? MxChat_Model_Catalog::image_model_status_label($image_model) : '';
+                                    $mxch_group = (strpos($image_model, 'grok') === 0) ? __('xAI', 'mxchat') : ((strpos($image_model, 'gemini') === 0 || strpos($image_model, 'imagen') === 0) ? __('Google', 'mxchat') : __('OpenAI', 'mxchat'));
+                                    /* translators: 1: image model name, 2: status such as "retires December 1, 2026" */
+                                    $mxch_image_groups[$mxch_group][$image_model] = $mxch_status !== '' ? sprintf(__('%1$s — %2$s', 'mxchat'), $mxch_name, $mxch_status) : $mxch_name;
+                                }
+                                ?>
                                 <select id="mxch-image-model" data-field="content_image_model" class="mxch-cg-select">
-                                    <optgroup label="<?php esc_attr_e('OpenAI', 'mxchat'); ?>">
-                                        <option value="gpt-image-2" <?php selected($image_model, 'gpt-image-2'); ?>><?php esc_html_e('GPT Image 2 (Latest)', 'mxchat'); ?></option>
-                                        <option value="gpt-image-1.5" <?php selected($image_model, 'gpt-image-1.5'); ?>><?php esc_html_e('GPT Image 1.5', 'mxchat'); ?></option>
+                                    <?php foreach ($mxch_image_groups as $mxch_label => $mxch_models) : ?>
+                                    <optgroup label="<?php echo esc_attr($mxch_label); ?>">
+                                        <?php foreach ($mxch_models as $mxch_value => $mxch_text) : ?>
+                                        <option value="<?php echo esc_attr($mxch_value); ?>" <?php selected($image_model, $mxch_value); ?>><?php echo esc_html($mxch_text); ?></option>
+                                        <?php endforeach; ?>
                                     </optgroup>
-                                    <optgroup label="<?php esc_attr_e('xAI', 'mxchat'); ?>">
-                                        <option value="grok-imagine-image-pro" <?php selected($image_model, 'grok-imagine-image-pro'); ?>><?php esc_html_e('Grok Imagine Pro', 'mxchat'); ?></option>
-                                        <option value="grok-imagine-image" <?php selected($image_model, 'grok-imagine-image'); ?>><?php esc_html_e('Grok Imagine', 'mxchat'); ?></option>
-                                    </optgroup>
-                                    <optgroup label="<?php esc_attr_e('Google', 'mxchat'); ?>">
-                                        <option value="gemini-2.5-flash-image" <?php selected($image_model, 'gemini-2.5-flash-image'); ?>><?php esc_html_e('Nano Banana (Gemini 2.5 Flash)', 'mxchat'); ?></option>
-                                        <option value="gemini-3-pro-image-preview" <?php selected($image_model, 'gemini-3-pro-image-preview'); ?>><?php esc_html_e('Nano Banana Pro (Gemini 3 Pro)', 'mxchat'); ?></option>
-                                    </optgroup>
+                                    <?php endforeach; ?>
                                 </select>
                             </div>
                             <p class="mxch-field-description"><?php esc_html_e('Select the AI model used for generating images within your content.', 'mxchat'); ?></p>

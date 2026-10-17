@@ -35,6 +35,9 @@ jQuery(document).ready(function($) {
     // Close modal
     $closeButtons.on('click', function() {
         $modal.hide();
+        // No word count keeps reading pages behind a closed modal (M6).
+        wordCountRun++;
+        wordQueue = [];
     });
 // Handle import option box clicks (for non-WordPress options)
 $('.mxchat-import-box').on('click', function() {
@@ -170,6 +173,8 @@ function updateBotIdInForm(formSelector) {
 function loadContent() {
     $loading.show();
     $contentList.find('.mxchat-kb-content-item').remove();
+    wordCountRun++; // a word count still arriving for the previous list is dropped
+    wordQueue = [];
     
     const data = {
         action: 'mxchat_get_content_list',
@@ -198,6 +203,7 @@ function loadContent() {
                 
                 if (items.length > 0) {
                     renderContentItems(items);
+                    countPendingWords(items);
                     renderPagination(parseInt(response.data.current_page), parseInt(response.data.total_pages));
                     
                     // Update state
@@ -224,6 +230,101 @@ function loadContent() {
     });
 }
 
+// Word counts the list could not show yet (M6): a page whose text the import reads from its
+// published page is counted on the server after the list is shown, a few rows per request.
+// One request is in flight at a time, across list reloads too (each count reads a page from
+// this site, so small hosting plans are not asked for several at once). A newer list replaces
+// the queue and an answer for an older list is dropped. A row keeps its saved count if
+// counting fails. Counting pauses while selected content is imported, and the import waits
+// for a count still in flight: on a host with two PHP workers, a count and an import that
+// both read a page from the site would leave neither read a worker to answer it.
+let wordCountRun = 0;
+let wordQueue = [];
+let wordBusy = false;
+let wordPaused = false;
+let wordIdle = [];
+
+function pauseWordCounts(then) {
+    wordPaused = true;
+    if (wordBusy) {
+        wordIdle.push(then);
+    } else {
+        then();
+    }
+}
+
+function resumeWordCounts() {
+    wordPaused = false;
+    if (!wordBusy) {
+        pumpWordCounts();
+    }
+}
+
+function countingLabel() {
+    return (mxchatSelector.i18n && mxchatSelector.i18n.countingWords) || 'Counting words…';
+}
+
+function showWords(id, words) {
+    const item = allItems.find(function(i) { return i.id === id; });
+    if (item) {
+        if (words !== null && words !== undefined) { item.word_count = words; }
+        item.word_count_pending = false;
+    }
+    const shown = item ? item.word_count : words;
+    if (shown !== null && shown !== undefined) {
+        $contentList.find('.mxchat-kb-content-item[data-id="' + id + '"] .mxchat-kb-content-words').text(shown + ' words');
+    }
+}
+
+function countPendingWords(items) {
+    wordQueue = items.filter(function(item) { return item.word_count_pending; }).map(function(item) { return item.id; });
+    if (!wordBusy && !wordPaused) {
+        pumpWordCounts();
+    }
+}
+
+function pumpWordCounts() {
+    if (wordPaused || wordQueue.length === 0) {
+        wordBusy = false;
+        const waiting = wordIdle;
+        wordIdle = [];
+        waiting.forEach(function(then) { then(); });
+        return;
+    }
+    wordBusy = true;
+    const run = wordCountRun;
+    const batch = wordQueue.splice(0, 4);
+    $.ajax({
+        url: mxchatSelector.ajaxurl,
+        method: 'POST',
+        dataType: 'json',
+        data: { action: 'mxchat_count_indexed_words', nonce: mxchatSelector.nonce, post_ids: batch }
+    }).done(function(response) {
+        if (run !== wordCountRun) {
+            return;
+        }
+        const counts = (response && response.success && response.data && response.data.counts) || null;
+        if (!counts) {
+            batch.forEach(function(id) { showWords(id, null); });
+            return;
+        }
+        // Ids the server had no time for go back to the front of the queue.
+        const missed = [];
+        batch.forEach(function(id) {
+            if (Object.prototype.hasOwnProperty.call(counts, id)) { showWords(id, counts[id]); } else { missed.push(id); }
+        });
+        if (missed.length === batch.length) {
+            missed.forEach(function(id) { showWords(id, null); }); // never ask again for nothing
+        } else {
+            wordQueue.unshift.apply(wordQueue, missed);
+        }
+    }).fail(function() {
+        if (run === wordCountRun) {
+            batch.forEach(function(id) { showWords(id, null); });
+        }
+    }).always(pumpWordCounts);
+}
+
 // Helper function to display appropriate "no results" message
 function displayNoResults(processedStatus) {
     let message = 'No content found matching your criteria.';
@@ -239,6 +340,14 @@ function displayNoResults(processedStatus) {
     $pagination.empty();
 }
     
+    // Server text in the list (titles, excerpts, dates, labels, links) is shown as text,
+    // never parsed as markup (M7g). Titles and excerpts come with WordPress's display
+    // entities (&#8217;, &amp;): those are decoded first, in an inert textarea, so a
+    // title reads exactly as it does in the Posts list.
+    const escapeText = function(text) { return $('<div>').text(String(text == null ? '' : text)).html().replace(/"/g, '&quot;').replace(/'/g, '&#039;'); };
+    const decodeEntities = function(text) { const area = document.createElement('textarea'); area.innerHTML = String(text == null ? '' : text); return area.value; };
+    const plainText = function(text) { return escapeText(decodeEntities(text)); };
+
     // Render content items
     function renderContentItems(items) {
         let html = '';
@@ -263,16 +372,16 @@ function displayNoResults(processedStatus) {
                     </div>
                     <div class="mxchat-kb-content-details">
                         <div class="mxchat-kb-content-title">
-                            <a href="${item.permalink}" target="_blank">${item.title}</a>
+                            <a href="${escapeText(item.permalink)}" target="_blank">${plainText(item.title)}</a>
                             <span class="${badgeClass}">${badgeText}</span>
-                            ${isProcessed ? '<span class="mxchat-kb-last-updated">Last updated: ' + item.processed_date + '</span>' : ''}
+                            ${isProcessed ? '<span class="mxchat-kb-last-updated">Last updated: ' + plainText(item.processed_date) + '</span>' : ''}
                         </div>
                         <div class="mxchat-kb-content-meta">
-                            <span class="mxchat-kb-content-type">${item.type_label || item.type}</span>
-                            <span class="mxchat-kb-content-date">${item.date}</span>
-                            <span class="mxchat-kb-content-words">${item.size_label ? item.size_label : item.word_count + ' words'}</span>
+                            <span class="mxchat-kb-content-type">${plainText(item.type_label || item.type)}</span>
+                            <span class="mxchat-kb-content-date">${plainText(item.date)}</span>
+                            <span class="mxchat-kb-content-words">${plainText(item.size_label ? item.size_label : (item.word_count_pending ? countingLabel() : item.word_count + ' words'))}</span>
                         </div>
-                        <div class="mxchat-kb-content-excerpt">${item.excerpt}</div>
+                        <div class="mxchat-kb-content-excerpt">${plainText(item.excerpt)}</div>
                     </div>
                 </div>
             `;
@@ -486,11 +595,17 @@ $processButton.on('click', function() {
     let processed = 0;
     let updated = 0;
     let failed = 0;
+    let skipped = 0;
     const results = {
         success: [],
         updated: [],
-        failed: []
+        failed: [],
+        skipped: []
     };
+    // Strings for posts a developer filter leaves out (plan 9dd0da). Server text in the
+    // results (titles, reasons, failure messages) is always escaped (M7b).
+    const i18n = mxchatSelector.i18n || {};
+    const escapeHtml = function(text) { return $('<div>').text(String(text)).html(); };
     
     // UPDATED: Get current bot_id for WordPress content processing
     const currentBotId = $('#mxchat-bot-selector').val();
@@ -566,7 +681,20 @@ $processButton.on('click', function() {
             data: ajaxData,
             dataType: 'json',
             success: function(response) {
-                if (response.success) {
+                if (response.success && response.data && response.data.skipped) {
+                    // A developer filter excluded this post: a skip with its reason, not a failure.
+                    skipped++;
+                    results.skipped.push({
+                        id: postId,
+                        title: response.data.title || ('ID: ' + postId),
+                        reason: response.data.reason || ''
+                    });
+                    $progressModal.find('.mxchat-kb-current-item').text(
+                        (i18n.skippedItem || 'Skipped "%1$s": %2$s')
+                            .replace('%1$s', response.data.title || ('ID: ' + postId))
+                            .replace('%2$s', response.data.reason || '')
+                    );
+                } else if (response.success) {
                     if (isUpdate) {
                         updated++;
                         results.updated.push({
@@ -626,6 +754,7 @@ $processButton.on('click', function() {
     function finishProcessing(wasAborted) {
         // Remove progress modal
         $progressModal.remove();
+        resumeWordCounts();
 
         // Determine notification type based on results
         let notificationClass = 'success';
@@ -633,6 +762,8 @@ $processButton.on('click', function() {
             notificationClass = processed > 0 || updated > 0 ? 'warning' : 'info';
         } else if (failed > 0) {
             notificationClass = processed > 0 || updated > 0 ? 'warning' : 'error';
+        } else if (skipped > 0 && processed === 0 && updated === 0) {
+            notificationClass = 'info';
         }
 
         // Create summary message
@@ -652,8 +783,14 @@ $processButton.on('click', function() {
             resultHTML += 'Processed ' + processed + ' items successfully';
         } else if (updated > 0) {
             resultHTML += 'Updated ' + updated + ' items successfully';
+        } else if (skipped > 0) {
+            resultHTML += escapeHtml((i18n.onlySkipped || 'Nothing was imported: %d skipped').replace('%d', skipped));
         } else {
             resultHTML += 'No items were processed successfully';
+        }
+
+        if (skipped > 0 && (wasAborted || processed > 0 || updated > 0)) {
+            resultHTML += ', ' + escapeHtml((i18n.skippedCount || '%d skipped').replace('%d', skipped));
         }
 
         if (failed > 0 && !wasAborted) {
@@ -662,16 +799,28 @@ $processButton.on('click', function() {
         
         resultHTML += '</h4>';
         
-        // Add details if there were failures
-        if (failed > 0) {
+        // Add details if there were failures or skips
+        if (failed > 0 || skipped > 0) {
             resultHTML += '<div class="mxchat-kb-results-details">';
+        }
+        if (failed > 0) {
             resultHTML += '<h5>Failed Items:</h5><ul>';
             
             results.failed.forEach(function(item) {
-                resultHTML += '<li><strong>ID: ' + item.id + '</strong>: ' + item.error + '</li>';
+                resultHTML += '<li><strong>ID: ' + escapeHtml(item.id) + '</strong>: ' + escapeHtml(item.error) + '</li>';
             });
             
-            resultHTML += '</ul></div>';
+            resultHTML += '</ul>';
+        }
+        if (skipped > 0) {
+            resultHTML += '<h5 class="mxchat-kb-results-skipped">' + escapeHtml(i18n.skippedHeading || 'Skipped') + '</h5><ul>';
+            results.skipped.forEach(function(item) {
+                resultHTML += '<li><strong>' + escapeHtml(item.title) + '</strong>: ' + escapeHtml(item.reason) + '</li>';
+            });
+            resultHTML += '</ul>';
+        }
+        if (failed > 0 || skipped > 0) {
+            resultHTML += '</div>';
         }
         
         resultHTML += '</div>';
@@ -703,8 +852,10 @@ $processButton.on('click', function() {
         }
     }
     
-    // Start processing the first post
-    processNext(0);
+    // Start processing the first post once no word count is reading a page (M6)
+    pauseWordCounts(function() {
+        processNext(0);
+    });
 });
 
     // Initialize - Set WordPress as the active option by default
@@ -835,7 +986,7 @@ var initPineconeFeatures, initVectorStoreFeatures;
         var nonce = (typeof mxchatAdmin !== 'undefined' && mxchatAdmin.settings_nonce) ? mxchatAdmin.settings_nonce :
                     ((typeof mxchatPromptsAdmin !== 'undefined' && mxchatPromptsAdmin.prompts_setting_nonce) ? mxchatPromptsAdmin.prompts_setting_nonce : '');
 
-        function escapeText(text) { return $('<div>').text(String(text == null ? '' : text)).html(); }
+        function escapeText(text) { return $('<div>').text(String(text == null ? '' : text)).html().replace(/"/g, '&quot;').replace(/'/g, '&#039;'); }
         function notice(kind, text) {
             $result.html('<div class="mxch-notice mxch-notice-' + kind + '" style="margin: 12px 0;"><span>' + escapeText(text) + '</span></div>').show();
         }

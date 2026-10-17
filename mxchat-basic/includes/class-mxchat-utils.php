@@ -386,6 +386,7 @@ public static function embedding_model_registry() {
         'text-embedding-3-large' => array('dims' => 3072, 'provider' => 'openai',  'label' => 'TE3 Large'),
         'voyage-3-large'         => array('dims' => 2048, 'provider' => 'voyage',  'label' => 'Voyage-3 Large'),
         'gemini-embedding-001'   => array('dims' => 1536, 'provider' => 'gemini',  'label' => 'Gemini Embedding'),
+        'gemini-embedding-2'     => array('dims' => 1536, 'provider' => 'gemini',  'label' => 'Gemini Embedding 2'), // direct task M2
     );
 }
 
@@ -476,6 +477,7 @@ public static function standard_embedding_dimension($options = null) {
         'voyage-large-2'         => 1536,
         'voyage-3-large'         => 2048,
         'gemini-embedding-001'   => 1536,
+        'gemini-embedding-2'     => 1536,
     );
     if (strpos($selected_model, 'voyage-3-large') === 0) {
         return intval($options['voyage_output_dimension'] ?? 2048);

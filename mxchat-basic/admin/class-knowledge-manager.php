@@ -29,6 +29,31 @@ class MxChat_Knowledge_Manager {
     // what makes it safe to arm transition_indexed_posts (plan a664f3).
     private $pending_post_update = array();
 
+    // Synced patterns whose text changed this request, waiting for the shutdown re-sync of
+    // the pages that use them (plan 3f95de): pattern id => $index_seq when it changed.
+    private $pattern_resync_queue = array();
+    private $pattern_resync_hooked = false;
+
+    // Post id => $index_seq of its last auto-sync write this request, so a page written
+    // AFTER a pattern changed (it already carries the new text) is not embedded again by
+    // that pattern's re-sync, while a page written BEFORE it still is (plan 3f95de).
+    private $indexed_in_request = array();
+    private $index_seq = 0;
+
+    // When this request's batches of the synced-pattern cron re-sync stop starting pages
+    // (M6): set by the first batch, shared by every pattern's batch in the same request.
+    private $pattern_resync_until = null;
+
+    // Post id => true when this request saw the post's entry under its previous address just
+    // before a slug change removed it, so "Keep imported entries up to date only" still
+    // treats the post as imported when it is written under the new address (plan 9dd0da).
+    private $existing_only_known = array();
+
+    // Post id => what the rendered-page fallback fetched (plan c26d40), kept only while the
+    // Re-import tool builds one entry's routes, so a page is fetched once, not once per route.
+    // Null at every other time: a later save in the same process fetches the page again.
+    private $rendered_page_memo = null;
+
     /**
      * Constructor - Register hooks for content processing
      */
@@ -56,6 +81,7 @@ private function mxchat_init_hooks() {
     add_action('wp_ajax_mxchat_get_status_updates', array($this, 'mxchat_ajax_get_status_updates'));
     add_action('wp_ajax_mxchat_dismiss_completed_status', array($this, 'mxchat_ajax_dismiss_completed_status'));
     add_action('wp_ajax_mxchat_get_content_list', array($this, 'ajax_mxchat_get_content_list'));
+    add_action('wp_ajax_mxchat_count_indexed_words', array($this, 'ajax_mxchat_count_indexed_words'));
     add_action('wp_ajax_mxchat_process_selected_content', array($this, 'ajax_mxchat_process_selected_content'));
     add_action('wp_ajax_mxchat_save_inline_prompt', array($this, 'mxchat_save_inline_prompt'));
     add_action('admin_post_mxchat_delete_pinecone_prompt', array($this, 'mxchat_handle_pinecone_prompt_delete'));
@@ -82,6 +108,12 @@ private function mxchat_init_hooks() {
     // WordPress post management hooks
     add_action('pre_post_update', array($this, 'mxchat_store_pre_update_status'), 10, 2);
     add_action('post_updated', array($this, 'mxchat_handle_post_update'), 10, 3);
+    add_action('post_updated', array($this, 'mxchat_handle_pattern_update'), 10, 3);
+    add_action('mxchat_pattern_resync', array($this, 'mxchat_run_pattern_resync_batch'));
+    // The knowledge base's own read of a published page (plan c26d40) is kept out of page
+    // caches: every read carries a unique cache-busting argument, so a cached copy would
+    // never be served again and would only fill the cache.
+    add_action('init', array($this, 'mxchat_rendered_fetch_no_cache'), 1);
     add_action('before_delete_post', array($this, 'mxchat_handle_post_delete'));
     add_action('wp_trash_post', array($this, 'mxchat_handle_post_delete'));
     // Authoritative unpublish detection: core hands this hook the REAL previous status, so
@@ -2219,36 +2251,65 @@ private function mxchat_inline_referenced_content($content, $depth = 0, $chain =
         return "\n" . $r->invokeArgs($self, array($text, $depth + 1, $next, &$budget)) . "\n";
     };
 
-    // 1. Synced patterns: <!-- wp:block {"ref":123} /--> (pattern overrides keep the ref).
-    if (strpos($content, 'wp:block') !== false) {
-        $content = preg_replace_callback('/<!--\s*wp:block\s+(\{.*?\})\s*\/-->/s', function ($m) use ($resolve) {
-            $attrs = json_decode($m[1], true);
-            $id    = (is_array($attrs) && isset($attrs['ref'])) ? (int) $attrs['ref'] : 0;
-            $text  = $id ? $resolve($id) : null;
+    // The shapes, in order (synced patterns first, then the reference shortcodes), come
+    // from one list that the synced-pattern re-sync reads too (plan 3f95de).
+    foreach ($this->mxchat_reference_shapes() as $shape) {
+        if (strpos($content, $shape['needle']) === false) {
+            continue;
+        }
+        $content = preg_replace_callback($shape['regex'], function ($m) use ($resolve, $shape) {
+            $id   = self::mxchat_reference_match_id($shape, $m);
+            $text = $id ? $resolve($id) : null;
             return ($text === null) ? $m[0] : $text;
         }, $content);
     }
 
-    // 2. Reference shortcodes: [html_block id="123"] and whatever the filter adds.
-    if (strpos($content, '[') !== false) {
-        $map = apply_filters('mxchat_reference_shortcodes', array('html_block' => 'id'));
-        foreach ((array) $map as $tag => $attr) {
-            if (!is_string($tag) || !is_string($attr) || !preg_match('/^[A-Za-z0-9_-]+$/', $tag) || !preg_match('/^[A-Za-z0-9_-]+$/', $attr)) {
-                continue;
-            }
-            if (strpos($content, '[' . $tag) === false) {
-                continue;
-            }
-            $content = preg_replace_callback('/\[' . preg_quote($tag, '/') . '(\s[^\]]*)?\]/', function ($m) use ($resolve, $attr) {
-                $atts = shortcode_parse_atts(isset($m[1]) ? trim(rtrim(trim($m[1]), '/')) : '');
-                $id   = (is_array($atts) && isset($atts[$attr])) ? (int) $atts[$attr] : 0;
-                $text = $id ? $resolve($id) : null;
-                return ($text === null) ? $m[0] : $text;
-            }, $content);
-        }
-    }
-
     return $content;
+}
+
+/**
+ * The shapes in which a page pulls in another post's text by reference, listed once
+ * (plan 3f95de) so the import (mxchat_inline_referenced_content, plan 735943) and the
+ * synced-pattern re-sync (mxchat_find_pattern_users) can never read different lists.
+ *
+ * Each shape: 'needle' (text every match contains: the cheap pre-test), 'regex' (one
+ * reference; group 1 holds its attributes), 'attr' (null for the block comment, whose
+ * JSON carries 'ref'; otherwise the shortcode attribute that carries the post id).
+ *
+ *   1. Synced patterns: <!-- wp:block {"ref":123} /--> (pattern overrides keep the ref).
+ *   2. Reference shortcodes: [html_block id="123"] and whatever the filter adds
+ *      (mxchat_reference_shortcodes: shortcode name => attribute; default html_block / id).
+ *
+ * @return array[]
+ */
+private function mxchat_reference_shapes() {
+    $shapes = array(
+        array('needle' => 'wp:block', 'regex' => '/<!--\s*wp:block\s+(\{.*?\})\s*\/-->/s', 'attr' => null),
+    );
+    $map = apply_filters('mxchat_reference_shortcodes', array('html_block' => 'id'));
+    foreach ((array) $map as $tag => $attr) {
+        if (!is_string($tag) || !is_string($attr) || !preg_match('/^[A-Za-z0-9_-]+$/', $tag) || !preg_match('/^[A-Za-z0-9_-]+$/', $attr)) {
+            continue;
+        }
+        $shapes[] = array('needle' => '[' . $tag, 'regex' => '/\[' . preg_quote($tag, '/') . '(\s[^\]]*)?\]/', 'attr' => $attr);
+    }
+    return $shapes;
+}
+
+/**
+ * The post id one reference names (0 when it names none).
+ *
+ * @param array $shape One entry of mxchat_reference_shapes().
+ * @param array $m     The regex match.
+ * @return int
+ */
+private static function mxchat_reference_match_id($shape, $m) {
+    if ($shape['attr'] === null) {
+        $attrs = json_decode($m[1], true);
+        return (is_array($attrs) && isset($attrs['ref'])) ? (int) $attrs['ref'] : 0;
+    }
+    $atts = shortcode_parse_atts(isset($m[1]) ? trim(rtrim(trim($m[1]), '/')) : '');
+    return (is_array($atts) && isset($atts[$shape['attr']])) ? (int) $atts[$shape['attr']] : 0;
 }
 
 public function mxchat_sanitize_content_for_api($content) {
@@ -4410,7 +4471,31 @@ public function ajax_mxchat_get_content_list() {
             $post_date = get_the_date();
             $excerpt = wp_trim_words(get_the_excerpt(), 20, '...');
             $word_count = str_word_count(strip_tags(get_the_content()));
-            
+            // A page built from ACF Blocks keeps its text in the block comments, which the
+            // strip above removes: count the block text the import will index (plan d99057).
+            $acf_block_text = $this->mxchat_acf_block_fields_text((string) get_post_field('post_content', $id, 'raw'));
+            if ($acf_block_text['text'] !== '') {
+                $word_count += str_word_count($acf_block_text['text']);
+            }
+            // A page whose text the import reads from its published page (page builders, very
+            // short pages; plan c26d40) shows the words of that text (M6): the count an earlier
+            // import, save or count remembered while the page is unchanged, otherwise the
+            // modal asks for it after the list is shown (mxchat_count_indexed_words). The
+            // list itself never reads a published page.
+            $words_pending = false;
+            if (get_post_status() === 'publish' && get_post_type() !== 'attachment') {
+                $row_post = get_post($id);
+                $parts    = $this->mxchat_post_body_text((string) $row_post->post_content);
+                if ($this->mxchat_rendered_page_wanted($row_post, mb_strlen($this->mxchat_rendered_norm($parts['known']), 'UTF-8'))) {
+                    $remembered = $this->mxchat_indexed_words_remembered($row_post);
+                    if ($remembered !== null) {
+                        $word_count = $remembered;
+                    } else {
+                        $words_pending = true;
+                    }
+                }
+            }
+
             $is_processed = in_array($id, $processed_ids);
             $processed_date = '';
             $db_record_id = 0;
@@ -4474,6 +4559,7 @@ public function ajax_mxchat_get_content_list() {
                 'status' => get_post_status(),
                 'excerpt' => $excerpt,
                 'word_count' => $word_count,
+                'word_count_pending' => $words_pending,
                 'already_processed' => $is_processed,
                 'processed_date' => $processed_date,
                 'db_record_id' => $db_record_id,
@@ -4494,6 +4580,90 @@ public function ajax_mxchat_get_content_list() {
     
     wp_send_json_success($response);
     exit;
+}
+
+/** Post meta holding the import list's word count for a page read from its published page (M6). */
+const INDEXED_WORDS_META = '_mxchat_kb_words';
+
+/**
+ * AJAX: the word counts the import list could not show from memory (M6). Takes up to 10
+ * post ids and answers with the words each one's import would index, reading the published
+ * page where the import would. Stops starting new posts after about 6 seconds; the modal
+ * asks again for any id the answer leaves out.
+ */
+public function ajax_mxchat_count_indexed_words() {
+    check_ajax_referer('mxchat_content_selector_nonce', 'nonce');
+    if (!current_user_can('manage_options')) {
+        wp_send_json_error(__('Unauthorized access', 'mxchat'));
+    }
+    $ids = isset($_POST['post_ids']) ? (array) wp_unslash($_POST['post_ids']) : array();
+    $ids = array_slice(array_values(array_unique(array_filter(array_map('absint', $ids)))), 0, 10);
+    $until  = microtime(true) + 6;
+    $counts = array();
+    foreach ($ids as $id) {
+        if (!empty($counts) && microtime(true) >= $until) {
+            break;
+        }
+        $post = get_post($id);
+        $counts[$id] = ($post instanceof WP_Post && $post->post_type !== 'attachment') ? $this->mxchat_count_indexed_words($post) : null;
+    }
+    wp_send_json_success(array('counts' => (object) $counts));
+}
+
+/**
+ * Words in the text the WordPress importer would index for a post's body: the published
+ * page's text where the rendered-page fallback uses it, otherwise the saved body, plus the
+ * ACF Block lines (M6). The same reading as the import itself (raw post fields).
+ *
+ * @param WP_Post $post
+ * @return int
+ */
+private function mxchat_count_indexed_words($post) {
+    $parts    = $this->mxchat_post_body_text((string) $post->post_content);
+    $rendered = $this->mxchat_rendered_page_body($post, $parts['known']);
+    $body     = $rendered['used'] ? $rendered['text'] : $parts['body'];
+    $words    = str_word_count($body) + ($parts['acf_blocks']['text'] !== '' ? str_word_count($parts['acf_blocks']['text']) : 0);
+    // A passing failure (a busy or blocked loopback, a server error) is not remembered: the
+    // saved body's count is shown and the next view asks again.
+    if ($rendered['settled']) {
+        $this->mxchat_remember_indexed_words((int) $post->ID, $words);
+    }
+    return $words;
+}
+
+/**
+ * Remember a post's indexed word count for the import list (M6), with the post's modified
+ * time. Written only after the published page was read; an unchanged count is rewritten at
+ * most once an hour, so a save that changes nothing does not write every time.
+ */
+private function mxchat_remember_indexed_words($post_id, $words) {
+    $modified = (string) get_post_field('post_modified_gmt', $post_id, 'raw');
+    $was      = get_post_meta($post_id, self::INDEXED_WORDS_META, true);
+    if (is_array($was) && isset($was['words'], $was['modified'], $was['time'])
+        && (int) $was['words'] === (int) $words && (string) $was['modified'] === $modified
+        && (time() - (int) $was['time']) < HOUR_IN_SECONDS) {
+        return;
+    }
+    update_post_meta($post_id, self::INDEXED_WORDS_META, array('words' => (int) $words, 'modified' => $modified, 'time' => time()));
+}
+
+/**
+ * The remembered word count (M6), or null when there is none, the post was modified since,
+ * or it is more than a week old (a page builder's template or a synced pattern can change the
+ * published page without touching the post).
+ *
+ * @param WP_Post $post
+ * @return int|null
+ */
+private function mxchat_indexed_words_remembered($post) {
+    $was = get_post_meta($post->ID, self::INDEXED_WORDS_META, true);
+    if (!is_array($was) || !isset($was['words'], $was['modified'], $was['time'])) {
+        return null;
+    }
+    if ((string) $was['modified'] !== (string) $post->post_modified_gmt || (time() - (int) $was['time']) > WEEK_IN_SECONDS) {
+        return null;
+    }
+    return (int) $was['words'];
 }
 
 
@@ -4720,6 +4890,12 @@ public function ajax_mxchat_process_selected_content() {
         exit;
     }
 
+    // A developer filter can leave a post out of the knowledge base (plan 9dd0da):
+    // mxchat_should_index_post first, for every kind of post including Media files.
+    if (!$this->mxchat_post_index_allowed($post, 'import')) {
+        $this->mxchat_send_import_excluded($post, $bot_id);
+    }
+
     // Media-library attachments take their own route (plan 01010a) — different source
     // URL (the file, not the attachment page), different body (an extractor, not
     // post_content), and a file that yields no text is refused with a reason instead
@@ -4728,20 +4904,13 @@ public function ajax_mxchat_process_selected_content() {
         $this->mxchat_import_attachment($post, $bot_id);
     }
 
-    /**
-     * Allow developers to modify post data before processing into the knowledge base.
-     * Applied on BOTH content-preparation paths (this manual bulk import and the
-     * auto-sync path in mxchat_handle_post_update) with the same signature, so a
-     * callback registered once covers every indexing route. Purely additive —
-     * zero behaviour change when unhooked.
-     *
-     * @param WP_Post $post   The post about to be indexed.
-     * @param string  $bot_id Bot context for this import.
-     */
-    $post = apply_filters('mxchat_before_process_post', $post, $bot_id);
-    if (!($post instanceof WP_Post)) {
-        $post = get_post($post_id); // defend against a bad callback return
+    // mxchat_before_process_post (documented on mxchat_index_filters()): returning
+    // exactly false skips the post; any other non-post return keeps the old fallback.
+    $filtered = $this->mxchat_index_filters($post, 'import', $bot_id, true);
+    if ($filtered === null) {
+        $this->mxchat_send_import_excluded($post, $bot_id);
     }
+    $post = $filtered;
 
     // Assemble the indexable text via the shared post-kind assembler (a3d60c).
     // Bulk import reads raw post fields, has always included product custom tabs,
@@ -4844,13 +5013,18 @@ public function ajax_mxchat_process_selected_content() {
     //   Automatically apply role restriction based on tags
     $this->apply_role_restriction_to_post($post_id, $source_url);
 
+    // The import list shows this page's word count from now on without reading it (M6).
+    if (!empty($prepared['page_settled'])) {
+        $this->mxchat_remember_indexed_words($post_id, $prepared['body_words']);
+    }
+
     $operation_type = $is_update ? 'update' : 'new';
 
     // Count ACF fields for debugging
     $acf_field_count = $prepared['acf_fields_found'];
     
     // Success response with minimal data
-    wp_send_json_success(array(
+    $response_data = array(
         'message' => $operation_type === 'update' ? 'Content updated successfully' : 'Content processed successfully',
         'post_id' => $post_id,
         'title'   => $post->post_title,
@@ -4860,8 +5034,180 @@ public function ajax_mxchat_process_selected_content() {
         'pdf_extracted_count' => (int) $pdf_extracted_count,
         'content_preview' => substr($content, 0, 100) . '...',
         'bot_id' => $bot_id
+    );
+    // Rendered-page fallback (plan c26d40): whether the published page's text was used,
+    // and if it was read but not used, why. Present only when the page was read.
+    if (!empty($prepared['rendered_page'])) {
+        $response_data['rendered_page'] = $prepared['rendered_page'];
+    }
+    wp_send_json_success($response_data);
+    exit;
+}
+
+/**
+ * The developer filters that decide whether a post goes into the knowledge base, in
+ * the order every indexing route applies them (plan 9dd0da): the WordPress content
+ * importer, Auto-Sync (saves, publishes, scheduled publishes, a synced pattern's
+ * re-sync, the WooCommerce product writer) and the Re-import tool.
+ *
+ *   mxchat_should_index_post( bool $index, WP_Post $post, string $context )
+ *     Return false to leave the post out. $context is 'import', 'auto_sync' or
+ *     'reimport'.
+ *
+ *   mxchat_before_process_post( WP_Post $post, string $bot_id )
+ *     Change the post before it is indexed. Returning exactly false leaves it out
+ *     too; any other value that is not a post (null, an array) is a broken callback,
+ *     and the post is indexed unfiltered, as it always was.
+ *
+ * Only an exact false excludes, on both filters, so a callback that forgets to
+ * return (null) can never empty a knowledge base.
+ *
+ * @param WP_Post $post
+ * @param string  $context     'import' | 'auto_sync' | 'reimport'
+ * @param string  $bot_id      Bot context handed to mxchat_before_process_post.
+ * @param bool    $skip_should True when the caller already asked mxchat_should_index_post.
+ * @return WP_Post|null The post to index (filtered), or null when a filter excludes it.
+ */
+private function mxchat_index_filters($post, $context, $bot_id, $skip_should = false) {
+    if (!$skip_should && !$this->mxchat_post_index_allowed($post, $context)) {
+        return null;
+    }
+    /**
+     * Allow developers to modify post data before processing into the knowledge base,
+     * or to leave the post out by returning false (since 3.2.26).
+     *
+     * @param WP_Post $post   The post about to be indexed.
+     * @param string  $bot_id Bot context ('default' on Auto-Sync).
+     */
+    $filtered = apply_filters('mxchat_before_process_post', $post, $bot_id);
+    if ($filtered === false) {
+        return null;
+    }
+    if (!($filtered instanceof WP_Post)) {
+        $fresh    = get_post($post->ID); // defend against a bad callback return
+        $filtered = ($fresh instanceof WP_Post) ? $fresh : $post;
+    }
+    return $filtered;
+}
+
+/**
+ * mxchat_should_index_post: false leaves the post out of the knowledge base (plan 9dd0da).
+ *
+ * @param WP_Post $post
+ * @param string  $context 'import' | 'auto_sync' | 'reimport'
+ * @return bool
+ */
+private function mxchat_post_index_allowed($post, $context) {
+    if (!($post instanceof WP_Post)) {
+        return true;
+    }
+    /**
+     * Decide whether a post goes into the knowledge base. Return false to leave it out.
+     *
+     * @since 3.2.26
+     * @param bool    $index   Whether to index the post. Default true.
+     * @param WP_Post $post    The post.
+     * @param string  $context 'import' (WordPress content importer), 'auto_sync' (Auto-Sync)
+     *                         or 'reimport' (the Re-import tool).
+     */
+    return false !== apply_filters('mxchat_should_index_post', true, $post, (string) $context);
+}
+
+/**
+ * The importer's answer for a post a filter left out (plan 9dd0da): not an error, a
+ * skip with its reason, so the results list can say so. Sends JSON and exits.
+ */
+private function mxchat_send_import_excluded($post, $bot_id) {
+    $title  = (string) $post->post_title;
+    $reason = __('excluded by a filter', 'mxchat');
+    wp_send_json_success(array(
+        'skipped'        => true,
+        'reason'         => $reason,
+        /* translators: 1: post title, 2: reason the post was skipped */
+        'message'        => sprintf(__('Skipped "%1$s": %2$s', 'mxchat'), $title, $reason),
+        'post_id'        => (int) $post->ID,
+        'title'          => $title,
+        'operation_type' => 'skipped',
+        'bot_id'         => $bot_id,
     ));
     exit;
+}
+
+/**
+ * Remove the default-bot entry of a post a filter now excludes (plan 9dd0da): it was
+ * indexed before the exclusion, and Auto-Sync keeps the knowledge base in step with
+ * the post. Reads first, so a post that was never indexed costs one lookup, not a
+ * delete round-trip to every store.
+ */
+private function mxchat_remove_excluded_entry($source_url) {
+    if ($source_url && MxChat_Utils::count_chunks_for_url($source_url, 'default') > 0) {
+        MxChat_Utils::delete_chunks_for_url($source_url, 'default');
+    }
+}
+
+/**
+ * The option-name stem Auto-Sync uses for a post type: 'posts' and 'pages' for the two
+ * built-in types (their historical option names), the post type itself otherwise.
+ */
+private static function mxchat_auto_sync_key($post_type) {
+    if ($post_type === 'post') {
+        return 'posts';
+    }
+    if ($post_type === 'page') {
+        return 'pages';
+    }
+    return (string) $post_type;
+}
+
+/**
+ * The option holding a post type's "Keep imported entries up to date only" switch
+ * (plan 9dd0da). Public for the Auto-Sync settings screen.
+ */
+public static function mxchat_existing_only_option($post_type) {
+    return 'mxchat_auto_sync_existing_only_' . self::mxchat_auto_sync_key($post_type);
+}
+
+/**
+ * Whether Auto-Sync for a post type only updates or removes entries that are already in
+ * the knowledge base, and never adds new posts (plan 9dd0da). Default off.
+ */
+private function mxchat_auto_sync_existing_only($post_type) {
+    return get_option(self::mxchat_existing_only_option($post_type)) === '1';
+}
+
+/**
+ * Whether the default-bot knowledge base already holds an entry for this address, read
+ * from the store auto-sync writes to (Pinecone or the WordPress table).
+ */
+private function mxchat_kb_has_entry($source_url, $post_id = 0) {
+    if ($post_id && !empty($this->existing_only_known[$post_id])) {
+        return true;
+    }
+    return $source_url && MxChat_Utils::count_chunks_for_url($source_url, 'default') > 0;
+}
+
+/**
+ * Whether the default-bot entry for this address already holds what storing $content
+ * would write: the same text (chunks joined the way the entry readers join them),
+ * embedded with the embedding model selected now. Auto-Sync then skips the write and its
+ * embedding request: the block editor saves twice per click (its REST request, then the
+ * meta-box form it posts to post.php), and only the first can change the text.
+ */
+private function mxchat_kb_entry_is_current($source_url, $content) {
+    if (MxChat_Utils::get_active_embedding_model() !== MxChat_Utils::get_selected_embedding_model()) {
+        return false;
+    }
+    $text    = $this->mxchat_reimport_storable($content);
+    $chunker = MxChat_Chunker::from_settings();
+    if ($chunker->should_chunk($text)) {
+        $text = implode("\n\n", $chunker->chunk_text($text));
+    }
+    $stored = $this->mxchat_reimport_stored_text(array(
+        'store'      => $this->mxchat_reimport_store('default'),
+        'source_url' => $source_url,
+        'id'         => 0,
+    ), 'default');
+    return is_string($stored) && $stored === $text;
 }
 
 private function apply_role_restriction_to_post($post_id, $source_url) {
@@ -5978,6 +6324,150 @@ public function mxchat_get_acf_fields_for_post($post_id) {
 }
 
 /**
+ * Text held by the ACF Blocks in a post's content (plan d99057).
+ *
+ * An ACF Block keeps its field values as JSON in its block comment inside post_content
+ * (<!-- wp:acf/name {"name":"acf/name","data":{...}} /-->), not in post meta, so
+ * mxchat_get_acf_fields_for_post() never sees them and the tag strip drops the comment.
+ * Each acf/* block found by parse_blocks(), walked through innerBlocks at any depth, is
+ * loaded with ACF's own block-data API (acf_setup_meta, as ACF does when it renders the
+ * block), so both stored shapes work: values under field names with "_name" field-key
+ * references, and values under field keys. Labels are the ACF field labels; a value whose
+ * field no longer exists falls back to the humanised key. The ACF Fields exclusion list
+ * applies (field key, or a legacy name entry), and values go through
+ * mxchat_format_acf_field_value() like post-meta fields. Read from the stored content, so
+ * drafts and private pages work and no page is fetched. Without ACF this returns nothing.
+ *
+ * @param string $content Raw post_content (synced patterns already inlined by the caller).
+ * @return array 'text' (one "Label: value" line per field, a blank line between blocks)
+ *               and 'count' (fields emitted).
+ */
+private function mxchat_acf_block_fields_text($content) {
+    $result = array('text' => '', 'count' => 0);
+    if (!is_string($content) || strpos($content, 'wp:acf/') === false
+        || !function_exists('parse_blocks') || !function_exists('acf_setup_meta')
+        || !function_exists('acf_reset_meta') || !function_exists('get_field_objects')) {
+        return $result;
+    }
+
+    $excluded = get_option('mxchat_acf_excluded_fields', array());
+    if (!is_array($excluded)) {
+        $excluded = array();
+    }
+
+    $sections = array();
+    $this->mxchat_collect_acf_block_sections(parse_blocks($content), $excluded, $sections, 0);
+
+    foreach ($sections as $lines) {
+        $result['count'] += count($lines);
+    }
+    $result['text'] = implode("\n\n", array_map(function ($lines) {
+        return implode("\n", $lines);
+    }, $sections));
+
+    return $result;
+}
+
+/**
+ * Walk parsed blocks (and their innerBlocks) in document order, collecting the
+ * "Label: value" lines of every acf/* block that carries data (plan d99057).
+ */
+private function mxchat_collect_acf_block_sections($blocks, $excluded, &$sections, $depth) {
+    if (!is_array($blocks) || $depth > 20) {
+        return;
+    }
+    foreach ($blocks as $block) {
+        if (!is_array($block)) {
+            continue;
+        }
+        $name = isset($block['blockName']) ? (string) $block['blockName'] : '';
+        if (strpos($name, 'acf/') === 0 && !empty($block['attrs']['data']) && is_array($block['attrs']['data'])) {
+            $lines = $this->mxchat_acf_block_lines($block['attrs']['data'], $excluded);
+            if (!empty($lines)) {
+                $sections[] = $lines;
+            }
+        }
+        if (!empty($block['innerBlocks'])) {
+            $this->mxchat_collect_acf_block_sections($block['innerBlocks'], $excluded, $sections, $depth + 1);
+        }
+    }
+}
+
+/**
+ * The "Label: value" lines of one ACF Block's data (plan d99057).
+ */
+private function mxchat_acf_block_lines($data, $excluded) {
+    // Content-addressed id in ACF's own "block_" form: ACF caches loaded values per id,
+    // so a block can never be answered with another block's values.
+    $block_id = 'block_' . md5(wp_json_encode($data));
+    $objects  = false;
+    try {
+        acf_setup_meta($data, $block_id);
+        $objects = get_field_objects($block_id);
+    } catch (\Throwable $e) {
+        $objects = false; // a failing field-type filter costs this block, never the import
+    } finally {
+        acf_reset_meta($block_id);
+    }
+
+    $lines   = array();
+    $covered = array();
+    foreach ((array) $objects as $field_name => $field) {
+        if (!is_array($field)) {
+            continue;
+        }
+        $covered[$field_name] = true;
+        $field_key = isset($field['key']) ? $field['key'] : '';
+        if (in_array($field_key, $excluded, true) || in_array($field_name, $excluded, true)) {
+            continue;
+        }
+        $value = $this->mxchat_acf_block_plain_text($this->mxchat_format_acf_field_value(isset($field['value']) ? $field['value'] : null, $field_name));
+        if ($value === '') {
+            continue;
+        }
+        $label   = isset($field['label']) ? trim(wp_strip_all_tags((string) $field['label'])) : '';
+        $lines[] = ($label !== '' ? $this->mxchat_decode_entities_for_indexing($label) : ucwords(str_replace(['_', '-'], ' ', $field_name))) . ': ' . $value;
+    }
+
+    // Values ACF could not resolve to a field (the field was deleted, or the data has no
+    // reference): text values keep their humanised key. Hidden "_name" references, values
+    // stored under field keys, and keys whose reference ACF does know (sub fields of a
+    // group or repeater, already rendered with their parent) are skipped.
+    foreach ($data as $key => $value) {
+        if (!is_string($key) || $key === '' || $key[0] === '_' || isset($covered[$key]) || strpos($key, 'field_') === 0) {
+            continue;
+        }
+        $ref = (isset($data['_' . $key]) && is_string($data['_' . $key])) ? $data['_' . $key] : '';
+        if (($ref !== '' && function_exists('acf_get_field') && acf_get_field($ref))
+            || in_array($ref, $excluded, true) || in_array($key, $excluded, true) || !is_string($value)) {
+            continue;
+        }
+        $text = $this->mxchat_acf_block_plain_text($value);
+        if ($text !== '' && !is_numeric($text)) {
+            $lines[] = ucwords(str_replace(['_', '-'], ' ', $key)) . ': ' . $text;
+        }
+    }
+
+    return $lines;
+}
+
+/**
+ * One block field value as plain indexable text: shortcode tags and HTML tags removed
+ * (a line break kept where a paragraph, list item or break ended, so words never run
+ * together), entities decoded once, blank lines collapsed (plan d99057).
+ */
+private function mxchat_acf_block_plain_text($value) {
+    $value = (string) $value;
+    if ($value === '') {
+        return '';
+    }
+    $value = preg_replace('#<br\s*/?>|</(?:p|div|li|h[1-6]|tr|blockquote|pre)>#i', '$0' . "\n", $value);
+    $value = $this->mxchat_decode_entities_for_indexing(wp_strip_all_tags($this->strip_shortcode_tags_preserve_content($value)));
+    $value = preg_replace('/[ \t]*\n\s*/', "\n", $value);
+    return trim((string) $value);
+}
+
+/**
  * Get all registered ACF field groups and their fields for the settings UI
  */
 public function mxchat_get_all_acf_fields() {
@@ -6781,13 +7271,33 @@ public function mxchat_handle_attachment_change($attachment_id) {
         return;
     }
 
+    $signature = get_post_meta($attachment_id, '_mxchat_kb_attachment_sig', true);
+
+    // mxchat_should_index_post (plan 9dd0da; Media files never went through
+    // mxchat_before_process_post): an excluded file is not read or embedded, and an
+    // entry it had from before the exclusion is removed.
+    if (!$this->mxchat_post_index_allowed($post, 'auto_sync')) {
+        $this->mxchat_remove_excluded_entry($source_url);
+        if (is_array($signature) && !empty($signature['url']) && $signature['url'] !== $source_url) {
+            $this->mxchat_remove_excluded_entry($signature['url']);
+        }
+        return;
+    }
+
+    // "Keep imported entries up to date only" for Media: a file with no entry, under its
+    // address or the one it was last indexed at, is not added (plan 9dd0da).
+    if ($this->mxchat_auto_sync_existing_only('attachment')
+        && !$this->mxchat_kb_has_entry($source_url)
+        && !(is_array($signature) && !empty($signature['url']) && $signature['url'] !== $source_url && $this->mxchat_kb_has_entry($signature['url']))) {
+        return;
+    }
+
     $extracted = $this->mxchat_extract_attachment_text($attachment_id);
     if ($extracted['text'] === '') {
         return;
     }
 
-    $content   = $this->mxchat_build_attachment_content($post, $extracted['text']);
-    $signature = get_post_meta($attachment_id, '_mxchat_kb_attachment_sig', true);
+    $content = $this->mxchat_build_attachment_content($post, $extracted['text']);
 
     if (is_array($signature) && isset($signature['url'], $signature['hash'])) {
         // Nothing we index changed — don't pay for another embedding.
@@ -6993,6 +7503,11 @@ public function mxchat_handle_post_update($post_id, $post, $update) {
     if ($post->post_status === 'publish' && !empty($previous_url)) {
         $current_url = get_permalink($post_id);
         if ($current_url && $current_url !== $previous_url) {
+            // "Keep imported entries up to date only" reads the entry under the NEW address,
+            // which a rename has not written yet: remember the post was imported (plan 9dd0da).
+            if ($this->mxchat_auto_sync_existing_only($post_type) && MxChat_Utils::count_chunks_for_url($previous_url, 'default') > 0) {
+                $this->existing_only_known[$post_id] = true;
+            }
             MxChat_Utils::delete_chunks_for_url($previous_url, 'default');
         }
     }
@@ -7040,6 +7555,11 @@ public function mxchat_handle_post_update($post_id, $post, $update) {
  * scheduled publishes (wp_publish_post) and direct status=publish inserts index
  * identically to editor saves (plan 3055e1). Pure extraction of the former
  * publish branch — body indentation retained to keep the diff reviewable.
+ *
+ * @return bool True when the entry holds the post's current text (stored now, or already
+ *              held, which sends no embedding request); false when it was left
+ *              alone (a developer filter excluded it, "Keep imported entries up to date
+ *              only" found no entry, the WooCommerce writer owns it, or storage failed).
  */
 private function mxchat_index_published_post($post_id, $post) {
         $post_type = $post->post_type;
@@ -7058,7 +7578,7 @@ private function mxchat_index_published_post($post_id, $post) {
             && class_exists('WooCommerce')
             && isset($this->options['enable_woocommerce_integration'])
             && in_array($this->options['enable_woocommerce_integration'], ['1', 'on'])) {
-            return;
+            return false;
         }
 
         // Get the source URL
@@ -7075,23 +7595,24 @@ private function mxchat_index_published_post($post_id, $post) {
         // (Plan d138c4.)
         if ('' === $post->post_name
             && untrailingslashit($source_url) === untrailingslashit(home_url())) {
-            return;
+            return false;
         }
 
-        /**
-         * Allow developers to modify post data before processing into the knowledge base.
-         * Same filter and signature as the manual bulk-import path
-         * (ajax_mxchat_process_selected_content), so a callback registered once covers
-         * every indexing route. Purely additive — zero behaviour change when unhooked.
-         * Auto-sync runs under the 'default' bot context, matching the rest of this
-         * function.
-         *
-         * @param WP_Post $post   The post about to be indexed.
-         * @param string  $bot_id Bot context ('default' on auto-sync).
-         */
-        $post = apply_filters('mxchat_before_process_post', $post, 'default');
-        if (!($post instanceof WP_Post)) {
-            $post = get_post($post_id); // defend against a bad callback return
+        // Developer filters (plan 9dd0da; mxchat_index_filters() documents both): the
+        // same pair the importer applies, under the 'default' bot context. A post a
+        // filter excludes is never embedded, and an entry it had from before the
+        // exclusion is removed, so the knowledge base follows the filter.
+        $filtered = $this->mxchat_index_filters($post, 'auto_sync', 'default');
+        if ($filtered === null) {
+            $this->mxchat_remove_excluded_entry($source_url);
+            return false;
+        }
+        $post = $filtered;
+
+        // "Keep imported entries up to date only" (plan 9dd0da): this post type's
+        // Auto-Sync updates entries that already exist and never adds a post that has none.
+        if ($this->mxchat_auto_sync_existing_only($post_type) && !$this->mxchat_kb_has_entry($source_url, $post_id)) {
+            return false;
         }
 
         // Assemble the indexable text via the shared post-kind assembler (a3d60c),
@@ -7111,6 +7632,10 @@ private function mxchat_index_published_post($post_id, $post) {
             'include_product_tabs' => true,
         ));
         $final_content = $prepared['content'];
+        // The import list shows this page's word count without reading it (M6).
+        if (!empty($prepared['page_settled'])) {
+            $this->mxchat_remember_indexed_words($post_id, $prepared['body_words']);
+        }
 
         // Embedding decision — custom-provider-aware. Gating on a cloud API key
         // here silently killed auto-sync on keyless custom-embeddings sites,
@@ -7118,9 +7643,19 @@ private function mxchat_index_published_post($post_id, $post) {
         // key (plan cbd5fd). Silent-return shape preserved.
         $preflight = MxChat_Utils::embedding_preflight(get_option('mxchat_options'));
         if (!$preflight['ok']) {
-            return;
+            return false;
         }
         $api_key = $preflight['api_key'];
+        unset($this->existing_only_known[$post_id]);
+
+        // In-flight record for the synced-pattern re-sync (plan 3f95de): this write
+        // reads every pattern as it is right now.
+        $this->indexed_in_request[$post_id] = ++$this->index_seq;
+
+        if ($this->mxchat_kb_entry_is_current($source_url, $final_content)) {
+            $this->apply_role_restriction_to_post($post_id, $source_url);
+            return true;
+        }
 
         // Use the centralized utility function for storage
         $result = MxChat_Utils::submit_content_to_db(
@@ -7129,11 +7664,12 @@ private function mxchat_index_published_post($post_id, $post) {
             $api_key,
             md5($source_url) // Vector ID for Pinecone
         );
-        
+
         //   After successful storage, apply role restriction based on tags
         if (!is_wp_error($result)) {
             $this->apply_role_restriction_to_post($post_id, $source_url);
         }
+        return !is_wp_error($result);
 }
 
 /**
@@ -7165,7 +7701,9 @@ private function mxchat_index_published_post($post_id, $post) {
  *                                compares against. Empty text for a product with no tabs.
  *
  * Returns array: 'content' (the assembled indexable text), 'acf_fields_found' and
- * 'pdf_extracted_count' (the bulk path reports both in its AJAX response).
+ * 'pdf_extracted_count' (the bulk path reports both in its AJAX response), and
+ * 'rendered_page' (plan c26d40: null when the published page was not read; otherwise
+ * array('used' => bool, 'note' => string) saying whether its text was used, or why not).
  */
 private function mxchat_prepare_post_content_for_indexing($post_id, $post, $args) {
     $read_display         = !empty($args['read_display']);
@@ -7194,12 +7732,27 @@ private function mxchat_prepare_post_content_for_indexing($post_id, $post, $args
         $content .= "Short Description: " . $this->mxchat_decode_entities_for_indexing(wp_strip_all_tags($clean_excerpt)) . "\n\n";
     }
 
-    // Main content — resolve text the page pulls in by reference (synced patterns,
-    // WoodMart HTML Blocks; plan 735943) by lookup, then remove shortcode tags but
-    // preserve content inside them, then strip tags (don't use 'the_content'
-    // filter as it may re-add shortcodes and would execute every shortcode).
-    $clean_content = $this->strip_shortcode_tags_preserve_content($this->mxchat_inline_referenced_content($raw_content));
-    $content .= $this->mxchat_decode_entities_for_indexing(wp_strip_all_tags($clean_content));
+    // Main content and ACF Block lines (plans 735943, c26d40, d99057): see mxchat_post_body_text().
+    $parts      = $this->mxchat_post_body_text($raw_content);
+    $body_text  = $parts['body'];
+    $acf_blocks = $parts['acf_blocks'];
+
+    // Rendered-page fallback (plan c26d40): a page made with a page builder that keeps
+    // its text outside post_content (Breakdance, Oxygen, Bricks, Divi 5), or whose body
+    // is still very short once the ACF Block text above is counted, is read from the
+    // published page itself. Its text replaces the body only when it is clearly longer.
+    // 'read_page' => false (M6) decides whether the page would be read, without reading it.
+    $rendered = $this->mxchat_rendered_page_body($post, $parts['known'], !isset($args['read_page']) || $args['read_page']);
+    $saved_body = $body_text;
+    if ($rendered['used']) {
+        $body_text = $rendered['text'];
+    }
+    $head     = $content;
+    $content .= $body_text;
+
+    if ($acf_blocks['text'] !== '') {
+        $content .= "\n\n" . $acf_blocks['text'];
+    }
 
     // WooCommerce product enrichment (post-fields kind). The WC-object assembler
     // (mxchat_prepare_product_content_for_indexing) owns product rows whenever the
@@ -7314,9 +7867,341 @@ private function mxchat_prepare_post_content_for_indexing($post_id, $post, $args
 
     return array(
         'content'             => $content,
-        'acf_fields_found'    => count($acf_fields),
+        'acf_fields_found'    => count($acf_fields) + $acf_blocks['count'],
         'pdf_extracted_count' => $pdf_extracted_count,
+        'rendered_page'       => $rendered['report'],
+        // M6: the same text with the saved body in place of the published page's text
+        // (what this route wrote before 3.2.26), present only when the page's text was used.
+        'content_without_page' => $rendered['used'] ? $head . $saved_body . substr($content, strlen($head) + strlen($body_text)) : null,
+        // M6: whether the published page is (or, with 'read_page' => false, would be) read,
+        // and whether the outcome of reading it is settled (see mxchat_rendered_page_body).
+        'page_wanted'         => $rendered['wanted'],
+        'page_settled'        => $rendered['settled'],
+        // M6: words in the body and ACF Block text as indexed, the import list's count.
+        'body_words'          => str_word_count($body_text) + ($acf_blocks['text'] !== '' ? str_word_count($acf_blocks['text']) : 0),
     );
+}
+
+/**
+ * A post's body text the way the post-fields assembler reads it (plans 735943, c26d40,
+ * d99057), before the rendered-page fallback: text the page pulls in by reference (synced
+ * patterns, WoodMart HTML Blocks) resolved by lookup, Divi 4 and WPBakery shortcode
+ * attribute text read and WPBakery raw HTML dropped, shortcode tags removed with their
+ * content kept, tags stripped (never the_content, which would run every shortcode),
+ * entities decoded; plus the ACF Block field lines, which live in the block comments the
+ * strip removes. Shared by the assembler and the import list's word count (M6).
+ *
+ * @param string $raw_content post_content as the caller reads it.
+ * @return array{body:string,acf_blocks:array,known:string} 'known' is the body plus the
+ *         ACF Block lines, the text the rendered-page fallback measures.
+ */
+private function mxchat_post_body_text($raw_content) {
+    $inlined_content = $this->mxchat_inline_referenced_content($raw_content);
+    $clean_content   = $this->strip_shortcode_tags_preserve_content($this->mxchat_builder_shortcode_text($inlined_content));
+    $body_text       = $this->mxchat_decode_entities_for_indexing(wp_strip_all_tags($clean_content));
+    $acf_blocks      = $this->mxchat_acf_block_fields_text($inlined_content);
+    return array(
+        'body'       => $body_text,
+        'acf_blocks' => $acf_blocks,
+        'known'      => $body_text . ($acf_blocks['text'] !== '' ? "\n\n" . $acf_blocks['text'] : ''),
+    );
+}
+
+/**
+ * The post meta that marks a post as made with a page builder whose text is not, or
+ * not all, in post_content (plan c26d40). Returns the key found, or '' for none.
+ *
+ *   Breakdance            _breakdance_data         element tree (JSON)
+ *   Oxygen 6              _oxygen_data             element tree (JSON)
+ *   Oxygen classic 2-3    ct_builder_shortcodes    ct_* shortcodes
+ *   Oxygen classic 4      ct_builder_json          element tree (JSON)
+ *   Bricks                _bricks_page_content_2   element array; post_content keeps
+ *                                                  whatever the page held before Bricks
+ *   Divi 4 and Divi 5     _et_pb_use_builder = on  shortcodes / divi/* block comments
+ *   WPBakery              _wpb_vc_js_status = true
+ *   Beaver Builder        _fl_builder_enabled
+ *   Elementor             _elementor_edit_mode = builder
+ *
+ * @param int $post_id
+ * @return string
+ */
+private function mxchat_page_builder_marker($post_id) {
+    $markers = array(
+        '_breakdance_data'       => null,
+        '_oxygen_data'           => null,
+        'ct_builder_shortcodes'  => null,
+        'ct_builder_json'        => null,
+        '_bricks_page_content_2' => null,
+        '_et_pb_use_builder'     => 'on',
+        '_wpb_vc_js_status'      => 'true',
+        '_fl_builder_enabled'    => null,
+        '_elementor_edit_mode'   => 'builder',
+    );
+    foreach ($markers as $key => $want) {
+        $value = get_post_meta($post_id, $key, true);
+        if ($want === null ? !empty($value) : (is_string($value) && $value === $want)) {
+            return $key;
+        }
+    }
+    return '';
+}
+
+/**
+ * Rendered-page fallback for the post-fields assembler (plan c26d40).
+ *
+ * The assembler reads post_content. Breakdance, Oxygen, Bricks and Divi 5 keep a page's
+ * text in post meta or in block comments instead, so such a page used to be stored as
+ * its title alone (or, for Bricks, the text it had before the builder). When the post is
+ * marked by mxchat_page_builder_marker(), or when the text read so far (the body plus the
+ * ACF Block lines of plan d99057, which always come first) is still under 200 characters,
+ * the published page is fetched and read the way the URL importer reads a page
+ * (mxchat_extract_main_content, then mxchat_sanitize_content_for_api). Its text replaces
+ * the body only when it is clearly longer: by more than 20 characters and more than 10%,
+ * so a page whose rendered text differs only in typography keeps today's entry. A short
+ * product description is normal (the product lines carry the facts), so products are
+ * fetched only when a builder marks them.
+ *
+ * Only a published, publicly viewable post with no password is fetched, and anonymously,
+ * so the text read is what a visitor reads. Any failure (loopback blocked, a 4xx/5xx
+ * answer, a redirect to another address, no readable text) keeps today's text, and the
+ * report says why.
+ *
+ * Filter: mxchat_index_use_rendered_page( bool $use, int $post_id, WP_Post $post )
+ *   Return true to read the published page for any post (it must still be published,
+ *   public and without a password), false never to read it. The "clearly longer" rule
+ *   still decides whether the page's text is used.
+ *
+ * @param WP_Post $post
+ * @param string  $known The text read without the page: the body plus ACF Block lines.
+ * @param bool    $fetch False (M6): only say whether the page would be read ('wanted').
+ * @return array{used:bool,text:string,report:array|null,wanted:bool,settled:bool} 'settled' (M6):
+ *         the page was read, or answered in a way a second read would repeat (a redirect, not
+ *         HTML, no readable text, a 4xx other than 429); false after a connection failure,
+ *         a 5xx or a 429, which can pass.
+ */
+private function mxchat_rendered_page_body($post, $known, $fetch = true) {
+    $out = array('used' => false, 'text' => '', 'report' => null, 'wanted' => false, 'settled' => false);
+    if (!($post instanceof WP_Post)) {
+        return $out;
+    }
+    $post_id   = (int) $post->ID;
+    $known_len = mb_strlen($this->mxchat_rendered_norm($known), 'UTF-8');
+    if (!$this->mxchat_rendered_page_wanted($post, $known_len)) {
+        return $out;
+    }
+    $out['wanted'] = true;
+    if (!$fetch) {
+        return $out;
+    }
+
+    if (is_array($this->rendered_page_memo) && isset($this->rendered_page_memo[$post_id])) {
+        $fetched = $this->rendered_page_memo[$post_id];
+    } else {
+        $fetched = $this->mxchat_fetch_rendered_page($post);
+        if (is_array($this->rendered_page_memo)) {
+            $this->rendered_page_memo[$post_id] = $fetched;
+        }
+    }
+    $out['settled'] = empty($fetched['passing']);
+    if ($fetched['text'] === '') {
+        $out['report'] = array('used' => false, 'note' => $fetched['note']);
+        return $out;
+    }
+
+    $page_len = mb_strlen($this->mxchat_rendered_norm($fetched['text']), 'UTF-8');
+    if ($page_len > $known_len + max(20, (int) ceil($known_len * 0.1))) {
+        $out['used']   = true;
+        $out['text']   = $fetched['text'];
+        $out['report'] = array('used' => true, 'note' => __('text read from the published page', 'mxchat'));
+    } else {
+        $out['report'] = array('used' => false, 'note' => __('the published page has no more text than the saved content', 'mxchat'));
+    }
+    return $out;
+}
+
+/**
+ * Whether the rendered-page fallback reads this post's published page (plan c26d40): a
+ * page-builder page, or a body (with its ACF Block lines) under 200 characters that is not
+ * a product, as the mxchat_index_use_rendered_page filter leaves it, and only for a
+ * published, publicly viewable post without a password. Fetches nothing.
+ *
+ * @param WP_Post $post
+ * @param int     $known_len Length of the text read without the page, whitespace collapsed.
+ * @return bool
+ */
+private function mxchat_rendered_page_wanted($post, $known_len) {
+    $post_id = (int) $post->ID;
+    $want    = $this->mxchat_page_builder_marker($post_id) !== ''
+        || ($known_len < 200 && $post->post_type !== 'product');
+
+    /**
+     * Whether the knowledge base reads this post's published page for its text.
+     *
+     * @since 3.2.26
+     * @param bool    $use     Default: true for a page-builder page or a body under 200 characters.
+     * @param int     $post_id The post.
+     * @param WP_Post $post    The post being indexed.
+     */
+    $want = (bool) apply_filters('mxchat_index_use_rendered_page', $want, $post_id, $post);
+    if (!$want) {
+        return false;
+    }
+    return !($post->post_status !== 'publish' || (string) $post->post_password !== '' || $post->post_type === 'attachment'
+        || (function_exists('is_post_publicly_viewable') && !is_post_publicly_viewable($post)));
+}
+
+/**
+ * On the request the rendered-page fallback makes (mxchat_index_fetch argument plus the
+ * X-MxChat-Index header, plan c26d40), tell page caches not to store the response.
+ * DONOTCACHEPAGE is honoured by WP Super Cache, W3 Total Cache, WP Rocket and LiteSpeed
+ * Cache. Changes nothing on any other request.
+ */
+public function mxchat_rendered_fetch_no_cache() {
+    if (!isset($_GET['mxchat_index_fetch']) || empty($_SERVER['HTTP_X_MXCHAT_INDEX'])) {
+        return;
+    }
+    if (!defined('DONOTCACHEPAGE')) {
+        define('DONOTCACHEPAGE', true);
+    }
+    if (!headers_sent()) {
+        nocache_headers();
+    }
+}
+
+/** Whitespace collapsed to single spaces, for comparing lengths of text read two ways. */
+private function mxchat_rendered_norm($text) {
+    $text = (string) $text;
+    $norm = preg_replace('/\s+/u', ' ', $text);
+    if ($norm === null) {
+        $norm = preg_replace('/\s+/', ' ', $text);
+    }
+    return trim((string) $norm);
+}
+
+/**
+ * Fetch a post's published page as an anonymous visitor and return its main text (plan
+ * c26d40). The request carries a cache-busting query argument (mxchat_index_fetch) so a
+ * page cache serves the current page, and an X-MxChat-Index header a site can recognise.
+ * Connecting is capped at 3 seconds (a blocked loopback fails fast) and the whole request
+ * at 10, so a save or a one-post import request stays well inside PHP's time limit.
+ *
+ * @param WP_Post $post
+ * @return array{text:string,note:string,passing?:bool} Text '' with a note saying why on any
+ *         failure; 'passing' (M6) true for a failure a later read may not repeat (no answer,
+ *         HTTP 5xx or 429).
+ */
+private function mxchat_fetch_rendered_page($post) {
+    $permalink = get_permalink($post);
+    if (!is_string($permalink) || !preg_match('#^https?://#i', $permalink)) {
+        return array('text' => '', 'note' => __('the page has no address to read', 'mxchat'));
+    }
+    $url = add_query_arg('mxchat_index_fetch', (string) time(), $permalink);
+
+    $connect = function ($handle, $request, $request_url) use ($url) {
+        if ($request_url === $url && defined('CURLOPT_CONNECTTIMEOUT')) {
+            curl_setopt($handle, CURLOPT_CONNECTTIMEOUT, 3);
+        }
+    };
+    add_action('http_api_curl', $connect, 10, 3);
+    $response = wp_remote_get($url, array(
+        'timeout'     => 10,
+        'redirection' => 3,
+        'sslverify'   => apply_filters('https_local_ssl_verify', false),
+        'user-agent'  => function_exists('mxchat_ingest_user_agent') ? mxchat_ingest_user_agent() : 'MxChat',
+        'headers'     => array(
+            'Accept'         => 'text/html,application/xhtml+xml',
+            'Cache-Control'  => 'no-cache',
+            'Pragma'         => 'no-cache',
+            'X-MxChat-Index' => '1',
+        ),
+    ));
+    remove_action('http_api_curl', $connect, 10);
+
+    if (is_wp_error($response)) {
+        /* translators: %s: the error the request returned */
+        return array('text' => '', 'note' => sprintf(__('the published page could not be read (%s), so the saved content was used', 'mxchat'), $response->get_error_message()), 'passing' => true);
+    }
+    $code = (int) wp_remote_retrieve_response_code($response);
+    if ($code !== 200) {
+        /* translators: %d: HTTP status code */
+        return array('text' => '', 'note' => sprintf(__('the published page answered HTTP %d, so the saved content was used', 'mxchat'), $code), 'passing' => ($code >= 500 || $code === 429));
+    }
+    // A page that sends an anonymous visitor somewhere else (a login page, a members-only
+    // notice) is not this page's text.
+    $final = '';
+    if (isset($response['http_response']) && is_object($response['http_response']) && method_exists($response['http_response'], 'get_response_object')) {
+        $raw = $response['http_response']->get_response_object();
+        if (is_object($raw) && isset($raw->url)) {
+            $final = (string) $raw->url;
+        }
+    }
+    if ($final !== '' && untrailingslashit((string) wp_parse_url($final, PHP_URL_PATH)) !== untrailingslashit((string) wp_parse_url($permalink, PHP_URL_PATH))) {
+        return array('text' => '', 'note' => __('the published page sends visitors to another address, so the saved content was used', 'mxchat'));
+    }
+    $type = (string) wp_remote_retrieve_header($response, 'content-type');
+    if ($type !== '' && stripos($type, 'html') === false) {
+        return array('text' => '', 'note' => __('the published page is not an HTML page, so the saved content was used', 'mxchat'));
+    }
+
+    $main = (string) $this->mxchat_extract_main_content(wp_remote_retrieve_body($response));
+    // Builder markup rarely puts one element per line, and the tag strip would join the
+    // words of neighbouring elements: end every block element with a line break first.
+    $broken = preg_replace('#(</(?:p|div|h[1-6]|li|section|article|blockquote|figcaption|td|th|tr|dd|dt|pre|address|button)>|<br\s*/?>)#i', "$1\n", $main);
+    $text   = $this->mxchat_sanitize_content_for_api(is_string($broken) ? $broken : $main);
+    $text   = trim((string) preg_replace("/\n{3,}/", "\n\n", $text));
+    if ($text === '') {
+        return array('text' => '', 'note' => __('the published page has no readable text, so the saved content was used', 'mxchat'));
+    }
+    return array('text' => $text, 'note' => '');
+}
+
+/**
+ * Divi 4 and WPBakery text held in shortcode attributes (plan c26d40). Headings, blurb
+ * titles, button labels and tab titles live in an attribute of the module's opening tag
+ * (title, heading, text, button_text, content), and the shortcode strip removed them with
+ * the tag. Each et_pb_* / vc_* opening tag is replaced by those attribute values, one per
+ * line, in the order the tag lists them, with each builder's attribute encoding undone
+ * (Divi: %22 %91 %93; WPBakery: `{` `}` ``). WPBakery raw HTML and raw JS blocks are
+ * base64 payloads that read as noise, and are dropped. Content with no et_pb_ or vc_
+ * shortcode is returned unchanged, byte for byte.
+ *
+ * @param string $content post_content with references inlined.
+ * @return string
+ */
+private function mxchat_builder_shortcode_text($content) {
+    if (!is_string($content) || (strpos($content, '[et_pb_') === false && strpos($content, '[vc_') === false)) {
+        return $content;
+    }
+    $out = preg_replace('/\[(vc_raw_html|vc_raw_js)\b[^\]]*\].*?\[\/\1\]/s', '', $content);
+    $out = is_string($out) ? $out : $content;
+
+    $keys = array('title', 'heading', 'text', 'button_text', 'content');
+    $read = preg_replace_callback('/\[((?:et_pb|vc)_[A-Za-z0-9_-]+)(\s[^\]]*)?\]/', function ($m) use ($keys) {
+        $raw = isset($m[2]) ? trim(rtrim(trim($m[2]), '/')) : '';
+        if ($raw === '') {
+            return $m[0];
+        }
+        $atts = shortcode_parse_atts($raw);
+        if (!is_array($atts)) {
+            return $m[0];
+        }
+        $lines = array();
+        foreach ($atts as $name => $value) {
+            if (!is_string($name) || !in_array(strtolower($name), $keys, true) || !is_string($value)) {
+                continue;
+            }
+            $value = str_replace(array('%22', '%91', '%93'), array('"', '[', ']'), $value);
+            $value = str_replace(array('`{`', '`}`', '``'), array('[', ']', '"'), $value);
+            $value = trim(wp_strip_all_tags($value));
+            if ($value === '' || is_numeric($value) || preg_match('#^(?:https?:)?//#i', $value)
+                || in_array(strtolower($value), array('on', 'off', 'yes', 'no', 'true', 'false'), true)) {
+                continue;
+            }
+            $lines[] = $value;
+        }
+        return $lines ? "\n" . implode("\n", $lines) . "\n" : $m[0];
+    }, $out);
+    return is_string($read) ? $read : $out;
 }
 
 /**
@@ -7458,6 +8343,349 @@ private function mxchat_is_auto_sync_enabled($post_type) {
         return get_option('mxchat_auto_sync_pages') === '1';
     }
     return get_option('mxchat_auto_sync_' . $post_type) === '1';
+}
+
+/**
+ * A synced pattern was saved: re-sync the pages that use it (plan 3f95de).
+ *
+ * Since 3.2.25 a page's entry carries the text of the synced patterns it references
+ * (plan 735943), but Auto-Sync keys on the saved post and a pattern is its own wp_block
+ * post with no Auto-Sync switch, so editing the pattern left every such entry on the old
+ * text until each page was saved or imported again. Hooked to post_updated.
+ *
+ * Nothing happens unless the pattern is published and its post_content changed, or it
+ * has just been published: the import reads no draft pattern, and a save that leaves the
+ * text alone changes no page's entry. The pages come from mxchat_find_pattern_users()
+ * (Auto-Sync on for their post type, published, deduplicated, capped) and are re-synced
+ * through mxchat_index_published_post(), the routine a save of the page runs, so each
+ * entry is what that save would write. Up to a handful of pages
+ * (mxchat_pattern_resync_inline_max, default 5) are re-synced at shutdown of this
+ * request; more are written to a job and re-synced by a single-event cron
+ * (mxchat_pattern_resync) in batches (M6, mxchat_run_pattern_resync_batch), so the
+ * pattern editor's save stays fast and no cron request runs long.
+ *
+ * @param int     $pattern_id
+ * @param WP_Post $post_after
+ * @param WP_Post $post_before
+ */
+public function mxchat_handle_pattern_update($pattern_id, $post_after, $post_before) {
+    if (!($post_after instanceof WP_Post) || $post_after->post_type !== 'wp_block') {
+        return;
+    }
+    if ((defined('DOING_AUTOSAVE') && DOING_AUTOSAVE) || wp_is_post_revision($pattern_id)) {
+        return;
+    }
+    if ($post_after->post_status !== 'publish') {
+        return;
+    }
+    $was_published = ($post_before instanceof WP_Post) && $post_before->post_status === 'publish';
+    if ($was_published && (string) $post_before->post_content === (string) $post_after->post_content) {
+        return;
+    }
+
+    $pattern_id = (int) $pattern_id;
+    $found      = $this->mxchat_find_pattern_users($pattern_id);
+    if (empty($found['ids'])) {
+        return;
+    }
+
+    $inline_max = max(0, (int) apply_filters('mxchat_pattern_resync_inline_max', 5, $pattern_id));
+    if (count($found['ids']) > $inline_max) {
+        unset($this->pattern_resync_queue[$pattern_id]);
+        // A later edit replaces the job: every page is written again with the newest text.
+        $this->mxchat_pattern_resync_job_start($pattern_id, $found);
+        $this->mxchat_pattern_resync_schedule($pattern_id);
+        return;
+    }
+
+    // The latest change wins: a page written between two edits of the pattern in one
+    // request holds the first edit's text, so it is written again.
+    $this->pattern_resync_queue[$pattern_id] = $this->index_seq;
+    if (!$this->pattern_resync_hooked) {
+        $this->pattern_resync_hooked = true;
+        add_action('shutdown', array($this, 'mxchat_run_pattern_resync_queue'));
+    }
+}
+
+/**
+ * Shutdown: re-sync the pages of every synced pattern queued this request (plan 3f95de).
+ */
+public function mxchat_run_pattern_resync_queue() {
+    $queue = $this->pattern_resync_queue;
+    $this->pattern_resync_queue = array();
+    foreach ($queue as $pattern_id => $since) {
+        $this->mxchat_resync_pattern_users((int) $pattern_id, (int) $since);
+    }
+}
+
+/** Option prefix of a synced pattern's cron re-sync job (M6); the pattern id follows. */
+const PATTERN_RESYNC_JOB = 'mxchat_pattern_resync_job_';
+
+/** Seconds after which a request's pattern re-sync batches start no further page (M6). */
+const PATTERN_RESYNC_SECONDS = 15;
+
+/**
+ * The cron route of the synced-pattern re-sync, one batch per event (M6).
+ *
+ * The save that changed the pattern wrote a job: the pages that use it (at most
+ * mxchat_pattern_resync_cap, default 50) and a revision. Each event re-syncs the next pages
+ * of the job, at most mxchat_pattern_resync_batch (default 10) and only while the request has
+ * spent under PATTERN_RESYNC_SECONDS on these batches, so a cron request stays well inside a
+ * 30 second time limit (one tiny page costs about 0.7 s on InstaWP: a page read and an
+ * embedding request). The next event is scheduled before the first page is written, and each
+ * page leaves the job as soon as it is written, so a request stopped part-way (a host time
+ * limit, a fatal error) leaves its unwritten pages in the job with an event to finish them.
+ * The last batch deletes the job and that event. One event per pattern: the save, and each
+ * batch, schedule only when none is waiting.
+ *
+ * An event with no job (written by a request that stopped before the job, or run by hand)
+ * takes the pages as they are now.
+ *
+ * @param int $pattern_id
+ * @return int Pages re-synced by this batch.
+ */
+public function mxchat_run_pattern_resync_batch($pattern_id) {
+    $pattern_id = (int) $pattern_id;
+    if ($pattern_id <= 0) {
+        return 0;
+    }
+    $job = $this->mxchat_pattern_resync_job_get($pattern_id);
+    if ($job === null) {
+        $found = $this->mxchat_find_pattern_users($pattern_id);
+        if (empty($found['ids'])) {
+            return 0;
+        }
+        $job = $this->mxchat_pattern_resync_job_start($pattern_id, $found);
+    }
+    if ($this->pattern_resync_until === null) {
+        $this->pattern_resync_until = microtime(true) + self::PATTERN_RESYNC_SECONDS;
+    }
+    $batch = max(1, (int) apply_filters('mxchat_pattern_resync_batch', 10, $pattern_id));
+
+    // Before any page is written: the rest of the job already has its event.
+    $this->mxchat_pattern_resync_schedule($pattern_id);
+
+    $synced  = 0;
+    $written = 0;
+    $current = true;
+    foreach (array_slice($job['ids'], 0, $batch) as $post_id) {
+        if ($written > 0 && microtime(true) >= $this->pattern_resync_until) {
+            break;
+        }
+        if ($this->mxchat_resync_pattern_user((int) $post_id)) {
+            $synced++;
+        }
+        $written++;
+        // The page leaves the job now. A newer edit wrote a new job (a new revision) with
+        // every page in it: that job is left as it is and its event carries on.
+        $now = $this->mxchat_pattern_resync_job_get($pattern_id);
+        if ($now === null || $now['rev'] !== $job['rev']) {
+            $current = false;
+            break;
+        }
+        $now['ids'] = array_values(array_diff($now['ids'], array((int) $post_id)));
+        update_option(self::PATTERN_RESYNC_JOB . $pattern_id, $now, false);
+        $job = $now;
+    }
+
+    $left = $current ? count($job['ids']) : null;
+    if ($left === 0) {
+        delete_option(self::PATTERN_RESYNC_JOB . $pattern_id);
+        wp_clear_scheduled_hook('mxchat_pattern_resync', array($pattern_id));
+    }
+    if (defined('WP_DEBUG') && WP_DEBUG) {
+        if ($left === null) {
+            $rest = '; the pattern was edited again, so its pages start over in the next batch';
+        } elseif ($left > 0) {
+            $rest = sprintf('; %d of %d still to do, in the next batch', $left, (int) $job['total']);
+        } else {
+            $rest = sprintf('; all %d done', (int) $job['total']);
+        }
+        error_log(sprintf(
+            'MxChat Auto-Sync: synced pattern %d ("%s") changed; re-synced %d page(s) that use it in this batch%s%s.',
+            $pattern_id,
+            (string) get_post_field('post_title', $pattern_id, 'raw'),
+            $synced,
+            $rest,
+            !empty($job['capped']) ? sprintf('; capped at %d (mxchat_pattern_resync_cap), the others update when they are next saved', (int) $job['cap']) : ''
+        ));
+    }
+    return $synced;
+}
+
+/** One page of a synced-pattern re-sync: what a save of the page writes (plan 3f95de). */
+private function mxchat_resync_pattern_user($post_id) {
+    $post = get_post($post_id);
+    if (!($post instanceof WP_Post) || $post->post_status !== 'publish' || !$this->mxchat_is_auto_sync_enabled($post->post_type)) {
+        return false;
+    }
+    // False when a developer filter excludes the page or "Keep imported entries up to date
+    // only" finds no entry for it (plan 9dd0da): not counted as re-synced.
+    return $this->mxchat_index_published_post($post_id, $post);
+}
+
+/** A pattern's cron re-sync job (M6), read from the database, or null. */
+private function mxchat_pattern_resync_job_get($pattern_id) {
+    $name = self::PATTERN_RESYNC_JOB . (int) $pattern_id;
+    // Another request (a newer edit of the pattern) may have written it since this one read it.
+    wp_cache_delete($name, 'options');
+    $job = get_option($name, null);
+    return (is_array($job) && isset($job['ids'], $job['rev']) && is_array($job['ids'])) ? $job : null;
+}
+
+/** Write a new job for a pattern's pages (M6): every page found, a new revision. */
+private function mxchat_pattern_resync_job_start($pattern_id, array $found) {
+    $job = array(
+        'ids'     => array_values(array_map('intval', $found['ids'])),
+        'total'   => count($found['ids']),
+        'capped'  => !empty($found['capped']),
+        'cap'     => (int) $found['cap'],
+        'rev'     => uniqid('', true),
+        'started' => time(),
+    );
+    update_option(self::PATTERN_RESYNC_JOB . (int) $pattern_id, $job, false);
+    return $job;
+}
+
+/** Schedule the pattern's re-sync event unless one is already waiting (M6). */
+private function mxchat_pattern_resync_schedule($pattern_id) {
+    $args = array((int) $pattern_id);
+    if (!wp_next_scheduled('mxchat_pattern_resync', $args)) {
+        wp_schedule_single_event(time(), 'mxchat_pattern_resync', $args);
+    }
+}
+
+/**
+ * Re-sync the pages that use a synced pattern, one auto-sync write each (plan 3f95de): the
+ * shutdown route, for a pattern used by a handful of pages. The cron route is
+ * mxchat_run_pattern_resync_batch().
+ *
+ * @param int      $pattern_id
+ * @param int|null $since      $index_seq when the pattern changed in this request: a page
+ *                             auto-synced after that already carries the new text and is
+ *                             not embedded again. Null: every page found.
+ * @return int Pages re-synced.
+ */
+public function mxchat_resync_pattern_users($pattern_id, $since = null) {
+    $pattern_id = (int) $pattern_id;
+    $found      = $this->mxchat_find_pattern_users($pattern_id);
+    $synced     = 0;
+    foreach ($found['ids'] as $post_id) {
+        if ($since !== null && isset($this->indexed_in_request[$post_id]) && $this->indexed_in_request[$post_id] > $since) {
+            continue;
+        }
+        if ($this->mxchat_resync_pattern_user($post_id)) {
+            $synced++;
+        }
+    }
+    if (defined('WP_DEBUG') && WP_DEBUG) {
+        error_log(sprintf(
+            'MxChat Auto-Sync: synced pattern %d ("%s") changed; re-synced %d page(s) that use it%s.',
+            $pattern_id,
+            (string) get_post_field('post_title', $pattern_id, 'raw'),
+            $synced,
+            $found['capped'] ? sprintf('; capped at %d (mxchat_pattern_resync_cap), the others update when they are next saved', $found['cap']) : ''
+        ));
+    }
+    return $synced;
+}
+
+/**
+ * The posts that reference a synced pattern in a shape the import inlines
+ * (mxchat_reference_shapes): published, of a post type whose Auto-Sync switch is on, one
+ * entry per post, oldest first, at most mxchat_pattern_resync_cap (default 50).
+ *
+ * A prepared LIKE narrows the candidates ("ref":ID for the block comment; the shortcode
+ * name plus attr="ID", attr='ID' or attr=ID for each reference shortcode), then each
+ * candidate is confirmed with the regex and id reading the import itself uses, so a
+ * reference to 1234 never counts as one to 123.
+ *
+ * @param int $pattern_id
+ * @return array 'ids' => int[], 'capped' => bool (more posts reference it than the cap
+ *               lets through), 'cap' => int
+ */
+private function mxchat_find_pattern_users($pattern_id) {
+    global $wpdb;
+    $pattern_id = (int) $pattern_id;
+    $cap        = max(0, (int) apply_filters('mxchat_pattern_resync_cap', 50, $pattern_id));
+    $out        = array('ids' => array(), 'capped' => false, 'cap' => $cap);
+    if ($pattern_id <= 0 || $cap === 0) {
+        return $out;
+    }
+
+    // Post types whose Auto-Sync switch is on (the check mxchat_handle_post_update makes).
+    // Products are left out while the WooCommerce integration owns their entries: the
+    // auto-sync routine stands down for them then (mxchat_index_published_post).
+    $woo_owns_products = class_exists('WooCommerce')
+        && isset($this->options['enable_woocommerce_integration'])
+        && in_array($this->options['enable_woocommerce_integration'], array('1', 'on'), true);
+    $types = array();
+    foreach (get_post_types(array(), 'names') as $type) {
+        if (in_array($type, array('wp_block', 'revision', 'attachment'), true) || ($type === 'product' && $woo_owns_products)) {
+            continue;
+        }
+        if ($this->mxchat_is_auto_sync_enabled($type)) {
+            $types[] = $type;
+        }
+    }
+    if (empty($types)) {
+        return $out;
+    }
+
+    $shapes = $this->mxchat_reference_shapes();
+    $where  = array();
+    $params = $types;
+    foreach ($shapes as $shape) {
+        if ($shape['attr'] === null) {
+            $where[]  = '(post_content LIKE %s OR post_content LIKE %s)';
+            $params[] = '%' . $wpdb->esc_like('"ref":' . $pattern_id) . '%';
+            $params[] = '%' . $wpdb->esc_like('"ref": ' . $pattern_id) . '%';
+        } else {
+            $attr     = $shape['attr'];
+            $where[]  = '(post_content LIKE %s AND (post_content LIKE %s OR post_content LIKE %s OR post_content LIKE %s))';
+            $params[] = '%' . $wpdb->esc_like($shape['needle']) . '%';
+            $params[] = '%' . $wpdb->esc_like($attr . '="' . $pattern_id . '"') . '%';
+            $params[] = '%' . $wpdb->esc_like($attr . "='" . $pattern_id . "'") . '%';
+            $params[] = '%' . $wpdb->esc_like($attr . '=' . $pattern_id) . '%';
+        }
+    }
+    $sql = "SELECT ID FROM {$wpdb->posts} WHERE post_type IN (" . implode(',', array_fill(0, count($types), '%s')) . ")"
+         . " AND post_status = 'publish' AND (" . implode(' OR ', $where) . ') ORDER BY ID ASC';
+    $candidates = $wpdb->get_col($wpdb->prepare($sql, $params));
+
+    $ids = array();
+    foreach ((array) $candidates as $id) {
+        $id = (int) $id;
+        if ($id <= 0 || isset($ids[$id]) || !$this->mxchat_content_references((string) get_post_field('post_content', $id, 'raw'), $pattern_id, $shapes)) {
+            continue;
+        }
+        if (count($ids) >= $cap) {
+            $out['capped'] = true;
+            break;
+        }
+        $ids[$id] = $id;
+    }
+    $out['ids'] = array_values($ids);
+    return $out;
+}
+
+/**
+ * Whether content references a post id in one of the given reference shapes (plan 3f95de).
+ */
+private function mxchat_content_references($content, $post_id, $shapes) {
+    foreach ($shapes as $shape) {
+        if (strpos($content, $shape['needle']) === false) {
+            continue;
+        }
+        if (preg_match_all($shape['regex'], $content, $all, PREG_SET_ORDER)) {
+            foreach ($all as $m) {
+                if (self::mxchat_reference_match_id($shape, $m) === (int) $post_id) {
+                    return true;
+                }
+            }
+        }
+    }
+    return false;
 }
 
 /**
@@ -7858,12 +9086,17 @@ private function mxchat_rtl_repair_pinecone_enabled($bot_id) {
  * An entry whose source simply changed since it was imported is reported and
  * left alone: that is a different question from "was it damaged at import".
  *
+ * Plan e77da7 adds one shape that is not an import defect but has the same
+ * cure: a product entry an auto-sync save wrote before 3.2.25 (plan f9573e)
+ * lacks the product's Custom Product Tabs text. Reason "tabs_missing", tried
+ * only when none of the fixes above explains the difference.
+ *
  * One engine, two callers: wp mxchat kb-reimport and the Knowledge screen's
  * resumable action. A scan makes no embedding call and writes no entry.
  * ====================================================================== */
 
-/** Release date of 3.2.20, the last release that changed how text is imported. */
-const REIMPORT_DEFAULT_BEFORE = '2026-08-28';
+/** Release date of 3.2.25, the last of these fixes (Auto-Sync keeps product tabs). */
+const REIMPORT_DEFAULT_BEFORE = '2026-10-10';
 const REIMPORT_STATE_OPTION   = 'mxchat_kb_reimport_state';
 
 /** Which store holds the entries for this bot: wordpress, pinecone or documents. */
@@ -8127,8 +9360,30 @@ private function mxchat_reimport_entity_count($text) {
     return $n;
 }
 
-/** Why the rebuilt text differs from the stored text, in the fixes' own terms. */
-private function mxchat_reimport_reasons($stored, $fresh, $is_pdf) {
+/**
+ * Why the rebuilt text differs from the stored text, in the fixes' own terms.
+ *
+ * $tab_block (plan e77da7): the Custom Product Tabs text the sync route appends
+ * for this product today. Given one, the question asked is "custom tabs
+ * missing": the block is taken out of the rebuilt text where the sync route
+ * put it, and the remainder is compared with the stored text in the same
+ * comparison form every other reason uses. The same document: whatever reasons
+ * the remainder carries, then tabs_missing. Anything else: no reason.
+ */
+private function mxchat_reimport_reasons($stored, $fresh, $is_pdf, $tab_block = '') {
+    if ($tab_block !== '') {
+        $at = strrpos((string) $fresh, $tab_block);
+        if ($at === false) {
+            return array();
+        }
+        $without = substr_replace((string) $fresh, '', $at, strlen($tab_block));
+        if ($this->mxchat_reimport_norm($without, $is_pdf) !== $this->mxchat_reimport_norm($stored, $is_pdf)) {
+            return array();
+        }
+        $reasons   = $this->mxchat_reimport_reasons($stored, $without, $is_pdf);
+        $reasons[] = 'tabs_missing';
+        return $reasons;
+    }
     $reasons = array();
     if ($this->mxchat_reimport_entity_count($stored) > $this->mxchat_reimport_entity_count($fresh)) {
         $reasons[] = 'entities';
@@ -8160,6 +9415,29 @@ private function mxchat_reimport_price_code_missing($stored, $fresh) {
     return (bool) preg_match('/^(?:Price|Sale Price|Price Range): /m', $stored)
         && !preg_match($coded, $stored)
         && (bool) preg_match($coded, $fresh);
+}
+
+/**
+ * The tab block the sync route appends for a post today (plan e77da7): the
+ * product's own tabs and its applied reusable tabs, read by the one tab reader
+ * every route shares. Empty for anything that is not a product with tabs, and
+ * whenever WooCommerce is off (the sync route appends tabs only with it on).
+ */
+private function mxchat_reimport_tab_block($post_id) {
+    if (!$post_id || get_post_type($post_id) !== 'product' || !class_exists('WooCommerce')) {
+        return '';
+    }
+    return $this->mxchat_reimport_storable($this->mxchat_woo_custom_tabs_text($post_id));
+}
+
+/** Reason keys as the command line prints them. */
+private function mxchat_reimport_reason_words(array $reasons) {
+    $words = array('tabs_missing' => 'custom tabs missing', 'page_text_missing' => 'page text missing');
+    $out   = array();
+    foreach ($reasons as $reason) {
+        $out[] = isset($words[$reason]) ? $words[$reason] : $reason;
+    }
+    return implode(', ', $out);
 }
 
 /** What submit_content_to_db() does to text before it stores it. */
@@ -8234,14 +9512,20 @@ private function mxchat_reimport_fresh(array $entry, $bot_id) {
         }
         if ($type === 'product' && !isset($texts['bulk'])) {
             $bulk = $this->mxchat_reimport_post_text($url, $bot_id, 'bulk');
+            if (is_array($bulk) && !empty($bulk['excluded'])) {
+                return array('mode' => 'skip', 'note' => __('excluded by a filter', 'mxchat'));
+            }
             if (is_array($bulk)) {
                 $texts['bulk'] = $bulk['text'];
+                if ($bulk['plain'] !== null) {
+                    $plain = array('bulk' => $bulk['plain']);
+                }
             }
         }
         if (empty($texts)) {
             return array('mode' => 'skip', 'note' => __('the page has no readable text now', 'mxchat'));
         }
-        return array('mode' => 'refetch', 'texts' => $texts, 'title' => isset($title) ? (string) $title : '');
+        return array('mode' => 'refetch', 'texts' => $texts, 'plain' => isset($plain) ? $plain : array(), 'title' => isset($title) ? (string) $title : '');
     }
 
     // Everything else was built from a post, a product or a media file on this site.
@@ -8253,6 +9537,11 @@ private function mxchat_reimport_fresh(array $entry, $bot_id) {
             return array('mode' => 'inplace');
         }
         return array('mode' => 'skip', 'note' => __('its source is gone (no post or file on this site has this address)', 'mxchat'));
+    }
+    // A developer filter leaves this post out of the knowledge base (plan 9dd0da): the
+    // tool does not rewrite its entry. Removing it is Auto-Sync's job, on the next save.
+    if (!$this->mxchat_post_index_allowed($post, 'reimport')) {
+        return array('mode' => 'skip', 'note' => __('excluded by a filter', 'mxchat'));
     }
     if ($post->post_type === 'attachment') {
         $extracted = $this->mxchat_extract_attachment_text($post_id);
@@ -8271,13 +9560,25 @@ private function mxchat_reimport_fresh(array $entry, $bot_id) {
     }
 
     $texts = array();
+    $plain = array();
     $routes = ($type === 'content' || $type === '') ? array('sync', 'bulk') : array('bulk', 'sync');
+    // Both routes read the same published page when the rendered-page fallback applies
+    // (plan c26d40): fetch it once for this entry.
+    $this->rendered_page_memo = array();
     foreach ($routes as $route) {
-        $built = $this->mxchat_reimport_post_text($url, $bot_id, $route, $post);
+        $built = $this->mxchat_reimport_post_text($url, $bot_id, $route, $post, true);
+        if (is_array($built) && !empty($built['excluded'])) {
+            $this->rendered_page_memo = null;
+            return array('mode' => 'skip', 'note' => __('excluded by a filter', 'mxchat'));
+        }
         if (is_array($built)) {
             $texts[$route] = $built['text'];
+            if ($built['plain'] !== null) {
+                $plain[$route] = $built['plain'];
+            }
         }
     }
+    $this->rendered_page_memo = null;
     if ($post->post_type === 'product' && class_exists('WooCommerce') && function_exists('wc_get_product')) {
         $product = wc_get_product($post_id);
         if ($product) {
@@ -8290,11 +9591,21 @@ private function mxchat_reimport_fresh(array $entry, $bot_id) {
     if (empty($texts)) {
         return array('mode' => 'skip', 'note' => __('its source has no text now', 'mxchat'));
     }
-    return array('mode' => 'refetch', 'texts' => $texts, 'post_id' => $post_id);
+    return array('mode' => 'refetch', 'texts' => $texts, 'plain' => $plain, 'post_id' => $post_id);
 }
 
-/** A post's text as the bulk import ('bulk') or auto-sync ('sync') builds it. @return array|null */
-private function mxchat_reimport_post_text($url, $bot_id, $route, $post = null) {
+/**
+ * A post's text as the bulk import ('bulk') or auto-sync ('sync') builds it.
+ *
+ * @param bool $checked   True when the caller already asked mxchat_should_index_post.
+ * @param bool $read_page False (M6): build the text without reading the published page, and
+ *                        say in 'page_wanted' whether the route would have read it.
+ * @return array|null array('text' => string, 'plain' => string|null, 'page_wanted' => bool),
+ *                    array('excluded' => true) when a developer filter leaves the post out
+ *                    (plan 9dd0da), or null. 'plain' (M6) is the route's text with the saved
+ *                    body in place of the published page's text, set only when that text was used.
+ */
+private function mxchat_reimport_post_text($url, $bot_id, $route, $post = null, $checked = false, $read_page = true) {
     if (!$post) {
         $post_id = (int) $this->mxchat_url_to_post_id_improved($url);
         $post    = $post_id ? get_post($post_id) : null;
@@ -8303,16 +9614,21 @@ private function mxchat_reimport_post_text($url, $bot_id, $route, $post = null) 
         return null;
     }
     $post_id  = (int) $post->ID;
-    $filtered = apply_filters('mxchat_before_process_post', $post, $route === 'sync' ? 'default' : $bot_id);
-    if (!($filtered instanceof WP_Post)) {
-        $filtered = $post;
+    $filtered = $this->mxchat_index_filters($post, 'reimport', $route === 'sync' ? 'default' : $bot_id, $checked);
+    if ($filtered === null) {
+        return array('excluded' => true, 'text' => '');
     }
     // Same argument sets as the two writers (auto-sync appends product tabs since plan f9573e).
     $args = ($route === 'sync')
         ? array('read_display' => true, 'extract_acf_pdfs' => get_option('mxchat_auto_sync_acf_pdfs', '0') === '1', 'include_product_tabs' => true)
         : array('read_display' => false, 'extract_acf_pdfs' => get_option('mxchat_acf_pdf_extraction', '0') === '1', 'include_product_tabs' => true);
+    $args['read_page'] = $read_page;
     $prepared = $this->mxchat_prepare_post_content_for_indexing($post_id, $filtered, $args);
-    return array('text' => (string) $prepared['content']);
+    return array(
+        'text'        => (string) $prepared['content'],
+        'plain'       => isset($prepared['content_without_page']) ? (string) $prepared['content_without_page'] : null,
+        'page_wanted' => !empty($prepared['page_wanted']),
+    );
 }
 
 /**
@@ -8397,6 +9713,43 @@ private function mxchat_reimport_evaluate(array $entry, $bot_id) {
         }
     }
 
+    // "Custom tabs missing" (plan e77da7): tried only when none of the fixes
+    // above explains the difference, only for a product with custom tabs today,
+    // and only against the sync route, the one writer that left the tabs out
+    // (auto-sync before 3.2.25). The rewrite is the sync route's text, byte for
+    // byte what a save of the product writes. Any other change to the source
+    // still fails the comparison and the entry stays left alone.
+    if ($repair === null && isset($fresh['texts']['sync']) && !empty($fresh['post_id'])) {
+        $tab_block = $this->mxchat_reimport_tab_block((int) $fresh['post_id']);
+        if ($tab_block !== '') {
+            $text    = $this->mxchat_reimport_storable($fresh['texts']['sync']);
+            $reasons = $this->mxchat_reimport_reasons($stored, $text, $is_pdf, $tab_block);
+            if (!empty($reasons)) {
+                $repair = array('reasons' => $reasons, 'fresh' => $text);
+            }
+        }
+    }
+
+    // "Page text missing" (M6): a page whose text the import now reads from its published
+    // page (page builders, very short pages; plan c26d40) was stored before 3.2.26 without
+    // that text: its title alone, or the text it had before the builder. The question is the
+    // tabs_missing one: is the stored text exactly what this route builds with the saved body
+    // in place of the page's text ('plain')? Then the entry lacks only the page's text, which
+    // the fallback found clearly longer, and the rewrite is the route's text today, byte for
+    // byte what an import (or, for an auto-synced entry, a save) writes. An entry that differs
+    // in any other way still fails the comparison and is left alone.
+    if ($repair === null && !empty($fresh['plain'])) {
+        foreach ($fresh['plain'] as $route => $plain) {
+            if (!isset($fresh['texts'][$route]) || $this->mxchat_reimport_norm($this->mxchat_reimport_storable($plain), $is_pdf) !== $stored_norm) {
+                continue;
+            }
+            $reasons   = $this->mxchat_reimport_reasons($stored, $this->mxchat_reimport_storable($plain), $is_pdf);
+            $reasons[] = 'page_text_missing';
+            $repair    = array('reasons' => $reasons, 'fresh' => $this->mxchat_reimport_storable($fresh['texts'][$route]));
+            break;
+        }
+    }
+
     if ($repair === null) {
         $result['outcome'] = 'changed';
         $result['note']    = __('its source reads differently now, and not because of these fixes', 'mxchat');
@@ -8435,6 +9788,51 @@ private function mxchat_reimport_evaluate(array $entry, $bot_id) {
     $result['post_id'] = isset($fresh['post_id']) ? (int) $fresh['post_id'] : 0;
     $result['is_file'] = !empty($fresh['is_file']);
     return $result;
+}
+
+/**
+ * First look for "page text missing" at an entry outside the date (M6). True only when the
+ * post behind the entry is a page-builder page whose published page is read today, and the
+ * entry holds, in the comparison form, exactly what the import or a save builds without that
+ * page. Reads no page: the full check (mxchat_reimport_evaluate) does that for the entries
+ * this lets through. A very short page with no builder is checked only inside the date, so a
+ * site's short pages are not read on every check.
+ */
+private function mxchat_reimport_page_text_suspect(array $entry, $bot_id) {
+    $url  = (string) $entry['source_url'];
+    $type = (string) $entry['content_type'];
+    if (!preg_match('#^https?://#i', $url) || in_array($type, array('url', 'product', 'youtube'), true) || $this->mxchat_reimport_is_pdf($entry)) {
+        return false;
+    }
+    if ($entry['store'] === 'wordpress' && strpos($url, 'mxchat.ai') !== false) {
+        return false;
+    }
+    $post_id = (int) $this->mxchat_url_to_post_id_improved($url);
+    $post    = $post_id ? get_post($post_id) : null;
+    if (!$post || $post->post_status !== 'publish' || $post->post_type === 'attachment' || $this->mxchat_page_builder_marker($post_id) === '') {
+        return false;
+    }
+    $stored_norm = null;
+    foreach (array('sync', 'bulk') as $route) {
+        $built = $this->mxchat_reimport_post_text($url, $bot_id, $route, $post, false, false);
+        if (!is_array($built) || !empty($built['excluded'])) {
+            return false;
+        }
+        if (!$built['page_wanted']) {
+            continue;
+        }
+        if ($stored_norm === null) {
+            $stored = $this->mxchat_reimport_stored_text($entry, $bot_id);
+            if (is_wp_error($stored)) {
+                return false;
+            }
+            $stored_norm = $this->mxchat_reimport_norm($stored, false);
+        }
+        if ($this->mxchat_reimport_norm($this->mxchat_reimport_storable($built['text']), false) === $stored_norm) {
+            return true;
+        }
+    }
+    return false;
 }
 
 /** An uploaded PDF page stored before 3.2.24 has a manual identity; its header is what marks it as a PDF. */
@@ -8637,16 +10035,23 @@ private function mxchat_reimport_scan_step(array &$state, $deadline) {
         }
         foreach ($page['entries'] as $entry) {
             $in_window = $this->mxchat_reimport_selected($entry, $state);
+            $any_date  = !$in_window && empty($state['before_set']) && $this->mxchat_reimport_selected($entry, $state, true);
             // "Also rewrite edited entries" with the default date (plan a00ef8): an
             // entry whose page was edited after import is stale whatever its own
             // date says, so it is looked at for that one outcome only.
-            $for_edit_only = !$in_window && !empty($state['with_edited']) && empty($state['before_set'])
-                && $this->mxchat_reimport_selected($entry, $state, true);
-            if (!$in_window && !$for_edit_only) {
+            $for_edit_only = $any_date && !empty($state['with_edited']);
+            // "Page text missing" (M6) with the default date: a page-builder page stored
+            // without its text by any release before 3.2.26, which may be later than the
+            // default date, so it is looked at for that one outcome too. A cheap first look
+            // (no page read) passes over every entry that cannot have it.
+            $for_page_only = $any_date && ($for_edit_only || $this->mxchat_reimport_page_text_suspect($entry, $state['bot']));
+            if (!$in_window && !$for_edit_only && !$for_page_only) {
                 continue;
             }
             $eval = $this->mxchat_reimport_evaluate($entry, $state['bot']);
-            if ($for_edit_only && $eval['outcome'] !== 'edited') {
+            if (!$in_window
+                && !($for_edit_only && $eval['outcome'] === 'edited')
+                && !($for_page_only && $eval['outcome'] === 'repair' && in_array('page_text_missing', $eval['reasons'], true))) {
                 continue;
             }
             $state['scanned']++;
@@ -8723,7 +10128,8 @@ private function mxchat_reimport_api_key($bot_id) {
  * WP-CLI: re-import knowledge entries that were damaged by an import defect
  * fixed in a later release (HTML entities left in the text, currency signs,
  * accents and other marks removed, joiner characters turned into spaces,
- * right-to-left PDF text stored backwards).
+ * right-to-left PDF text stored backwards), and product entries saved before
+ * 3.2.25 without their custom product tabs.
  *
  * Each entry's text is rebuilt from its source with the current importer and
  * compared with what is stored. An entry is rewritten and re-embedded only
@@ -8743,7 +10149,7 @@ private function mxchat_reimport_api_key($bot_id) {
  *
  * [--before=<date>]
  * : Only entries last written before this date (YYYY-MM-DD). Default
- * 2026-08-28, the release date of the last of these fixes.
+ * 2026-10-10, the release date of the last of these fixes.
  *
  * [--bot=<id>]
  * : The bot whose knowledge base and embedding settings to use. Default: default.
@@ -8808,7 +10214,7 @@ public function cli_kb_reimport($args, $assoc_args) {
         WP_CLI::log(sprintf('%s  %s (%s)', isset($kinds[$note['kind']]) ? $kinds[$note['kind']] : 'Skipped', $note['label'], $note['note']));
     }
     foreach ($state['candidates'] as $c) {
-        WP_CLI::log(sprintf('%s  %s (%s)', $dry_run ? 'Would rewrite' : 'Will rewrite', $c['label'], implode(', ', $c['reasons'])));
+        WP_CLI::log(sprintf('%s  %s (%s)', $dry_run ? 'Would rewrite' : 'Will rewrite', $c['label'], $this->mxchat_reimport_reason_words($c['reasons'])));
     }
     $count   = count($state['candidates']);
     $summary = sprintf('%d checked: %d to rewrite, %d already correct, %d left alone (source changed), %d edited since import, %d skipped.', $state['scanned'], $count, $state['unchanged'], $state['changed'], $state['edited'], $state['skipped']);
@@ -8836,7 +10242,7 @@ public function cli_kb_reimport($args, $assoc_args) {
         for (; $shown < $state['pos']; $shown++) {
             $c = $state['candidates'][$shown];
             if ($c['result'] === 'repaired') {
-                WP_CLI::log(sprintf('Rewritten  %s (%s)', $c['label'], implode(', ', $c['reasons'])));
+                WP_CLI::log(sprintf('Rewritten  %s (%s)', $c['label'], $this->mxchat_reimport_reason_words($c['reasons'])));
             } elseif ($c['result'] === 'failed') {
                 WP_CLI::warning(sprintf('Not rewritten  %s: %s. Entry left unchanged.', $c['label'], $c['note']));
             } else {
@@ -9038,6 +10444,21 @@ private function mxchat_store_product_embedding($product) {
     $source_url = get_permalink($product->get_id());
     $product_id = $product->get_id();
 
+    // This writer is Auto-Sync for products whenever the integration is on, so it
+    // honours the same developer filters and "Keep imported entries up to date only"
+    // switch as mxchat_index_published_post() (plan 9dd0da). The filtered post itself
+    // is not used: product text is built from the WooCommerce object.
+    $product_post = get_post($product_id);
+    if ($product_post instanceof WP_Post) {
+        if ($this->mxchat_index_filters($product_post, 'auto_sync', 'default') === null) {
+            $this->mxchat_remove_excluded_entry($source_url);
+            return;
+        }
+        if ($this->mxchat_auto_sync_existing_only('product') && !$this->mxchat_kb_has_entry($source_url, $product_id)) {
+            return;
+        }
+    }
+
     // Build product content via the shared WC-object assembler (a3d60c) — this
     // writer owns product rows whenever the integration is on.
     $content = $this->mxchat_prepare_product_content_for_indexing($product);
@@ -9050,6 +10471,11 @@ private function mxchat_store_product_embedding($product) {
         return;
     }
     $api_key = $preflight['api_key'];
+
+    if ($this->mxchat_kb_entry_is_current($source_url, $content)) {
+        $this->apply_role_restriction_to_post($product_id, $source_url);
+        return;
+    }
 
     // Use the centralized utility function for storage
     $result = MxChat_Utils::submit_content_to_db(
@@ -11609,7 +13035,8 @@ public function ajax_mxchat_mark_queue_complete() {
     // ========================================
     
     /**
-     * Get singleton instance
+     * Get singleton instance. Always use this: the constructor registers every save
+     * hook, so a second instance would index each save twice.
      */
     public static function get_instance() {
         static $instance = null;

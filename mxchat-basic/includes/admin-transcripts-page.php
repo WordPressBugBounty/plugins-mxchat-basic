@@ -19,8 +19,14 @@ function mxchat_render_transcripts_page($admin_instance, $page_data) {
 
     // Extract page data
     extract($page_data);
+
+    // Read-only view (plan 93999a): a role with the transcripts capability but
+    // not manage_options can read, search and export; every write control below
+    // (delete, translate, the Notifications settings) is left out for it, and
+    // the handlers behind them refuse it with 403 regardless.
+    $mxch_can_manage = current_user_can('manage_options');
     ?>
-    <div class="mxch-admin-wrapper">
+    <div class="mxch-admin-wrapper<?php echo $mxch_can_manage ? '' : ' mxch-transcripts-readonly'; ?>">
         <!-- Mobile Header -->
         <header class="mxch-mobile-header">
             <a href="#" class="mxch-mobile-logo">
@@ -66,6 +72,7 @@ function mxchat_render_transcripts_page($admin_instance, $page_data) {
                         <span><?php esc_html_e('Leads', 'mxchat'); ?></span>
                     </button>
                 </div>
+                <?php if ($mxch_can_manage): ?>
                 <!-- Settings Section -->
                 <div class="mxch-mobile-nav-section">
                     <div class="mxch-mobile-nav-section-title"><?php esc_html_e('Settings', 'mxchat'); ?></div>
@@ -74,7 +81,12 @@ function mxchat_render_transcripts_page($admin_instance, $page_data) {
                         <span><?php esc_html_e('Notifications', 'mxchat'); ?></span>
                     </button>
                 </div>
-                <?php if (!$is_activated): ?>
+                <?php endif; ?>
+                <?php if (!$mxch_can_manage): ?>
+                <div class="mxch-mobile-menu-footer">
+                    <?php mxchat_render_transcripts_readonly_note(); ?>
+                </div>
+                <?php elseif (!$is_activated): ?>
                 <div class="mxch-mobile-menu-footer">
                     <a href="https://mxchat.ai/" target="_blank" class="mxch-mobile-upgrade-btn">
                         <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9H4.5a2.5 2.5 0 0 1 0-5H6"/><path d="M18 9h1.5a2.5 2.5 0 0 0 0-5H18"/><path d="M4 22h16"/><path d="M10 14.66V17c0 .55-.47.98-.97 1.21C7.85 18.75 7 20.24 7 22"/><path d="M14 14.66V17c0 .55.47.98.97 1.21C16.15 18.75 17 20.24 17 22"/><path d="M18 2H6v7a6 6 0 0 0 12 0V2Z"/></svg>
@@ -137,6 +149,7 @@ function mxchat_render_transcripts_page($admin_instance, $page_data) {
                     </div>
                 </div>
 
+                <?php if ($mxch_can_manage): ?>
                 <!-- Settings Section -->
                 <div class="mxch-nav-section">
                     <div class="mxch-nav-section-title"><?php esc_html_e('Settings', 'mxchat'); ?></div>
@@ -150,9 +163,14 @@ function mxchat_render_transcripts_page($admin_instance, $page_data) {
                         </button>
                     </div>
                 </div>
+                <?php endif; ?>
             </nav>
 
-            <?php if (!$is_activated): ?>
+            <?php if (!$mxch_can_manage): ?>
+            <div class="mxch-sidebar-footer">
+                <?php mxchat_render_transcripts_readonly_note(); ?>
+            </div>
+            <?php elseif (!$is_activated): ?>
             <div class="mxch-sidebar-footer">
                 <a href="https://mxchat.ai/" target="_blank" class="mxch-sidebar-upgrade-v2">
                     <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
@@ -422,10 +440,12 @@ function mxchat_render_transcripts_page($admin_instance, $page_data) {
                                 <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
                                 <span><?php esc_html_e('Export All Chats', 'mxchat'); ?></span>
                             </button>
+                            <?php if ($mxch_can_manage): ?>
                             <button type="button" class="mxch-quick-action-btn" data-action="settings">
                                 <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
                                 <span><?php esc_html_e('Notification Settings', 'mxchat'); ?></span>
                             </button>
+                            <?php endif; ?>
                         </div>
                     </div>
                 </div>
@@ -438,19 +458,23 @@ function mxchat_render_transcripts_page($admin_instance, $page_data) {
                     <div class="mxch-chat-list-panel">
                         <!-- Bulk Actions Toolbar -->
                         <div class="mxch-bulk-toolbar">
+                            <?php if ($mxch_can_manage): /* selection only drives bulk delete */ ?>
                             <label class="mxch-bulk-select-all">
                                 <input type="checkbox" id="mxch-select-all">
                                 <span><?php esc_html_e('All', 'mxchat'); ?></span>
                             </label>
                             <span class="mxch-selected-count" id="mxch-selected-count">0</span>
+                            <?php endif; ?>
                             <div class="mxch-bulk-actions">
                                 <button type="button" class="mxch-bulk-btn" id="mxch-sort-btn" title="<?php esc_attr_e('Sort', 'mxchat'); ?>">
                                     <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="6" x2="16" y2="6"/><line x1="4" y1="12" x2="12" y2="12"/><line x1="4" y1="18" x2="8" y2="18"/><polyline points="15 15 18 18 21 15"/></svg>
                                     <span><?php esc_html_e('Sort', 'mxchat'); ?></span>
                                 </button>
+                                <?php if ($mxch_can_manage): ?>
                                 <button type="button" class="mxch-bulk-btn mxch-bulk-delete" id="mxch-delete-selected" disabled title="<?php esc_attr_e('Delete Selected', 'mxchat'); ?>">
                                     <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
                                 </button>
+                                <?php endif; ?>
                             </div>
                         </div>
                         <div class="mxch-panel-header">
@@ -502,6 +526,11 @@ function mxchat_render_transcripts_page($admin_instance, $page_data) {
                                     <div class="mxch-user-name" id="mxch-user-name">User Name</div>
                                     <div class="mxch-user-meta" id="mxch-user-meta">User ID: 123</div>
                                 </div>
+                                <?php /* plan 705b6c: the chat's token total, filled by the script; hidden when no reply recorded usage */ ?>
+                                <div class="mxch-conversation-usage" id="mxch-conversation-usage" hidden>
+                                    <span class="mxch-conversation-usage-label"><?php esc_html_e('Tokens', 'mxchat'); ?></span>
+                                    <span class="mxch-conversation-usage-value" id="mxch-conversation-usage-value"></span>
+                                </div>
                                 <button type="button" class="mxch-details-toggle" id="mxch-toggle-details" title="<?php esc_attr_e('Show details', 'mxchat'); ?>">
                                     <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
                                 </button>
@@ -543,15 +572,24 @@ function mxchat_render_transcripts_page($admin_instance, $page_data) {
                                     </div>
                                 </div>
                                 <div class="mxch-details-actions">
+                                    <?php if ($mxch_can_manage): ?>
                                     <button type="button" id="mxch-delete-current" class="mxch-btn mxch-btn-danger mxch-btn-sm">
                                         <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
                                         <?php esc_html_e('Delete Chat', 'mxchat'); ?>
                                     </button>
+                                    <?php endif; ?>
                                     <button type="button" id="mxch-export-current" class="mxch-btn mxch-btn-secondary mxch-btn-sm">
                                         <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
                                         <?php esc_html_e('Export', 'mxchat'); ?>
                                     </button>
+                                    <?php if (!$mxch_can_manage): /* a saved translation still shows; this switches back to the original */ ?>
+                                    <button type="button" id="mxch-show-original-btn" class="mxch-btn mxch-btn-secondary mxch-btn-sm" style="display: none;">
+                                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
+                                        <?php esc_html_e('Original', 'mxchat'); ?>
+                                    </button>
+                                    <?php endif; ?>
                                 </div>
+                                <?php if ($mxch_can_manage): ?>
                                 <div class="mxch-translate-section">
                                     <div class="mxch-translate-controls">
                                         <select id="mxch-translate-lang" class="mxch-translate-select" title="<?php esc_attr_e('Target language', 'mxchat'); ?>">
@@ -586,6 +624,7 @@ function mxchat_render_transcripts_page($admin_instance, $page_data) {
                                         </button>
                                     </div>
                                 </div>
+                                <?php endif; ?>
                             </div>
 
                             <!-- Messages Area -->
@@ -596,6 +635,7 @@ function mxchat_render_transcripts_page($admin_instance, $page_data) {
                     </div>
                 </div>
 
+                <?php if ($mxch_can_manage): ?>
                 <?php wp_nonce_field('mxchat_delete_chat_history', 'mxchat_delete_chat_nonce'); ?>
 
                 <!-- Transcript delete confirm modal (shared by bulk + individual delete) -->
@@ -622,6 +662,7 @@ function mxchat_render_transcripts_page($admin_instance, $page_data) {
                         </div>
                     </div>
                 </div>
+                <?php endif; ?>
             </div>
 
             <!-- Leads Section -->
@@ -697,10 +738,12 @@ function mxchat_render_transcripts_page($admin_instance, $page_data) {
                                 <span><?php esc_html_e('All', 'mxchat'); ?></span>
                             </label>
                             <span class="mxch-selected-count" id="mxch-leads-selected-count">0</span>
+                            <?php if ($mxch_can_manage): /* selection stays for a reader: it feeds "Export selected" */ ?>
                             <button type="button" class="mxch-bulk-btn mxch-bulk-delete" id="mxch-leads-delete-selected" disabled title="<?php esc_attr_e('Delete Selected', 'mxchat'); ?>">
                                 <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
                                 <span><?php esc_html_e('Delete', 'mxchat'); ?></span>
                             </button>
+                            <?php endif; ?>
                         </div>
                         <div class="mxch-leads-toolbar-right">
                             <div class="mxch-leads-export" id="mxch-leads-export-wrap">
@@ -771,6 +814,7 @@ function mxchat_render_transcripts_page($admin_instance, $page_data) {
                     </div>
                 </div>
 
+                <?php if ($mxch_can_manage): ?>
                 <!-- Delete confirm modal -->
                 <div id="mxch-leads-confirm" class="mxch-modal-overlay" style="display:none;">
                     <div class="mxch-modal-content mxch-leads-confirm-box">
@@ -790,9 +834,11 @@ function mxchat_render_transcripts_page($admin_instance, $page_data) {
                 </div>
 
                 <?php wp_nonce_field('mxchat_delete_leads', 'mxchat_leads_delete_nonce'); ?>
+                <?php endif; ?>
                 <?php wp_nonce_field('mxchat_export_leads', 'mxchat_leads_export_nonce'); ?>
             </div>
 
+            <?php if ($mxch_can_manage): ?>
             <!-- Notifications Section -->
             <div id="notifications" class="mxch-section">
                 <div class="mxch-content-header">
@@ -1000,6 +1046,7 @@ function mxchat_render_transcripts_page($admin_instance, $page_data) {
                     </div>
                 </div>
             </div>
+            <?php endif; ?>
         </main>
     </div>
 
@@ -1045,6 +1092,23 @@ function mxchat_render_transcripts_page($admin_instance, $page_data) {
                 </div>
             </div>
         </div>
+    </div>
+    <?php
+}
+
+/**
+ * The note a read-only transcripts user sees in the sidebar footer and the
+ * mobile menu footer, in the slot the upgrade link uses for administrators
+ * (plan 93999a). It says what they can do and who handles the rest.
+ */
+function mxchat_render_transcripts_readonly_note() {
+    ?>
+    <div class="mxch-readonly-note" role="note">
+        <span class="mxch-readonly-note-title">
+            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+            <?php esc_html_e('View only', 'mxchat'); ?>
+        </span>
+        <span class="mxch-readonly-note-text"><?php esc_html_e('You can read, search and export chats and leads. Deleting and settings are for administrators.', 'mxchat'); ?></span>
     </div>
     <?php
 }

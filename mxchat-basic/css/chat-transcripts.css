@@ -1244,6 +1244,65 @@
     margin-top: 4px;
 }
 
+/* Token usage of an AI reply (plan 705b6c): sits on the time's line, quieter
+   than the reply, wraps under the time on narrow screens. */
+.mxch-message-foot {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 2px 12px;
+    margin-top: 4px;
+    max-width: 80%;
+}
+
+.mxch-message-foot .mxch-message-time {
+    margin-top: 0;
+}
+
+.mxch-message-usage {
+    font-size: 11px;
+    line-height: 1.4;
+    color: var(--mxch-text-muted, #94a3b8);
+    font-variant-numeric: tabular-nums;
+    overflow-wrap: anywhere;
+}
+
+.mxch-message-usage-model {
+    color: var(--mxch-text-secondary, #64748b);
+    font-weight: 500;
+}
+
+/* The chat's token total in the conversation header (plan 705b6c). */
+.mxch-conversation-usage {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 1px;
+    flex-shrink: 0;
+    max-width: 45%;
+    text-align: right;
+}
+
+.mxch-conversation-usage[hidden] {
+    display: none;
+}
+
+.mxch-conversation-usage-label {
+    font-size: 11px;
+    color: var(--mxch-text-muted, #94a3b8);
+}
+
+.mxch-conversation-usage-value {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--mxch-text-secondary, #64748b);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 100%;
+}
+
 /* Message Content Styles */
 .mxch-message-bubble p {
     margin: 0 0 10px 0;
@@ -1478,6 +1537,26 @@
     .mxch-conversation-header {
         padding: 12px 16px;
         flex-shrink: 0;
+        flex-wrap: wrap;
+    }
+
+    /* Token total drops to its own row under the visitor (plan 705b6c). */
+    .mxch-conversation-usage {
+        order: 10;
+        flex-basis: 100%;
+        max-width: 100%;
+        flex-direction: row;
+        align-items: baseline;
+        gap: 6px;
+        text-align: left;
+    }
+
+    .mxch-conversation-usage-value {
+        font-size: 12px;
+    }
+
+    .mxch-message-foot {
+        max-width: 100%;
     }
 
     /* Details drawer adjustments */
@@ -2533,6 +2612,7 @@
 /* Table */
 .mxch-leads-table-wrap {
     overflow-x: auto;
+    container: mxch-leads / inline-size;
 }
 
 .mxch-leads-table {
@@ -2578,11 +2658,12 @@
 
 .mxch-leads-table { table-layout: fixed; }
 
-.mxch-leads-col-check { width: 40px; }
-.mxch-leads-col-lead  { width: auto; min-width: 280px; }
+.mxch-leads-col-check { width: 28px; }
+.mxch-leads-col-lead  { width: auto; }
 .mxch-leads-col-count { width: 130px; text-align: left; }
 .mxch-leads-col-last  { width: 110px; white-space: nowrap; }
 .mxch-leads-col-page  { width: 180px; max-width: 180px; }
+.mxch-leads-col-consent { width: 96px; }
 .mxch-leads-col-actions { width: 170px; white-space: nowrap; text-align: right; }
 
 .mxch-leads-lead-cell {
@@ -2751,19 +2832,38 @@
     border-top: 1px solid var(--mxch-card-border);
 }
 
-/* Responsive: tablet */
-@media (max-width: 1024px) {
+/* Responsive: the columns follow the width the table actually gets, not the
+   window's (M7b). Lead takes the room the fixed columns leave; at a 1280 px
+   window the two sidebars leave the table about 814 px, and window rules let
+   the fixed columns squeeze Lead to 22 px. Top page steps out first, then
+   Last seen and Conversations, then Consent; on a phone the address wraps. */
+@container mxch-leads (max-width: 1140px) {
+    .mxch-leads-col-count { width: 110px; }
     .mxch-leads-col-page { width: 140px; max-width: 140px; }
-    .mxch-leads-col-actions { width: 140px; }
+    .mxch-leads-col-consent { width: 64px; }
+    .mxch-leads-col-actions { width: 88px; }
     .mxch-leads-col-actions .mxch-leads-view span { display: none; }
+}
+
+@container mxch-leads (max-width: 960px) {
+    .mxch-leads-col-page { display: none; }
+}
+
+@container mxch-leads (max-width: 800px) {
+    .mxch-leads-col-count,
+    .mxch-leads-col-last { display: none; }
+}
+
+@container mxch-leads (max-width: 520px) {
+    .mxch-leads-col-consent { display: none; }
+    .mxch-leads-table thead th { padding: 8px 10px; font-size: 10px; }
+    .mxch-leads-table tbody td { padding: 10px; font-size: 12px; }
+    .mxch-leads-lead-email,
+    .mxch-leads-lead-name { white-space: normal; overflow-wrap: anywhere; }
 }
 
 /* Responsive: phone */
 @media (max-width: 768px) {
-    .mxch-leads-col-page,
-    .mxch-leads-col-last {
-        display: none;
-    }
     .mxch-leads-filters {
         padding: var(--mxch-spacing-sm);
     }
@@ -2774,12 +2874,9 @@
     .mxch-leads-toolbar {
         padding: var(--mxch-spacing-sm);
     }
-    .mxch-leads-table thead th { padding: 8px 10px; font-size: 10px; }
-    .mxch-leads-table tbody td { padding: 10px; font-size: 12px; }
 }
 
 @media (max-width: 480px) {
-    .mxch-leads-col-count { display: none; }
     .mxch-leads-toppages-list { grid-template-columns: 1fr; }
 }
 
@@ -2875,4 +2972,49 @@
     margin-top: 4px;
     opacity: 0.9;
     font-style: italic;
+}
+
+/* Read-only transcripts role (plan 93999a). The note sits in the sidebar and
+   mobile-menu footer, the slot the upgrade link uses for administrators, in the
+   sidebar's own quiet colours. */
+.mxch-readonly-note {
+    display: flex;
+    flex-direction: column;
+    gap: var(--mxch-spacing-xs);
+    padding: 10px 12px;
+    border: 1px solid var(--mxch-sidebar-border);
+    border-radius: var(--mxch-radius-md);
+    color: var(--mxch-sidebar-text);
+    font-size: 12px;
+    line-height: 1.5;
+}
+
+.mxch-readonly-note-title {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--mxch-sidebar-text-hover);
+    font-size: 13px;
+    font-weight: 500;
+}
+
+.mxch-readonly-note-title svg {
+    width: 14px;
+    height: 14px;
+    flex-shrink: 0;
+}
+
+/* A reader's WordPress menu is two items long, so the page is short enough for
+   WordPress's footer line to paint over the bottom of the shell. An
+   administrator's long menu pushes that footer below the screen; for a reader it
+   is hidden on this screen. */
+body:has(.mxch-transcripts-readonly) #wpfooter {
+    display: none;
+}
+
+/* The Moderation add-on injects its Ban button into the conversation actions
+   for anyone who can open this page; a reader cannot ban, so it is not shown. */
+.mxch-transcripts-readonly #mxch-ban-user-btn,
+.mxch-transcripts-readonly .mxch-btn-ban {
+    display: none !important;
 }

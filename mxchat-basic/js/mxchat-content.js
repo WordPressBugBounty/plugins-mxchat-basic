@@ -1154,7 +1154,7 @@
     function escapeHtml(s) {
         var d = document.createElement('div');
         d.appendChild(document.createTextNode(s));
-        return d.innerHTML;
+        return d.innerHTML.replace(/"/g, '&quot;').replace(/'/g, '&#039;');
     }
 
     // ─── Left Column Tabs ──────────────────────────────────────────────
@@ -1564,7 +1564,7 @@
     function escapeHtml(str) {
         var div = document.createElement('div');
         div.appendChild(document.createTextNode(str));
-        return div.innerHTML;
+        return div.innerHTML.replace(/"/g, '&quot;').replace(/'/g, '&#039;');
     }
 
     // ─── SEO Dashboard (Site-wide) ─────────────────────────────────────

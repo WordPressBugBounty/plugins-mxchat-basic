@@ -1089,22 +1089,25 @@ function setupMxChatModelSelector() {
                 { value: 'openrouter', label: 'OpenRouter', description: 'Access 100+ models from multiple providers (add API key to browse)' }
             ],
             gemini: [
-                { value: 'gemini-3.8-flash', label: 'Gemini 3.8 Flash', description: 'Stable — newest Flash generation, recommended default' },
+                { value: 'gemini-3.8-flash', label: 'Gemini 3.8 Flash', description: 'Recommended — newest stable Flash: fast and affordable, suited to customer chat' },
+                { value: 'gemini-4-argon', label: 'Gemini 4 Argon', description: 'Newest Google flagship — strongest reasoning, priced above Flash' },
             ],
             openai: [
-                { value: 'gpt-6-astra', label: 'GPT-6 Astra', description: 'Recommended — newest OpenAI flagship; strongest reasoning, coding and agentic work' },
+                { value: 'gpt-6.1-sol', label: 'GPT-6.1 Sol', description: 'Recommended — fast and affordable, close to GPT-6 Astra quality; suited to customer chat' },
             ],
             claude: [
-                { value: 'claude-fable-5', label: 'Claude Fable 5', description: 'Latest Flagship — newest and most capable Anthropic model' },
-                { value: 'claude-opus-5', label: 'Claude Opus 5', description: 'Latest Opus — best for complex agentic and coding work' },
-                { value: 'claude-opus-4-8', label: 'Claude Opus 4.8', description: 'Previous Opus generation' },
-                { value: 'claude-opus-4-7', label: 'Claude Opus 4.7', description: 'Previous Anthropic flagship model' },
+                { value: 'claude-haiku-5-5', label: 'Claude Haiku 5.5', description: 'Recommended — fastest and lowest-cost current Claude; answers customer questions well' },
+                { value: 'claude-sonnet-5-5', label: 'Claude Sonnet 5.5', description: 'Newest Sonnet — best balance of speed and intelligence' },
+                { value: 'claude-fable-5-1', label: 'Claude Fable 5.1', description: 'Newest flagship — most capable Anthropic model, slower and priciest' },
+                { value: 'claude-opus-5-5', label: 'Claude Opus 5.5', description: 'Newest Opus — long-running agentic and knowledge work' },
+                { value: 'claude-sonnet-5', label: 'Claude Sonnet 5', description: 'Previous Sonnet — fast, smart and affordable' },
             ],
             xai: [
-                { value: 'grok-4.6', label: 'Grok 4.6', description: 'Newest xAI flagship — 500K context, accepts image input' },
+                { value: 'grok-4.20-0309-non-reasoning', label: 'Grok 4.20 (Non-Reasoning)', description: 'Recommended — fastest and cheapest current Grok, answers without a reasoning pause; suited to customer chat' },
+                { value: 'grok-4.7', label: 'Grok 4.7', description: 'Newest xAI flagship — reasons before answering, 500K context, accepts image input' },
             ],
             deepseek: [
-                { value: 'deepseek-v4-flash', label: 'DeepSeek V4 Flash', description: 'Fast and cost-effective' },
+                { value: 'deepseek-flash', label: 'DeepSeek Flash', description: 'Recommended — DeepSeek V4.1 Flash: fastest and cheapest DeepSeek, suited to customer chat' },
                 { value: 'deepseek-v4-pro', label: 'DeepSeek V4 Pro', description: 'Most capable DeepSeek model' },
             ],
             custom: [
@@ -1865,6 +1868,11 @@ function setupMxChatEmbeddingModelSelector() {
                     value: 'gemini-embedding-001',
                     label: 'Gemini Embedding',
                     description: 'Stable SOTA embeddings (1536 dimensions, 8K context)'
+                },
+                {
+                    value: 'gemini-embedding-2',
+                    label: 'Gemini Embedding 2',
+                    description: 'Newest Google embeddings (1536 dimensions, 8K context)'
                 }
             ]
         };
@@ -3505,7 +3513,7 @@ jQuery(document).ready(function($) {
     function escapeHtml(text) {
         var div = document.createElement('div');
         div.appendChild(document.createTextNode(text));
-        return div.innerHTML;
+        return div.innerHTML.replace(/"/g, '&quot;').replace(/'/g, '&#039;');
     }
 
     // ========================================

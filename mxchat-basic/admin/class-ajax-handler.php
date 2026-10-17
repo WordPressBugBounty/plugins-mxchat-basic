@@ -359,8 +359,10 @@ public function mxchat_test_provider_key_callback() {
 public function mxchat_save_setting_callback() {
     check_ajax_referer('mxchat_save_setting_nonce');
     if (!current_user_can('manage_options')) {
-        ('MXChat Save: Unauthorized access attempt');
-        wp_send_json_error(['message' => esc_html__('Unauthorized', 'mxchat')]);
+        // 403, like the nonce failure above: the read-only transcripts role
+        // (plan 93999a) must not save the Transcripts notification or
+        // retention settings that post here.
+        wp_send_json_error(['message' => esc_html__('Unauthorized', 'mxchat')], 403);
     }
 
     $name = isset($_POST['name']) ? $_POST['name'] : '';

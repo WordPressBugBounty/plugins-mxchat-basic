@@ -63,6 +63,21 @@ class MxChat_Integrator {
     private $pending_originating_page = null; // Originating page captured at session start, consumed on row insert
     private $current_action_instruction = null; // Success-message instruction injected into the next system context
     private $last_action_analysis = null; // Last action-match analysis for testing_data payloads
+    // plan 705b6c — token usage of the AI reply this request is producing.
+    // Provider calls add to it (an AI Tools turn sums every hop) and the next
+    // bot row saved takes it: model, tokens_in, tokens_cached, tokens_out.
+    private $mxchat_reply_usage = null;
+    // plan 705b6c — usage seen in the provider stream that is running now
+    // (shape, model, the usage keys merged as they arrive), added to the reply
+    // when the reply is saved.
+    private $mxchat_stream_usage = null;
+    // plan 705b6c — above 0 while the AI Tools loop runs: rows a tool saves in
+    // the middle of the loop take no usage; the reply saved after it takes all.
+    private $mxchat_usage_hold = 0;
+    // M7a — every bot row this request saved, and the ones the matched Action
+    // saved itself, so the chat handler does not store them a second time.
+    private $mxchat_bot_rows_saved = array();
+    private $mxchat_action_rows = array();
 
 /**
  * Setup streaming headers - call this right before actually streaming
@@ -1075,6 +1090,9 @@ private function mxchat_save_chat_message($session_id, $role, $message, $origina
     global $wpdb;
     $table_name = $wpdb->prefix . 'mxchat_chat_transcripts';
     //error_log("[DEBUG] mxchat_save_chat_message -> START for session_id: {$session_id}, role: {$role}");
+    if ($role === 'bot') {
+        $this->mxchat_bot_rows_saved[] = (string) $message; // M7a
+    }
     
     // Check if this is the first message in a new session (before any other database operations)
     $is_new_session = false;
@@ -1242,7 +1260,28 @@ private function mxchat_save_chat_message($session_id, $role, $message, $origina
         }
     }
 
-    $wpdb->insert($table_name, $insert_data);
+    // plan 705b6c: the first bot row after a provider call carries the model and
+    // the tokens that call reported. Only once the columns exist (the 3.2.26
+    // migration sets the flag after checking them); unknown values stay NULL.
+    $usage_fields = array();
+    $usage = ($role === 'bot') ? $this->mxchat_usage_take() : null;
+    if ($usage !== null && get_option('mxchat_transcripts_usage_columns')) {
+        if ($usage['model'] !== null && $usage['model'] !== '') {
+            $usage_fields['model'] = substr((string) $usage['model'], 0, 191);
+        }
+        foreach (array('in' => 'tokens_in', 'cached' => 'tokens_cached', 'out' => 'tokens_out') as $key => $column) {
+            if ($usage[$key] !== null) {
+                $usage_fields[$column] = min(4294967295, max(0, (int) $usage[$key]));
+            }
+        }
+        $insert_data = array_merge($insert_data, $usage_fields);
+    }
+
+    $inserted = $wpdb->insert($table_name, $insert_data);
+    if ($inserted === false && !empty($usage_fields)) {
+        // Never lose the message over its usage: save it without the columns.
+        $wpdb->insert($table_name, array_diff_key($insert_data, $usage_fields));
+    }
     //error_log("[DEBUG] mxchat_save_chat_message -> Inserted message into DB. row_id: {$wpdb->insert_id}, data: " . print_r($insert_data, true));
 
     // The row id IS the message id now. Flush the per-request history cache
@@ -1268,6 +1307,18 @@ private function mxchat_save_chat_message($session_id, $role, $message, $origina
     
     //error_log("[DEBUG] mxchat_save_chat_message -> END for session_id: {$session_id}");
     return $message_id;
+}
+
+/**
+ * M7a: save a matched Action's reply row unless the Action already saved that
+ * exact row itself, so each message of the turn is stored once (image search
+ * transcripts read text, gallery, text, gallery). Rows stored before this fix
+ * are left as they are.
+ */
+private function mxchat_save_action_reply($session_id, $message) {
+    if (!in_array((string) $message, $this->mxchat_action_rows, true)) {
+        $this->mxchat_save_chat_message($session_id, 'bot', $message);
+    }
 }
 
 private function send_new_chat_notification($session_id, $user_info = array()) {
@@ -1764,6 +1815,77 @@ public function mxchat_check_email_provided() {
 }
 
 /**
+ * Server-side pre-chat gate (plan f2cce2).
+ *
+ * When the resolved bot shows the pre-chat form (enable_email_block), a chat
+ * turn is refused until the session row holds what the form requires: an
+ * email address (or a name, when the owner made email optional), a name when
+ * the name field is on, and a recorded "yes" when the consent box is required.
+ * These are the rules the widget, mxchat_check_email_provided() and the save
+ * handler already apply, read from the same options. A signed-in visitor is
+ * exempt unless "Also Show for Logged-In Users" is on, and the admin Testing
+ * tab never shows the form. The mxchat_require_lead_before_chat filter lets a
+ * site opt out deliberately.
+ *
+ * @param string $bot_id          The bot id as posted.
+ * @param string $session_id      The resolved session id.
+ * @param array  $current_options The bot's options (the bot's own, or the global ones).
+ * @return true|string True when the turn may proceed, otherwise the visitor-facing message.
+ */
+public function mxchat_lead_capture_gate($bot_id, $session_id, $current_options) {
+    $on = function ($opts, $key) {
+        return is_array($opts) && isset($opts[$key]) && ($opts[$key] === '1' || $opts[$key] === 'on');
+    };
+    $global   = is_array($this->options) ? $this->options : array();
+    $required = $on($current_options, 'enable_email_block');
+
+    if ($required && is_user_logged_in()) {
+        $show_for_logged_in = isset($global['lead_capture_logged_in_toggle'])
+            && $global['lead_capture_logged_in_toggle'] === 'on';
+        if (!$show_for_logged_in) {
+            $required = false;
+        }
+    }
+    if ($required && $bot_id === 'testing' && current_user_can('manage_options')) {
+        $required = false;
+    }
+
+    /**
+     * Whether this chat turn must wait for the pre-chat form. Return false to
+     * let a visitor chat without the form on file (a deliberate opt-out).
+     *
+     * @param bool   $required
+     * @param string $bot_id
+     * @param string $session_id
+     */
+    $required = (bool) apply_filters('mxchat_require_lead_before_chat', $required, $bot_id, $session_id);
+    if (!$required || !class_exists('MxChat_Session_Store')) {
+        return true;
+    }
+
+    $require_email    = ($global['lead_capture_require_email_toggle'] ?? 'on') === 'on';
+    $name_required    = $on($global, 'enable_name_field');
+    $consent_required = $on($global, 'enable_consent_checkbox') && $on($global, 'consent_checkbox_required');
+
+    $email = (string) MxChat_Session_Store::get($session_id, 'email', '');
+    $name  = (string) MxChat_Session_Store::get($session_id, 'name', '');
+
+    $captured = ($email !== '') || (!$require_email && $name !== '');
+    if ($name_required) {
+        $captured = $captured && ($name !== '');
+    }
+    if ($captured && $consent_required) {
+        $given    = (string) MxChat_Session_Store::get($session_id, 'consent', '');
+        $captured = ($given === 'yes' || $given === '1');
+    }
+
+    if ($captured) {
+        return true;
+    }
+    return esc_html__('Please complete the form before starting the chat.', 'mxchat');
+}
+
+/**
  * Send error response in appropriate format based on streaming mode
  * ADDED: Helper method to consistently handle errors in both streaming and non-streaming modes
  *
@@ -1814,11 +1936,17 @@ public function mxchat_handle_chat_request() {
     // NOTE: Streaming headers are now set later via setup_streaming_headers()
     // This allows actions/forms to return JSON responses without header conflicts
 
-    // Check if MX Chat Moderation is active
-    if (class_exists('MX_Chat_Moderation')) {
-        // Get user email and IP
+    // Moderation add-on ban check. Guard on the HANDLER class, never on the
+    // add-on's bootstrap class: the add-on only loaded class-ban-handler.php
+    // while the Pro licence was active, so a paused or expired licence used to
+    // fatal every chat request here ("Class MX_Chat_Ban_Handler not found").
+    // No handler = no ban check, silently. Plan e73d04.
+    if (class_exists('MX_Chat_Ban_Handler') && method_exists('MX_Chat_Ban_Handler', 'check_ban')) {
+        // Get user email and IP. The IP comes from the same resolver the
+        // transcripts store (Cloudflare and proxy aware), so an IP ban copied
+        // from a transcript matches the visitor behind Cloudflare.
         $user_email = '';
-        $user_ip = $_SERVER['REMOTE_ADDR'];
+        $user_ip = MxChat_User::mxchat_get_client_ip();
 
         // If user is logged in, get their email
         if (is_user_logged_in()) {
@@ -1839,14 +1967,31 @@ public function mxchat_handle_chat_request() {
             wp_die();
         }
 
-        // If user is logged in, also check email
-        if (!empty($user_email) && $ban_handler->check_ban($user_email, 'email')) {
-            wp_send_json([
-                'success' => false,
-                'message' => esc_html__('Access denied. Your email address has been banned.', 'mxchat'),
-                'status' => 'banned'
-            ]);
-            wp_die();
+        // Email bans: the logged-in account's address, and the address the
+        // visitor gave in the pre-chat form (stored on the session) — so a
+        // banned guest email actually stops the guest (plan 1874f0).
+        $emails_to_check = array();
+        if (!empty($user_email)) {
+            $emails_to_check[] = $user_email;
+        }
+        if (class_exists('MxChat_Session_Store') && isset($_POST['session_id'])) {
+            $ban_session_id = MxChat_Utils::sanitize_session_id(wp_unslash($_POST['session_id']));
+            if ($ban_session_id !== '') {
+                $stored_email = trim((string) MxChat_Session_Store::get($ban_session_id, 'email', ''));
+                if ($stored_email !== '') {
+                    $emails_to_check[] = $stored_email;
+                }
+            }
+        }
+        foreach (array_unique($emails_to_check) as $email_to_check) {
+            if ($ban_handler->check_ban($email_to_check, 'email')) {
+                wp_send_json([
+                    'success' => false,
+                    'message' => esc_html__('Access denied. Your email address has been banned.', 'mxchat'),
+                    'status' => 'banned'
+                ]);
+                wp_die();
+            }
         }
     }
 
@@ -1871,8 +2016,10 @@ public function mxchat_handle_chat_request() {
     // Get and sanitize the user identifier
     $user_id = sanitize_key($user_id);
 
-    // Check rate limit using new settings structure
-    $rate_limit_result = $this->check_rate_limit();
+    // Check rate limit using new settings structure. The counters are named
+    // after the RESOLVED bot id (a registered bot, or the default bot for any
+    // other value), so an invented bot_id cannot open a fresh counter (plan 256483).
+    $rate_limit_result = $this->check_rate_limit($this->mxchat_resolve_bot_id($bot_id));
 
     if ($rate_limit_result !== true) {
         wp_send_json([
@@ -1907,6 +2054,21 @@ public function mxchat_handle_chat_request() {
 
     if (!$session_owner || $session_owner !== $current_user_identifier) {
         MxChat_Session_Store::set($session_id, 'owner', $current_user_identifier);
+    }
+
+    // Server-side pre-chat gate (plan f2cce2): when the bot's pre-chat form is
+    // on and this session has not completed it, refuse the turn here, before
+    // any provider call and before the message is stored. The widget and the
+    // embed show the form again on this status. Headers are not sent yet in
+    // streaming mode, so the JSON reply reaches both clients.
+    $lead_gate = $this->mxchat_lead_capture_gate($bot_id, $session_id, $current_options);
+    if ($lead_gate !== true) {
+        wp_send_json([
+            'success' => false,
+            'message' => $lead_gate,
+            'status'  => 'lead_capture_required'
+        ]);
+        wp_die();
     }
 
     // Validate and sanitize the incoming message
@@ -2218,7 +2380,7 @@ public function mxchat_handle_chat_request() {
             
                 // Save the mode switch message
                 $this->mxchat_save_chat_message($session_id, 'system', esc_html__('Switched to AI chat mode', 'mxchat'));
-                $this->mxchat_save_chat_message($session_id, 'bot', $this->fallbackResponse['text']);
+                $this->mxchat_save_action_reply($session_id, $this->fallbackResponse['text']);
             
                 // Send response and exit
                 wp_send_json($response_data);
@@ -2412,11 +2574,11 @@ public function mxchat_handle_chat_request() {
 
                 // SAVE TO TRANSCRIPT
                 if (!empty($this->fallbackResponse['text'])) {
-                    $this->mxchat_save_chat_message($session_id, 'bot', $this->fallbackResponse['text']);
+                    $this->mxchat_save_action_reply($session_id, $this->fallbackResponse['text']);
                 }
                 // Save action HTML (product cards, featured products, etc.) so it renders in transcripts
                 if (!empty($this->fallbackResponse['html'])) {
-                    $this->mxchat_save_chat_message($session_id, 'bot', $this->fallbackResponse['html']);
+                    $this->mxchat_save_action_reply($session_id, $this->fallbackResponse['html']);
                 }
 
                 $response_data = [
@@ -3238,6 +3400,7 @@ private function mxchat_check_intent_and_invoke_callback($message, $user_id, $se
     
     // Around line 715 in your mxchat_check_intent_and_invoke_callback function
     if ($matched_intent) {
+        $rows_before = count($this->mxchat_bot_rows_saved); // M7a
         // If the callback is a method on this instance (core callback), call it directly
         if (method_exists($this, $matched_intent->callback_function)) {
             $callback_result = call_user_func(
@@ -3259,6 +3422,9 @@ private function mxchat_check_intent_and_invoke_callback($message, $user_id, $se
                 $matched_intent
             );
         }
+        // M7a: the rows the callback stored itself (image search, web search,
+        // image generation save their own text + html).
+        $this->mxchat_action_rows = array_slice($this->mxchat_bot_rows_saved, $rows_before);
         
         // Handle the callback result properly
         if ($callback_result !== false) {
@@ -3495,7 +3661,15 @@ private function mxchat_save_generated_image($base64_data, $mime_type = 'image/p
     return esc_url_raw(wp_get_attachment_url($attach_id));
 }
 
-private function mxchat_generate_openai_image($prompt, $api_key, $model = 'gpt-image-1', $timeout = 60) {
+/**
+ * In-chat OpenAI image generation. Direct task M2 (2026-10-16): the default
+ * model moves from gpt-image-1 (OpenAI shuts it down 2026-10-23) to
+ * gpt-image-2.5-flare, the replacement OpenAI names ("fast, high-quality
+ * everyday image generation"). Probed with this exact body: HTTP 200, PNG.
+ * Filter mxchat_openai_image_model (string $model) to choose another.
+ */
+private function mxchat_generate_openai_image($prompt, $api_key, $model = 'gpt-image-2.5-flare', $timeout = 60) {
+    $model = (string) apply_filters('mxchat_openai_image_model', $model);
     $api_url = 'https://api.openai.com/v1/images/generations';
     $body = json_encode([
         'prompt'        => sanitize_text_field($prompt),
@@ -3582,15 +3756,22 @@ private function mxchat_generate_custom_image($prompt, $timeout = 90) {
     return ['error' => esc_html($err_msg)];
 }
 
-private function mxchat_generate_imagen_image($prompt, $api_key, $timeout = 60) {
-    $api_url = 'https://generativelanguage.googleapis.com/v1beta/models/imagen-4.0-generate-001:predict';
+/**
+ * In-chat Gemini image generation. Direct task M2 (2026-10-16): Google shut
+ * down imagen-4.0-generate-001 on 2026-08-17 (the :predict call now 404s, so
+ * every Gemini image request failed); its named replacement is Nano Banana 2.1
+ * (gemini-nano-banana-2.1), which generates through generateContent with an
+ * IMAGE response modality. Probed with this body: HTTP 200, inline PNG.
+ * Filter mxchat_gemini_image_model (string $model) to choose another
+ * generateContent image model. The function keeps its old name for callers.
+ */
+private function mxchat_generate_imagen_image($prompt, $api_key, $timeout = 90) {
+    $model   = (string) apply_filters('mxchat_gemini_image_model', 'gemini-nano-banana-2.1');
+    $api_url = 'https://generativelanguage.googleapis.com/v1beta/models/' . rawurlencode($model) . ':generateContent';
 
-    $body = json_encode([
-        'instances'  => [['prompt' => sanitize_text_field($prompt)]],
-        'parameters' => [
-            'sampleCount' => 1,
-            'aspectRatio'  => '1:1',
-        ],
+    $body = wp_json_encode([
+        'contents'         => [['parts' => [['text' => sanitize_text_field($prompt)]]]],
+        'generationConfig' => ['responseModalities' => ['TEXT', 'IMAGE']],
     ]);
 
     $args = [
@@ -3611,9 +3792,18 @@ private function mxchat_generate_imagen_image($prompt, $api_key, $timeout = 60) 
 
     $response_body = json_decode(wp_remote_retrieve_body($response), true);
 
-    $b64 = $response_body['predictions'][0]['bytesBase64Encoded'] ?? $response_body['predictions'][0]['imageBytes'] ?? null;
+    $b64  = null;
+    $mime = 'image/png';
+    $parts = $response_body['candidates'][0]['content']['parts'] ?? [];
+    foreach ((array) $parts as $part) {
+        $inline = $part['inlineData'] ?? ($part['inline_data'] ?? null);
+        if (is_array($inline) && !empty($inline['data'])) {
+            $b64  = $inline['data'];
+            $mime = $inline['mimeType'] ?? ($inline['mime_type'] ?? 'image/png');
+            break;
+        }
+    }
     if ($b64) {
-        $mime = $response_body['predictions'][0]['mimeType'] ?? 'image/png';
         $saved_url = $this->mxchat_save_generated_image($b64, $mime, 'mxchat-gemini');
         if (is_wp_error($saved_url)) {
             return ['error' => $saved_url->get_error_message()];
@@ -4063,7 +4253,7 @@ private function mxchat_claude_omits_temperature($model) {
     if (class_exists('MxChat_Model_Catalog') && method_exists('MxChat_Model_Catalog', 'supports_temperature')) {
         return !MxChat_Model_Catalog::supports_temperature($model);
     }
-    $no_temp = array('claude-opus-5', 'claude-opus-4-7', 'claude-opus-4-8', 'claude-fable-5', 'claude-sonnet-5');
+    $no_temp = array('claude-opus-5', 'claude-opus-4-7', 'claude-opus-4-8', 'claude-fable-5', 'claude-sonnet-5', 'claude-haiku-5-5', 'claude-sonnet-5-5', 'claude-opus-5-5', 'claude-fable-5-1'); // 5.5 + Fable 5.1: direct task M2
     return in_array($model, $no_temp, true);
 }
 
@@ -4127,7 +4317,7 @@ private function mxchat_reasoning_effort_fallback($model, $context) {
         if ($model === 'gpt-5.1-2025-11-13') return 'low';
         if ($model === 'gpt-5.5') return 'low';
         if ($model === 'gpt-5.4') return 'low';
-        if (in_array($model, array('gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna'), true)) return 'low'; // plan 45c22d
+        if (in_array($model, array('gpt-6-astra', 'gpt-6.1-sol', 'gpt-6-sol', 'gpt-6-luna'), true)) return 'low'; // plan 45c22d; gpt-6.1-sol plan 6945f6
         if (in_array($model, array('gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna'), true)) return 'low';
         return null;
     }
@@ -4140,7 +4330,7 @@ private function mxchat_reasoning_effort_fallback($model, $context) {
     if ($model === 'gpt-5.1-2025-11-13') return 'low';
     if ($model === 'gpt-5.5') return 'none';
     if ($model === 'gpt-5.4') return 'none';
-    if (in_array($model, array('gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna'), true)) return 'low'; // plan 45c22d
+    if (in_array($model, array('gpt-6-astra', 'gpt-6.1-sol', 'gpt-6-sol', 'gpt-6-luna'), true)) return 'low'; // plan 45c22d; gpt-6.1-sol plan 6945f6
     if (in_array($model, array('gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna'), true)) return 'low';
     return 'minimal';
 }
@@ -4314,8 +4504,26 @@ private function interpret_query_with_gemini($user_query, $system_prompt, $api_k
  * Interpret query using X.AI (Grok) models
  */
 private function interpret_query_with_xai($user_query, $system_prompt, $api_key, $model) {
-    $url = 'https://api.xai.com/v1/chat/completions';
-    
+    // api.x.ai, the host every other xAI call in core uses (plan 8e065b). The old
+    // api.xai.com answered HTTP 502, so every Grok site searched the visitor's
+    // whole sentence on every web and image search.
+    $url = 'https://api.x.ai/v1/chat/completions';
+
+    // This step runs on a fast non-reasoning Grok whatever the site chats on
+    // (direct task M1). The chat default grok-4.6 reasons first: 6-15 s per query
+    // against the 15 s timeout below (median 9.5 s, one real widget turn timed out),
+    // where grok-4.20-0309-non-reasoning answered the same sentences in 0.4-1.2 s
+    // (median 0.44 s) with the same queries. A site can name another id through
+    // the filter, or return '' to use its own Grok model. An error on this id falls
+    // back to the visitor's message like any other failure below.
+    $site_model  = $model;
+    $query_model = apply_filters('mxchat_xai_query_model', 'grok-4.20-0309-non-reasoning', $site_model);
+    $model       = (is_string($query_model) && trim($query_model) !== '') ? trim($query_model) : $site_model;
+
+    // The cap bounds only the query: a reasoning Grok bills its reasoning outside
+    // max_tokens (measured on every Grok id in the catalog: 150-540 reasoning
+    // tokens, 7-17 answer tokens). 20 cut a long multi-attribute question
+    // mid-word on the non-reasoning ids (finish_reason length); 48 leaves room.
     $args = [
         'headers' => [
             'Content-Type' => 'application/json',
@@ -4328,22 +4536,32 @@ private function interpret_query_with_xai($user_query, $system_prompt, $api_key,
                 ['role' => 'user', 'content' => sanitize_text_field($user_query)],
             ],
             'temperature' => 0.2,
-            'max_tokens' => 20,
+            'max_tokens' => 48,
         ]),
         'method' => 'POST',
         'timeout' => 15,
     ];
-    
+
     $response = wp_remote_post($url, $args);
     if (is_wp_error($response)) {
         return sanitize_text_field($user_query);
     }
-    
+
     $body = json_decode(wp_remote_retrieve_body($response), true);
-    if (isset($body['choices'][0]['message']['content'])) {
-        return sanitize_text_field(trim($body['choices'][0]['message']['content']));
+    // A reply the cap cut off is never used (plan 8e065b, as be6cbb for Gemini):
+    // "... pit z" would pass the not-empty test below and be searched.
+    $finish_reason = isset($body['choices'][0]['finish_reason']) ? (string) $body['choices'][0]['finish_reason'] : '';
+    if ($finish_reason === 'length') {
+        return sanitize_text_field($user_query);
     }
-    
+    $interpreted = (isset($body['choices'][0]['message']['content']) && is_string($body['choices'][0]['message']['content']))
+        ? sanitize_text_field($body['choices'][0]['message']['content'])
+        : '';
+    // An empty reply returns the visitor's message so the search runs on something.
+    if ($interpreted !== '') {
+        return $interpreted;
+    }
+
     return sanitize_text_field($user_query);
 }
 
@@ -4498,10 +4716,50 @@ private function mxchat_fetch_pdf_body($pdf_url) {
     return (string) wp_remote_retrieve_body($response);
 }
 
+/**
+ * Decide what kind of PDF source this is (plan 66cfef). Returns:
+ *   'remote' - an http(s) link that passes the address check; it is only ever
+ *              downloaded through wp_safe_remote_get(), which re-checks every redirect;
+ *   'local'  - a file that exists inside the uploads folder (where the upload handler
+ *              writes), resolved with realpath() so "../" cannot climb out of it;
+ *   false    - anything else.
+ * Anything carrying a scheme is treated as a link, never as a path, so a string from a
+ * chat message can no longer reach the PDF parser's own file read. The old test sent
+ * every string that failed FILTER_VALIDATE_URL down the local-file branch, including
+ * https links that wp_http_validate_url() accepts (a non-ASCII path, for example), and
+ * PHP then fetched them itself, redirects and all.
+ */
+private function mxchat_pdf_source_type($pdf_source) {
+    if (!is_string($pdf_source) || $pdf_source === '' || strpos($pdf_source, "\0") !== false) {
+        return false;
+    }
+
+    if (preg_match('#^[a-z][a-z0-9+.\-]*:#i', $pdf_source) && !preg_match('#^[a-z]:[\\\\/]#i', $pdf_source)) {
+        // http/https only (php://, phar://, file://, data: and the rest fail here).
+        return $this->mxchat_is_safe_pdf_url($pdf_source) ? 'remote' : false;
+    }
+
+    $uploads = wp_upload_dir(null, false);
+    $base    = !empty($uploads['basedir']) ? realpath($uploads['basedir']) : false;
+    $real    = realpath($pdf_source);
+    if ($base === false || $real === false || !is_file($real)) {
+        return false;
+    }
+    $base = trailingslashit(wp_normalize_path($base));
+    return strpos(wp_normalize_path($real), $base) === 0 ? 'local' : false;
+}
+
 private function fetch_and_split_pdf_pages($pdf_source, $max_pages, $prefetched_body = null) {
     // Reset the per-call embedding-failure reason (104a75) — callers read it via
     // get_last_pdf_embedding_error() when zero pages come back.
     $this->last_pdf_embedding_error = null;
+
+    // Only a checked link or a file inside uploads goes any further (plan 66cfef).
+    $source_type = $this->mxchat_pdf_source_type($pdf_source);
+    if ($source_type === false) {
+        return false;
+    }
+    $is_remote = ($source_type === 'remote');
 
     // CLEAR DEBUG LOGGING
     //error_log("=== MXCHAT PDF PROCESSING START ===");
@@ -4555,7 +4813,7 @@ private function fetch_and_split_pdf_pages($pdf_source, $max_pages, $prefetched_
         // Your existing basic processing code here...
         // (I'll include the key parts with debug logging)
         
-        if (filter_var($pdf_source, FILTER_VALIDATE_URL)) {
+        if ($is_remote) {
             //error_log("Downloading PDF from URL...");
             
             // SECURITY FIX: Validate URL before processing
@@ -4603,7 +4861,7 @@ private function fetch_and_split_pdf_pages($pdf_source, $max_pages, $prefetched_
         
         if (count($pages) > $max_pages) {
             //error_log("❌ BASIC PROCESSING: Too many pages (" . count($pages) . " > " . $max_pages . ")");
-            if (filter_var($pdf_source, FILTER_VALIDATE_URL) && $temp_file) {
+            if ($is_remote && $temp_file) {
                 unlink($temp_file);
             }
             return 'too_many_pages';
@@ -4672,7 +4930,7 @@ private function fetch_and_split_pdf_pages($pdf_source, $max_pages, $prefetched_
         //error_log("✅ BASIC PROCESSING COMPLETE: " . $processed_pages . " pages processed");
         
         // Cleanup
-        if (filter_var($pdf_source, FILTER_VALIDATE_URL) && $temp_file && file_exists($temp_file)) {
+        if ($is_remote && $temp_file && file_exists($temp_file)) {
             unlink($temp_file);
         }
         
@@ -4681,7 +4939,7 @@ private function fetch_and_split_pdf_pages($pdf_source, $max_pages, $prefetched_
         
     } catch (\Exception $e) {
         //error_log("❌ BASIC PROCESSING ERROR: " . $e->getMessage());
-        if (filter_var($pdf_source, FILTER_VALIDATE_URL) && $temp_file && file_exists($temp_file)) {
+        if ($is_remote && $temp_file && file_exists($temp_file)) {
             unlink($temp_file);
         }
         //error_log("=== MXCHAT PDF PROCESSING END (ERROR) ===");
@@ -10127,6 +10385,8 @@ private function mxchat_fc_attempt($message, $relevant_content, $conversation_hi
     // we buffer the whole tool round, then emit once. Restored in finally.
     $prev_streaming = $this->is_streaming;
     $this->is_streaming = false;
+    // plan 705b6c: every hop's usage adds up; a row a tool saves mid-loop takes none.
+    $this->mxchat_usage_hold++;
     try {
         if ($prov['family'] === 'anthropic') {
             return $this->mxchat_fc_loop_anthropic($prov, $system, $relevant_content, $conversation_history, $tools, $message, $user_id, $session_id);
@@ -10139,6 +10399,7 @@ private function mxchat_fc_attempt($message, $relevant_content, $conversation_hi
         return array('handled' => false);
     } finally {
         $this->is_streaming = $prev_streaming;
+        $this->mxchat_usage_hold = max(0, $this->mxchat_usage_hold - 1);
     }
 }
 
@@ -10637,6 +10898,11 @@ private function mxchat_fc_loop_openai($prov, $system, $relevant_content, $conve
     $calls_made = 0;
     $tool_texts = array();
     $out_tokens = 0;
+    // plan 705b6c: OpenAI only (never a compatible provider); dropped for good
+    // after a 400 that names it.
+    $cache_key = (strpos($prov['url'], 'api.openai.com') !== false)
+        ? $this->mxchat_openai_prompt_cache_key($this->get_current_bot_id($session_id), $system, $prov['model'])
+        : null;
 
     for ($step = 0; $step <= $depth; $step++) {
         // plan 3c23ab: once the per-turn budget is spent, stop offering tools —
@@ -10651,6 +10917,9 @@ private function mxchat_fc_loop_openai($prov, $system, $relevant_content, $conve
             $effort = $this->mxchat_reasoning_effort_for($prov['model'], 'chat');
             if ($effort !== null) {
                 $body['reasoning_effort'] = $effort;
+            }
+            if ($cache_key !== null) {
+                $body['prompt_cache_key'] = $cache_key;
             }
         }
         if (strpos($prov['url'], 'api.deepseek.com') !== false) {
@@ -10673,8 +10942,16 @@ private function mxchat_fc_loop_openai($prov, $system, $relevant_content, $conve
             }
         }
         $r = $this->mxchat_fc_post($prov['url'], $body, $prov['headers'], $prov['tag']);
+        if (isset($body['prompt_cache_key']) && $this->mxchat_is_prompt_cache_key_rejection($r['code'], $r['data'])) {
+            $cache_key = null;
+            unset($body['prompt_cache_key']);
+            $r = $this->mxchat_fc_post($prov['url'], $body, $prov['headers'], $prov['tag']);
+        }
         if ($r['code'] !== 200 || !is_array($r['data'])) {
             return $this->mxchat_fc_degrade('openai', $this->mxchat_fc_failure_detail($r), $used_tool, $calls_made, $tool_texts);
+        }
+        if (isset($r['data']['usage'])) {
+            $this->mxchat_usage_add('chat', $prov['model'], $r['data']['usage']); // plan 705b6c: every hop counts
         }
         $msg = isset($r['data']['choices'][0]['message']) ? $r['data']['choices'][0]['message'] : null;
         if (!$msg) {
@@ -10684,6 +10961,10 @@ private function mxchat_fc_loop_openai($prov, $system, $relevant_content, $conve
         $tool_calls = isset($msg['tool_calls']) && is_array($msg['tool_calls']) ? $msg['tool_calls'] : array();
         if (empty($tool_calls)) {
             $text = isset($msg['content']) ? trim((string) $msg['content']) : '';
+            // M7a: finish_reason length → the reply ends with the 7428c4 note.
+            if ($text !== '' && $this->mxchat_chat_completion_cut_off($r['data'])) {
+                $text = $this->mxchat_append_cutoff_notice($text);
+            }
             if (!$used_tool) {
                 // plan 12761a: the model answered without a tool — keep that
                 // answer instead of generating it again on the normal path.
@@ -10756,7 +11037,7 @@ private function mxchat_fc_loop_anthropic($prov, $system, $relevant_content, $co
     for ($step = 0; $step <= $depth; $step++) {
         // plan 3c23ab: no tools offered once the per-turn budget is spent.
         $offer_tools = ($step < $depth) && !empty($tool_schema) && ($calls_made < $budget);
-        $body = array('model' => $prov['model'], 'max_tokens' => 1024, 'temperature' => 0.8,
+        $body = array('model' => $prov['model'], 'max_tokens' => $this->mxchat_claude_max_tokens($prov['model']), 'temperature' => 0.8, // M7a (was 1024)
                       'messages' => $messages,
                       // Breakpoint on the last system block caches tools+system
                       // together (tools precede system in Anthropic's prefix).
@@ -10776,6 +11057,9 @@ private function mxchat_fc_loop_anthropic($prov, $system, $relevant_content, $co
         }
         $content = isset($r['data']['content']) && is_array($r['data']['content']) ? $r['data']['content'] : array();
         $out_tokens += isset($r['data']['usage']['output_tokens']) ? (int) $r['data']['usage']['output_tokens'] : 0;
+        if (isset($r['data']['usage'])) {
+            $this->mxchat_usage_add('claude', $prov['model'], $r['data']['usage']); // plan 705b6c
+        }
         $tool_uses = array();
         $text_out = '';
         foreach ($content as $block) {
@@ -10788,6 +11072,10 @@ private function mxchat_fc_loop_anthropic($prov, $system, $relevant_content, $co
         }
         if (empty($tool_uses)) {
             $text_out = trim($text_out);
+            // M7a: stopped at max_tokens → the reply ends with the 7428c4 note.
+            if ($text_out !== '' && isset($r['data']['stop_reason']) && $r['data']['stop_reason'] === 'max_tokens') {
+                $text_out = $this->mxchat_append_cutoff_notice($text_out);
+            }
             if (!$used_tool) {
                 // plan 12761a: keep the no-tool first hop's answer (see the OpenAI loop).
                 if ($text_out !== '' && $this->mxchat_fc_keep_first_hop_text($prov['model'])) {
@@ -10895,6 +11183,9 @@ private function mxchat_fc_loop_gemini($prov, $system, $relevant_content, $conve
         $parts = isset($r['data']['candidates'][0]['content']['parts']) && is_array($r['data']['candidates'][0]['content']['parts'])
             ? $r['data']['candidates'][0]['content']['parts'] : array();
         $out_tokens += isset($r['data']['usageMetadata']['candidatesTokenCount']) ? (int) $r['data']['usageMetadata']['candidatesTokenCount'] : 0;
+        if (isset($r['data']['usageMetadata'])) {
+            $this->mxchat_usage_add('gemini', $prov['model'], $r['data']['usageMetadata']); // plan 705b6c
+        }
         $fn_calls = array();
         $text_out = '';
         foreach ($parts as $p) {
@@ -10906,6 +11197,10 @@ private function mxchat_fc_loop_gemini($prov, $system, $relevant_content, $conve
         }
         if (empty($fn_calls)) {
             $text_out = trim($text_out);
+            // M7a: cut at maxOutputTokens → the reply ends with the 7428c4 note.
+            if ($text_out !== '' && isset($r['data']['candidates'][0]['finishReason']) && $r['data']['candidates'][0]['finishReason'] === 'MAX_TOKENS') {
+                $text_out = $this->mxchat_append_cutoff_notice($text_out);
+            }
             if (!$used_tool) {
                 // plan 12761a: keep the no-tool first hop's answer (see the OpenAI loop).
                 if ($text_out !== '' && $this->mxchat_fc_keep_first_hop_text($prov['model'])) {
@@ -11078,6 +11373,14 @@ private function mxchat_fc_failure_detail($r) {
 }
 
 private function mxchat_generate_response($relevant_content, $api_key, $xai_api_key, $claude_api_key, $deepseek_api_key, $gemini_api_key, $openrouter_api_key, $conversation_history, $streaming = false, $session_id = '', $testing_data = null, $selected_model = 'gpt-5.6-sol') {
+    // Direct task M4: one read-time rescue for EVERY provider. The OpenAI and
+    // Claude branches already resolved retired ids (e46b8f, 8c4eb4); Gemini,
+    // xAI and DeepSeek did not, so a site still saved on a shut-down Gemini or
+    // Grok id — or on a model whose announced date has just passed, before the
+    // migration has run that day — got the provider's error instead of a reply.
+    if (class_exists('MxChat_Model_Catalog') && method_exists('MxChat_Model_Catalog', 'resolve_retired')) {
+        $selected_model = MxChat_Model_Catalog::resolve_retired($selected_model);
+    }
     try {
         if (!$relevant_content) {
             $error_response = [
@@ -11514,6 +11817,7 @@ private function mxchat_generate_response_openrouter_stream($selected_model, $op
             $full_response = '';
             $stream_started = false;
             $buffer = '';
+            $this->mxchat_usage_stream_begin('chat', $selected_model); // plan 705b6c
 
             $ch = curl_init();
             curl_setopt($ch, CURLOPT_URL, 'https://openrouter.ai/api/v1/chat/completions');
@@ -11577,12 +11881,17 @@ private function mxchat_generate_response_openrouter_stream($selected_model, $op
                     }
 
                     $json = json_decode(trim($json_str), true);
+                    $this->mxchat_usage_stream_observe($json); // plan 705b6c: usage rides the last events
                     if ($json && isset($json['choices'][0]['delta']['content'])) {
                         $content = $json['choices'][0]['delta']['content'];
                         $full_response .= $content;
 
                         echo "data: " . json_encode(['content' => $content]) . "\n\n";
                         flush();
+                    }
+                    // plan 7428c4: finish_reason length = cut at the token limit.
+                    if ($json && $this->mxchat_chat_completion_cut_off($json)) {
+                        $full_response = $this->mxchat_stream_emit_cutoff_notice($full_response);
                     }
                 }
 
@@ -11720,7 +12029,9 @@ private function mxchat_generate_response_openai_stream($selected_model, $api_ke
             'model' => $selected_model,
             'messages' => $formatted_conversation,
             'temperature' => 1,
-            'stream' => true
+            'stream' => true,
+            // plan 705b6c: usage arrives on a last chunk only when asked for.
+            'stream_options' => ['include_usage' => true]
         ];
 
         // reasoning_effort — sourced from the core model catalog (plan-dcb71c);
@@ -11728,6 +12039,10 @@ private function mxchat_generate_response_openai_stream($selected_model, $api_ke
         $effort = $this->mxchat_reasoning_effort_for($selected_model, 'chat');
         if ($effort !== null) {
             $request_body['reasoning_effort'] = $effort;
+        }
+        $cache_key = $this->mxchat_openai_prompt_cache_key($bot_id, $system_prompt_instructions, $selected_model); // plan 705b6c
+        if ($cache_key !== null) {
+            $request_body['prompt_cache_key'] = $cache_key;
         }
 
         $body = json_encode($request_body);
@@ -11747,6 +12062,7 @@ private function mxchat_generate_response_openai_stream($selected_model, $api_ke
         $max_attempts = $this->mxchat_retry_enabled() ? 3 : 1;
         $backoff_ms = array(0, 750, 2000);
         $reasoning_stripped = false; // plan-25b972: one strip-and-retry allowed
+        $cache_key_stripped = false; // plan 705b6c: same, for prompt_cache_key
 
         for ($attempt = 0; $attempt < $max_attempts; $attempt++) {
             $delay = isset($backoff_ms[$attempt]) ? $backoff_ms[$attempt] : 0;
@@ -11760,6 +12076,7 @@ private function mxchat_generate_response_openai_stream($selected_model, $api_ke
             $full_response = '';
             $stream_started = false;
             $buffer = '';
+            $this->mxchat_usage_stream_begin('chat', $selected_model); // plan 705b6c
 
             $ch = curl_init();
             curl_setopt($ch, CURLOPT_URL, 'https://api.openai.com/v1/chat/completions');
@@ -11833,12 +12150,17 @@ private function mxchat_generate_response_openai_stream($selected_model, $api_ke
                     }
 
                     $json = json_decode(trim($json_str), true);
+                    $this->mxchat_usage_stream_observe($json); // plan 705b6c: usage rides the last events
                     if ($json && isset($json['choices'][0]['delta']['content'])) {
                         $content = $json['choices'][0]['delta']['content'];
                         $full_response .= $content;
 
                         echo "data: " . json_encode(['content' => $content]) . "\n\n";
                         flush();
+                    }
+                    // plan 7428c4: finish_reason length = cut at the token limit.
+                    if ($json && $this->mxchat_chat_completion_cut_off($json)) {
+                        $full_response = $this->mxchat_stream_emit_cutoff_notice($full_response);
                     }
                 }
 
@@ -11878,6 +12200,23 @@ private function mxchat_generate_response_openai_stream($selected_model, $api_ke
                     $max_attempts = $attempt + 2; // grant the retry even when transient retry is off
                 }
                 $backoff_ms[$attempt + 1] = 0; // deterministic 400 — no backoff needed
+                continue;
+            }
+
+            // plan 705b6c: a model that rejects prompt_cache_key gets the
+            // request again without it, once, the same way.
+            if (!$cache_key_stripped
+                && !$this->streaming_headers_sent
+                && !$errno
+                && isset($request_body['prompt_cache_key'])
+                && $this->mxchat_is_prompt_cache_key_rejection($http_code, $captured_body_pre_stream)) {
+                $cache_key_stripped = true;
+                unset($request_body['prompt_cache_key']);
+                $body = json_encode($request_body);
+                if ($max_attempts <= $attempt + 1) {
+                    $max_attempts = $attempt + 2;
+                }
+                $backoff_ms[$attempt + 1] = 0;
                 continue;
             }
 
@@ -12090,6 +12429,19 @@ private function mxchat_generate_response_custom_stream($selected_model, $conver
             'messages' => $formatted_conversation,
             'stream'   => true,
         );
+        /**
+         * plan 705b6c: ask an OpenAI-compatible server for usage on its last
+         * stream chunk. A server that rejects the field fails the stream and the
+         * reply falls back to the non-streaming request, which reads usage from
+         * the body. Return false to leave the field out.
+         *
+         * @param bool   $include  Whether to send stream_options.include_usage.
+         * @param string $base_url The custom provider's base URL.
+         * @param string $model    The custom provider's model.
+         */
+        if (apply_filters('mxchat_custom_stream_include_usage', true, $cfg['base_url'], $cfg['model'])) {
+            $request_body['stream_options'] = array('include_usage' => true);
+        }
         // plan a9774b: a Gemini model reached through Google's OpenAI-compatible
         // endpoint gets the catalog's thinking level as reasoning_effort. Gemini
         // ids only — Ollama / vLLM / Azure models keep the bare body they had.
@@ -12123,6 +12475,7 @@ private function mxchat_generate_response_custom_stream($selected_model, $conver
             $full_response = '';
             $stream_started = false;
             $buffer = '';
+            $this->mxchat_usage_stream_begin('chat', $cfg['model']); // plan 705b6c
 
             $ch = curl_init();
             curl_setopt($ch, CURLOPT_URL, $cfg['chat_url']);
@@ -12172,11 +12525,16 @@ private function mxchat_generate_response_custom_stream($selected_model, $conver
                         continue;
                     }
                     $json = json_decode(trim($json_str), true);
+                    $this->mxchat_usage_stream_observe($json); // plan 705b6c: usage rides the last events
                     if ($json && isset($json['choices'][0]['delta']['content'])) {
                         $content = $json['choices'][0]['delta']['content'];
                         $full_response .= $content;
                         echo "data: " . json_encode(array('content' => $content)) . "\n\n";
                         flush();
+                    }
+                    // plan 7428c4: finish_reason length = cut at the token limit.
+                    if ($json && $this->mxchat_chat_completion_cut_off($json)) {
+                        $full_response = $this->mxchat_stream_emit_cutoff_notice($full_response);
                     }
                 }
                 return strlen($data);
@@ -12295,7 +12653,14 @@ private function mxchat_generate_response_custom($selected_model, $conversation_
         return array('error' => sprintf(esc_html__('Custom provider returned HTTP %d.', 'mxchat'), $code), 'error_code' => 'custom_provider_http_error');
     }
     $body = json_decode(wp_remote_retrieve_body($response), true);
+    if (isset($body['usage'])) {
+        $this->mxchat_usage_add('chat', $cfg['model'], $body['usage']); // plan 705b6c
+    }
     if (isset($body['choices'][0]['message']['content'])) {
+        // plan 7428c4: finish_reason length = cut at the token limit.
+        if ($this->mxchat_chat_completion_cut_off($body)) {
+            return $this->mxchat_append_cutoff_notice((string) $body['choices'][0]['message']['content']);
+        }
         return (string) $body['choices'][0]['message']['content'];
     }
     return array('error' => esc_html__('Custom provider returned an unexpected response shape.', 'mxchat'), 'error_code' => 'custom_provider_response_shape');
@@ -12365,6 +12730,10 @@ private function mxchat_generate_response_openai_web_search($selected_model, $ap
         if ($effort !== null) {
             $request_body['reasoning'] = ['effort' => $effort];
         }
+        $cache_key = $this->mxchat_openai_prompt_cache_key($bot_id, $system_prompt_instructions, $selected_model); // plan 705b6c
+        if ($cache_key !== null) {
+            $request_body['prompt_cache_key'] = $cache_key;
+        }
 
         //error_log("MXCHAT WEB SEARCH: Request body: " . json_encode($request_body));
 
@@ -12409,6 +12778,26 @@ private function mxchat_web_search_non_streaming_response($request_body, $api_ke
     $response_code = wp_remote_retrieve_response_code($response);
     $response_body = wp_remote_retrieve_body($response);
 
+    // plan 705b6c: a model that rejects prompt_cache_key gets the request again
+    // without it, once (the streaming path falls back to this function).
+    if ($response_code !== 200
+        && isset($request_body['prompt_cache_key'])
+        && $this->mxchat_is_prompt_cache_key_rejection($response_code, $response_body)) {
+        unset($request_body['prompt_cache_key']);
+        $retry = $this->mxchat_provider_call_with_retry('https://api.openai.com/v1/responses', array(
+            'headers' => array(
+                'Authorization' => 'Bearer ' . $api_key,
+                'Content-Type' => 'application/json'
+            ),
+            'body' => json_encode($request_body),
+            'timeout' => 90
+        ), 'openai');
+        if (!is_wp_error($retry)) {
+            $response_code = wp_remote_retrieve_response_code($retry);
+            $response_body = wp_remote_retrieve_body($retry);
+        }
+    }
+
     //error_log("MXCHAT WEB SEARCH: Response code: " . $response_code);
     //error_log("MXCHAT WEB SEARCH: Response body (first 2000): " . substr($response_body, 0, 2000));
 
@@ -12428,6 +12817,9 @@ private function mxchat_web_search_non_streaming_response($request_body, $api_ke
             'error' => esc_html__('Invalid response from OpenAI', 'mxchat'),
             'error_code' => 'web_search_json_error'
         ];
+    }
+    if (isset($result['usage'])) {
+        $this->mxchat_usage_add('responses', isset($request_body['model']) ? $request_body['model'] : '', $result['usage']); // plan 705b6c
     }
 
     // Extract the response text and citations from Responses API format
@@ -12456,6 +12848,14 @@ private function mxchat_web_search_non_streaming_response($request_body, $api_ke
                 }
             }
         }
+    }
+
+    // plan 7428c4: status "incomplete" because max_output_tokens ran out → the
+    // text that arrived ends with the cut-off notice (or is the notice alone).
+    if (isset($result['status'], $result['incomplete_details']['reason'])
+        && $result['status'] === 'incomplete'
+        && $result['incomplete_details']['reason'] === 'max_output_tokens') {
+        $output_text = $this->mxchat_append_cutoff_notice($output_text);
     }
 
     // If we have citations, append them to the response
@@ -12573,6 +12973,7 @@ private function mxchat_web_search_streaming_response($request_body, $api_key, $
             }
 
             $json = json_decode(trim($json_str), true);
+            $this->mxchat_usage_stream_observe($json); // plan 705b6c: response.completed carries usage
             if (!$json) continue;
 
             // Handle Responses API streaming events
@@ -12586,6 +12987,13 @@ private function mxchat_web_search_streaming_response($request_body, $api_key, $
                             $full_response .= $content;
                             echo "data: " . json_encode(['content' => $content]) . "\n\n";
                             flush();
+                        }
+                        break;
+
+                    case 'response.incomplete':
+                        // plan 7428c4: the stream stopped at max_output_tokens.
+                        if (isset($json['response']['incomplete_details']['reason']) && $json['response']['incomplete_details']['reason'] === 'max_output_tokens') {
+                            $full_response = $this->mxchat_stream_emit_cutoff_notice($full_response);
                         }
                         break;
 
@@ -12613,6 +13021,7 @@ private function mxchat_web_search_streaming_response($request_body, $api_key, $
         return strlen($data);
     });
 
+    $this->mxchat_usage_stream_begin('responses', isset($request_body['model']) ? $request_body['model'] : ''); // plan 705b6c
     $response = curl_exec($ch);
     $http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
 
@@ -12701,7 +13110,7 @@ private function mxchat_generate_response_claude_stream($selected_model, $claude
         $payload = [
             'model' => $selected_model,
             'messages' => $conversation_history,
-            'max_tokens' => 1000,
+            'max_tokens' => $this->mxchat_claude_max_tokens($selected_model), // plan 7428c4 (was 1000)
             'temperature' => 0.8,
             'system' => $this->mxchat_anthropic_system_blocks($system_prompt_instructions),
             'stream' => true
@@ -12768,6 +13177,7 @@ private function mxchat_generate_response_claude_stream($selected_model, $claude
             $full_response = '';
             $stream_started = false;
             $buffer = '';
+            $this->mxchat_usage_stream_begin('claude', $selected_model); // plan 705b6c
 
             $ch = curl_init();
             curl_setopt($ch, CURLOPT_URL, 'https://api.anthropic.com/v1/messages');
@@ -12825,6 +13235,7 @@ private function mxchat_generate_response_claude_stream($selected_model, $claude
                         if (json_last_error() !== JSON_ERROR_NONE) {
                             continue;
                         }
+                        $this->mxchat_usage_stream_observe($json); // plan 705b6c: message_start + message_delta carry usage
 
                         if (isset($json['type'])) {
                             switch ($json['type']) {
@@ -12834,6 +13245,15 @@ private function mxchat_generate_response_claude_stream($selected_model, $claude
                                         $full_response .= $content;
                                         echo "data: " . json_encode(['content' => $content]) . "\n\n";
                                         flush();
+                                    }
+                                    break;
+
+                                case 'message_delta':
+                                    // plan 7428c4: stopped at max_tokens → the
+                                    // notice is the last content event, saved
+                                    // with the transcript via $full_response.
+                                    if (isset($json['delta']['stop_reason']) && $json['delta']['stop_reason'] === 'max_tokens') {
+                                        $full_response = $this->mxchat_stream_emit_cutoff_notice($full_response);
                                     }
                                     break;
 
@@ -12990,7 +13410,9 @@ private function mxchat_generate_response_xai_stream($selected_model, $xai_api_k
             'model' => $selected_model,
             'messages' => $formatted_conversation,
             'temperature' => 0.8,
-            'stream' => true
+            'stream' => true,
+            // plan 705b6c: xAI sends usage on a last chunk only when asked (probed).
+            'stream_options' => ['include_usage' => true]
         ]);
 
         // V2 retry-on-initial-connect: setup_streaming_headers is lazy-fired in WRITEFUNCTION.
@@ -13015,6 +13437,7 @@ private function mxchat_generate_response_xai_stream($selected_model, $xai_api_k
             $full_response = '';
             $stream_started = false;
             $buffer = '';
+            $this->mxchat_usage_stream_begin('chat', $selected_model); // plan 705b6c
 
             $ch = curl_init();
             curl_setopt($ch, CURLOPT_URL, 'https://api.x.ai/v1/chat/completions');
@@ -13076,11 +13499,16 @@ private function mxchat_generate_response_xai_stream($selected_model, $xai_api_k
                     }
 
                     $json = json_decode(trim($json_str), true);
+                    $this->mxchat_usage_stream_observe($json); // plan 705b6c: usage rides the last events
                     if ($json && isset($json['choices'][0]['delta']['content'])) {
                         $content = $json['choices'][0]['delta']['content'];
                         $full_response .= $content;
                         echo "data: " . json_encode(['content' => $content]) . "\n\n";
                         flush();
+                    }
+                    // plan 7428c4: finish_reason length = cut at the token limit.
+                    if ($json && $this->mxchat_chat_completion_cut_off($json)) {
+                        $full_response = $this->mxchat_stream_emit_cutoff_notice($full_response);
                     }
                 }
 
@@ -13249,6 +13677,7 @@ private function mxchat_generate_response_deepseek_stream($selected_model, $deep
             $full_response = '';
             $stream_started = false;
             $buffer = '';
+            $this->mxchat_usage_stream_begin('chat', $selected_model); // plan 705b6c
 
             $ch = curl_init();
             curl_setopt($ch, CURLOPT_URL, 'https://api.deepseek.com/v1/chat/completions');
@@ -13310,11 +13739,16 @@ private function mxchat_generate_response_deepseek_stream($selected_model, $deep
                     }
 
                     $json = json_decode(trim($json_str), true);
+                    $this->mxchat_usage_stream_observe($json); // plan 705b6c: usage rides the last events
                     if ($json && isset($json['choices'][0]['delta']['content'])) {
                         $content = $json['choices'][0]['delta']['content'];
                         $full_response .= $content;
                         echo "data: " . json_encode(['content' => $content]) . "\n\n";
                         flush();
+                    }
+                    // plan 7428c4: finish_reason length = cut at the token limit.
+                    if ($json && $this->mxchat_chat_completion_cut_off($json)) {
+                        $full_response = $this->mxchat_stream_emit_cutoff_notice($full_response);
                     }
                 }
 
@@ -13434,6 +13868,265 @@ private function mxchat_empty_completion_error($decoded_body, $provider_label) {
     ];
 }
 
+/**
+ * plan 7428c4: the line a reply ends with when the provider stopped it at its
+ * output limit (Claude stop_reason max_tokens, Gemini finishReason MAX_TOKENS,
+ * OpenAI Responses incomplete / max_output_tokens, chat-completions
+ * finish_reason length). Plain italic markdown; the widget renders *text* as
+ * italics. Never a provider error: the visitor keeps whatever text arrived.
+ */
+private function mxchat_cutoff_notice() {
+    /* translators: shown in italics at the end of a chat reply that the AI provider cut off at its output limit. */
+    return '*' . esc_html__('(Reply shortened: it reached the length limit.)', 'mxchat') . '*';
+}
+
+/** plan 7428c4: text + blank line + notice, or the notice alone when no text arrived. */
+private function mxchat_append_cutoff_notice($text) {
+    $text = rtrim((string) $text);
+    return $text === '' ? $this->mxchat_cutoff_notice() : $text . "\n\n" . $this->mxchat_cutoff_notice();
+}
+
+/** plan 7428c4: an OpenAI-compatible chat-completions body that stopped at the token limit. */
+private function mxchat_chat_completion_cut_off($decoded_body) {
+    return is_array($decoded_body)
+        && isset($decoded_body['choices'][0]['finish_reason'])
+        && $decoded_body['choices'][0]['finish_reason'] === 'length';
+}
+
+/**
+ * plan 7428c4, streaming: emit the notice as one final content event (before
+ * [DONE]) and return the buffer with it appended, so the saved transcript
+ * matches what the visitor saw. Idempotent: a buffer that already ends with
+ * the notice is returned unchanged.
+ */
+private function mxchat_stream_emit_cutoff_notice($full_response) {
+    $notice = $this->mxchat_cutoff_notice();
+    $full_response = (string) $full_response;
+    if (substr(rtrim($full_response), -strlen($notice)) === $notice) {
+        return $full_response;
+    }
+    $piece = (trim($full_response) === '') ? $notice : "\n\n" . $notice;
+    echo "data: " . json_encode(['content' => $piece]) . "\n\n";
+    flush();
+    return $full_response . $piece;
+}
+
+/**
+ * plan 7428c4: Claude's completion budget for chat replies. Was a flat 1000,
+ * which cut ordinary answers short. claude-fable-5 and claude-opus-5 write a
+ * thinking block that spends from the same budget (opus-5 spent all 300 of a
+ * 300-token budget thinking on a long-answer prompt, measured 2026-10-16), so
+ * they get 8192; the other models get 4096. Every catalog Claude model accepts
+ * both. Filter `mxchat_claude_max_tokens` (int $max_tokens, string $model); a
+ * non-positive result keeps the default.
+ *
+ * Direct task M2 (2026-10-16): the prefixes put claude-opus-5-5 and
+ * claude-fable-5-1 (thinking always on) in the 8192 group; claude-haiku-5-5
+ * and claude-sonnet-5-5 think on harder turns too but finished a long support
+ * answer in 389 / 479 output tokens, so they stay at 4096 like claude-sonnet-5.
+ *
+ * Direct task M7a (2026-10-17): the AI Tools loop (mxchat_fc_loop_anthropic)
+ * uses the same budget; it sent a flat 1024.
+ */
+private function mxchat_claude_max_tokens($model) {
+    $model    = (string) $model;
+    $thinking = strpos($model, 'claude-fable-') === 0 || strpos($model, 'claude-opus-5') === 0;
+    $default  = $thinking ? 8192 : 4096;
+    $filtered = (int) apply_filters('mxchat_claude_max_tokens', $default, $model);
+    return $filtered > 0 ? $filtered : $default;
+}
+
+/* ---------------------------------------------------------------------- *
+ *  Token usage per reply (plan 705b6c)
+ *
+ *  Every provider path hands its usage object to mxchat_usage_add() (or,
+ *  for a stream, to mxchat_usage_stream_observe() as events arrive), and
+ *  mxchat_save_chat_message() writes the result on the reply's row. The
+ *  shapes below were probed live on 2026-10-16:
+ *   chat      OpenAI chat completions, xAI, DeepSeek, OpenRouter, custom:
+ *             prompt_tokens (cached included), prompt_tokens_details.
+ *             cached_tokens (DeepSeek also prompt_cache_hit_tokens),
+ *             completion_tokens (reasoning included). Streams: OpenAI and
+ *             xAI send usage only with stream_options.include_usage, on a
+ *             last chunk whose choices are empty; DeepSeek and OpenRouter
+ *             always send it on the last chunk.
+ *   responses OpenAI Responses: input_tokens (cached included),
+ *             input_tokens_details.cached_tokens, output_tokens. Stream:
+ *             response.completed / response.incomplete carry response.usage.
+ *   claude    input_tokens excludes cache_read_input_tokens and
+ *             cache_creation_input_tokens, so the three are added; stream:
+ *             message_start has the input side, message_delta the running
+ *             totals (a later value replaces an earlier one).
+ *   gemini    usageMetadata: promptTokenCount (cached included) plus
+ *             toolUsePromptTokenCount, cachedContentTokenCount when a cache
+ *             was read, candidatesTokenCount + thoughtsTokenCount out.
+ *  in = every input token billed (cached ones included), cached = tokens
+ *  read from the prompt cache (null when the provider reports no such
+ *  field), out = every output token (reasoning / thinking included).
+ * ---------------------------------------------------------------------- */
+
+/** plan 705b6c: one provider usage object as array(in, cached, out), or null when it carries no counts. */
+private function mxchat_usage_normalize($shape, $u) {
+    if (!is_array($u)) {
+        return null;
+    }
+    $n = function ($v) {
+        if (is_int($v) || is_float($v) || (is_string($v) && $v !== '' && ctype_digit($v))) {
+            return max(0, (int) $v);
+        }
+        return null;
+    };
+    $in = null;
+    $cached = null;
+    $out = null;
+    switch ($shape) {
+        case 'claude':
+            $base  = $n(isset($u['input_tokens']) ? $u['input_tokens'] : null);
+            $read  = $n(isset($u['cache_read_input_tokens']) ? $u['cache_read_input_tokens'] : null);
+            $write = $n(isset($u['cache_creation_input_tokens']) ? $u['cache_creation_input_tokens'] : null);
+            if ($base !== null || $read !== null || $write !== null) {
+                $in = (int) $base + (int) $read + (int) $write;
+            }
+            $cached = $read;
+            $out = $n(isset($u['output_tokens']) ? $u['output_tokens'] : null);
+            break;
+        case 'gemini':
+            $prompt = $n(isset($u['promptTokenCount']) ? $u['promptTokenCount'] : null);
+            $tool   = $n(isset($u['toolUsePromptTokenCount']) ? $u['toolUsePromptTokenCount'] : null);
+            if ($prompt !== null || $tool !== null) {
+                $in = (int) $prompt + (int) $tool;
+            }
+            $cached = $n(isset($u['cachedContentTokenCount']) ? $u['cachedContentTokenCount'] : null);
+            $cand     = $n(isset($u['candidatesTokenCount']) ? $u['candidatesTokenCount'] : null);
+            $thoughts = $n(isset($u['thoughtsTokenCount']) ? $u['thoughtsTokenCount'] : null);
+            if ($cand !== null || $thoughts !== null) {
+                $out = (int) $cand + (int) $thoughts;
+            }
+            break;
+        case 'responses':
+            $in = $n(isset($u['input_tokens']) ? $u['input_tokens'] : null);
+            $cached = $n(isset($u['input_tokens_details']['cached_tokens']) ? $u['input_tokens_details']['cached_tokens'] : null);
+            $out = $n(isset($u['output_tokens']) ? $u['output_tokens'] : null);
+            break;
+        default: // 'chat'
+            $in = $n(isset($u['prompt_tokens']) ? $u['prompt_tokens'] : null);
+            $cached = $n(isset($u['prompt_tokens_details']['cached_tokens']) ? $u['prompt_tokens_details']['cached_tokens'] : null);
+            if ($cached === null) {
+                $cached = $n(isset($u['prompt_cache_hit_tokens']) ? $u['prompt_cache_hit_tokens'] : null);
+            }
+            $out = $n(isset($u['completion_tokens']) ? $u['completion_tokens'] : null);
+    }
+    if ($in === null && $out === null) {
+        return null;
+    }
+    return array('in' => $in, 'cached' => $cached, 'out' => $out);
+}
+
+/** plan 705b6c: add one provider call's usage to the reply this request is producing. */
+private function mxchat_usage_add($shape, $model, $raw) {
+    $u = $this->mxchat_usage_normalize($shape, $raw);
+    if ($u === null) {
+        return;
+    }
+    $acc = is_array($this->mxchat_reply_usage)
+        ? $this->mxchat_reply_usage
+        : array('model' => null, 'in' => null, 'cached' => null, 'out' => null);
+    foreach (array('in', 'cached', 'out') as $k) {
+        if ($u[$k] !== null) {
+            $acc[$k] = (int) $acc[$k] + $u[$k];
+        }
+    }
+    if (($acc['model'] === null || $acc['model'] === '') && is_string($model) && $model !== '') {
+        $acc['model'] = $model;
+    }
+    $this->mxchat_reply_usage = $acc;
+}
+
+/** plan 705b6c: a provider stream is starting (called per attempt, so a retried connect starts clean). */
+private function mxchat_usage_stream_begin($shape, $model) {
+    $this->mxchat_stream_usage = array('shape' => $shape, 'model' => (string) $model, 'raw' => array());
+}
+
+/** plan 705b6c: look at one decoded stream event for usage; later values replace earlier ones. */
+private function mxchat_usage_stream_observe($event) {
+    if (!is_array($event) || !is_array($this->mxchat_stream_usage)) {
+        return;
+    }
+    $shape = $this->mxchat_stream_usage['shape'];
+    $u = null;
+    if ($shape === 'claude') {
+        $type = isset($event['type']) ? $event['type'] : '';
+        if ($type === 'message_start' && isset($event['message']['usage'])) {
+            $u = $event['message']['usage'];
+        } elseif ($type === 'message_delta' && isset($event['usage'])) {
+            $u = $event['usage'];
+        }
+    } elseif ($shape === 'responses') {
+        if (isset($event['response']['usage'])) {
+            $u = $event['response']['usage'];
+        }
+    } elseif (isset($event['usage'])) {
+        $u = $event['usage'];
+    }
+    if (is_array($u)) {
+        $this->mxchat_stream_usage['raw'] = array_replace_recursive($this->mxchat_stream_usage['raw'], $u);
+    }
+}
+
+/** plan 705b6c: fold the running stream's usage into the reply. */
+private function mxchat_usage_stream_commit() {
+    if (!is_array($this->mxchat_stream_usage)) {
+        return;
+    }
+    $s = $this->mxchat_stream_usage;
+    $this->mxchat_stream_usage = null;
+    if (!empty($s['raw'])) {
+        $this->mxchat_usage_add($s['shape'], $s['model'], $s['raw']);
+    }
+}
+
+/** plan 705b6c: hand the reply's usage to the row being saved (once), or null. */
+private function mxchat_usage_take() {
+    if ($this->mxchat_usage_hold > 0) {
+        return null;
+    }
+    $this->mxchat_usage_stream_commit();
+    $u = $this->mxchat_reply_usage;
+    $this->mxchat_reply_usage = null;
+    return is_array($u) ? $u : null;
+}
+
+/**
+ * plan 705b6c: prompt_cache_key for a request to api.openai.com, or null.
+ *
+ * OpenAI routes requests that share a key and a prompt prefix to the same
+ * cache. The key is a hash of the site, the bot and its system instructions,
+ * so it changes when the instructions do and never carries their text.
+ * Accepted by every OpenAI chat model in the catalog on Chat Completions and
+ * Responses (probed 2026-10-16); never sent to OpenAI-compatible providers.
+ * Filter `mxchat_openai_prompt_cache_key` (string $key, string $bot_id,
+ * string $model): return '' to send none.
+ */
+private function mxchat_openai_prompt_cache_key($bot_id, $system_prompt, $model) {
+    $key = 'mxchat-' . substr(hash('sha256', home_url() . '|' . (string) $bot_id . '|' . (string) $system_prompt), 0, 24);
+    $key = apply_filters('mxchat_openai_prompt_cache_key', $key, (string) $bot_id, (string) $model);
+    if (!is_string($key) || trim($key) === '') {
+        return null;
+    }
+    return substr(trim($key), 0, 64);
+}
+
+/** plan 705b6c: a 400 that names prompt_cache_key (a model that rejects it): resend once without it. */
+private function mxchat_is_prompt_cache_key_rejection($status, $body) {
+    if ((int) $status !== 400) {
+        return false;
+    }
+    if (!is_string($body)) {
+        $body = (string) wp_json_encode($body);
+    }
+    return stripos($body, 'prompt_cache_key') !== false;
+}
+
 private function mxchat_generate_response_openrouter($selected_model, $openrouter_api_key, $conversation_history, $relevant_content, $session_id = '') {
     try {
         if (!is_array($conversation_history)) {
@@ -13517,9 +14210,16 @@ private function mxchat_generate_response_openrouter($selected_model, $openroute
 
         $response_body = wp_remote_retrieve_body($response);
         $decoded_response = json_decode($response_body, true);
+        if (isset($decoded_response['usage'])) {
+            $this->mxchat_usage_add('chat', $selected_model, $decoded_response['usage']); // plan 705b6c
+        }
 
         if (isset($decoded_response['choices'][0]['message']['content'])) {
             $text = trim($decoded_response['choices'][0]['message']['content']);
+            // plan 7428c4: finish_reason length = cut at the token limit.
+            if ($this->mxchat_chat_completion_cut_off($decoded_response)) {
+                return $this->mxchat_append_cutoff_notice($text);
+            }
             if ($text !== '') {
                 return $text;
             }
@@ -13663,7 +14363,7 @@ private function mxchat_generate_response_claude($selected_model, $claude_api_ke
     // Build request body
     $payload = [
         'model' => $selected_model,
-        'max_tokens' => 1000,
+        'max_tokens' => $this->mxchat_claude_max_tokens($selected_model), // plan 7428c4 (was 1000)
         'temperature' => 0.8,
         'messages' => $conversation_history,
         'system' => $this->mxchat_anthropic_system_blocks($system_prompt_instructions)
@@ -13722,6 +14422,9 @@ private function mxchat_generate_response_claude($selected_model, $claude_api_ke
         //error_log("Claude API JSON decode error: " . json_last_error_msg());
         return "Sorry, there was an error processing the API response.";
     }
+    if (isset($response_body['usage'])) {
+        $this->mxchat_usage_add('claude', $selected_model, $response_body['usage']); // plan 705b6c
+    }
 
     // Prompt-cache visibility (plan 1ff43b), dev mode only: a working cache
     // shows cache_creation_input_tokens on the first request of a conversation
@@ -13739,12 +14442,19 @@ private function mxchat_generate_response_claude($selected_model, $claude_api_ke
     // thinking block to content even with no thinking param — take the first
     // TEXT block rather than content[0].
     if (isset($response_body['content']) && is_array($response_body['content'])) {
+        // plan 7428c4: a reply stopped at max_tokens ends with the cut-off
+        // notice; with no text at all (the thinking block spent the budget)
+        // the visitor gets the notice instead of the empty-response error.
+        $cut_off = isset($response_body['stop_reason']) && $response_body['stop_reason'] === 'max_tokens';
         foreach ($response_body['content'] as $block) {
             // plan-4aa8e5: skip empty text blocks — a 200 whose only text
             // block trims to '' must not render as a silent empty bubble.
             if (isset($block['type'], $block['text']) && $block['type'] === 'text' && trim($block['text']) !== '') {
-                return trim($block['text']);
+                return $cut_off ? $this->mxchat_append_cutoff_notice(trim($block['text'])) : trim($block['text']);
             }
+        }
+        if ($cut_off) {
+            return $this->mxchat_cutoff_notice();
         }
         return $this->mxchat_empty_completion_error($response_body, 'Claude');
     }
@@ -13815,6 +14525,10 @@ private function mxchat_generate_response_openai($selected_model, $api_key, $con
         if ($effort !== null) {
             $request_body['reasoning_effort'] = $effort;
         }
+        $cache_key = $this->mxchat_openai_prompt_cache_key($bot_id, $system_prompt_instructions, $selected_model); // plan 705b6c
+        if ($cache_key !== null) {
+            $request_body['prompt_cache_key'] = $cache_key;
+        }
 
         $body = json_encode($request_body);
 
@@ -13865,12 +14579,26 @@ private function mxchat_generate_response_openai($selected_model, $api_key, $con
             }
         }
 
+        // plan 705b6c: a model that rejects prompt_cache_key gets the request
+        // again without it, once.
+        if ($status_code !== 200
+            && isset($request_body['prompt_cache_key'])
+            && $this->mxchat_is_prompt_cache_key_rejection($status_code, wp_remote_retrieve_body($response))) {
+            unset($request_body['prompt_cache_key']);
+            $args['body'] = json_encode($request_body);
+            $retry_response = $this->mxchat_provider_call_with_retry('https://api.openai.com/v1/chat/completions', $args, 'openai');
+            if (!is_wp_error($retry_response)) {
+                $response = $retry_response;
+                $status_code = wp_remote_retrieve_response_code($response);
+            }
+        }
+
         if ($status_code !== 200) {
             $response_body = wp_remote_retrieve_body($response);
             $decoded_response = json_decode($response_body, true);
-            
-            $error_message = isset($decoded_response['error']['message']) 
-                ? $decoded_response['error']['message'] 
+
+            $error_message = isset($decoded_response['error']['message'])
+                ? $decoded_response['error']['message']
                 : 'HTTP Error ' . $status_code;
             
             $error_type = isset($decoded_response['error']['type']) 
@@ -13924,9 +14652,16 @@ private function mxchat_generate_response_openai($selected_model, $api_key, $con
 
         $response_body = wp_remote_retrieve_body($response);
         $decoded_response = json_decode($response_body, true);
+        if (isset($decoded_response['usage'])) {
+            $this->mxchat_usage_add('chat', $selected_model, $decoded_response['usage']); // plan 705b6c
+        }
 
         if (isset($decoded_response['choices'][0]['message']['content'])) {
             $text = trim($decoded_response['choices'][0]['message']['content']);
+            // plan 7428c4: finish_reason length = cut at the token limit.
+            if ($this->mxchat_chat_completion_cut_off($decoded_response)) {
+                return $this->mxchat_append_cutoff_notice($text);
+            }
             if ($text !== '') {
                 return $text;
             }
@@ -14124,9 +14859,16 @@ private function mxchat_generate_response_xai($selected_model, $xai_api_key, $co
 
     $response_body = wp_remote_retrieve_body($response);
     $decoded_response = json_decode($response_body, true);
+    if (isset($decoded_response['usage'])) {
+        $this->mxchat_usage_add('chat', $selected_model, $decoded_response['usage']); // plan 705b6c
+    }
 
     if (isset($decoded_response['choices'][0]['message']['content'])) {
         $text = trim($decoded_response['choices'][0]['message']['content']);
+        // plan 7428c4: finish_reason length = cut at the token limit.
+        if ($this->mxchat_chat_completion_cut_off($decoded_response)) {
+            return $this->mxchat_append_cutoff_notice($text);
+        }
         if ($text !== '') {
             return $text;
         }
@@ -14299,9 +15041,16 @@ private function mxchat_generate_response_deepseek($selected_model, $deepseek_ap
 
         $response_body = wp_remote_retrieve_body($response);
         $decoded_response = json_decode($response_body, true);
+        if (isset($decoded_response['usage'])) {
+            $this->mxchat_usage_add('chat', $selected_model, $decoded_response['usage']); // plan 705b6c
+        }
 
         if (isset($decoded_response['choices'][0]['message']['content'])) {
             $text = trim($decoded_response['choices'][0]['message']['content']);
+            // plan 7428c4: finish_reason length = cut at the token limit.
+            if ($this->mxchat_chat_completion_cut_off($decoded_response)) {
+                return $this->mxchat_append_cutoff_notice($text);
+            }
             if ($text !== '') {
                 return $text;
             }
@@ -14498,13 +15247,23 @@ private function mxchat_generate_response_gemini($selected_model, $gemini_api_ke
         return $this->mxchat_friendly_chat_error($gemini_http_code, $gemini_error_message, 'Gemini', $selected_model);
     }
     
+    if (isset($response_body['usageMetadata'])) {
+        $this->mxchat_usage_add('gemini', $selected_model, $response_body['usageMetadata']); // plan 705b6c
+    }
+
     // Extract the response text: every text part, not only parts[0] (plan 781afd).
     $text = $this->mxchat_gemini_join_text_parts($response_body);
     if ($text !== '') {
+        // plan 7428c4: a reply cut at maxOutputTokens keeps its text and ends
+        // with the cut-off notice.
+        if (isset($response_body['candidates'][0]['finishReason']) && $response_body['candidates'][0]['finishReason'] === 'MAX_TOKENS') {
+            return $this->mxchat_append_cutoff_notice($text);
+        }
         return $text;
     }
     // No text came back: a withheld reply (safety / recitation / blocklist),
-    // an empty candidate, or a body that was not JSON at all.
+    // a reply cut at the output limit before any text, an empty candidate,
+    // or a body that was not JSON at all.
     return $this->mxchat_gemini_no_text_error($response_body, wp_remote_retrieve_response_code($response), $selected_model);
 }
 
@@ -14560,10 +15319,13 @@ private function mxchat_gemini_join_text_parts($response_body) {
 }
 
 /**
- * A Gemini reply with no text in it (plan 781afd). Three shapes land here:
+ * A Gemini reply with no text in it (plan 781afd). Four shapes land here:
  *  - withheld: promptFeedback.blockReason set, a candidate whose finishReason
- *    is not STOP (SAFETY, RECITATION, PROHIBITED_CONTENT, BLOCKLIST, SPII,
- *    MAX_TOKENS, OTHER), or a safetyRating with blocked=true;
+ *    is not STOP or MAX_TOKENS (SAFETY, RECITATION, PROHIBITED_CONTENT,
+ *    BLOCKLIST, SPII, OTHER), or a safetyRating with blocked=true;
+ *  - cut off (plan 7428c4): finishReason MAX_TOKENS with no block. Not a
+ *    safety call: visitors get the cut-off notice, an administrator also sees
+ *    that the output limit (maxOutputTokens) was reached;
  *  - empty: finishReason STOP and no text, the existing empty-completion contract;
  *  - not JSON: a null / non-array body (an HTML 5xx page), a provider error.
  *
@@ -14612,6 +15374,15 @@ private function mxchat_gemini_no_text_error($response_body, $http_code, $model)
     $ratings = array_values(array_unique($ratings));
 
     $this->mxchat_gemini_log_no_text($model, $http_code, $finish_reason, $block_reason, $ratings);
+
+    // plan 7428c4: MAX_TOKENS is the output limit, not a withheld reply. A
+    // block reason or a blocked rating on the same body still wins.
+    if ($finish_reason === 'MAX_TOKENS' && $block_reason === '' && !$blocked_rating) {
+        if (current_user_can('manage_options')) {
+            return $this->mxchat_cutoff_notice() . "\n\n" . esc_html__('Gemini reached the output limit (maxOutputTokens) before it wrote any text. Visitors see only the note above.', 'mxchat');
+        }
+        return $this->mxchat_cutoff_notice();
+    }
 
     $withheld = ($block_reason !== '') || $blocked_rating || ($finish_reason !== '' && $finish_reason !== 'STOP');
     if (!$withheld) {
@@ -15346,9 +16117,63 @@ public function check_fallback_rate_limits() {
     }
 }
 /**
- * Enhanced rate limit check that includes fallback cleanup and bot-specific rate limits
+ * Resolve the bot id a request is COUNTED against (plan 256483).
+ *
+ * Rate-limit counters are named after the bot id, and get_bot_options()
+ * quietly answers with the default bot for any id that is not a registered
+ * Multi-Bot bot (and for every id when Multi-Bot is inactive). Naming the
+ * counters after the raw request value therefore handed every visitor a
+ * fresh counter per made-up bot_id while the chat kept answering as the
+ * default bot: the per-visitor limits and the whole-chatbot cap never
+ * triggered, and wp_options grew one row per invented id.
+ *
+ * Rules: '' and 'default' -> 'default'. 'testing' (the admin Testing tab)
+ * keeps its own counters for an administrator and counts as 'default' for
+ * anyone else. Any other id is kept only when Multi-Bot knows it (the
+ * mxchat_get_bot_options filter answers with that bot's options); every
+ * other id resolves to 'default'. Real bots keep their own counters and
+ * their own limits exactly as before.
+ *
+ * @param string|null $raw The requested bot id; null reads $_POST['bot_id'].
+ * @return string The id to count against.
  */
-public function check_rate_limit() {
+public function mxchat_resolve_bot_id($raw = null) {
+    static $resolved = array();
+
+    if ($raw === null) {
+        $raw = isset($_POST['bot_id']) ? wp_unslash($_POST['bot_id']) : '';
+    }
+    $bot_id = sanitize_key((string) $raw);
+    if ($bot_id === '' || $bot_id === 'default') {
+        return 'default';
+    }
+    if ($bot_id === 'testing') {
+        return current_user_can('manage_options') ? 'testing' : 'default';
+    }
+    if (isset($resolved[$bot_id])) {
+        return $resolved[$bot_id];
+    }
+
+    $exists = false;
+    if (class_exists('MxChat_Multi_Bot_Manager')) {
+        $bot_options = apply_filters('mxchat_get_bot_options', array(), $bot_id);
+        $exists = is_array($bot_options) && !empty($bot_options);
+    }
+    if (!$exists && defined('WP_DEBUG') && WP_DEBUG) {
+        error_log('MxChat: unknown bot_id "' . $bot_id . '" counted against the default bot.');
+    }
+
+    $resolved[$bot_id] = $exists ? $bot_id : 'default';
+    return $resolved[$bot_id];
+}
+
+/**
+ * Enhanced rate limit check that includes fallback cleanup and bot-specific rate limits
+ *
+ * @param string|null $bot_id The bot id to count against, already resolved by
+ *                            mxchat_resolve_bot_id(); null resolves it from the request.
+ */
+public function check_rate_limit($bot_id = null) {
     // Check if we need to run fallback cleanup
     $use_fallback = get_option('mxchat_use_fallback_rate_limits', false);
     $next_check = get_option('mxchat_next_rate_limit_check', 0);
@@ -15358,9 +16183,10 @@ public function check_rate_limit() {
         update_option('mxchat_next_rate_limit_check', time() + 3600); // Next hour
     }
     
-    // Get bot ID from current request context
-    $bot_id = isset($_POST['bot_id']) ? sanitize_key($_POST['bot_id']) : 'default';
-    
+    // The bot id every counter below is named after: a registered bot keeps
+    // its own, anything else counts as the default bot (plan 256483).
+    $bot_id = $this->mxchat_resolve_bot_id($bot_id);
+
     // Get bot-specific options (includes rate limits if overridden)
     $bot_options = $this->get_bot_options($bot_id);
     $current_options = !empty($bot_options) ? $bot_options : $this->options;
@@ -15380,8 +16206,7 @@ public function check_rate_limit() {
     $global_limit_raw = isset($global_cfg['limit']) ? (string) $global_cfg['limit'] : 'unlimited';
     $global_timeframe = isset($global_cfg['timeframe']) ? (string) $global_cfg['timeframe'] : 'daily';
     if ($global_limit_raw !== '' && $global_limit_raw !== 'unlimited' && (int) $global_limit_raw >= 1) {
-        $bot_id_for_global = isset($_POST['bot_id']) ? sanitize_key($_POST['bot_id']) : 'default';
-        $safe_bot_global   = preg_replace('/[^a-zA-Z0-9_]/', '_', $bot_id_for_global);
+        $safe_bot_global   = preg_replace('/[^a-zA-Z0-9_]/', '_', $bot_id);
         $global_option     = 'mxchat_chat_limit_' . $safe_bot_global . '_global';
         $global_data       = get_option($global_option, ['count' => 0, 'timestamp' => time()]);
         if ((int) $global_data['count'] === 0) {

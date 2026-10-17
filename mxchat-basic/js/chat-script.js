@@ -1066,6 +1066,15 @@ function callMxChat(message, callback, botId) {
                 updateChatModeIndicator(response.data.chat_mode, botId);
             }
 
+            // Server-side pre-chat gate (f2cce2): this session has not completed
+            // the form, so show it again instead of an error bubble.
+            if (response.status === 'lead_capture_required') {
+                getElement(botId, 'chat-box').find('.bot-message.temporary-message').remove();
+                enableChatInput(botId);
+                if (typeof showEmailFormForBot === 'function') { showEmailFormForBot(botId); }
+                return;
+            }
+
             // SECURITY FIX: Check for errors FIRST before checking for success
             // This ensures API errors (quota exceeded, invalid key, rate limit) are properly displayed
             if (response.success === false || (response.data && response.data.error_message)) {
@@ -1565,6 +1574,14 @@ function handleNonStreamResponse(data, callback, botId) {
 
     // NOTE: Don't remove temporary message here - let replaceLastMessage handle it
     // This prevents a visual gap between thinking dots disappearing and content appearing
+
+    // Server-side pre-chat gate (f2cce2): show the form again, no error bubble.
+    if (data.status === 'lead_capture_required') {
+        getElement(botId, 'chat-box').find('.bot-message.temporary-message').remove();
+        enableChatInput(botId);
+        if (typeof showEmailFormForBot === 'function') { showEmailFormForBot(botId); }
+        return;
+    }
 
     // SECURITY FIX: Check for errors FIRST
     if (data.success === false || (data.data && data.data.error_message)) {
@@ -2677,6 +2694,9 @@ function replaceLastMessage(sender, responseText, responseHtml = '', images = []
         return `${prefix}<a href="${safeUrl}" target="${linkTarget}">${cleanUrl}</a>`;
     });
     
+    // Fenced code blocks go back last (M7a)
+    processedText = literals.restoreBlocks(processedText);
+
     return processedText;
 }
      
@@ -2688,14 +2708,23 @@ function replaceLastMessage(sender, responseText, responseHtml = '', images = []
     // backtick, hash, pipe or bracket for a later rule to match.
     function protectLiterals(text) {
         const store = [];
-        const out = String(text).replace(/\\([\\`*_~])|(```[\s\S]*?```)|(`[^`\n]+`)/g, function(match, escaped) {
+        const out = String(text).replace(/\\([\\`*_~])|(```[\s\S]*?```)|(`[^`\n]+`)/g, function(match, escaped, fenced) {
             store.push(escaped !== undefined ? escaped : formatCodeBlocks(match));
-            return '\uE000' + (store.length - 1) + '\uE001';
+            return (fenced !== undefined ? '\uE002' : '\uE000') + (store.length - 1) + '\uE001';
         });
         return {
             text: out,
             restore: function(t) {
                 return String(t).replace(/\uE000(\d+)\uE001/g, function(m, i) {
+                    return store[Number(i)];
+                });
+            },
+            // Fenced blocks have their own mark and go back last, after the
+            // table, paragraph and link rules (M7a): none of those may reach
+            // inside the code, so a blank line no longer splits the block and
+            // Copy gets the code as written.
+            restoreBlocks: function(t) {
+                return String(t).replace(/\uE002(\d+)\uE001/g, function(m, i) {
                     return store[Number(i)];
                 });
             }
@@ -2796,35 +2825,35 @@ function convertNewlinesToBreaks(text) {
         .join('');
 }
     function formatCodeBlocks(text) {
-        // Handle fenced code blocks with language specification (```language)
-        text = text.replace(/```(\w+)?\n?([\s\S]*?)```/g, (match, language, code) => {
-            const lang = language || 'text';
-            const escapedCode = escapeHtml(code.trim());
-            return `<div class="mxchat-code-block-container">
-                <div class="mxchat-code-header">
-                    <span class="mxchat-code-language">${lang}</span>
-                    <button class="mxchat-copy-button" aria-label="Copy to clipboard">Copy</button>
-                </div>
-                <pre class="mxchat-code-block"><code class="language-${lang}">${escapedCode}</code></pre>
-            </div>`;
+        // Fenced code blocks (```language) and inline code in ONE pass (M7a):
+        // the inline rule used to run over the finished block and turn a
+        // backtick inside the code into an inline-code span.
+        text = text.replace(/```(\w+)?\n?([\s\S]*?)```|`([^`\n]+)`/g, (match, language, code, inline) => {
+            if (inline !== undefined) {
+                return '<code class="mxchat-inline-code">' + escapeInlineCode(inline) + '</code>';
+            }
+            return codeBlockHtml(language || 'text', escapeHtml(code.trim()));
         });
-
-        // Handle inline code with single backticks
-        text = text.replace(/`([^`\n]+)`/g, '<code class="mxchat-inline-code">$1</code>');
 
         // Handle raw PHP tags (legacy support)
         text = text.replace(/(<\?php[\s\S]*?\?>)/g, (match) => {
-            const escapedCode = escapeHtml(match);
-            return `<div class="mxchat-code-block-container">
-                <div class="mxchat-code-header">
-                    <span class="mxchat-code-language">php</span>
-                    <button class="mxchat-copy-button" aria-label="Copy to clipboard">Copy</button>
-                </div>
-                <pre class="mxchat-code-block"><code class="language-php">${escapedCode}</code></pre>
-            </div>`;
+            return codeBlockHtml('php', escapeHtml(match));
         });
 
         return text;
+    }
+
+    // The code box as one line of markup (M7a): .bot-message keeps newlines
+    // (white-space: pre-line), so the indented template it was built from
+    // drew an empty band above the header and another under it.
+    function codeBlockHtml(lang, escapedCode) {
+        return '<div class="mxchat-code-block-container">' +
+            '<div class="mxchat-code-header">' +
+                '<span class="mxchat-code-language">' + lang + '</span>' +
+                '<button class="mxchat-copy-button" aria-label="Copy to clipboard">Copy</button>' +
+            '</div>' +
+            '<pre class="mxchat-code-block"><code class="language-' + lang + '">' + escapedCode + '</code></pre>' +
+        '</div>';
     }
 
     function formatMarkdownTables(text) {
@@ -2896,10 +2925,16 @@ function convertNewlinesToBreaks(text) {
         return result.join('\n');
     }
 
+    // Text and attribute safe: the result also lands in alt="" for image
+    // search results, so quotes are escaped too (CVE-2026-110662 follow-up).
     function sanitizeUserInput(text) {
-        const div = document.createElement('div');
-        div.textContent = text;
-        return div.innerHTML;
+        if (text === null || typeof text === 'undefined') return '';
+        return String(text)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#039;');
     }
 
     // Attribute-safe URL for href="…" / src="…" interpolation (plan 2db182).
@@ -2919,10 +2954,12 @@ function convertNewlinesToBreaks(text) {
     }
 
     function escapeHtml(unsafe) {
-        // Skip escaping if it's already escaped or contains HTML code block markup
-        if (unsafe.includes('&lt;') || unsafe.includes('&gt;') || 
-            unsafe.includes('<pre><code') || unsafe.includes('</code></pre>')) {
-            return unsafe;
+        // Code text is escaped exactly once (M7a). Code that arrives already
+        // escaped (&lt; / &gt;) is decoded first, so it shows the same
+        // characters as before; it used to be returned unescaped, so raw
+        // markup next to an entity was inserted as markup.
+        if (unsafe.includes('&lt;') || unsafe.includes('&gt;')) {
+            unsafe = decodeHTMLEntities(unsafe);
         }
         
         return unsafe
@@ -2933,6 +2970,20 @@ function convertNewlinesToBreaks(text) {
             .replace(/'/g, "&#039;");
     }
     
+    // Inline code text, escaped exactly once like a code block's (M7b), so it
+    // shows the characters as written. Quotes stay as typed: the span goes back
+    // before the link rules, and a URL after &quot; would be linked where one
+    // after a quote is not.
+    function escapeInlineCode(code) {
+        if (code.includes('&lt;') || code.includes('&gt;')) {
+            code = decodeHTMLEntities(code);
+        }
+        return code
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;");
+    }
+
     function decodeHTMLEntities(text) {
         var textArea = document.createElement('textarea');
         textArea.innerHTML = text;
@@ -3527,9 +3578,15 @@ function loadChatHistory(botId, onComplete) {
 
     function initializeChatVisibility(botId) {
         botId = botId || 'default';
-        const complianzEnabled = mxchatChat.complianz_toggle === 'on' ||
-                                mxchatChat.complianz_toggle === '1' ||
-                                mxchatChat.complianz_toggle === 1;
+        // The Complianz setting arrives as "1" from the normal loader
+        // (wp_localize_script), as a JSON true from the delayed and On User
+        // Interaction loader, or as "on" as the settings store it: every
+        // loading mode asks for consent the same way (M7g).
+        const complianzToggle = mxchatChat.complianz_toggle;
+        const complianzEnabled = complianzToggle === true ||
+                                complianzToggle === 'on' ||
+                                complianzToggle === '1' ||
+                                complianzToggle === 1;
 
         if (complianzEnabled && typeof cmplz_has_consent === "function" && typeof complianz !== 'undefined') {
             // Initial check
@@ -3540,11 +3597,15 @@ function loadChatHistory(botId, onComplete) {
                 checkConsentAndShowChat(botId);
             });
         } else {
-            // If Complianz is not enabled, always show
+            // If Complianz is not enabled (or its script is not on the page),
+            // always show. The window's no-consent mark is cleared with the
+            // launcher's, so once this script has run both marks mean the same
+            // thing in every loading mode: consent is needed and not given.
             getElement(botId, 'floating-chatbot-button')
                 .css('display', 'flex')
                 .removeClass('hidden no-consent')
                 .fadeTo(500, 1);
+            getElement(botId, 'floating-chatbot').removeClass('no-consent');
 
             // Also check pre-chat message when Complianz is not enabled
             checkPreChatDismissal(botId);
@@ -4132,7 +4193,7 @@ if (mxchatChat && mxchatChat.email_collection_enabled === 'on') {
         // Replace {visitor_name} placeholder (case-insensitive)
         if (visitorName && visitorName.trim()) {
             // Escape HTML to prevent XSS
-            var safeName = $('<div>').text(visitorName.trim()).html();
+            var safeName = $('<div>').text(visitorName.trim()).html().replace(/"/g, '&quot;').replace(/'/g, '&#039;');
             html = html.replace(/\{visitor_name\}/gi, safeName);
         } else {
             // Remove placeholder and clean up spacing if no name provided
@@ -4630,10 +4691,12 @@ $(document).on('click', '.chat-box a[href]:not([data-tracked])', function(e) {
     // Initialize all chatbot instances on the page
     initializeAllInstances();
 
-    // Legacy initialization for single bot compatibility
+    // Legacy initialization for single bot compatibility. A launcher kept back
+    // for cookie consent (no-consent) is left to initializeChatVisibility():
+    // un-hiding it here painted it for the length of its fade-out (M7g).
     $('.floating-chatbot.hidden').each(function() {
         var botId = getBotIdFromElement(this);
-        getElement(botId, 'floating-chatbot-button').removeClass('hidden');
+        getElement(botId, 'floating-chatbot-button').not('.no-consent').removeClass('hidden');
     });
 
     // Initialize when document is ready

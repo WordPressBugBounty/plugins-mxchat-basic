@@ -3,7 +3,7 @@
  * Plugin Name: MxChat
  * Plugin URI: https://mxchat.ai/
  * Description: AI chatbot for WordPress with OpenAI, Claude, xAI, DeepSeek, live agent, PDF uploads, WooCommerce, and training on website data.
- * Version: 3.2.25
+ * Version: 3.2.26
  * Author: MxChat
  * Author URI: https://mxchat.ai
  * License: GPLv2 or later
@@ -142,81 +142,15 @@ function mxchat_load_textdomain() {
 }
 add_action('init', 'mxchat_load_textdomain');
 
-/**
- * One-time migration: gemini-3-pro-preview was shut down by Google on March 9, 2026.
- * Existing installs with the dead ID get auto-remapped to gemini-3.1-pro-preview
- * (Google's official migration target) the first time admin_init fires after update.
+/*
+ * The one-off admin_init remaps that lived here (gemini-3-pro-preview,
+ * the Grok 2 family, the Claude 4 2025-05-14 snapshots) were removed in
+ * direct task M4: those ids are rows in MxChat_Model_Catalog::retired_model_map()
+ * and mxchat_migrate_deprecated_models() moves them (and now Multi-Bot bots,
+ * the content image model and add-on settings too) with a notice. Two of the
+ * old targets (grok-4-1-fast-non-reasoning, claude-sonnet-4-6) are legacy
+ * models today; the map sends those ids to current ones instead.
  */
-add_action('admin_init', function () {
-    if (get_option('mxchat_gemini_3_remap_done')) {
-        return;
-    }
-    $opts = get_option('mxchat_options');
-    if (is_array($opts) && isset($opts['model']) && $opts['model'] === 'gemini-3-pro-preview') {
-        $opts['model'] = 'gemini-3.1-pro-preview';
-        update_option('mxchat_options', $opts);
-    }
-    if (is_array($opts) && isset($opts['content_model']) && $opts['content_model'] === 'gemini-3-pro-preview') {
-        $opts['content_model'] = 'gemini-3.1-pro-preview';
-        update_option('mxchat_options', $opts);
-    }
-    update_option('mxchat_gemini_3_remap_done', 1);
-});
-
-/**
- * One-time migration: the Grok 2 family was retired by xAI (grok-2, grok-2-1212,
- * grok-2-latest, grok-2-vision-1212 all return 400 "Model not found"). Existing
- * installs with the dead ID get auto-remapped to grok-4-1-fast-non-reasoning
- * (modern, fast, broadly available) the first time admin_init fires after update.
- */
-add_action('admin_init', function () {
-    if (get_option('mxchat_grok_2_remap_done')) {
-        return;
-    }
-    $opts = get_option('mxchat_options');
-    if (is_array($opts) && isset($opts['model']) && $opts['model'] === 'grok-2') {
-        $opts['model'] = 'grok-4-1-fast-non-reasoning';
-        update_option('mxchat_options', $opts);
-    }
-    if (is_array($opts) && isset($opts['content_model']) && $opts['content_model'] === 'grok-2') {
-        $opts['content_model'] = 'grok-4-1-fast-non-reasoning';
-        update_option('mxchat_options', $opts);
-    }
-    update_option('mxchat_grok_2_remap_done', 1);
-});
-
-/**
- * One-time migration: Anthropic retired the Claude 4 (2025-05-14) snapshots on
- * June 15, 2026 — claude-opus-4-20250514 and claude-sonnet-4-20250514 now return
- * an API error. Existing installs with a dead ID get auto-remapped to the current
- * equivalents Anthropic recommends (Opus 4.8 / Sonnet 4.6) the first time admin_init
- * fires after update. Mirrors the gemini-3-pro-preview / grok-2 rescues above.
- */
-add_action('admin_init', function () {
-    if (get_option('mxchat_claude_4_retire_remap_done')) {
-        return;
-    }
-    $map = array(
-        'claude-opus-4-20250514'   => 'claude-opus-4-8',
-        'claude-sonnet-4-20250514' => 'claude-sonnet-4-6',
-    );
-    $opts = get_option('mxchat_options');
-    if (is_array($opts)) {
-        $changed = false;
-        if (isset($opts['model']) && isset($map[$opts['model']])) {
-            $opts['model'] = $map[$opts['model']];
-            $changed = true;
-        }
-        if (isset($opts['content_model']) && isset($map[$opts['content_model']])) {
-            $opts['content_model'] = $map[$opts['content_model']];
-            $changed = true;
-        }
-        if ($changed) {
-            update_option('mxchat_options', $opts);
-        }
-    }
-    update_option('mxchat_claude_4_retire_remap_done', 1);
-});
 
 /**
  * Exclude MxChat assets from caching plugin optimizations
@@ -497,6 +431,7 @@ function mxchat_include_classes() {
         'includes/class-mxchat-chunker.php',
         'includes/class-mxchat-word-handler.php',
         'includes/class-mxchat-content-generator.php',
+        'includes/class-mxchat-media-image.php',
         'includes/class-mxchat-cache-purge.php',
         'includes/class-mxchat-editor-assistant.php',
         'includes/class-rest-api.php',
@@ -676,6 +611,10 @@ function mxchat_create_chat_transcripts_table() {
         originating_page_url TEXT DEFAULT NULL,
         originating_page_title VARCHAR(500) DEFAULT NULL,
         timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL,
+        model VARCHAR(191) DEFAULT NULL,
+        tokens_in INT(10) UNSIGNED DEFAULT NULL,
+        tokens_cached INT(10) UNSIGNED DEFAULT NULL,
+        tokens_out INT(10) UNSIGNED DEFAULT NULL,
         PRIMARY KEY (id),
         KEY session_id (session_id),
         KEY user_email (user_email),
@@ -716,7 +655,13 @@ function mxchat_ensure_all_columns($table_name) {
         'user_name' => 'VARCHAR(100) DEFAULT NULL',
         'originating_page_url' => 'TEXT DEFAULT NULL',
         'originating_page_title' => 'VARCHAR(500) DEFAULT NULL',
-        'rag_context' => 'LONGTEXT DEFAULT NULL'
+        'rag_context' => 'LONGTEXT DEFAULT NULL',
+        // 3.2.26 (plan 705b6c): model and token usage of an AI reply. NULL = not
+        // recorded (rows saved before 3.2.26, replies that came from no provider).
+        'model' => 'VARCHAR(191) DEFAULT NULL',
+        'tokens_in' => 'INT(10) UNSIGNED DEFAULT NULL',
+        'tokens_cached' => 'INT(10) UNSIGNED DEFAULT NULL',
+        'tokens_out' => 'INT(10) UNSIGNED DEFAULT NULL'
     ];
     
     // Get existing columns
@@ -1124,6 +1069,48 @@ function mxchat_create_session_ratings_table() {
 }
 
 /**
+ * Delete the satisfaction ratings stored for the given sessions (plan 79c1be).
+ *
+ * A rating belongs to its conversation: every path that removes a session's
+ * transcript rows (retention, Delete Chat, bulk delete, the Leads wipe, the
+ * privacy eraser, the REST session delete) calls this so the thumbs-up/down
+ * and the free-text feedback go with it. Batched in chunks of 500 ids so a
+ * retention sweep of thousands of sessions stays a few short statements.
+ *
+ * @param string[] $session_ids
+ * @return int Rating rows removed.
+ */
+function mxchat_delete_session_ratings(array $session_ids) {
+    global $wpdb;
+    static $table_exists = null;
+
+    $session_ids = array_values(array_unique(array_filter(array_map('strval', $session_ids), 'strlen')));
+    if (empty($session_ids)) {
+        return 0;
+    }
+
+    $table = $wpdb->prefix . 'mxchat_session_ratings';
+    if ($table_exists !== true) {
+        $table_exists = ($wpdb->get_var($wpdb->prepare("SHOW TABLES LIKE %s", $table)) === $table);
+    }
+    if (!$table_exists) {
+        return 0;
+    }
+
+    $removed = 0;
+    foreach (array_chunk($session_ids, 500) as $chunk) {
+        $placeholders = implode(',', array_fill(0, count($chunk), '%s'));
+        // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- $placeholders is a server-built list of literal %s tokens.
+        $result = $wpdb->query($wpdb->prepare("DELETE FROM {$table} WHERE session_id IN ($placeholders)", $chunk));
+        if ($result !== false) {
+            $removed += (int) $result;
+        }
+    }
+
+    return $removed;
+}
+
+/**
  * Create the OpenAI Vector Store file-mapping table (v3.2.20, plan 15b5c6).
  * One row per mirrored KB entry: which store, which bot, which OpenAI file id,
  * and a hash of the uploaded body for change detection. Vector store files are
@@ -1191,80 +1178,378 @@ function mxchat_migrate_transcripts_charset() {
 }
 
 /**
- * Version 3.0.55: Migrate GPT-4 series models (deprecated 2026-02-17) to GPT-5 series
+ * Move every saved model a provider has discontinued to its replacement.
+ *
+ * Version 3.0.55 started this for the GPT-4 series; plan 202df5 routed it
+ * through the catalog's one retired map; direct task M4 (Maxwell, 2026-10-16:
+ * "discontinue any model that's discontinued and migrate users to a valid
+ * model") made it cover the Content screen's image model and every add-on that
+ * stores a model, show ONE notice naming each old and new model, and run again
+ * by itself when an announced retirement date is reached (see
+ * mxchat_maybe_migrate_retired_models()). Idempotent: only ids in the retired
+ * maps are touched; legacy (older but still served) models never are.
  */
 function mxchat_migrate_deprecated_models() {
-    $options = get_option('mxchat_options', array());
-    $migrated = false;
-    $migration_message = '';
-
-    if (!isset($options['model'])) {
-        return;
-    }
-
     // The retired-id → replacement mapping lives in ONE place:
-    // MxChat_Model_Catalog::retired_model_map() (plan 202df5). This function
-    // and every add-on that stores model ids consume that map — do not add a
+    // MxChat_Model_Catalog::retired_model_map() (plan 202df5), and image models
+    // in retired_image_model_map() (direct task M4). This function and every
+    // add-on that stores model ids consume those maps — do not add a
     // deprecation list here again.
     if (!class_exists('MxChat_Model_Catalog') || !method_exists('MxChat_Model_Catalog', 'retired_model_map')) {
         return; // catalog not loaded (defensive) — the next admin load retries
     }
     $map = MxChat_Model_Catalog::retired_model_map();
+    $img = method_exists('MxChat_Model_Catalog', 'retired_image_model_map') ? MxChat_Model_Catalog::retired_image_model_map() : array();
 
-    $current_model = $options['model'];
-    if (isset($map[$current_model])) {
-        $entry = $map[$current_model];
-        $options['model'] = $entry['to'];
-        $migrated = true;
-        $migration_message = sprintf(
-            'Your chatbot model has been automatically updated from %s to %s %s.',
-            $current_model,
-            $entry['label'],
-            $entry['reason']
+    $changes = array();
+    $options = get_option('mxchat_options', array());
+    if (is_array($options)) {
+        // Every saved model core owns. Since 202df5 the content model is moved
+        // by the same map as the chat model; since M4 the Content screen's image
+        // model is moved by the image map.
+        $slots = array(
+            'model'               => array('chat', $map),
+            'content_model'       => array('content', $map),
+            'content_image_model' => array('content_image', $img),
         );
+        $updated = false;
+        foreach ($slots as $key => $slot) {
+            list($where, $slot_map) = $slot;
+            $old = isset($options[$key]) && is_string($options[$key]) ? $options[$key] : '';
+            if ($old === '' || !isset($slot_map[$old]['to'])) {
+                continue;
+            }
+            $options[$key] = $slot_map[$old]['to'];
+            $updated = true;
+            $changes[] = mxchat_model_migration_entry($where, $old, $slot_map[$old]);
+        }
+        if ($updated) {
+            update_option('mxchat_options', $options);
+        }
     }
 
-    // The content generator has its own model option — the same map applies.
-    // (Pre-202df5 this branch covered only the two gpt-5.x-chat-latest aliases;
-    // it now covers every retired id, so e.g. a content model stranded on a
-    // retired Claude id is rescued the same way the chat model is.)
-    if (isset($options['content_model']) && isset($map[$options['content_model']])) {
-        $old_content_model = $options['content_model'];
-        $entry = $map[$old_content_model];
-        $options['content_model'] = $entry['to'];
-        $migrated = true;
-        $migration_message = trim($migration_message . ' ' . sprintf(
-            'Your content generation model has also been automatically updated from %s to %s %s.',
-            $old_content_model,
-            $entry['label'],
-            $entry['reason']
-        ));
-    }
+    // Add-ons that store their own model ids (Admin Chat, AI Search, the AI
+    // theme generator, Image Analysis editing, Perplexity) move theirs here and
+    // report each move through mxchat_record_model_migrations(), so the owner
+    // gets ONE notice for the whole site. Multi-Bot keeps its own digest-driven
+    // pass (it also runs against an older core) and reports the same way.
+    do_action('mxchat_migrate_saved_models', $map, $img);
 
-    if ($migrated) {
-        update_option('mxchat_options', $options);
-        update_option('mxchat_model_migrated_notice', true);
-        update_option('mxchat_model_migration_message', $migration_message);
+    if (!empty($changes)) {
+        mxchat_record_model_migrations($changes);
     }
+    update_option('mxchat_retired_map_digest', mxchat_retired_map_digest(), false);
 }
 
 /**
- * Show admin notice after model migration
+ * One notice line for a moved setting. 'where' is a key the notice renders in
+ * the site's language at display time (the migration usually runs before the
+ * text domain loads): chat, content, content_image, bot (+ name), admin_chat,
+ * admin_chat_image, search, theme, vision_editing, perplexity.
+ *
+ * @param string $where Setting key (see above).
+ * @param string $old   The discontinued model id.
+ * @param array  $row   Its retired-map row (to, label, optional from_label).
+ * @param string $name  Optional name (a Multi-Bot bot's name).
+ * @return array
+ */
+function mxchat_model_migration_entry($where, $old, $row, $name = '') {
+    $old = (string) $old;
+    $old_label = !empty($row['from_label']) ? $row['from_label']
+        : ((class_exists('MxChat_Model_Catalog') && method_exists('MxChat_Model_Catalog', 'chat_model_label')) ? MxChat_Model_Catalog::chat_model_label($old) : $old);
+    $slug = (class_exists('MxChat_Model_Catalog') && method_exists('MxChat_Model_Catalog', 'provider_slug_for_id')) ? MxChat_Model_Catalog::provider_slug_for_id($old) : '';
+    return array(
+        'where'     => (string) $where,
+        'name'      => (string) $name,
+        'old'       => $old,
+        'old_label' => (string) $old_label,
+        'new'       => isset($row['to']) ? (string) $row['to'] : '',
+        'new_label' => isset($row['label']) ? (string) $row['label'] : (isset($row['to']) ? (string) $row['to'] : ''),
+        'company'   => (class_exists('MxChat_Model_Catalog') && method_exists('MxChat_Model_Catalog', 'provider_company')) ? MxChat_Model_Catalog::provider_company($slug) : '',
+    );
+}
+
+/**
+ * Add lines to the "discontinued models replaced" notice. Public on purpose:
+ * add-ons call it (guarded with function_exists) for the settings they own.
+ * Lines accumulate until the owner dismisses the notice; a repeated line
+ * (same setting, same old and new model) is stored once.
+ *
+ * @param array $entries Lines from mxchat_model_migration_entry().
+ */
+function mxchat_record_model_migrations($entries) {
+    if (empty($entries) || !is_array($entries)) {
+        return;
+    }
+    $notice = get_option('mxchat_model_migration_notice', array());
+    if (!is_array($notice) || !isset($notice['entries']) || !is_array($notice['entries'])) {
+        $notice = array('entries' => array());
+    }
+    foreach ($entries as $entry) {
+        if (!is_array($entry) || empty($entry['old']) || empty($entry['new'])) {
+            continue;
+        }
+        $key = md5(($entry['where'] ?? '') . '|' . ($entry['name'] ?? '') . '|' . $entry['old'] . '|' . $entry['new']);
+        $notice['entries'][$key] = $entry;
+    }
+    $notice['updated_at'] = time();
+    update_option('mxchat_model_migration_notice', $notice, false);
+}
+
+/**
+ * Fingerprint of everything the migration would move: the retired chat ids
+ * and the discontinued image ids. It changes when a release adds a row AND on
+ * the day an announced retirement date is reached (the maps are date-aware),
+ * which is what lets sites that never upgrade still be moved (direct task M4).
+ */
+function mxchat_retired_map_digest() {
+    if (!class_exists('MxChat_Model_Catalog') || !method_exists('MxChat_Model_Catalog', 'retired_model_map')) {
+        return '';
+    }
+    $ids = array_keys(MxChat_Model_Catalog::retired_model_map());
+    if (method_exists('MxChat_Model_Catalog', 'retired_image_model_map')) {
+        $ids = array_merge($ids, array_map(function ($id) { return 'image:' . $id; }, array_keys(MxChat_Model_Catalog::retired_image_model_map())));
+    }
+    sort($ids);
+    return md5(wp_json_encode($ids));
+}
+
+/**
+ * Re-run the migration when the retired maps changed since it last ran.
+ * Hooked to admin_init and to the existing daily model-liveness cron, so a
+ * site that never upgrades is still moved off a model within a day of its
+ * provider's shutdown date — and request-time resolve_retired() covers the
+ * chat in between. Cheap when nothing changed: one digest comparison.
+ */
+function mxchat_maybe_migrate_retired_models() {
+    $digest = mxchat_retired_map_digest();
+    if ($digest === '' || get_option('mxchat_retired_map_digest') === $digest) {
+        return;
+    }
+    mxchat_migrate_deprecated_models();
+}
+add_action('admin_init', 'mxchat_maybe_migrate_retired_models', 5);
+add_action('mxchat_model_liveness_check', 'mxchat_maybe_migrate_retired_models', 5);
+
+/**
+ * The notice's lines, in the site's language. Includes the single message an
+ * older MxChat version may have stored and not shown yet.
+ *
+ * @return string[] Plain-text sentences (escape on output).
+ */
+function mxchat_model_migration_notice_lines() {
+    $lines  = array();
+    $notice = get_option('mxchat_model_migration_notice', array());
+    $wheres = array(
+        'chat'             => __('Your chatbot', 'mxchat'),
+        'content'          => __('Your content generator', 'mxchat'),
+        'content_image'    => __('Content image generation', 'mxchat'),
+        'admin_chat'       => __('The Admin Assistant', 'mxchat'),
+        'admin_chat_image' => __('Admin Assistant image generation', 'mxchat'),
+        'search'           => __('AI Search', 'mxchat'),
+        'theme'            => __('The AI theme generator', 'mxchat'),
+        'vision_editing'   => __('Image editing', 'mxchat'),
+        'perplexity'       => __('Web search (Perplexity)', 'mxchat'),
+    );
+    if (is_array($notice) && !empty($notice['entries']) && is_array($notice['entries'])) {
+        // The chatbot first, then the other settings in a fixed order, so the
+        // line an owner cares about most leads whatever order the moves ran in.
+        $order   = array_flip(array('chat', 'bot', 'content', 'content_image', 'search', 'admin_chat', 'admin_chat_image', 'vision_editing', 'theme', 'perplexity'));
+        $entries = array_values($notice['entries']);
+        usort($entries, function ($a, $b) use ($order) {
+            $ra = isset($a['where'], $order[$a['where']]) ? $order[$a['where']] : 99;
+            $rb = isset($b['where'], $order[$b['where']]) ? $order[$b['where']] : 99;
+            return $ra - $rb;
+        });
+        foreach ($entries as $e) {
+            $e = array_merge(array('where' => '', 'name' => '', 'old' => '', 'old_label' => '', 'new_label' => '', 'company' => ''), (array) $e);
+            if ($e['where'] === 'bot') {
+                /* translators: %s: Multi-Bot bot name */
+                $where = sprintf(__('The bot “%s”', 'mxchat'), $e['name'] !== '' ? $e['name'] : $e['old']);
+            } else {
+                $where = isset($wheres[$e['where']]) ? $wheres[$e['where']] : __('A saved setting', 'mxchat');
+            }
+            $lines[] = sprintf(
+                /* translators: 1: which setting ("Your chatbot"), 2: old model name, 3: provider ("Google"), 4: new model name */
+                __('%1$s was using %2$s, which %3$s has discontinued; it now uses %4$s.', 'mxchat'),
+                $where,
+                $e['old_label'],
+                $e['company'] !== '' ? $e['company'] : __('the provider', 'mxchat'),
+                $e['new_label']
+            );
+        }
+    }
+    // Pre-M4 versions stored one pre-built English message.
+    if (get_option('mxchat_model_migrated_notice')) {
+        $legacy = (string) get_option('mxchat_model_migration_message', '');
+        if ($legacy !== '') {
+            $lines[] = $legacy;
+        }
+    }
+    return $lines;
+}
+
+/** Nonce'd dismiss URL shared by both renderings of the notice. */
+function mxchat_model_migration_dismiss_url() {
+    return wp_nonce_url(admin_url('admin-post.php?action=mxchat_dismiss_model_migration_notice'), 'mxchat_dismiss_model_migration_notice');
+}
+
+/**
+ * "Discontinued models replaced" — standard WP notice for admin screens
+ * OUTSIDE MxChat's own pages (Dashboard, Plugins, Updates). On MxChat pages
+ * the branded shell paints over WP's notice region (see
+ * MxChat_Model_Liveness::render_notice()), so the Settings screen renders
+ * mxchat_render_model_migration_inline_notice() instead. Shown until the
+ * owner dismisses it — never deleted on first render, which is how a
+ * migration notice used to vanish unseen behind the shell.
  */
 function mxchat_show_migration_notice() {
-    if (get_option('mxchat_model_migrated_notice')) {
-        $migration_message = get_option('mxchat_model_migration_message', __('Your chatbot model has been automatically updated due to a model deprecation.', 'mxchat'));
-        ?>
-        <div class="notice notice-info is-dismissible">
-            <p>
-                <strong><?php esc_html_e('MxChat Model Updated', 'mxchat'); ?></strong><br>
-                <?php echo esc_html($migration_message); ?>
+    if (!current_user_can('manage_options')) {
+        return;
+    }
+    $page = isset($_GET['page']) ? sanitize_key(wp_unslash($_GET['page'])) : '';
+    if (strpos($page, 'mxchat') === 0) {
+        return; // branded shell — the Settings screen shows the in-shell version
+    }
+    $lines = mxchat_model_migration_notice_lines();
+    if (empty($lines)) {
+        return;
+    }
+    ?>
+    <div class="notice notice-info mxchat-model-migration-notice">
+        <p><strong><?php esc_html_e('MxChat replaced discontinued AI models', 'mxchat'); ?></strong></p>
+        <?php foreach ($lines as $line) : ?>
+            <p><?php echo esc_html($line); ?></p>
+        <?php endforeach; ?>
+        <p>
+            <a href="<?php echo esc_url(admin_url('admin.php?page=mxchat-settings')); ?>"><?php esc_html_e('Change it in Settings', 'mxchat'); ?></a>
+            &nbsp;|&nbsp;
+            <a href="<?php echo esc_url(mxchat_model_migration_dismiss_url()); ?>"><?php esc_html_e('Dismiss', 'mxchat'); ?></a>
+        </p>
+    </div>
+    <?php
+}
+
+/**
+ * The same notice inside MxChat's shell, in the design system's .mxch-notice
+ * component. Called from the AI Models section of admin-settings-page.php,
+ * right above the Chat Model field it talks about.
+ */
+function mxchat_render_model_migration_inline_notice() {
+    if (!current_user_can('manage_options')) {
+        return;
+    }
+    $lines = mxchat_model_migration_notice_lines();
+    if (empty($lines)) {
+        return;
+    }
+    ?>
+    <div class="mxch-notice mxch-notice-info mxch-notice-block mxchat-model-migration-notice-inline" role="status">
+        <svg class="mxch-notice-icon" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+        <div class="mxch-notice-body">
+            <strong><?php esc_html_e('Discontinued models replaced', 'mxchat'); ?></strong>
+            <?php foreach ($lines as $line) : ?>
+                <p><?php echo esc_html($line); ?></p>
+            <?php endforeach; ?>
+            <p class="mxch-notice-actions">
+                <span><?php esc_html_e('You can choose a different model below.', 'mxchat'); ?></span>
+                <a class="mxch-btn mxch-btn-secondary mxch-btn-sm" href="<?php echo esc_url(mxchat_model_migration_dismiss_url()); ?>"><?php esc_html_e('Dismiss', 'mxchat'); ?></a>
             </p>
         </div>
-        <?php
-        delete_option('mxchat_model_migrated_notice');
-        delete_option('mxchat_model_migration_message');
+    </div>
+    <?php
+}
+
+/** Dismiss handler: the notice is gone until the next migration adds a line. */
+function mxchat_dismiss_model_migration_notice() {
+    if (!current_user_can('manage_options')) {
+        wp_die(esc_html__('Insufficient permissions.', 'mxchat'), '', array('response' => 403));
     }
+    check_admin_referer('mxchat_dismiss_model_migration_notice');
+    delete_option('mxchat_model_migration_notice');
+    delete_option('mxchat_model_migrated_notice');
+    delete_option('mxchat_model_migration_message');
+    $referer = wp_get_referer();
+    wp_safe_redirect($referer ? $referer : admin_url('admin.php?page=mxchat-settings'));
+    exit;
+}
+add_action('admin_post_mxchat_dismiss_model_migration_notice', 'mxchat_dismiss_model_migration_notice');
+
+/**
+ * Rule E of direct task M4: an embedding model is NEVER switched for the
+ * owner — the stored vectors only match the model that made them. When the
+ * saved embedding model is one its provider has shut down, explain what to do
+ * instead. Not dismissible: it clears itself once the embedding model changes.
+ *
+ * @return array|null array('model','label','to_label','company') or null.
+ */
+function mxchat_retired_embedding_model() {
+    if (!class_exists('MxChat_Model_Catalog') || !method_exists('MxChat_Model_Catalog', 'retired_embedding_map')) {
+        return null;
+    }
+    $options = get_option('mxchat_options', array());
+    $model   = is_array($options) && isset($options['embedding_model']) ? (string) $options['embedding_model'] : '';
+    $map     = MxChat_Model_Catalog::retired_embedding_map();
+    if ($model === '' || !isset($map[$model])) {
+        return null;
+    }
+    return array(
+        'model'    => $model,
+        'label'    => $map[$model]['from_label'],
+        'to_label' => $map[$model]['label'],
+        'company'  => MxChat_Model_Catalog::provider_company(MxChat_Model_Catalog::provider_slug_for_id($model)),
+    );
+}
+
+/** The embedding sentence, plain text (escape on output). */
+function mxchat_retired_embedding_sentence($info) {
+    return sprintf(
+        /* translators: 1: embedding model name, 2: provider ("Google"), 3: current embedding model name */
+        __('Your knowledge base was built with %1$s, which %2$s has discontinued, so knowledge-base answers may stop working. Re-embed it with %3$s: choose %3$s as the Embedding Model in MxChat Settings, then re-import your content. Your setting has not been changed.', 'mxchat'),
+        $info['label'],
+        $info['company'],
+        $info['to_label']
+    );
+}
+
+function mxchat_show_retired_embedding_notice() {
+    if (!current_user_can('manage_options')) {
+        return;
+    }
+    $page = isset($_GET['page']) ? sanitize_key(wp_unslash($_GET['page'])) : '';
+    if (strpos($page, 'mxchat') === 0) {
+        return; // the Settings screen shows the in-shell version
+    }
+    $info = mxchat_retired_embedding_model();
+    if (!$info) {
+        return;
+    }
+    ?>
+    <div class="notice notice-warning mxchat-embedding-retired-notice">
+        <p><strong><?php esc_html_e('MxChat: your embedding model was discontinued', 'mxchat'); ?></strong></p>
+        <p><?php echo esc_html(mxchat_retired_embedding_sentence($info)); ?></p>
+        <p><a href="<?php echo esc_url(admin_url('admin.php?page=mxchat-settings')); ?>"><?php esc_html_e('Open MxChat Settings', 'mxchat'); ?></a></p>
+    </div>
+    <?php
+}
+
+function mxchat_render_retired_embedding_inline_notice() {
+    if (!current_user_can('manage_options')) {
+        return;
+    }
+    $info = mxchat_retired_embedding_model();
+    if (!$info) {
+        return;
+    }
+    ?>
+    <div class="mxch-notice mxch-notice-warning mxch-notice-block mxchat-embedding-retired-notice-inline" role="status">
+        <svg class="mxch-notice-icon" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+        <div class="mxch-notice-body">
+            <strong><?php esc_html_e('Your embedding model was discontinued', 'mxchat'); ?></strong>
+            <p><?php echo esc_html(mxchat_retired_embedding_sentence($info)); ?></p>
+        </div>
+    </div>
+    <?php
 }
 
 /**
@@ -1494,11 +1779,31 @@ function mxchat_activate() {
     // Setup cron jobs
     mxchat_setup_cron_jobs();
 
+    // Read-only Transcripts capability for administrators (plan 93999a). Runs on
+    // activation and, because the upgrade block calls this function, on every
+    // update.
+    mxchat_grant_transcripts_capability();
+
     // Update version (stable base version — never the dev time()-suffixed one,
     // or the check_for_update comparison would churn every request)
     update_option('mxchat_plugin_version', MXCHAT_BASE_VERSION);
 
     //error_log("MxChat: Activation function completed");
+}
+
+/**
+ * Give the administrator role the mxchat_view_transcripts capability (plan
+ * 93999a). Only administrator is touched: a site owner grants it to any other
+ * role (for example a support role) themselves. Administrators can open
+ * Transcripts through manage_options anyway; holding the capability as well
+ * means a role editor shows it on the role it belongs to.
+ */
+function mxchat_grant_transcripts_capability() {
+    $role = get_role('administrator');
+    // Absent only: a capability a role editor set to "denied" stays denied.
+    if ($role && !array_key_exists('mxchat_view_transcripts', (array) $role->capabilities)) {
+        $role->add_cap('mxchat_view_transcripts');
+    }
 }
 
 /**
@@ -1739,6 +2044,16 @@ function mxchat_check_for_update() {
             // rewrites models on the catalog's retired_model_map().
             if (version_compare($current_version, '3.2.20', '<')) {
                 mxchat_backfill_tool_hint_defaults();
+                mxchat_migrate_deprecated_models();
+            }
+
+            // 3.2.26: direct task M4 — discontinued models move to their
+            // replacements (chat, content, Content image model and every add-on
+            // that stores a model, via the mxchat_migrate_saved_models action),
+            // with one notice naming each old and new model. The gate equals
+            // the version this block ships in (a5a598). Sites that do not
+            // upgrade are covered by mxchat_maybe_migrate_retired_models().
+            if (version_compare($current_version, '3.2.26', '<')) {
                 mxchat_migrate_deprecated_models();
             }
 
@@ -2174,6 +2489,7 @@ function mxchat_init() {
     
     // Add migration notice hook
     add_action('admin_notices', 'mxchat_show_migration_notice');
+    add_action('admin_notices', 'mxchat_show_retired_embedding_notice');
     add_action('admin_notices', 'mxchat_show_model_access_notice');
     
     // Initialize classes with error handling
@@ -2181,7 +2497,7 @@ function mxchat_init() {
         // Initialize admin classes
         if (is_admin()) {
             if (class_exists('MxChat_Knowledge_Manager')) {
-                $mxchat_knowledge_manager = new MxChat_Knowledge_Manager();
+                $mxchat_knowledge_manager = MxChat_Knowledge_Manager::get_instance();
                 
                 if (class_exists('MxChat_Admin')) {
                     $mxchat_admin = new MxChat_Admin($mxchat_knowledge_manager);
@@ -2263,6 +2579,44 @@ function mxchat_check_and_run_migrations() {
     mxchat_migrate_add_content_type_column();
     mxchat_migrate_add_translations_table();
     mxchat_migrate_add_session_ratings_table();
+    mxchat_migrate_cleanup_orphan_ratings();
+    mxchat_migrate_neutralise_rating_feedback();
+    mxchat_migrate_add_transcript_usage_columns();
+}
+
+/**
+ * Migration: model + token usage columns on the transcripts table (v3.2.26,
+ * plan 705b6c).
+ *
+ * Runs the table's own dbDelta statement (which now carries model, tokens_in,
+ * tokens_cached and tokens_out) plus mxchat_ensure_all_columns(), then marks
+ * itself done only when all four columns are really there. The chat writes
+ * usage only once this flag is set, so a site whose database user cannot ALTER
+ * keeps saving every message exactly as before. A failed attempt waits a day
+ * before trying again instead of running on every admin request.
+ */
+function mxchat_migrate_add_transcript_usage_columns() {
+    global $wpdb;
+    $migration_key = 'mxchat_transcripts_usage_columns';
+    if (get_option($migration_key) || get_transient('mxchat_transcripts_usage_columns_retry')) {
+        return;
+    }
+
+    $table = $wpdb->prefix . 'mxchat_chat_transcripts';
+    if ($wpdb->get_var($wpdb->prepare("SHOW TABLES LIKE %s", $table)) !== $table) {
+        // Activation creates the table, columns included; check again later.
+        return;
+    }
+
+    mxchat_create_chat_transcripts_table();
+
+    $columns = $wpdb->get_col("SHOW COLUMNS FROM `{$table}`", 0);
+    $missing = array_diff(array('model', 'tokens_in', 'tokens_cached', 'tokens_out'), (array) $columns);
+    if (empty($missing)) {
+        update_option($migration_key, '3.2.26');
+        return;
+    }
+    set_transient('mxchat_transcripts_usage_columns_retry', 1, DAY_IN_SECONDS);
 }
 
 /**
@@ -2276,6 +2630,113 @@ function mxchat_migrate_add_session_ratings_table() {
     }
     mxchat_create_session_ratings_table();
     update_option($migration_key, '3.2.6');
+}
+
+/**
+ * Migration: remove ratings whose conversation is already gone (v3.2.26, plan 79c1be).
+ *
+ * Before 3.2.26 nothing ever deleted from the ratings table, so retention,
+ * Delete Chat and the privacy eraser left the rating and its feedback behind.
+ * Runs in batches of 1,000 and marks itself done only once a batch comes back
+ * short, so a large table finishes over a few admin requests rather than one
+ * long one.
+ */
+function mxchat_migrate_cleanup_orphan_ratings() {
+    global $wpdb;
+    $migration_key = 'mxchat_session_ratings_orphans_cleaned';
+    if (get_option($migration_key)) {
+        return;
+    }
+
+    $ratings_table     = $wpdb->prefix . 'mxchat_session_ratings';
+    $transcripts_table = $wpdb->prefix . 'mxchat_chat_transcripts';
+    if ($wpdb->get_var($wpdb->prepare("SHOW TABLES LIKE %s", $ratings_table)) !== $ratings_table
+        || $wpdb->get_var($wpdb->prepare("SHOW TABLES LIKE %s", $transcripts_table)) !== $transcripts_table) {
+        update_option($migration_key, '3.2.26');
+        return;
+    }
+
+    $batch = 1000;
+    for ($i = 0; $i < 20; $i++) {
+        $orphan_ids = $wpdb->get_col($wpdb->prepare(
+            "SELECT r.id FROM {$ratings_table} r
+             LEFT JOIN {$transcripts_table} t ON t.session_id = r.session_id
+             WHERE t.session_id IS NULL
+             ORDER BY r.id ASC
+             LIMIT %d",
+            $batch
+        ));
+        if (!empty($orphan_ids)) {
+            $id_list = implode(',', array_map('intval', $orphan_ids));
+            $wpdb->query("DELETE FROM {$ratings_table} WHERE id IN ($id_list)");
+        }
+        if (count($orphan_ids) < $batch) {
+            update_option($migration_key, '3.2.26');
+            return;
+        }
+    }
+    // More than 20,000 orphans in one go: the next admin request continues.
+}
+
+/**
+ * Migration: neutralise stored rating feedback that tries to break out of an
+ * HTML attribute (v3.2.26, CVE-2026-110662, plan 9c73ed).
+ *
+ * Before 3.2.26 the Transcripts list put visitor feedback into a title=""
+ * attribute without escaping quotes. The new admin script is safe on its own;
+ * this also cleans rows saved before the update, so nothing stored on a site
+ * depends on the browser having loaded the new script. A row is changed only
+ * when it holds a quote AND an event-handler or javascript: shape; its quotes
+ * are removed and the rest of the text is kept. Batches of 500 from the last
+ * id seen, finishing over a few admin requests on a large table.
+ */
+function mxchat_migrate_neutralise_rating_feedback() {
+    global $wpdb;
+    $migration_key = 'mxchat_rating_feedback_neutralised';
+    if (get_option($migration_key)) {
+        return;
+    }
+
+    $table = $wpdb->prefix . 'mxchat_session_ratings';
+    if ($wpdb->get_var($wpdb->prepare("SHOW TABLES LIKE %s", $table)) !== $table) {
+        update_option($migration_key, '3.2.26');
+        return;
+    }
+
+    $cursor_key = 'mxchat_rating_feedback_neutralise_cursor';
+    $last_id    = (int) get_option($cursor_key, 0);
+    $batch      = 500;
+    for ($i = 0; $i < 20; $i++) {
+        $rows = $wpdb->get_results($wpdb->prepare(
+            "SELECT id, rating_feedback FROM {$table}
+             WHERE id > %d AND (rating_feedback LIKE %s OR rating_feedback LIKE %s)
+             ORDER BY id ASC
+             LIMIT %d",
+            $last_id,
+            '%' . $wpdb->esc_like('"') . '%',
+            '%' . $wpdb->esc_like("'") . '%',
+            $batch
+        ));
+        foreach ((array) $rows as $row) {
+            $last_id = (int) $row->id;
+            $text    = (string) $row->rating_feedback;
+            if (preg_match('/\bon[a-z]+\s*=|javascript\s*:/i', $text)) {
+                $wpdb->update(
+                    $table,
+                    array('rating_feedback' => str_replace(array('"', "'"), '', $text)),
+                    array('id' => (int) $row->id),
+                    array('%s'),
+                    array('%d')
+                );
+            }
+        }
+        if (count((array) $rows) < $batch) {
+            delete_option($cursor_key);
+            update_option($migration_key, '3.2.26');
+            return;
+        }
+    }
+    update_option($cursor_key, $last_id, false);
 }
 
 /**
@@ -2330,6 +2791,12 @@ register_deactivation_hook(__FILE__, 'mxchat_deactivate');
  * Records one 👍/👎 + optional feedback per chat session. The UNIQUE KEY on
  * session_id makes this naturally idempotent — only the first rating per
  * session is stored; duplicate POSTs are silent no-ops.
+ *
+ * Hardened in 3.2.26 (CVE-2026-110662, plan 9c73ed): a rating is accepted only
+ * for a conversation that exists and has at least one bot or agent reply,
+ * feedback can be added once but never replaced, and each address gets a
+ * small hourly budget of new ratings (filter `mxchat_rating_rate_limit`,
+ * default 10, 0 turns the throttle off).
  */
 function mxchat_save_session_rating() {
     global $wpdb;
@@ -2347,23 +2814,57 @@ function mxchat_save_session_rating() {
         $feedback = substr($feedback, 0, 1000);
     }
 
+    // Only a conversation the bot actually answered can be rated (the widget
+    // shows the prompt after the second bot reply).
+    $transcripts_table = $wpdb->prefix . 'mxchat_chat_transcripts';
+    $has_reply = $wpdb->get_var($wpdb->prepare(
+        "SELECT 1 FROM {$transcripts_table} WHERE session_id = %s AND role IN ('bot', 'agent') LIMIT 1",
+        $session_id
+    ));
+    if (!$has_reply) {
+        wp_send_json_error(array('message' => 'unknown_session'), 404);
+    }
+
     $table_name = $wpdb->prefix . 'mxchat_session_ratings';
-    $existing = $wpdb->get_var($wpdb->prepare(
-        "SELECT id FROM $table_name WHERE session_id = %s LIMIT 1",
+    $existing = $wpdb->get_row($wpdb->prepare(
+        "SELECT id, rating_feedback FROM $table_name WHERE session_id = %s LIMIT 1",
         $session_id
     ));
 
     if ($existing) {
-        if ($feedback !== '') {
-            $wpdb->update(
+        // The widget saves the thumb first and the optional comment second, so
+        // feedback may be added to a rating that has none. It is never replaced.
+        $updated = false;
+        if ($feedback !== '' && ($existing->rating_feedback === null || $existing->rating_feedback === '')) {
+            $updated = (bool) $wpdb->update(
                 $table_name,
                 array('rating_feedback' => $feedback),
-                array('id' => (int) $existing),
+                array('id' => (int) $existing->id),
                 array('%s'),
                 array('%d')
             );
         }
-        wp_send_json_success(array('updated' => true));
+        wp_send_json_success(array('updated' => $updated));
+    }
+
+    // Light per-address throttle on new ratings, fixed one-hour window. Feedback
+    // additions above need no budget of their own: each rating takes one at most.
+    $limit = (int) apply_filters('mxchat_rating_rate_limit', 10);
+    if ($limit > 0) {
+        $ip = class_exists('MxChat_User') ? MxChat_User::mxchat_get_client_ip() : '';
+        if ($ip !== '' && $ip !== 'unknown') {
+            $rl_key = 'mxchat_rating_rl_' . md5($ip);
+            $window = get_transient($rl_key);
+            $now    = time();
+            if (!is_array($window) || empty($window['t']) || ($now - (int) $window['t']) >= HOUR_IN_SECONDS) {
+                $window = array('n' => 0, 't' => $now);
+            }
+            if ((int) $window['n'] >= $limit) {
+                wp_send_json_error(array('message' => 'rate_limited'), 429);
+            }
+            $window['n'] = (int) $window['n'] + 1;
+            set_transient($rl_key, $window, max(1, HOUR_IN_SECONDS - ($now - (int) $window['t'])));
+        }
     }
 
     $inserted = $wpdb->insert(

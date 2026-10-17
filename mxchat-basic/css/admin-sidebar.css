@@ -1353,6 +1353,26 @@ body.rtl .mxch-nav-link.active {
     margin-bottom: var(--mxch-spacing-lg);
 }
 
+/* Multi-line notice body: a title line, one sentence per item, then an
+   actions row (direct task M4 — the "discontinued models replaced" notice). */
+.mxch-notice-body {
+    flex: 1;
+    min-width: 0;
+}
+
+.mxch-notice-body p {
+    margin: var(--mxch-spacing-xs) 0 0;
+}
+
+.mxch-notice-body .mxch-notice-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--mxch-spacing-sm);
+    margin-top: var(--mxch-spacing-sm);
+}
+
 /* ==========================================================================
    Disclosure (collapsible <details>)
    Generic Advanced/opt-in surface — used for static-bearer fallback on

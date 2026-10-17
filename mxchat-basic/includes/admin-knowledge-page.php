@@ -1405,7 +1405,7 @@ function mxchat_render_kb_reimport_card($current_bot_id = 'default') {
             </h3>
         </div>
         <div class="mxch-card-body">
-            <p class="mxch-field-description"><?php esc_html_e('Earlier versions stored some imported text incorrectly: currency signs and accents were dropped, HTML character codes were left in, and right-to-left PDF text was saved backwards. This finds the entries that still hold that text and rebuilds them from their source. Checking changes nothing.', 'mxchat'); ?></p>
+            <p class="mxch-field-description"><?php esc_html_e('Earlier versions stored some text incorrectly: currency signs and accents were dropped, HTML character codes were left in, right-to-left PDF text was saved backwards, and products lost their custom tab text. This finds the entries that still hold that text and rebuilds them from their source. Checking changes nothing.', 'mxchat'); ?></p>
 
             <div class="mxch-kb-reimport-controls">
                 <div class="mxch-field">
@@ -1464,6 +1464,41 @@ function mxchat_render_kb_reimport_card($current_bot_id = 'default') {
 }
 
 /**
+ * One post type's Auto-Sync switch with its "Keep imported entries up to date only"
+ * sub-switch beneath it (plan 9dd0da). Both autosave like every switch on this screen:
+ * the mxchat_auto_sync_ prefix routes them to mxchat_save_prompts_setting.
+ *
+ * @param string $post_type Post type name.
+ * @param string $label     Visible label of the main switch.
+ * @param bool   $strong    Bold label (Posts and Pages).
+ */
+function mxchat_render_auto_sync_type($post_type, $label, $strong = false) {
+    $key         = ($post_type === 'post') ? 'posts' : (($post_type === 'page') ? 'pages' : $post_type);
+    $sync_option = 'mxchat_auto_sync_' . $key;
+    $only_option = MxChat_Knowledge_Manager::mxchat_existing_only_option($post_type);
+    $nonce       = wp_create_nonce('mxchat_prompts_setting_nonce');
+    ?>
+    <div class="mxch-autosync-type">
+        <div class="mxch-autosync-row mxch-autosync-main">
+            <label class="mxchat-toggle-switch">
+                <input type="checkbox" name="<?php echo esc_attr($sync_option); ?>" class="mxchat-autosave-field" value="1" data-nonce="<?php echo esc_attr($nonce); ?>" aria-label="<?php echo esc_attr($label); ?>" <?php checked(get_option($sync_option, '0'), '1'); ?>>
+                <span class="mxchat-toggle-slider"></span>
+            </label>
+            <span class="mxch-autosync-label<?php echo $strong ? ' mxch-autosync-label-strong' : ''; ?>"><?php echo esc_html($label); ?></span>
+        </div>
+        <div class="mxch-autosync-row mxch-autosync-sub">
+            <label class="mxchat-toggle-switch">
+                <?php /* translators: %s: the Auto-Sync switch this option belongs to, e.g. "Auto-sync Posts" */ ?>
+                <input type="checkbox" name="<?php echo esc_attr($only_option); ?>" class="mxchat-autosave-field" value="1" data-nonce="<?php echo esc_attr($nonce); ?>" aria-label="<?php echo esc_attr(sprintf(__('%s: keep imported entries up to date only', 'mxchat'), $label)); ?>" <?php checked(get_option($only_option, '0'), '1'); ?>>
+                <span class="mxchat-toggle-slider"></span>
+            </label>
+            <span class="mxch-autosync-sub-label"><?php esc_html_e('Keep imported entries up to date only', 'mxchat'); ?></span>
+        </div>
+    </div>
+    <?php
+}
+
+/**
  * Render Auto-Sync Section
  */
 function mxchat_render_auto_sync_section($knowledge_manager) {
@@ -1476,21 +1511,12 @@ function mxchat_render_auto_sync_section($knowledge_manager) {
 
         <div class="mxch-card">
             <div class="mxch-card-body mxchat-autosave-section">
-                <div class="mxch-field">
-                    <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 16px;">
-                        <label class="mxchat-toggle-switch">
-                            <input type="checkbox" name="mxchat_auto_sync_posts" class="mxchat-autosave-field" value="1" data-nonce="<?php echo wp_create_nonce('mxchat_prompts_setting_nonce'); ?>" <?php checked(get_option('mxchat_auto_sync_posts', '0'), '1'); ?>>
-                            <span class="mxchat-toggle-slider"></span>
-                        </label>
-                        <span style="font-weight: 500;"><?php esc_html_e('Auto-sync Posts', 'mxchat'); ?></span>
-                    </div>
-                    <div style="display: flex; align-items: center; gap: 12px;">
-                        <label class="mxchat-toggle-switch">
-                            <input type="checkbox" name="mxchat_auto_sync_pages" class="mxchat-autosave-field" value="1" data-nonce="<?php echo wp_create_nonce('mxchat_prompts_setting_nonce'); ?>" <?php checked(get_option('mxchat_auto_sync_pages', '0'), '1'); ?>>
-                            <span class="mxchat-toggle-slider"></span>
-                        </label>
-                        <span style="font-weight: 500;"><?php esc_html_e('Auto-sync Pages', 'mxchat'); ?></span>
-                    </div>
+                <div class="mxch-field mxch-autosync-types">
+                    <?php
+                    mxchat_render_auto_sync_type('post', __('Auto-sync Posts', 'mxchat'), true);
+                    mxchat_render_auto_sync_type('page', __('Auto-sync Pages', 'mxchat'), true);
+                    ?>
+                    <p class="mxch-field-description mxch-autosync-help"><?php esc_html_e('With "Keep imported entries up to date only" on, Auto-sync updates or removes entries already in your knowledge base but never adds new ones, so only the posts you import with the WordPress importer stay in sync.', 'mxchat'); ?></p>
                 </div>
 
                 <div class="mxch-field" style="margin-top: 24px; padding-top: 20px; border-top: 1px solid var(--mxch-card-border);">
@@ -1516,19 +1542,11 @@ function mxchat_render_auto_sync_section($knowledge_manager) {
                         unset($post_types['post'], $post_types['page']);
 
                         if (!empty($post_types)) {
+                            echo '<div class="mxch-autosync-types">';
                             foreach ($post_types as $post_type => $label) {
-                                $option_name = 'mxchat_auto_sync_' . $post_type;
-                                $is_enabled = get_option($option_name, '0');
-                                ?>
-                                <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 8px;">
-                                    <label class="mxchat-toggle-switch">
-                                        <input type="checkbox" name="<?php echo esc_attr($option_name); ?>" class="mxchat-autosave-field" value="1" data-nonce="<?php echo wp_create_nonce('mxchat_prompts_setting_nonce'); ?>" <?php checked($is_enabled, '1'); ?>>
-                                        <span class="mxchat-toggle-slider"></span>
-                                    </label>
-                                    <span><?php echo esc_html($label); ?> (<?php echo esc_html($post_type); ?>)</span>
-                                </div>
-                                <?php
+                                mxchat_render_auto_sync_type($post_type, $label . ' (' . $post_type . ')');
                             }
+                            echo '</div>';
                         } else {
                             echo '<p style="color: var(--mxch-text-muted);">' . esc_html__('No custom post types found.', 'mxchat') . '</p>';
                         }
