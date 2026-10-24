@@ -831,7 +831,7 @@ class MxChat_Content_Generator {
         );
 
         // Build cURL requests for all images
-        $image_model = $options['content_image_model'] ?? 'gpt-image-2.5-flare';
+        $image_model = $options['content_image_model'] ?? self::default_openai_image_model();
         $curl_configs = array();
 
         foreach ($image_sections as $img) {
@@ -963,13 +963,14 @@ class MxChat_Content_Generator {
      */
     private function generate_single_image($prompt) {
         $options     = get_option('mxchat_options', array());
-        $image_model = $options['content_image_model'] ?? 'gpt-image-2.5-flare';
+        $image_model = $options['content_image_model'] ?? self::default_openai_image_model();
+        list($image_model, $provider) = self::image_engine($image_model);
 
-        if (strpos($image_model, 'gpt-image') === 0) {
+        if ($provider === 'openai') {
             return $this->generate_openai_image($prompt, $options);
-        } elseif (strpos($image_model, 'grok') === 0) {
+        } elseif ($provider === 'xai') {
             return $this->generate_xai_image($prompt, $options);
-        } elseif (strpos($image_model, 'gemini') === 0) {
+        } elseif ($provider === 'gemini') {
             return $this->generate_gemini_image($prompt, $image_model, $options);
         }
 
@@ -992,7 +993,8 @@ class MxChat_Content_Generator {
      * @return array|WP_Error     Array with 'url', 'headers', 'body' keys, or WP_Error.
      */
     private static function build_image_request($prompt, $image_model, $options, $shape = array()) {
-        if (strpos($image_model, 'gpt-image') === 0) {
+        list($image_model, $provider) = self::image_engine($image_model);
+        if ($provider === 'openai') {
             $api_key = $options['api_key'] ?? '';
             if (empty($api_key)) {
                 return new WP_Error('no_api_key', __('OpenAI API key not configured.', 'mxchat'));
@@ -1014,7 +1016,7 @@ class MxChat_Content_Generator {
             );
         }
 
-        if (strpos($image_model, 'grok') === 0) {
+        if ($provider === 'xai') {
             $api_key = $options['xai_api_key'] ?? '';
             if (empty($api_key)) {
                 return new WP_Error('no_api_key', __('xAI API key not configured.', 'mxchat'));
@@ -1035,16 +1037,17 @@ class MxChat_Content_Generator {
             );
         }
 
-        if (strpos($image_model, 'gemini') === 0) {
+        if ($provider === 'gemini') {
             $api_key = $options['gemini_api_key'] ?? '';
             if (empty($api_key)) {
                 return new WP_Error('no_api_key', __('Gemini API key not configured.', 'mxchat'));
             }
             $api_version = (strpos($image_model, 'preview') !== false) ? 'v1beta' : 'v1beta';
             return array(
-                'url'     => "https://generativelanguage.googleapis.com/{$api_version}/models/" . self::gemini_image_model($image_model) . ":generateContent?key={$api_key}",
+                'url'     => "https://generativelanguage.googleapis.com/{$api_version}/models/" . self::gemini_image_model($image_model) . ":generateContent",
                 'headers' => array(
                     'Content-Type: application/json',
+                    'x-goog-api-key: ' . $api_key, // plan f4c0bf: key in a header, never the URL
                 ),
                 'body' => wp_json_encode(array(
                     'contents' => array(
@@ -1083,9 +1086,10 @@ class MxChat_Content_Generator {
         if (json_last_error() !== JSON_ERROR_NONE || empty($decoded)) {
             return new WP_Error('json_error', __('Invalid image API response.', 'mxchat'));
         }
+        list($image_model, $provider) = self::image_engine($image_model);
 
         // OpenAI GPT Image — b64_json or url
-        if (strpos($image_model, 'gpt-image') === 0) {
+        if ($provider === 'openai') {
             $b64_data = $decoded['data'][0]['b64_json'] ?? '';
             if (!empty($b64_data)) {
                 return self::save_image_to_media_library($b64_data, 'image/png', $save);
@@ -1098,7 +1102,7 @@ class MxChat_Content_Generator {
         }
 
         // xAI Grok — url
-        if (strpos($image_model, 'grok') === 0) {
+        if ($provider === 'xai') {
             $url = $decoded['data'][0]['url'] ?? '';
             if (!empty($url)) {
                 return self::save_image_url_to_media_library($url, $save);
@@ -1107,7 +1111,7 @@ class MxChat_Content_Generator {
         }
 
         // Gemini — inlineData base64
-        if (strpos($image_model, 'gemini') === 0) {
+        if ($provider === 'gemini') {
             if (isset($decoded['candidates'][0]['content']['parts'])) {
                 foreach ($decoded['candidates'][0]['content']['parts'] as $part) {
                     $inline_data = $part['inlineData'] ?? $part['inline_data'] ?? null;
@@ -1121,6 +1125,49 @@ class MxChat_Content_Generator {
         }
 
         return new WP_Error('unknown_model', __('Unknown image model.', 'mxchat'));
+    }
+
+    /**
+     * Plan 9b9f58: which engine handles an image model id, after the catalog's
+     * retired-image map (463f28 / direct task M4) has moved a discontinued id
+     * to its replacement. Dispatching on the provider instead of the id prefix
+     * lets every id a picker ever offered keep working: a saved dall-e id goes
+     * to OpenAI as its replacement, chatgpt-image-latest to OpenAI until its
+     * date, an imagen id to Google as its Nano Banana replacement. The prefix
+     * tests are the frozen fallback for a partial upgrade.
+     *
+     * @param string $image_model Saved or requested image model id.
+     * @return array array(resolved model id, 'openai' | 'xai' | 'gemini' | '').
+     */
+    private static function image_engine($image_model) {
+        $image_model = (string) $image_model;
+        if (class_exists('MxChat_Model_Catalog') && method_exists('MxChat_Model_Catalog', 'resolve_retired_image')) {
+            $image_model = (string) MxChat_Model_Catalog::resolve_retired_image($image_model);
+        }
+        if (class_exists('MxChat_Model_Catalog') && method_exists('MxChat_Model_Catalog', 'image_model_provider')) {
+            return array($image_model, (string) MxChat_Model_Catalog::image_model_provider($image_model));
+        }
+        if (strpos($image_model, 'gpt-image') === 0) {
+            return array($image_model, 'openai');
+        }
+        if (strpos($image_model, 'grok') === 0) {
+            return array($image_model, 'xai');
+        }
+        if (strpos($image_model, 'gemini') === 0) {
+            return array($image_model, 'gemini');
+        }
+        return array($image_model, '');
+    }
+
+    /**
+     * Default OpenAI image model: the catalog image section's (plan 463f28);
+     * the literal is the frozen fallback for a partial upgrade.
+     */
+    public static function default_openai_image_model() {
+        if (class_exists('MxChat_Model_Catalog') && method_exists('MxChat_Model_Catalog', 'image_default_model')) {
+            return (string) MxChat_Model_Catalog::image_default_model('openai');
+        }
+        return 'gpt-image-2.5-flare';
     }
 
     /**
@@ -1145,7 +1192,7 @@ class MxChat_Content_Generator {
             $image_model = (string) MxChat_Model_Catalog::resolve_retired_image($image_model);
         }
         if (strpos($image_model, 'gpt-image') !== 0 && strpos($image_model, 'chatgpt-image') !== 0) {
-            return 'gpt-image-2.5-flare';
+            return self::default_openai_image_model();
         }
         $shutdown = array(
             'gpt-image-1'          => '2026-10-23',
@@ -1193,7 +1240,7 @@ class MxChat_Content_Generator {
         }
 
         $body = array(
-            'model'           => self::openai_image_model($options['content_image_model'] ?? 'gpt-image-2.5-flare'),
+            'model'           => self::openai_image_model($options['content_image_model'] ?? self::default_openai_image_model()),
             'prompt'          => $prompt,
             'n'               => 1,
             'size'            => '1536x1024',
@@ -1310,11 +1357,12 @@ class MxChat_Content_Generator {
         );
 
         $model = self::gemini_image_model($model); // direct task M2: retired preview ids -> GA
-        $url = 'https://generativelanguage.googleapis.com/v1beta/models/' . $model . ':generateContent?key=' . $api_key;
+        $url = 'https://generativelanguage.googleapis.com/v1beta/models/' . $model . ':generateContent';
 
         $response = wp_remote_post($url, array(
             'headers' => array(
-                'Content-Type' => 'application/json',
+                'Content-Type'   => 'application/json',
+                'x-goog-api-key' => $api_key, // plan f4c0bf
             ),
             'body'    => wp_json_encode($body),
             'timeout' => 120,
@@ -2675,12 +2723,12 @@ article .entry-content,
         );
 
         $api_version = (strpos($model, 'preview') !== false || strpos($model, 'exp') !== false) ? 'v1beta' : 'v1';
-        $url = "https://generativelanguage.googleapis.com/{$api_version}/models/{$model}:generateContent?key={$api_key}";
+        $url = "https://generativelanguage.googleapis.com/{$api_version}/models/{$model}:generateContent";
 
         $timeout = ($max_tokens > 8000) ? 300 : 120;
 
         $response = wp_remote_post($url, array(
-            'headers' => array('Content-Type' => 'application/json'),
+            'headers' => array('Content-Type' => 'application/json', 'x-goog-api-key' => $api_key), // plan f4c0bf
             'body'    => wp_json_encode($body),
             'timeout' => $timeout,
         ));

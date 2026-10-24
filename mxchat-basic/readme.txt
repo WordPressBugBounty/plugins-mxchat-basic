@@ -5,7 +5,7 @@ Tags: ai chatbot, chatgpt, woocommerce, customer support, content generation
 Requires at least: 5.3
 Tested up to: 7.1
 Requires PHP: 7.4
-Stable tag: 3.2.26
+Stable tag: 3.2.27
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -180,6 +180,10 @@ Yes. The free plugin lets you set the widget position (left or right), the greet
 
 You can add the chatbot using the shortcode `[mxchat_chatbot floating="yes"]` for a floating widget or `[mxchat_chatbot floating="no"]` for an embedded chat. Alternatively, enable "Append to Body" in settings to automatically display the chatbot on all pages without shortcodes.
 
+= Why is the chat hidden on some pages when Complianz is active? =
+
+With the Complianz Integration setting on (Settings, Lead Capture, Privacy and Compliance), the chat appears only after Complianz confirms that the visitor has accepted marketing cookies, and MxChat waits for the Complianz script on the page to give that answer. On a page where Complianz does not load its script, the answer never comes, so the chat stays hidden for every visitor on that page, even one who has already accepted cookies elsewhere on your site. To fix it, make sure the Complianz script loads on that page: check that the page is not excluded in your Complianz settings, and that a caching or optimization plugin is not removing that script or blocking it from running there. Delaying the script is fine, because the chat appears as soon as Complianz runs. If you do not need a consent check for the chat, turn the Complianz Integration setting off. A chat placed in a page (the shortcode with floating set to no, or the MxChat block) waits for the same consent and shows a one-line note in its place until the visitor accepts.
+
 = Does MxChat support streaming responses? =
 
 Yes. MxChat supports real-time streaming responses for OpenAI, Anthropic Claude, xAI Grok, and DeepSeek models. Streaming displays AI responses word-by-word as they're generated, providing a faster, more engaging chat experience for your visitors.
@@ -268,7 +272,7 @@ Yes. On the Licenses page of their mxchat.ai account, the license holder can tur
 
 == Developer Hooks & Filters ==
 
-MxChat has filter hooks for developers who want to extend it without editing plugin files, including mxchat_should_index_post (return false to leave a post out of the knowledge base; it also receives import, auto_sync or reimport as the context), mxchat_before_process_post (change a post before it is indexed, or return false to skip it), mxchat_system_instructions (adjust the system prompt for each reply), mxchat_gemini_safety_settings (Gemini safety thresholds), mxchat_reference_shortcodes (shortcodes whose referenced content is imported) and mxchat_index_use_rendered_page (return true or false to decide whether a post's published page is read for its text). Add-ons can also call mxchat_generate_media_image() to create an image with the site's image model and save it to the Media Library. Every hook is documented with code examples at [mxchat.ai](https://mxchat.ai/mxchat-developer-hooks-filters/).
+MxChat has filter hooks for developers who want to extend it without editing plugin files, including mxchat_should_index_post (return false to leave a post out of the knowledge base; it also receives import, auto_sync or reimport as the context), mxchat_before_process_post (change a post before it is indexed, or return false to skip it), mxchat_system_instructions (adjust the system prompt for each reply), mxchat_gemini_safety_settings (Gemini safety thresholds), mxchat_reference_shortcodes (shortcodes whose referenced content is imported), mxchat_index_use_rendered_page (return true or false to decide whether a post's published page is read for its text), mxchat_filter_roles_rate_limit (reorder a logged-in user's roles to choose which role's rate limit applies; the first role in the list is used), mxchat_lead_retention_days (how many days a lead is kept after the visitor's last chat; 0 keeps leads) and mxchat_stream_request (add headers to, or change the address or body of, a streamed chat request; WordPress's own HTTP filters do not reach streamed replies). Add-ons can also call mxchat_generate_media_image() to create an image with the site's image model and save it to the Media Library. Every hook is documented with code examples at [mxchat.ai](https://mxchat.ai/mxchat-developer-hooks-filters/).
 
 == External services ==
 
@@ -295,6 +299,20 @@ Pro license management uses mxchat.ai, the plugin's own website, and only on sit
 *(Note: Screenshots will be added in future updates)*
 
 == Changelog ==
+
+= 3.2.27 - October 24, 2026 =
+* Fixed: Security hardening and general security improvements.
+* New: Delete Leads After, on the Transcripts Notifications screen, deletes a lead and its conversations after a period without chats that you choose (default Never). Deleting a lead or chat also removes its ratings and link clicks.
+* New: A Generate Image (xAI) action and AI tool create images in the chat with xAI Grok Imagine, beside the OpenAI and Gemini ones.
+* New: Developer filters: mxchat_filter_roles_rate_limit picks the role a multi-role user is rate-limited by, mxchat_stream_request can change a streamed chat request, and mxchat_lead_retention_days adjusts lead auto-delete.
+* New: The REST API transcripts endpoint finds answers given without knowledge with knowledge_used=no, each row reports sources_used and knowledge_used, and filtering by role assistant now returns the chatbot's replies.
+* Fixed: With the Complianz integration on, the chat never opens without cookie consent. Chats placed in a page now wait for consent like the floating chat, a delayed Complianz script is waited for, and withdrawing consent closes the chat.
+* Fixed: Transcripts, the reloaded chat and the transcript email now show each reply as the visitor saw it, with product cards, forms and images in one message, the pre-chat name and email, and no stray code or empty messages.
+* Fixed: Knowledge base sync now follows synced patterns, posts that are unpublished, trashed or restored, and PDFs in ACF Blocks, and pages built with Breakdance, Oxygen, Bricks or Divi 5 show their published text in the import list.
+* Fixed: Saving settings no longer swaps an unrecognised chat model or an older embedding model, retired chat and image models use their replacement, and o-series models, Custom provider streaming and web search queries work on newer models.
+* Fixed: With delayed script loading the chat opens on the first click, the first open no longer hits a Too Many Requests error, replies no longer leave extra blank lines, and an add-to-cart critical error is gone.
+* Fixed: Many layout fixes in the MxChat admin pages on phones, tablets and wide screens, WordPress notices no longer cover the MxChat header and menu, and the Actions page reports embedding errors instead of saving phrases that cannot match.
+* Improved: Lower AI costs and clearer usage: one embedding call per reply instead of two, Transcripts show the tokens spent finding each answer (WooCommerce product searches too), and every model picker uses one list.
 
 = 3.2.26 - October 17, 2026 =
 * Security: Hardened how chat messages, code, visitor feedback, translations and import details are displayed, how PDF links in the chat are opened, and the permission checks on several admin requests. Update recommended.
@@ -368,6 +386,9 @@ Older releases are archived in the plugin's full version history on WordPress.or
 
 == Upgrade Notice ==
 
+= 3.2.27 =
+Includes important security improvements. Adds lead auto-delete, xAI images and REST transcript filters, Complianz consent covers embedded chats, and many Transcripts, model, sync and layout fixes. Update recommended.
+
 = 3.2.26 =
 Security hardening across the admin and chat, new models including GPT-6.1 Sol and Claude 5.5, automatic moves off discontinued models, token usage in Transcripts and fuller page-builder imports. Update recommended.
 
@@ -376,8 +397,9 @@ Fixes Gemini chatbots stopping on ordinary answers, chat links, PDF detection an
 
 == Credits ==
 
-This plugin incorporates the following third-party library:
+This plugin incorporates the following third-party libraries:
 
 - **Smalot PDF Parser**: Used for parsing and extracting text from PDF files. This library is developed by Smalot and distributed under the MIT License. For more details, visit the [Smalot PDF Parser GitHub repository](https://github.com/smalot/pdfparser).
+- **QR Code Generator for JavaScript** (qrcode-generator 1.4.4): Draws QR codes in the WordPress admin. Copyright (c) 2009 Kazuhiko Arase, distributed under the MIT License. See the [qrcode-generator repository](https://github.com/kazuhikoarase/qrcode-generator).
 
 This plugin was developed by [MxChat](https://mxchat.ai/).

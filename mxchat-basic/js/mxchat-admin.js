@@ -695,6 +695,18 @@ jQuery(document).ready(function($) {
                     window.mxchatRefreshAPIKeyStatus();
                 }
 
+                // Plan f7bbde: a card-header status pill that names this field
+                // (data-mxch-pill-follows) follows the saved switch state, no reload.
+                if (name && $field.attr('type') === 'checkbox') {
+                    $('.mxch-status-pill[data-mxch-pill-follows="' + name + '"]').each(function() {
+                        const $pill = $(this);
+                        const on = (value === 'on' || value === '1');
+                        $pill.removeClass('mxch-status-pill-active mxch-status-pill-disabled')
+                             .addClass(on ? 'mxch-status-pill-active' : 'mxch-status-pill-disabled')
+                             .find('.mxch-status-pill-text').text($pill.attr(on ? 'data-label-on' : 'data-label-off') || '');
+                    });
+                }
+
                 // *** ADD THIS: Update Pinecone checkbox state after successful save ***
                 if (name && name.indexOf('mxchat_pinecone_addon_options[mxchat_use_pinecone]') !== -1) {
                     //console.log('Pinecone toggle saved successfully, value:', value);
@@ -1837,43 +1849,12 @@ function setupMxChatEmbeddingModelSelector() {
         const $grid = $('#mxchat_embedding_models_grid');
         $grid.empty();
         
-        // Define embedding models with descriptions and context lengths
-        const models = {
+        // Plan 32e648: the catalog (class-mxchat-model-catalog.php
+        // embedding_models(), localized as mxchatEmbeddingModelCatalog) is the
+        // only embedding list. The one-entry literal is a bootstrap fallback.
+        const models = (typeof mxchatEmbeddingModelCatalog === 'object' && mxchatEmbeddingModelCatalog) ? mxchatEmbeddingModelCatalog : {
             openai: [
-                { 
-                    value: 'text-embedding-3-small', 
-                    label: 'TE3 Small', 
-                    description: 'Fast and cost-effective embeddings (1536 dimensions, 8K context)'
-                },
-                { 
-                    value: 'text-embedding-ada-002', 
-                    label: 'Ada 2', 
-                    description: 'Balanced performance embeddings (1536 dimensions, 8K context)'
-                },
-                { 
-                    value: 'text-embedding-3-large', 
-                    label: 'TE3 Large', 
-                    description: 'High-performance embeddings (3072 dimensions, 8K context)'
-                }
-            ],
-            voyage: [
-                { 
-                    value: 'voyage-3-large', 
-                    label: 'Voyage-3 Large', 
-                    description: 'Advanced semantic search embeddings (2048 dimensions, 32K context)'
-                }
-            ],
-            gemini: [
-                { 
-                    value: 'gemini-embedding-001',
-                    label: 'Gemini Embedding',
-                    description: 'Stable SOTA embeddings (1536 dimensions, 8K context)'
-                },
-                {
-                    value: 'gemini-embedding-2',
-                    label: 'Gemini Embedding 2',
-                    description: 'Newest Google embeddings (1536 dimensions, 8K context)'
-                }
+                { value: 'text-embedding-3-small', label: 'TE3 Small', description: 'Recommended: fast and cost-effective embeddings (1536 dimensions, 8K context)' }
             ]
         };
         

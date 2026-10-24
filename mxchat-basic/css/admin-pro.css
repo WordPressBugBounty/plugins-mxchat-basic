@@ -571,6 +571,7 @@
 
     .mxch-addon-hero-actions .mxch-btn {
         width: 100%;
+        box-sizing: border-box; /* full width includes the padding and border (plan 70d9ad) */
         justify-content: center;
     }
 

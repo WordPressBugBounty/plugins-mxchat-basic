@@ -101,29 +101,19 @@ class MxChat_Block {
     /**
      * Front-end render: delegate to the shortcode.
      *
-     * Consent mirrors append_chatbot_to_body() exactly (class-mxchat-public.php)
-     * so a block placement cannot bypass a Complianz gate the footer path
-     * respects. Everything else — bot resolution, per-page settings, the
-     * floating/Auto-Display collision — is the shortcode's existing logic.
+     * Complianz consent is the shortcode's own gate (hidden + no-consent
+     * render, revealed by chat-script.js), so a block placement gets it as
+     * the footer path does. Everything else — bot resolution, per-page
+     * settings, the floating/Auto-Display collision — is the shortcode's
+     * existing logic.
      */
     public static function render($attributes) {
         $floating = isset($attributes['displayMode']) && $attributes['displayMode'] === 'floating';
         $bot_id   = isset($attributes['botId']) ? sanitize_key($attributes['botId']) : '';
 
-        $options     = get_option('mxchat_options', array());
-        $has_consent = true;
-        if (is_array($options)
-            && isset($options['complianz_toggle'])
-            && $options['complianz_toggle'] === 'on'
-            && function_exists('cmplz_has_consent')
-        ) {
-            $has_consent = cmplz_has_consent('marketing');
-        }
-
         $shortcode = sprintf(
-            '[mxchat_chatbot floating="%s" has_consent="%s"',
-            $floating ? 'yes' : 'no',
-            $has_consent ? 'yes' : 'no'
+            '[mxchat_chatbot floating="%s"',
+            $floating ? 'yes' : 'no'
         );
         // Omit bot_id when unset: determine_bot_for_shortcode() then honors the
         // page-level bot selection, same as a bare shortcode.

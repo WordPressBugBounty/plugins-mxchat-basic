@@ -670,6 +670,20 @@ function mxchat_render_transcripts_page($admin_instance, $page_data) {
                 <div class="mxch-content-header">
                     <h1 class="mxch-content-title"><?php esc_html_e('Leads', 'mxchat'); ?></h1>
                     <p class="mxch-content-subtitle"><?php esc_html_e('Captured visitor emails and names from the lead-capture form, grouped by unique lead.', 'mxchat'); ?></p>
+                    <?php
+                    // plan 50fb99: one line when lead retention is on.
+                    $mxch_lead_days = (class_exists('MxChat_Session_Store') && method_exists('MxChat_Session_Store', 'lead_retention_days'))
+                        ? MxChat_Session_Store::lead_retention_days()
+                        : 0;
+                    if ($mxch_lead_days > 0) : ?>
+                        <p class="mxch-content-subtitle" id="mxch-leads-retention-note"><?php
+                            printf(
+                                /* translators: %d: number of days a lead is kept after the visitor's last chat */
+                                esc_html(_n('Leads are deleted %d day after the visitor\'s last chat (Notifications, Delete Leads After).', 'Leads are deleted %d days after the visitor\'s last chat (Notifications, Delete Leads After).', $mxch_lead_days, 'mxchat')),
+                                (int) $mxch_lead_days
+                            );
+                        ?></p>
+                    <?php endif; ?>
                 </div>
 
                 <!-- Stats strip -->
@@ -1021,6 +1035,24 @@ function mxchat_render_transcripts_page($admin_instance, $page_data) {
                                        data-nonce="<?php echo wp_create_nonce('mxchat_autosave_nonce'); ?>">
                                 <p class="mxch-field-description"><?php esc_html_e('Delete transcripts older than this many days (1&ndash;3650). When greater than 0 this overrides the dropdown above; set 0 to use the dropdown. Developers can adjust the final value with the mxchat_transcript_retention_days filter.', 'mxchat'); ?></p>
                             </div>
+
+                            <?php if (class_exists('MxChat_Session_Store') && method_exists('MxChat_Session_Store', 'lead_retention_choices')) :
+                                // plan 50fb99: standalone option, saved by its own autosave case.
+                                $mxch_lead_retention = MxChat_Session_Store::lead_retention_setting();
+                                ?>
+                            <div class="mxch-field">
+                                <label class="mxch-field-label" for="mxchat_lead_retention"><?php esc_html_e('Delete Leads After', 'mxchat'); ?></label>
+                                <select id="mxchat_lead_retention"
+                                        name="mxchat_lead_retention"
+                                        class="mxch-select mxchat-autosave-field"
+                                        data-nonce="<?php echo wp_create_nonce('mxchat_autosave_nonce'); ?>">
+                                    <?php foreach (MxChat_Session_Store::lead_retention_choices() as $mxch_lr_value => $mxch_lr_label) : ?>
+                                        <option value="<?php echo esc_attr($mxch_lr_value); ?>" <?php selected($mxch_lead_retention, $mxch_lr_value); ?>><?php echo esc_html($mxch_lr_label); ?></option>
+                                    <?php endforeach; ?>
+                                </select>
+                                <p class="mxch-field-description"><?php esc_html_e('Delete a lead (the visitor\'s name, email and consent record) and its conversations once the visitor has not chatted for this long. Bans and Forms submissions are kept. Developers can adjust the period with the mxchat_lead_retention_days filter.', 'mxchat'); ?></p>
+                            </div>
+                            <?php endif; ?>
                         </div>
                     </div>
 

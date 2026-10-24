@@ -75,6 +75,15 @@ class MxChat_Session_Store {
     /** Minimum seconds between opportunistic sweeps. */
     const TRIM_INTERVAL = HOUR_IN_SECONDS;
 
+    /** "Delete leads after" setting (plan 50fb99). Standalone, non-autoloaded; absent = never. */
+    const LEAD_RETENTION_OPTION = 'mxchat_lead_retention';
+
+    /** Last lead sweep: time, period in days, sessions erased. Non-autoloaded. */
+    const LEAD_SWEEP_STAMP_OPTION = 'mxchat_lead_retention_last_sweep';
+
+    /** Lead sessions erased at most per daily sweep. */
+    const LEAD_SWEEP_BATCH = 500;
+
     /**
      * Logical field => column name. Also the allowlist: anything not in here
      * is rejected, so the column name is never attacker-influenced.
@@ -913,6 +922,190 @@ class MxChat_Session_Store {
         }
 
         self::trim(self::TRIM_BATCH * 10);
+
+        // Lead retention (plan 50fb99). A no-op unless the owner chose a period.
+        self::sweep_expired_leads();
+    }
+
+    /* ---------------------------------------------------------------------
+     * Lead retention (plan 50fb99)
+     * ------------------------------------------------------------------ */
+
+    /**
+     * The "Delete leads after" choices, value => label. "never" (the default,
+     * and what an absent option means) keeps every lead, as before.
+     */
+    public static function lead_retention_choices() {
+        return array(
+            'never' => __('Never (Keep All)', 'mxchat'),
+            'same'  => __('Same as transcripts', 'mxchat'),
+            '30'    => __('After 30 days', 'mxchat'),
+            '90'    => __('After 90 days', 'mxchat'),
+            '180'   => __('After 180 days', 'mxchat'),
+            '365'   => __('After 365 days', 'mxchat'),
+        );
+    }
+
+    /** The saved choice, normalised to one of lead_retention_choices(). */
+    public static function lead_retention_setting() {
+        $value = (string) get_option(self::LEAD_RETENTION_OPTION, 'never');
+        return array_key_exists($value, self::lead_retention_choices()) ? $value : 'never';
+    }
+
+    /**
+     * Days a lead is kept after its last activity; 0 keeps leads forever.
+     * "same" follows the transcript retention exactly as the transcript
+     * clean-up computes it (Custom Retention, else the dropdown, then the
+     * mxchat_transcript_retention_days filter).
+     */
+    public static function lead_retention_days() {
+        $setting = self::lead_retention_setting();
+        $days    = 0;
+
+        if ($setting === 'same') {
+            $options = get_option('mxchat_transcripts_options', array());
+            $custom  = (is_array($options) && isset($options['mxchat_retention_days'])) ? (int) $options['mxchat_retention_days'] : 0;
+            if ($custom > 0) {
+                $days = $custom;
+            } else {
+                $map      = array('1week' => 7, '2weeks' => 14, '1month' => 30);
+                $interval = (is_array($options) && isset($options['mxchat_auto_delete_transcripts'])) ? $options['mxchat_auto_delete_transcripts'] : 'never';
+                $days     = isset($map[$interval]) ? $map[$interval] : 0;
+            }
+            $days = (int) apply_filters('mxchat_transcript_retention_days', $days);
+        } elseif ($setting !== 'never') {
+            $days = (int) $setting;
+        }
+
+        /**
+         * Filter how many days a lead (visitor name, email and consent record,
+         * with the lead's conversations) is kept after its last activity.
+         * Return 0 to keep leads forever.
+         *
+         * @param int    $days    Days from the "Delete leads after" setting (0 = never).
+         * @param string $setting The saved choice: never, same, 30, 90, 180 or 365.
+         */
+        $days = (int) apply_filters('mxchat_lead_retention_days', $days, $setting);
+
+        return max(0, $days);
+    }
+
+    /**
+     * Erase leads whose last activity is older than the lead retention
+     * period, in one bounded batch. A lead is any session carrying a visitor
+     * name or email: a session row with identity (pre-chat form, Forms,
+     * MxChat Anywhere), transcript rows with an email or name, or a lead kept
+     * after its chat was deleted. Last activity is the newest of the session
+     * row's update and the session's newest transcript row, so a lead that is
+     * still chatting is never removed. Each expired session leaves through
+     * the privacy eraser's own path (MxChat_Privacy::erase_sessions()).
+     *
+     * @param int $limit Sessions erased at most in this run.
+     * @return int Sessions erased.
+     */
+    public static function sweep_expired_leads($limit = self::LEAD_SWEEP_BATCH) {
+        global $wpdb;
+
+        $days = self::lead_retention_days();
+        if ($days <= 0 || !self::ensure_table() || !class_exists('MxChat_Privacy') || !method_exists('MxChat_Privacy', 'erase_sessions')) {
+            return 0;
+        }
+
+        $limit       = max(1, (int) $limit);
+        $table       = self::table();
+        $transcripts = $wpdb->prefix . 'mxchat_chat_transcripts';
+        $has_tr      = $wpdb->get_var($wpdb->prepare('SHOW TABLES LIKE %s', $transcripts)) === $transcripts;
+
+        // Transcript timestamps are compared against a GMT cutoff, as the
+        // transcript clean-up does; session rows hold site-local time, as
+        // trim() compares them.
+        $cutoff_gmt   = gmdate('Y-m-d H:i:s', time() - ($days * DAY_IN_SECONDS));
+        $cutoff_local = get_date_from_gmt($cutoff_gmt, 'Y-m-d H:i:s');
+
+        $identity = "((visitor_email IS NOT NULL AND visitor_email != '') OR (visitor_name IS NOT NULL AND visitor_name != ''))";
+        $expired  = array();
+        $seen     = array();
+
+        // A candidate expires only when nothing about it is newer than the
+        // cutoff: no transcript row and no session-row update since then.
+        $consider = function ($sid) use (&$expired, &$seen, $wpdb, $table, $transcripts, $has_tr, $cutoff_gmt, $cutoff_local) {
+            if (isset($seen[$sid])) {
+                return;
+            }
+            $seen[$sid] = true;
+            if ($has_tr && $wpdb->get_var($wpdb->prepare("SELECT 1 FROM `$transcripts` WHERE session_id = %s AND timestamp >= %s LIMIT 1", $sid, $cutoff_gmt))) {
+                return;
+            }
+            if ($wpdb->get_var($wpdb->prepare("SELECT 1 FROM `$table` WHERE session_id = %s AND COALESCE(updated_at, created_at) >= %s LIMIT 1", $sid, $cutoff_local))) {
+                return;
+            }
+            $expired[] = $sid;
+        };
+
+        // Candidates are read oldest first, a page at a time, so a run of
+        // still-active leads at the front cannot stall the sweep for good.
+        for ($page = 0; $page < 5 && count($expired) < $limit; $page++) {
+            // 1. Session rows with identity, untouched since the cutoff.
+            $rows = $wpdb->get_col($wpdb->prepare(
+                "SELECT session_id FROM `$table`
+                 WHERE $identity AND COALESCE(updated_at, created_at) IS NOT NULL AND COALESCE(updated_at, created_at) < %s
+                 ORDER BY COALESCE(updated_at, created_at) ASC
+                 LIMIT %d OFFSET %d",
+                $cutoff_local,
+                $limit,
+                $page * $limit
+            ));
+            // 2. Conversations with an email or name whose newest row is older than the cutoff.
+            $tr_rows = $has_tr ? $wpdb->get_col($wpdb->prepare(
+                "SELECT session_id FROM `$transcripts`
+                 WHERE (user_email IS NOT NULL AND user_email != '') OR (user_name IS NOT NULL AND user_name != '')
+                 GROUP BY session_id HAVING MAX(timestamp) < %s
+                 ORDER BY MAX(timestamp) ASC
+                 LIMIT %d OFFSET %d",
+                $cutoff_gmt,
+                $limit,
+                $page * $limit
+            )) : array();
+            if (empty($rows) && empty($tr_rows)) {
+                break;
+            }
+            foreach (array_merge((array) $rows, (array) $tr_rows) as $sid) {
+                if (count($expired) >= $limit) {
+                    break;
+                }
+                $consider((string) $sid);
+            }
+        }
+
+        // 3. Leads kept after their chat was deleted (mxchat_lead_del_* options).
+        // Their last activity is the stored time of the deleted chat's last
+        // message; one without a time cannot be dated and is kept.
+        if (count($expired) < $limit) {
+            $opts = $wpdb->get_results(
+                "SELECT option_name, option_value FROM {$wpdb->options} WHERE option_name LIKE 'mxchat\\_lead\\_del\\_ts\\_%'"
+            );
+            foreach ((array) $opts as $opt) {
+                if (count($expired) >= $limit) {
+                    break;
+                }
+                $ts = trim((string) $opt->option_value);
+                if ($ts !== '' && $ts < $cutoff_gmt) {
+                    $sid = substr($opt->option_name, strlen('mxchat_lead_del_ts_'));
+                    if ($sid !== '' && !in_array($sid, $expired, true)) {
+                        $expired[] = $sid;
+                    }
+                }
+            }
+        }
+
+        $erased = $expired ? MxChat_Privacy::erase_sessions($expired) : 0;
+        if ($erased) {
+            self::flush_cache();
+        }
+
+        update_option(self::LEAD_SWEEP_STAMP_OPTION, array('at' => time(), 'days' => $days, 'deleted' => $erased), false);
+
+        return $erased;
     }
 
     /* ---------------------------------------------------------------------

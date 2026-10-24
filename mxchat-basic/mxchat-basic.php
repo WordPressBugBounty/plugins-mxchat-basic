@@ -3,7 +3,7 @@
  * Plugin Name: MxChat
  * Plugin URI: https://mxchat.ai/
  * Description: AI chatbot for WordPress with OpenAI, Claude, xAI, DeepSeek, live agent, PDF uploads, WooCommerce, and training on website data.
- * Version: 3.2.26
+ * Version: 3.2.27
  * Author: MxChat
  * Author URI: https://mxchat.ai
  * License: GPLv2 or later
@@ -435,6 +435,10 @@ function mxchat_include_classes() {
         'includes/class-mxchat-cache-purge.php',
         'includes/class-mxchat-editor-assistant.php',
         'includes/class-rest-api.php',
+        'includes/class-mxchat-app-auth.php',
+        'includes/class-mxchat-app-addons.php',
+        'includes/class-mxchat-app-settings.php',
+        'includes/class-mxchat-app-api.php',
         'admin/class-ajax-handler.php',
         'admin/class-pinecone-manager.php',
         'admin/class-pinecone-documents.php',
@@ -615,6 +619,8 @@ function mxchat_create_chat_transcripts_table() {
         tokens_in INT(10) UNSIGNED DEFAULT NULL,
         tokens_cached INT(10) UNSIGNED DEFAULT NULL,
         tokens_out INT(10) UNSIGNED DEFAULT NULL,
+        retrieval_tokens_in INT(10) UNSIGNED DEFAULT NULL,
+        retrieval_tokens_out INT(10) UNSIGNED DEFAULT NULL,
         PRIMARY KEY (id),
         KEY session_id (session_id),
         KEY user_email (user_email),
@@ -661,7 +667,12 @@ function mxchat_ensure_all_columns($table_name) {
         'model' => 'VARCHAR(191) DEFAULT NULL',
         'tokens_in' => 'INT(10) UNSIGNED DEFAULT NULL',
         'tokens_cached' => 'INT(10) UNSIGNED DEFAULT NULL',
-        'tokens_out' => 'INT(10) UNSIGNED DEFAULT NULL'
+        'tokens_out' => 'INT(10) UNSIGNED DEFAULT NULL',
+        // 3.2.27 (plan 65366b): tokens of the calls made to find the answer
+        // before the reply (vector store file_search, search query rewrite),
+        // kept apart from the reply's own tokens. NULL = none made / not recorded.
+        'retrieval_tokens_in' => 'INT(10) UNSIGNED DEFAULT NULL',
+        'retrieval_tokens_out' => 'INT(10) UNSIGNED DEFAULT NULL'
     ];
     
     // Get existing columns
@@ -2531,6 +2542,14 @@ function mxchat_init() {
         if (class_exists('MxChat_Rest_Api')) {
             new MxChat_Rest_Api();
         }
+        // The mobile app's routes (mxchat/v1/app/*), on the same token.
+        if (class_exists('MxChat_App_Api')) {
+            new MxChat_App_Api();
+        }
+        // API Access → Mobile app: pairing codes and the paired phones list.
+        if (class_exists('MxChat_App_Auth')) {
+            MxChat_App_Auth::init_admin();
+        }
 
         // Initialize public classes
         if (class_exists('MxChat_Public')) {
@@ -2582,6 +2601,37 @@ function mxchat_check_and_run_migrations() {
     mxchat_migrate_cleanup_orphan_ratings();
     mxchat_migrate_neutralise_rating_feedback();
     mxchat_migrate_add_transcript_usage_columns();
+    mxchat_migrate_add_transcript_retrieval_usage_columns();
+}
+
+/**
+ * Migration: retrieval / search token columns on the transcripts table
+ * (v3.2.27, plan 65366b). Same shape as the 3.2.26 usage-columns migration:
+ * the chat writes these only once the flag is set, so a database user that
+ * cannot ALTER keeps saving every message as before; a failed attempt waits a
+ * day before trying again.
+ */
+function mxchat_migrate_add_transcript_retrieval_usage_columns() {
+    global $wpdb;
+    $migration_key = 'mxchat_transcripts_retrieval_usage_columns';
+    if (get_option($migration_key) || get_transient('mxchat_transcripts_retrieval_usage_columns_retry')) {
+        return;
+    }
+
+    $table = $wpdb->prefix . 'mxchat_chat_transcripts';
+    if ($wpdb->get_var($wpdb->prepare("SHOW TABLES LIKE %s", $table)) !== $table) {
+        return;
+    }
+
+    mxchat_create_chat_transcripts_table();
+
+    $columns = $wpdb->get_col("SHOW COLUMNS FROM `{$table}`", 0);
+    $missing = array_diff(array('retrieval_tokens_in', 'retrieval_tokens_out'), (array) $columns);
+    if (empty($missing)) {
+        update_option($migration_key, '3.2.27');
+        return;
+    }
+    set_transient('mxchat_transcripts_retrieval_usage_columns_retry', 1, DAY_IN_SECONDS);
 }
 
 /**

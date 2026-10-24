@@ -28,12 +28,57 @@
  * mxchat-basic/includes/admin-api-page.php, admin-settings-page.php,
  * admin-knowledge-page.php and mxchat-mcp/includes/admin-mcp-page.php.
  *
+ * Admin notices (plan bf8e9e): the shell is position:fixed, so a WordPress
+ * notice printed at the top of the page (div.notice / .updated / .error /
+ * .update-nag) would paint over the shell header and sidebar. On load they
+ * are moved into the first shell's .mxch-content, above its sections, the way
+ * WordPress moves notices after .wp-header-end; dismiss buttons keep their
+ * handlers (the nodes move, nothing is re-created). Core also loads this file
+ * on every MxChat admin page as "notices only" (?mxch_notices_only=1), which
+ * places notices and wires nothing else, so pages with their own tab script
+ * are not wired twice.
+ *
  * @package MxChat
  */
 (function () {
     // Section ids are plain slugs; anything else (junk hashes, selector
     // metacharacters) is rejected before it reaches querySelector.
     var SECTION_ID = /^[A-Za-z][A-Za-z0-9_-]*$/;
+
+    // Read while this file runs (currentScript is null in later callbacks).
+    var NOTICES_ONLY = !!(document.currentScript && /[?&]mxch_notices_only=1(?:&|$)/.test(document.currentScript.src || ''));
+    var NOTICE_SELECTOR = 'div.notice, div.updated, div.error, div.update-nag';
+
+    /**
+     * Move the page's top-level WordPress notices into the shell's content
+     * column, above the sections, in their original order. Only notices
+     * WordPress printed at the top of the page (directly in #wpbody-content,
+     * in a .wrap there, or straight inside the shell) move; a notice inside a
+     * card, a modal or another notice stays where its page put it. Notices
+     * already in the content column (Advanced Content places its own) stay.
+     */
+    function placeAdminNotices(wrapper) {
+        var content = wrapper.querySelector('.mxch-content');
+        var page = document.getElementById('wpbody-content');
+        if (!content || !page) {
+            return;
+        }
+        var anchor = content.firstElementChild;
+        while (anchor && anchor.matches(NOTICE_SELECTOR)) {
+            anchor = anchor.nextElementSibling;
+        }
+        Array.prototype.slice.call(page.querySelectorAll(NOTICE_SELECTOR)).forEach(function (notice) {
+            if (content.contains(notice)) {
+                return;
+            }
+            var parent = notice.parentElement;
+            var topLevel = parent === page || parent === wrapper
+                || (parent.classList.contains('wrap') && parent.parentElement === page);
+            if (topLevel) {
+                content.insertBefore(notice, anchor);
+            }
+        });
+    }
 
     function closeMobileMenu(wrapper) {
         var mobileMenu = wrapper.querySelector('.mxch-mobile-menu');
@@ -261,7 +306,13 @@
     }
 
     function init() {
-        document.querySelectorAll('.mxch-admin-wrapper').forEach(wire);
+        var wrappers = document.querySelectorAll('.mxch-admin-wrapper');
+        if (wrappers.length) {
+            placeAdminNotices(wrappers[0]);
+        }
+        if (!NOTICES_ONLY) {
+            wrappers.forEach(wire);
+        }
     }
 
     if (document.readyState === 'loading') {

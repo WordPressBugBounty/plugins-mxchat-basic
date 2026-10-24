@@ -105,25 +105,18 @@ public function append_chatbot_to_body() {
         return;
     }
     
-    // Handle consent for display
-    $consent_category = 'marketing';
-    $has_consent = true;
-    
-    if (
-        isset($this->options['complianz_toggle']) && 
-        $this->options['complianz_toggle'] === 'on' &&
-        function_exists('cmplz_has_consent')
-    ) {
-        $has_consent = cmplz_has_consent($consent_category);
-    }
-    
+    // Complianz consent is decided in the browser, never here: the shortcode
+    // renders the launcher hidden + no-consent and chat-script.js reveals it
+    // (a page cache would hand one visitor's consent to the next). The old
+    // has_consent shortcode attribute was never read (plan b2c9ba).
+
     // Display the appropriate chatbot (always floating for auto-append)
     if ($bot_to_show && $bot_to_show !== 'default') {
         // Show specific bot
-        echo do_shortcode('[mxchat_chatbot floating="yes" bot_id="' . esc_attr($bot_to_show) . '" has_consent="' . ($has_consent ? 'yes' : 'no') . '"]');
+        echo do_shortcode('[mxchat_chatbot floating="yes" bot_id="' . esc_attr($bot_to_show) . '"]');
     } else {
         // Show default bot
-        echo do_shortcode('[mxchat_chatbot floating="yes" has_consent="' . ($has_consent ? 'yes' : 'no') . '"]');
+        echo do_shortcode('[mxchat_chatbot floating="yes"]');
     }
 }
 
@@ -200,7 +193,6 @@ public function render_chatbot_shortcode($atts) {
     // UPDATED: Add bot_id parameter support and improve logic
     $attributes = shortcode_atts(array(
         'floating' => 'yes',
-        'has_consent' => 'yes',
         'bot_id' => '' // Support for multi-bot functionality - empty means auto-detect
     ), $atts);
     
@@ -246,9 +238,12 @@ public function render_chatbot_shortcode($atts) {
     // from this HTML and chat-style.css before any script runs: a cache or
     // optimisation plugin that delays JavaScript until the visitor interacts
     // (Delay JavaScript in WP Rocket, LiteSpeed, FlyingPress, Perfmatters,
-    // Flying Scripts) no longer leaves the page with no chatbot at all. Until
-    // the script has bound its handler a click on it does nothing; the window
-    // never half-opens. The launcher starts hidden only where something must
+    // Flying Scripts) no longer leaves the page with no chatbot at all. A click
+    // before the script has bound its handler never half-opens the window:
+    // under core's own On User Interaction and Delay loading, core's loader
+    // remembers it and replays it once the script is ready (plan 01b3d2);
+    // under a third-party Delay JavaScript setting it only starts the script.
+    // The launcher starts hidden only where something must
     // be decided in the browser:
     //  (a) Complianz consent (complianz_toggle on): hidden + no-consent for
     //      every render, revealed by chat-script.js when the visitor has
@@ -269,6 +264,12 @@ public function render_chatbot_shortcode($atts) {
         $additional_class = ' no-consent';
         $launcher_class = ' hidden no-consent';
     }
+
+    // An embedded chat (floating="no": the shortcode, the inline block, the
+    // Elementor widget) waits for the same consent (plan 2b137b): rendered
+    // hidden and marked no-consent with a one-line placeholder in its place,
+    // and revealed in place by chat-script.js once Complianz has consent.
+    $embedded_consent_gate = !$is_floating && $additional_class !== '';
     
     $theme_options = get_option('mxchat_theme_options', array());
     $custom_send_image = isset($theme_options['custom_send_button_image']) ? esc_url($theme_options['custom_send_button_image']) : '';
@@ -379,7 +380,13 @@ public function render_chatbot_shortcode($atts) {
     // data-nosnippet: keep the chat widget's UI copy (greeting, title, quick-question
     // prompts, privacy notice) out of Google search snippets. This wrapper renders in both
     // floating and inline/shortcode modes, so it covers all in-panel copy in one place.
-    echo '<div id="mxchat-chatbot-wrapper-' . esc_attr($bot_id) . '" class="mxchat-chatbot-wrapper" data-nosnippet data-bot-id="' . esc_attr($bot_id) . '">';
+    if ($embedded_consent_gate) {
+        echo '<div id="mxchat-consent-placeholder-' . esc_attr($bot_id) . '" class="mxchat-consent-placeholder" data-bot-id="' . esc_attr($bot_id) . '" role="status" data-nosnippet>';
+        echo '<svg class="mxchat-consent-placeholder-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>';
+        echo '<p class="mxchat-consent-placeholder-text">' . esc_html__('The chat will appear here once you accept the cookies it needs.', 'mxchat') . '</p>';
+        echo '</div>';
+    }
+    echo '<div id="mxchat-chatbot-wrapper-' . esc_attr($bot_id) . '" class="mxchat-chatbot-wrapper' . ($embedded_consent_gate ? ' no-consent' : '') . '" data-nosnippet data-bot-id="' . esc_attr($bot_id) . '">';
   
             echo '  <div class="chatbot-top-bar" id="exit-chat-button-' . esc_attr($bot_id) . '"' . ($skip_inline_colors ? '' : ' style="background: ' . esc_attr($top_bar_bg_color) . ';"') . '>';
             echo '      <div class="chatbot-title-container">';

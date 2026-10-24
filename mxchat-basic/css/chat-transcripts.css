@@ -1088,6 +1088,12 @@
     to { transform: rotate(360deg); }
 }
 
+/* One stored row of a reply shown as one message (plan e19ea8): no box of
+   its own, so the reply lays out exactly as the live chat showed it. */
+.mxch-message-part {
+    display: contents;
+}
+
 /* Translated message indicator */
 .mxch-message-bubble.translated {
     position: relative;
@@ -1270,6 +1276,12 @@
 .mxch-message-usage-model {
     color: var(--mxch-text-secondary, #64748b);
     font-weight: 500;
+}
+
+/* Tokens of the calls that found the answer (plan 65366b): same muted line,
+   no model name; the title explains what it counts. */
+.mxch-message-usage-retrieval {
+    cursor: help;
 }
 
 /* The chat's token total in the conversation header (plan 705b6c). */
@@ -2437,6 +2449,7 @@
 
 .mxch-leads-toppage-row {
     display: flex;
+    min-width: 0;
     align-items: center;
     justify-content: space-between;
     gap: var(--mxch-spacing-sm);
@@ -2569,6 +2582,13 @@
 .mxch-leads-filters .mxch-search-wrapper {
     flex: 1 1 260px;
     min-width: 180px;
+}
+
+/* Plan 3850e4: WordPress core's input[type="text"] padding outranks .mxch-search-input,
+   so the placeholder started under the icon. Clear the 14px icon at left 10px.
+   Plan 0c65cf: one rule for both Transcripts search fields (All Chats and Leads). */
+.mxch-search-wrapper .mxch-search-input {
+    padding-left: 34px;
 }
 
 .mxch-leads-filters .mxch-select {
@@ -2877,7 +2897,9 @@
 }
 
 @media (max-width: 480px) {
-    .mxch-leads-toppages-list { grid-template-columns: 1fr; }
+    /* minmax(0, 1fr): a long page title is cut with an ellipsis instead of
+       widening the card (plan 70d9ad). */
+    .mxch-leads-toppages-list { grid-template-columns: minmax(0, 1fr); }
 }
 
 /* Satisfaction card on Transcripts dashboard (plan-a5b006). */
@@ -3017,4 +3039,118 @@ body:has(.mxch-transcripts-readonly) #wpfooter {
 .mxch-transcripts-readonly #mxch-ban-user-btn,
 .mxch-transcripts-readonly .mxch-btn-ban {
     display: none !important;
+}
+
+/* Plan 9ddc82: a form the bot showed (mxchat-forms) appears with its fields,
+   read-only (the controls arrive disabled and nameless), laid out the way the
+   visitor saw it: label over field, choices in a row, the Submit button shown
+   inert like the product cards' buttons above. */
+.mxch-message-bubble .mxchat-form {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin-top: 4px;
+    min-width: 220px;
+}
+
+.mxch-message-bubble .mxchat-form-label {
+    display: block;
+    margin-bottom: 4px;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--mxch-text-secondary, #64748b);
+}
+
+.mxch-message-bubble .mxchat-label-as-placeholder .mxchat-form-label {
+    display: none;
+}
+
+.mxch-message-bubble .mxchat-required {
+    margin-left: 2px;
+    color: var(--mxch-error, #ef4444);
+}
+
+.mxch-message-bubble .mxchat-form input:not([type="checkbox"]):not([type="radio"]),
+.mxch-message-bubble .mxchat-form textarea,
+.mxch-message-bubble .mxchat-form select {
+    display: block;
+    width: 100%;
+    max-width: 100%;
+    min-height: 34px;
+    margin: 0;
+    padding: 6px 10px;
+    box-sizing: border-box;
+    border: 1px solid var(--mxch-card-border, #e2e8f0);
+    border-radius: var(--mxch-radius-sm, 4px);
+    background: var(--mxch-card-bg, #fff);
+    color: var(--mxch-text-primary, #1a1a2e);
+    font-size: 13px;
+    line-height: 1.4;
+    box-shadow: none;
+    opacity: 1;
+    cursor: default;
+}
+
+.mxch-message-bubble .mxchat-form textarea {
+    min-height: 64px;
+    resize: none;
+}
+
+.mxch-message-bubble .mxchat-choice-group {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 16px;
+}
+
+.mxch-message-bubble .mxchat-choice-option {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 13px;
+    cursor: default;
+}
+
+.mxch-message-bubble .mxchat-choice-option input {
+    margin: 0;
+    cursor: default;
+}
+
+/* Plan 97a730: WordPress's mobile admin styles (782px and below) enlarge every
+   checkbox and radio to 25px; the read-only choices keep their desktop size
+   and check marks, as at 1280. */
+@media screen and (max-width: 782px) {
+    .mxch-message-bubble .mxchat-choice-option input[type="checkbox"],
+    .mxch-message-bubble .mxchat-choice-option input[type="radio"] {
+        width: 1rem;
+        height: 1rem;
+    }
+
+    .mxch-message-bubble .mxchat-choice-option input[type="checkbox"]:checked::before {
+        width: 1.3125rem;
+        height: 1.3125rem;
+        margin: -.1875rem 0 0 -.25rem;
+    }
+
+    .mxch-message-bubble .mxchat-choice-option input[type="radio"]:checked::before {
+        width: .5rem;
+        height: .5rem;
+        margin: auto;
+    }
+}
+
+.mxch-message-bubble .mxchat-validation-message:empty {
+    display: none;
+}
+
+.mxch-message-bubble .mxchat-submit-form {
+    align-self: flex-start;
+    padding: 7px 14px;
+    border: none;
+    border-radius: var(--mxch-radius-sm, 4px);
+    background: #212121;
+    color: #fff;
+    font-size: 12px;
+    font-weight: 500;
+    opacity: 0.6;
+    cursor: default;
 }

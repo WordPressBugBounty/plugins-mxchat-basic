@@ -756,23 +756,23 @@ function mxchat_render_settings_page($admin_instance) {
                         );
                         ?>
 
-                        <div class="mxch-cache-compat-grid" style="display: grid; grid-template-columns: 1fr; gap: 12px; margin-top: 16px;">
+                        <div class="mxch-cache-compat-grid">
                             <?php foreach ($mxch_cache_rows as $row) :
                                 $is_auto = ($row['state'] === 'auto');
                                 $pill_class = $is_auto ? 'mxch-status-pill-active' : 'mxch-status-pill-warning';
                                 $pill_label = $is_auto ? __('Auto-handled', 'mxchat') : __('Manual', 'mxchat');
                                 ?>
-                                <div class="mxch-cache-compat-row" style="display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 14px; background: #f8fafc; border: 1px solid var(--mxch-card-border); border-radius: var(--mxch-radius-md);">
-                                    <div style="display: flex; align-items: center; gap: 10px; min-width: 0; flex: 0 0 auto;">
-                                        <span style="font-weight: 500;"><?php echo esc_html($row['name']); ?></span>
+                                <div class="mxch-cache-compat-row">
+                                    <div class="mxch-cache-compat-name">
+                                        <span class="mxch-cache-compat-label"><?php echo esc_html($row['name']); ?></span>
                                         <span class="mxch-status-pill <?php echo esc_attr($pill_class); ?>">
                                             <span class="mxch-status-dot"></span>
                                             <?php echo esc_html($pill_label); ?>
                                         </span>
                                     </div>
-                                    <div style="display: flex; align-items: center; gap: 8px; flex: 1 1 auto; min-width: 0;">
-                                        <code style="background: #fff; border: 1px solid var(--mxch-card-border); padding: 4px 8px; border-radius: var(--mxch-radius-sm); font-size: 12px; color: var(--mxch-text-secondary); flex: 1 1 auto; overflow-x: auto; white-space: nowrap; min-width: 0;"><?php echo esc_html($row['exclusion']); ?></code>
-                                        <button type="button" class="mxch-btn mxch-btn-secondary mxch-btn-sm" data-mxch-copy="<?php echo esc_attr($row['exclusion']); ?>" style="flex: 0 0 auto;">
+                                    <div class="mxch-cache-compat-exclusion">
+                                        <code><?php echo esc_html($row['exclusion']); ?></code>
+                                        <button type="button" class="mxch-btn mxch-btn-secondary mxch-btn-sm" data-mxch-copy="<?php echo esc_attr($row['exclusion']); ?>">
                                             <?php esc_html_e('Copy', 'mxchat'); ?>
                                         </button>
                                     </div>
@@ -798,9 +798,10 @@ function mxchat_render_settings_page($admin_instance) {
                             <svg class="mxch-card-title-icon" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-6.219-8.56"/><polyline points="21 4 21 10 15 10"/></svg>
                             <?php esc_html_e('Provider Reliability', 'mxchat'); ?>
                         </h3>
-                        <span class="mxch-status-pill <?php echo $auto_retry_enabled ? 'mxch-status-pill-active' : 'mxch-status-pill-disabled'; ?>">
+                        <?php // Plan f7bbde: data-mxch-pill-follows lets the autosave handler keep this pill in step with the switch (no reload). ?>
+                        <span class="mxch-status-pill <?php echo $auto_retry_enabled ? 'mxch-status-pill-active' : 'mxch-status-pill-disabled'; ?>" data-mxch-pill-follows="auto_retry_on_transient_error" data-label-on="<?php esc_attr_e('Active', 'mxchat'); ?>" data-label-off="<?php esc_attr_e('Disabled', 'mxchat'); ?>">
                             <span class="mxch-status-dot"></span>
-                            <?php echo $auto_retry_enabled ? esc_html__('Active', 'mxchat') : esc_html__('Disabled', 'mxchat'); ?>
+                            <span class="mxch-status-pill-text"><?php echo $auto_retry_enabled ? esc_html__('Active', 'mxchat') : esc_html__('Disabled', 'mxchat'); ?></span>
                         </span>
                     </div>
                     <div class="mxch-card-body mxchat-autosave-section">

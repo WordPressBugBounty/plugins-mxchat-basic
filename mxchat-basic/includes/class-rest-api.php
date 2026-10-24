@@ -83,14 +83,22 @@ class MxChat_Rest_Api {
                         'sanitize_callback' => 'sanitize_text_field',
                     ),
                     'role' => array(
-                        'description'       => __('Filter by role. One of: user, assistant, all (default: all).', 'mxchat'),
+                        // Bot replies are stored, and returned, with role "bot"; "assistant" and "bot" both select them.
+                        'description'       => __('Filter by role. One of: user, assistant (replies from the chatbot, returned with role "bot"), bot (same as assistant), all (default: all).', 'mxchat'),
                         'type'              => 'string',
                         'required'          => false,
-                        'enum'              => array('user', 'assistant', 'all'),
+                        'enum'              => array('user', 'assistant', 'bot', 'all'),
                         'default'           => 'all',
                     ),
                     'has_rag_context' => array(
-                        'description'       => __('Filter by whether the row has retrieved RAG context. Useful for finding "no-knowledge-hit" answers. One of: yes, no, any (default: any).', 'mxchat'),
+                        'description'       => __('Filter by whether a knowledge lookup was recorded for the row. A recorded lookup can still have found nothing; use knowledge_used=no to find every answer given without knowledge. One of: yes, no, any (default: any).', 'mxchat'),
+                        'type'              => 'string',
+                        'required'          => false,
+                        'enum'              => array('yes', 'no', 'any'),
+                        'default'           => 'any',
+                    ),
+                    'knowledge_used' => array(
+                        'description'       => __('Filter by whether knowledge base content went into the answer. no = answers given without knowledge: no lookup recorded, or a lookup that used no source. One of: yes, no, any (default: any).', 'mxchat'),
                         'type'              => 'string',
                         'required'          => false,
                         'enum'              => array('yes', 'no', 'any'),
@@ -260,6 +268,14 @@ class MxChat_Rest_Api {
      * @return bool|WP_Error
      */
     public function check_bearer_token($request) {
+        // A phone paired from API Access → Mobile app carries its own token (and may send it as
+        // X-MxChat-Token where the host strips Authorization); MxChat_App_Auth reads both and still
+        // accepts this site token with the same error codes.
+        if (class_exists('MxChat_App_Auth')) {
+            $who = MxChat_App_Auth::identify($request);
+            return is_wp_error($who) ? $who : true;
+        }
+
         $stored = (string) get_option(self::TOKEN_OPTION, '');
         if ($stored === '') {
             return new WP_Error(
@@ -369,14 +385,42 @@ class MxChat_Rest_Api {
             $where[]  = 'session_id = %s';
             $params[] = $session_id;
         }
-        if ($role === 'user' || $role === 'assistant') {
+        if ($role === 'user') {
             $where[]  = 'role = %s';
             $params[] = $role;
+        } elseif ($role === 'assistant' || $role === 'bot') {
+            // Plan 0c480a: the chatbot's replies are saved with role 'bot', so 'assistant' matched nothing.
+            // The rows keep reporting role 'bot' (existing consumers rely on it); live-agent rows ('agent') stay out.
+            $where[] = "role IN ('bot', 'assistant')";
         }
         if ($has_rag_context === 'yes') {
             $where[] = "(rag_context IS NOT NULL AND rag_context <> '')";
         } elseif ($has_rag_context === 'no') {
             $where[] = "(rag_context IS NULL OR rag_context = '')";
+        }
+        $knowledge_used = (string) $request->get_param('knowledge_used');
+        if ($knowledge_used === 'yes' || $knowledge_used === 'no') {
+            // A lookup that ran and matched nothing is saved with rag_context too (sources_used 0), so
+            // has_rag_context=no misses those answers. Knowledge counts as used when sources_used is above 0
+            // or a match is flagged used_for_context (rows saved before the Pinecone manual-entry fix carry a
+            // cosmetic sources_used:0 beside used_for_context:true). Matched on the stored JSON text with LIKE
+            // so it runs on every MySQL/MariaDB WordPress supports; knowledge_from_rag_context() decides the
+            // same way for the per-row fields.
+            $used_sql    = '(rag_context LIKE %s OR (rag_context LIKE %s AND rag_context NOT LIKE %s AND rag_context NOT LIKE %s AND rag_context NOT LIKE %s AND rag_context NOT LIKE %s))';
+            $used_params = array(
+                '%' . $wpdb->esc_like('"used_for_context":true') . '%',
+                '%' . $wpdb->esc_like('"sources_used":') . '%',
+                '%' . $wpdb->esc_like('"sources_used":0,') . '%',
+                '%' . $wpdb->esc_like('"sources_used":0}') . '%',
+                '%' . $wpdb->esc_like('"sources_used":"0"') . '%',
+                '%' . $wpdb->esc_like('"sources_used":null') . '%',
+            );
+            if ($knowledge_used === 'yes') {
+                $where[] = "(rag_context IS NOT NULL AND rag_context <> '' AND $used_sql)";
+            } else {
+                $where[] = "(rag_context IS NULL OR rag_context = '' OR NOT $used_sql)";
+            }
+            $params = array_merge($params, $used_params);
         }
 
         $where_sql = implode(' AND ', $where);
@@ -408,6 +452,7 @@ class MxChat_Rest_Api {
         $items = array();
         if (is_array($rows)) {
             foreach ($rows as $row) {
+                $knowledge = $this->knowledge_from_rag_context($row['rag_context']);
                 $items[] = array(
                     'id'                     => (int) $row['id'],
                     'user_id'                => (int) $row['user_id'],
@@ -421,6 +466,8 @@ class MxChat_Rest_Api {
                     'originating_page_title' => $row['originating_page_title'] !== null ? (string) $row['originating_page_title'] : null,
                     'has_rag_context'        => !empty($row['rag_context']),
                     'rag_context'            => $row['rag_context']            !== null ? (string) $row['rag_context']            : null,
+                    'sources_used'           => $knowledge['sources_used'],
+                    'knowledge_used'         => $knowledge['used'],
                     'timestamp'              => (string) $row['timestamp'],
                 );
             }
@@ -895,6 +942,31 @@ class MxChat_Rest_Api {
      * Try a few formats before falling back to strtotime.
      * Returns a Unix timestamp or null.
      */
+    /**
+     * How much knowledge went into one stored answer, decided the same way as the knowledge_used filter.
+     * sources_used is null when no lookup was recorded; used is true when a source went into the answer.
+     *
+     * @param string|null $raw The row's rag_context JSON.
+     * @return array{sources_used: int|null, used: bool}
+     */
+    private function knowledge_from_rag_context($raw) {
+        $data = ($raw === null || $raw === '') ? null : json_decode((string) $raw, true);
+        if (!is_array($data)) {
+            return array('sources_used' => null, 'used' => false);
+        }
+        $sources = isset($data['sources_used']) && is_numeric($data['sources_used']) ? (int) $data['sources_used'] : null;
+        $flagged = false;
+        if (!empty($data['top_matches']) && is_array($data['top_matches'])) {
+            foreach ($data['top_matches'] as $match) {
+                if (is_array($match) && isset($match['used_for_context']) && $match['used_for_context'] === true) {
+                    $flagged = true;
+                    break;
+                }
+            }
+        }
+        return array('sources_used' => $sources, 'used' => $flagged || ($sources !== null && $sources > 0));
+    }
+
     private function parse_datetime($value) {
         $value = trim((string) $value);
         if ($value === '') {

@@ -264,15 +264,21 @@ function countingLabel() {
     return (mxchatSelector.i18n && mxchatSelector.i18n.countingWords) || 'Counting words…';
 }
 
-function showWords(id, words) {
+function showWords(id, words, excerpt) {
     const item = allItems.find(function(i) { return i.id === id; });
     if (item) {
         if (words !== null && words !== undefined) { item.word_count = words; }
         item.word_count_pending = false;
     }
     const shown = item ? item.word_count : words;
+    const $row = $contentList.find('.mxchat-kb-content-item[data-id="' + id + '"]');
     if (shown !== null && shown !== undefined) {
-        $contentList.find('.mxchat-kb-content-item[data-id="' + id + '"] .mxchat-kb-content-words').text(shown + ' words');
+        $row.find('.mxchat-kb-content-words').text(shown + ' words');
+    }
+    // The excerpt read from the same text as the count (plan 4e8976), shown as text.
+    if (typeof excerpt === 'string') {
+        if (item) { item.excerpt = excerpt; }
+        $row.find('.mxchat-kb-content-excerpt').text(decodeEntities(excerpt));
     }
 }
 
@@ -308,10 +314,15 @@ function pumpWordCounts() {
             batch.forEach(function(id) { showWords(id, null); });
             return;
         }
+        const excerpts = (response.data && response.data.excerpts) || {};
         // Ids the server had no time for go back to the front of the queue.
         const missed = [];
         batch.forEach(function(id) {
-            if (Object.prototype.hasOwnProperty.call(counts, id)) { showWords(id, counts[id]); } else { missed.push(id); }
+            if (Object.prototype.hasOwnProperty.call(counts, id)) {
+                showWords(id, counts[id], Object.prototype.hasOwnProperty.call(excerpts, id) ? excerpts[id] : undefined);
+            } else {
+                missed.push(id);
+            }
         });
         if (missed.length === batch.length) {
             missed.forEach(function(id) { showWords(id, null); }); // never ask again for nothing

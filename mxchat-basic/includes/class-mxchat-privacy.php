@@ -589,6 +589,32 @@ class MxChat_Privacy {
     }
 
     /**
+     * Erase whole sessions exactly as an erasure request does (plan 50fb99):
+     * uploaded files, transients, transcript rows, translations, link clicks,
+     * the rating, the per-session options and the session row. The lead
+     * retention sweep calls this, so an expired lead leaves by the same path
+     * as a privacy erasure.
+     *
+     * @param string[] $session_ids Session ids (sanitized here).
+     * @return int Sessions erased.
+     */
+    public static function erase_sessions(array $session_ids) {
+        $done = 0;
+        foreach ($session_ids as $sid) {
+            $sid = class_exists('MxChat_Utils') ? MxChat_Utils::sanitize_session_id($sid) : sanitize_text_field((string) $sid);
+            if ($sid === '') {
+                continue;
+            }
+            self::erase_session($sid);
+            $done++;
+        }
+        if ($done) {
+            wp_cache_delete('all_chat_sessions', 'mxchat_chat_sessions');
+        }
+        return $done;
+    }
+
+    /**
      * Orphan sweep: pre-chat captures and chat-deleted lead preservations
      * whose stored value is the subject's email but whose transcript rows are
      * already gone (e.g. removed earlier by retention). Mirrors the tail of

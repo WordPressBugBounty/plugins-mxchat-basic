@@ -586,6 +586,7 @@
 
 .mxch-search-input {
     width: 100%;
+    margin: 0; /* WordPress's 1px input side margin pushed the full-width field past its panel (plan 70d9ad) */
     padding: 10px 12px 10px 34px;
     border: none;
     border-radius: 0;
@@ -603,6 +604,13 @@
 
 .mxch-search-input::placeholder {
     color: #9ca3af;
+}
+
+/* Plan 7af04a: WordPress core's input[type="text"] padding outranks
+   .mxch-search-input, so the placeholder started under the 14px icon at left
+   12px. Same shared rule as the Transcripts search fields (plan 0c65cf). */
+.mxch-search-wrapper .mxch-search-input {
+    padding-left: 34px;
 }
 
 /* Action List */

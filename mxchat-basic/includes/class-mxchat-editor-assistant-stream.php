@@ -6,7 +6,7 @@
  * the whole response before serializing, which defeats token-by-token streaming;
  * admin-ajax lets us set our own headers and flush() chunks as they arrive. This
  * mirrors the proven streaming pattern mxchat-basic already ships for its chat
- * widget (class-mxchat-admin.php perform_streaming_test / process_streaming_test_data).
+ * widget (the mxchat_stream_chat handler in class-mxchat-integrator.php).
  *
  * POST admin-ajax.php?action=mxchat_editor_assistant_stream
  *   { action: <slug>, content: <string>, locale?: <iso>, nonce: <stream nonce> }
@@ -127,7 +127,7 @@ class MxChat_Editor_Assistant_Stream {
                 self::stream_openai_compatible('https://api.x.ai/v1/chat/completions', array(
                     'Content-Type: application/json',
                     'Authorization: Bearer ' . self::key($opts, 'xai_api_key'),
-                ), $model, $system_prompt, $content, self::key($opts, 'xai_api_key'), __('Grok (xAI)', 'mxchat'));
+                ), $model, $system_prompt, $content, self::key($opts, 'xai_api_key'), __('Grok (xAI)', 'mxchat'), 'xai');
                 break;
 
             case 'anthropic':
@@ -145,7 +145,7 @@ class MxChat_Editor_Assistant_Stream {
                 foreach ($cfg['headers'] as $k => $v) {
                     $hdrs[] = $k . ': ' . $v;
                 }
-                self::stream_openai_compatible($cfg['chat_url'], $hdrs, $cfg['model'], $system_prompt, $content, $cfg['api_key'], __('custom provider', 'mxchat'));
+                self::stream_openai_compatible($cfg['chat_url'], $hdrs, $cfg['model'], $system_prompt, $content, $cfg['api_key'], __('custom provider', 'mxchat'), 'custom');
                 break;
 
             case 'google':
@@ -166,8 +166,11 @@ class MxChat_Editor_Assistant_Stream {
     /**
      * Stream from any OpenAI-compatible Chat Completions endpoint (OpenAI, Grok,
      * custom/Azure). Parses `choices[].delta.content` chunks.
+     *
+     * $filter_provider is the provider name the mxchat_stream_request filter
+     * sees: openai, xai or custom (plan d46bd3).
      */
-    private static function stream_openai_compatible($url, $headers, $model, $system_prompt, $user_content, $api_key, $provider_label) {
+    private static function stream_openai_compatible($url, $headers, $model, $system_prompt, $user_content, $api_key, $provider_label, $filter_provider = 'openai') {
         if ($api_key === '' && stripos(implode(' ', $headers), 'api-key:') === false) {
             /* translators: %s: provider label */
             self::emit_error_and_done(sprintf(__('%s API key is missing in MxChat settings.', 'mxchat'), $provider_label));
@@ -211,7 +214,7 @@ class MxChat_Editor_Assistant_Stream {
             }
         }
 
-        $emitted = self::run_curl_stream($url, $headers, $body, 'openai');
+        $emitted = self::run_curl_stream($url, $headers, $body, 'openai', $filter_provider, $model);
         self::finish_stream($emitted, $provider_label);
     }
 
@@ -247,21 +250,29 @@ class MxChat_Editor_Assistant_Stream {
             ),
             'stream'     => true,
         );
-        $emitted = self::run_curl_stream('https://api.anthropic.com/v1/messages', $headers, $body, 'anthropic');
+        $emitted = self::run_curl_stream('https://api.anthropic.com/v1/messages', $headers, $body, 'anthropic', 'claude', $model);
         self::finish_stream($emitted, __('Anthropic', 'mxchat'));
     }
 
     /**
      * Shared curl streaming core. Returns the number of content chunks emitted
      * (0 means nothing streamed — caller surfaces an error).
+     *
+     * The request passes through the mxchat_stream_request filter first, like
+     * the chat widget's streamed replies (plans 2ae397, d46bd3); with no filter
+     * attached it goes out exactly as built.
      */
-    private static function run_curl_stream($url, $headers, $body, $format) {
+    private static function run_curl_stream($url, $headers, $body, $format, $filter_provider = 'openai', $model = '') {
         $emitted = 0;
+        $json_body = wp_json_encode($body);
+        if (class_exists('MxChat_Utils') && method_exists('MxChat_Utils', 'filter_stream_request')) {
+            list($url, $headers, $json_body) = MxChat_Utils::filter_stream_request($url, (array) $headers, $json_body, $filter_provider, (string) $model, 'default');
+        }
         $ch = curl_init();
         curl_setopt($ch, CURLOPT_URL, $url);
         curl_setopt($ch, CURLOPT_RETURNTRANSFER, false);
         curl_setopt($ch, CURLOPT_POST, true);
-        curl_setopt($ch, CURLOPT_POSTFIELDS, wp_json_encode($body));
+        curl_setopt($ch, CURLOPT_POSTFIELDS, $json_body);
         curl_setopt($ch, CURLOPT_HTTPHEADER, $headers);
         curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, true);
         curl_setopt($ch, CURLOPT_TIMEOUT, 60);

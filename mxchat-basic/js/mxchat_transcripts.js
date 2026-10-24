@@ -567,6 +567,68 @@ jQuery(document).ready(function($) {
         });
     }
 
+    // A reply's text and its html part (product cards, a gallery, a form) are
+    // stored as two rows; the live chat showed them as one message (plan
+    // e19ea8). The server marks each bot row's part ('html', 'embed', 'none');
+    // a part joins the AI message just before it when no other row came
+    // between and it was written within 10 seconds of it, one blank line after
+    // the reply text (plan 45d9b5: two line breaks after text on one line, one
+    // after text that ends in a paragraph, which two would have pushed down two
+    // lines). A part that renders nothing (the Add to Cart script, the cart
+    // signal) is not shown; a YouTube embed stays its own message. Same
+    // grouping as the widget's replay (chat-script.js loadChatHistory). Rows
+    // from older servers carry no part and show as before.
+    function groupReplyParts(messages) {
+        const entries = [];
+        let turn = null;
+        (messages || []).forEach(function(msg, rowIndex) {
+            const part = msg.part || '';
+            if (msg.role === 'bot' && part) {
+                if (part === 'none') {
+                    return;
+                }
+                const sameTurn = turn && part !== 'embed' &&
+                    (!msg.ts || !turn.ts || Math.abs(msg.ts - turn.ts) <= 10);
+                if (sameTurn) {
+                    const textHtml = turn.entry.parts[0].content || '';
+                    const sep = (!turn.hasHtml && $('<div>').html(textHtml).text().trim() !== '')
+                        ? (/<\/p>\s*$/i.test(textHtml) ? '<br>' : '<br><br>')
+                        : '';
+                    turn.entry.parts.push({ index: rowIndex, content: msg.content, sep: sep });
+                    turn.hasHtml = true;
+                    // Usage and Sources normally sit on the text row; keep them
+                    // if the integrator put them on the part instead.
+                    const target = turn.entry.msg;
+                    if (!target.usage && msg.usage) { target.usage = msg.usage; }
+                    if (!target.retrieval_usage && msg.retrieval_usage) { target.retrieval_usage = msg.retrieval_usage; }
+                    if (!target.has_rag && msg.has_rag) { target.has_rag = true; target.rag_id = msg.id; }
+                    return;
+                }
+            }
+            const entry = { msg: $.extend({}, msg), parts: [{ index: rowIndex, content: msg.content, sep: '' }] };
+            entries.push(entry);
+            turn = (msg.role === 'bot' && part !== 'embed')
+                ? { entry: entry, ts: msg.ts || 0, hasHtml: part === 'html' }
+                : null;
+        });
+        return entries;
+    }
+
+    // A message's bubble markup. Each stored row stays one translation unit
+    // (data-mxch-tr-index = its row number), so translations saved before rows
+    // were joined still land on the row they were made for.
+    function bubbleContent(entry) {
+        if (entry.parts.length === 1) {
+            return { attr: ` data-mxch-tr-index="${entry.parts[0].index}"`, html: entry.parts[0].content };
+        }
+        return {
+            attr: '',
+            html: entry.parts.map(function(p) {
+                return `${p.sep}<div class="mxch-message-part" data-mxch-tr-index="${p.index}">${p.content}</div>`;
+            }).join('')
+        };
+    }
+
     // Render conversation content
     function renderConversation(data) {
         // Update header
@@ -636,13 +698,15 @@ jQuery(document).ready(function($) {
 
         // Render messages
         let messagesHtml = '';
-        data.messages.forEach(function(msg) {
+        groupReplyParts(data.messages).forEach(function(entry) {
+            const msg = entry.msg;
+            const bubble = bubbleContent(entry);
             if (msg.is_user) {
                 messagesHtml += `
                     <div class="mxch-message mxch-message-user" data-message-id="${msg.id}">
                         <div class="mxch-message-row">
-                            <div class="mxch-message-bubble">
-                                ${msg.content}
+                            <div class="mxch-message-bubble"${bubble.attr}>
+                                ${bubble.html}
                             </div>
                         </div>
                         <div class="mxch-message-time">${escapeHtml(msg.timestamp)}</div>
@@ -652,18 +716,22 @@ jQuery(document).ready(function($) {
                 // Live-agent replies (role 'agent') get their own label and never
                 // carry a Sources link; bot/assistant rows render exactly as before.
                 const isAgent = !!msg.is_agent;
-                const ragLink = (!isAgent && msg.has_rag) ? `<a href="#" class="mxch-rag-link" data-message-id="${msg.id}">Sources</a>` : '';
+                const ragLink = (!isAgent && msg.has_rag) ? `<a href="#" class="mxch-rag-link" data-message-id="${msg.rag_id || msg.id}">Sources</a>` : '';
                 const senderLabel = isAgent
                     ? '<span class="mxch-agent-label">Live Agent</span>'
                     : '<span class="mxch-bot-label">AI Assistant</span>';
                 // Model and tokens of this reply (plan 705b6c), beside the time.
                 // Replies without recorded usage keep the time line alone.
                 const usage = (!isAgent && msg.usage && msg.usage.label) ? msg.usage : null;
+                // Tokens of the calls that found the answer (vector store search,
+                // search query rewrite), kept apart from the reply's own (plan 65366b).
+                const retrieval = (!isAgent && msg.retrieval_usage && msg.retrieval_usage.text) ? msg.retrieval_usage : null;
                 const timeLine = `<div class="mxch-message-time">${escapeHtml(msg.timestamp)}</div>`;
-                const footer = usage
+                const footer = (usage || retrieval)
                     ? `<div class="mxch-message-foot">
                             ${timeLine}
-                            <div class="mxch-message-usage">${usage.model ? `<span class="mxch-message-usage-model">${escapeHtml(usage.model)}</span> ` : ''}<span class="mxch-message-usage-tokens">${escapeHtml(usage.label)}</span></div>
+                            ${usage ? `<div class="mxch-message-usage">${usage.model ? `<span class="mxch-message-usage-model">${escapeHtml(usage.model)}</span> ` : ''}<span class="mxch-message-usage-tokens">${escapeHtml(usage.label)}</span></div>` : ''}
+                            ${retrieval ? `<div class="mxch-message-usage mxch-message-usage-retrieval" title="${escapeHtml(String(retrieval.title || ''))}">${escapeHtml(retrieval.text)}</div>` : ''}
                         </div>`
                     : timeLine;
                 messagesHtml += `
@@ -673,8 +741,8 @@ jQuery(document).ready(function($) {
                             ${ragLink}
                         </div>
                         <div class="mxch-message-row">
-                            <div class="mxch-message-bubble">
-                                ${msg.content}
+                            <div class="mxch-message-bubble"${bubble.attr}>
+                                ${bubble.html}
                             </div>
                         </div>
                         ${footer}
@@ -808,24 +876,48 @@ jQuery(document).ready(function($) {
         localStorage.setItem('mxch_translate_lang', $(this).val());
     });
 
+    // Translation units: one per stored row, numbered by row (plan e19ea8), so
+    // a reply whose text and html part share a message keeps two units and a
+    // translation saved before they were joined lands where it was made for.
+    function translationUnits() {
+        return $('#mxch-messages-area [data-mxch-tr-index]');
+    }
+
+    function rememberOriginalMessages() {
+        if (originalMessages) {
+            return;
+        }
+        originalMessages = {};
+        translationUnits().each(function() {
+            originalMessages[$(this).attr('data-mxch-tr-index')] = $(this).html();
+        });
+    }
+
+    function restoreOriginalMessages() {
+        translationUnits().each(function() {
+            const key = $(this).attr('data-mxch-tr-index');
+            if (originalMessages[key]) {
+                $(this).html(originalMessages[key]);
+            }
+        });
+        $('#mxch-messages-area .mxch-message-bubble').removeClass('translated');
+    }
+
     // Apply translations to messages
     function applyTranslations(translations) {
         // Store original messages if not already stored
-        if (!originalMessages) {
-            originalMessages = [];
-            $('#mxch-messages-area .mxch-message-bubble').each(function() {
-                originalMessages.push($(this).html());
-            });
-        }
+        rememberOriginalMessages();
 
         // Apply translations
         translations.forEach(function(item) {
-            const $bubble = $('#mxch-messages-area .mxch-message-bubble').eq(item.index);
-            if ($bubble.length) {
+            const $unit = translationUnits().filter(function() {
+                return $(this).attr('data-mxch-tr-index') === String(item.index);
+            });
+            if ($unit.length) {
                 // A translation is model output from the messages' plain text
                 // (visitor-written), so it is shown as text; line breaks kept.
-                $bubble.html(escapeHtml(item.translated).replace(/\r?\n/g, '<br>'));
-                $bubble.addClass('translated');
+                $unit.html(escapeHtml(item.translated).replace(/\r?\n/g, '<br>'));
+                $unit.closest('.mxch-message-bubble').addClass('translated');
             }
         });
 
@@ -866,30 +958,21 @@ jQuery(document).ready(function($) {
         $btn.find('svg').addClass('mxch-translate-spinner');
 
         // Store original messages before translation
-        if (!originalMessages) {
-            originalMessages = [];
-            $('#mxch-messages-area .mxch-message-bubble').each(function() {
-                originalMessages.push($(this).html());
-            });
-        }
+        rememberOriginalMessages();
 
         // If already translated, restore originals first before re-translating
         if (isTranslated) {
-            $('#mxch-messages-area .mxch-message-bubble').each(function(index) {
-                if (originalMessages[index]) {
-                    $(this).html(originalMessages[index]);
-                    $(this).removeClass('translated');
-                }
-            });
+            restoreOriginalMessages();
         }
 
-        // Collect all message content (from originals)
+        // Collect all message content (from originals), one entry per row
         const messages = [];
-        originalMessages.forEach(function(html, index) {
+        translationUnits().each(function() {
+            const key = $(this).attr('data-mxch-tr-index');
             // Create temp element to get text content
-            const $temp = $('<div>').html(html);
+            const $temp = $('<div>').html(originalMessages[key] || '');
             messages.push({
-                index: index,
+                index: parseInt(key, 10),
                 content: $temp.text().trim()
             });
         });
@@ -931,12 +1014,7 @@ jQuery(document).ready(function($) {
         if (!originalMessages) return;
 
         // Restore original messages
-        $('#mxch-messages-area .mxch-message-bubble').each(function(index) {
-            if (originalMessages[index]) {
-                $(this).html(originalMessages[index]);
-                $(this).removeClass('translated');
-            }
-        });
+        restoreOriginalMessages();
 
         isTranslated = false;
         $(this).hide();

@@ -38,6 +38,50 @@ function mxchat_register_api_admin_page() {
 /**
  * Generate a new token and store it.
  */
+/** Whether this screen shows the Mobile app tab (MxChat_App_Auth::preview_enabled(), off by default). */
+function mxchat_api_page_app_preview() {
+    return class_exists('MxChat_App_Auth') && method_exists('MxChat_App_Auth', 'preview_enabled') && MxChat_App_Auth::preview_enabled();
+}
+
+/**
+ * Mobile app tab: the QR library (MIT, vendored) and the pairing script, on this screen only, and only while
+ * the app preview is on.
+ */
+add_action('admin_enqueue_scripts', 'mxchat_enqueue_app_pairing_assets');
+function mxchat_enqueue_app_pairing_assets() {
+    if (!isset($_GET['page']) || $_GET['page'] !== 'mxchat-api-access' || !current_user_can('manage_options') || !mxchat_api_page_app_preview()) {
+        return;
+    }
+    $base    = plugin_dir_url(dirname(__FILE__));
+    $version = defined('MXCHAT_VERSION') ? MXCHAT_VERSION : '1';
+    wp_enqueue_script('mxchat-qrcode-generator', $base . 'js/vendor/qrcode-generator.js', array(), '1.4.4', true);
+    wp_enqueue_script('mxchat-app-pairing', $base . 'js/admin-app-pairing.js', array('mxchat-qrcode-generator'), $version, true);
+    wp_localize_script('mxchat-app-pairing', 'mxchAppPairing', array(
+        'ajaxUrl' => admin_url('admin-ajax.php'),
+        'nonce'   => wp_create_nonce('mxchat_app_pairing'),
+        'i18n'    => array(
+            /* translators: %s: minutes:seconds left */
+            'expires'       => __('Expires in %s', 'mxchat'),
+            'expired'       => __('This code has expired. Show a new one.', 'mxchat'),
+            'newCode'       => __('Show a new code', 'mxchat'),
+            /* translators: %s: phone name */
+            'paired'        => __('Paired: %s. You can close this page.', 'mxchat'),
+            'none'          => __('No phones paired yet.', 'mxchat'),
+            'revoke'        => __('Revoke', 'mxchat'),
+            'notAdmin'      => __('Signed out: the account is no longer an administrator', 'mxchat'),
+            /* translators: %s: phone name */
+            'confirmRevoke' => __('Sign %s out of the MxChat app?', 'mxchat'),
+            'justNow'       => __('Just now', 'mxchat'),
+            /* translators: %d: number of minutes */
+            'minutes'       => __('%d min ago', 'mxchat'),
+            /* translators: %d: number of hours */
+            'hours'         => __('%d h ago', 'mxchat'),
+            /* translators: %d: number of days */
+            'days'          => __('%d days ago', 'mxchat'),
+        ),
+    ));
+}
+
 add_action('admin_post_mxchat_rotate_api_token', 'mxchat_handle_rotate_api_token');
 function mxchat_handle_rotate_api_token() {
     if (!current_user_can('manage_options')) {
@@ -94,6 +138,7 @@ function mxchat_render_api_admin_page() {
     $leads_url     = $base_url . 'leads';
 
     $plugin_url    = plugin_dir_url(dirname(__FILE__));
+    $app_preview   = mxchat_api_page_app_preview();
     $masked        = $token_set
         ? substr($stored_token, 0, 4) . str_repeat('•', 24) . substr($stored_token, -4)
         : '';
@@ -138,6 +183,12 @@ function mxchat_render_api_admin_page() {
                         <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21 2-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0 3 3L22 7l-3-3m-3.5 3.5L19 4"/></svg>
                         <span><?php esc_html_e('Token', 'mxchat'); ?></span>
                     </button>
+                    <?php if ($app_preview) : ?>
+                    <button class="mxch-mobile-nav-link" data-target="api-mobile">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="2" width="14" height="20" rx="2" ry="2"/><line x1="12" y1="18" x2="12.01" y2="18"/></svg>
+                        <span><?php esc_html_e('Mobile app', 'mxchat'); ?></span>
+                    </button>
+                    <?php endif; ?>
                     <button class="mxch-mobile-nav-link" data-target="api-endpoints">
                         <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
                         <span><?php esc_html_e('Endpoints', 'mxchat'); ?></span>
@@ -181,6 +232,17 @@ function mxchat_render_api_admin_page() {
                             <?php endif; ?>
                         </button>
                     </div>
+
+                    <?php if ($app_preview) : ?>
+                    <div class="mxch-nav-item" data-section="api-mobile">
+                        <button class="mxch-nav-link" data-target="api-mobile">
+                            <span class="mxch-nav-link-icon">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="2" width="14" height="20" rx="2" ry="2"/><line x1="12" y1="18" x2="12.01" y2="18"/></svg>
+                            </span>
+                            <span class="mxch-nav-link-text"><?php esc_html_e('Mobile app', 'mxchat'); ?></span>
+                        </button>
+                    </div>
+                    <?php endif; ?>
 
                     <div class="mxch-nav-item" data-section="api-endpoints">
                         <button class="mxch-nav-link" data-target="api-endpoints">
@@ -342,7 +404,7 @@ function mxchat_render_api_admin_page() {
                                     <td><span class="mxch-api-method mxch-api-method-get">GET</span></td>
                                     <td><code><?php echo esc_html($transcripts_u); ?></code></td>
                                     <td><span class="mxch-api-auth mxch-api-auth-bearer"><?php esc_html_e('Bearer', 'mxchat'); ?></span></td>
-                                    <td><?php esc_html_e('Read chat transcripts. Filterable by since, until, session_id, role, has_rag_context; supports limit + offset pagination.', 'mxchat'); ?></td>
+                                    <td><?php esc_html_e('Read chat transcripts. Filterable by since, until, session_id, role (user, assistant or all), has_rag_context, knowledge_used (no = answers given without knowledge); supports limit + offset pagination. Each row reports its role as user, bot (a chatbot reply) or agent (a live-agent reply).', 'mxchat'); ?></td>
                                 </tr>
                                 <tr>
                                     <td><span class="mxch-api-method mxch-api-method-post">POST</span></td>
@@ -397,7 +459,7 @@ function mxchat_render_api_admin_page() {
                     </div>
                     <div class="mxch-card-body">
                         <pre class="mxch-api-codeblock"><code>curl -H "Authorization: Bearer YOUR_TOKEN" \
-  "<?php echo esc_html($transcripts_u); ?>?role=user&amp;has_rag_context=no&amp;since=2026-05-01&amp;limit=50"</code></pre>
+  "<?php echo esc_html($transcripts_u); ?>?role=assistant&amp;knowledge_used=no&amp;since=2026-05-01&amp;limit=50"</code></pre>
                     </div>
                 </div>
 
@@ -449,6 +511,52 @@ function mxchat_render_api_admin_page() {
                     </div>
                 </div>
             </div>
+
+            <?php if ($app_preview) : ?>
+            <!-- Mobile app Section -->
+            <div id="api-mobile" class="mxch-section">
+                <div class="mxch-content-header">
+                    <h1 class="mxch-content-title"><?php esc_html_e('Mobile app', 'mxchat'); ?></h1>
+                    <p class="mxch-content-subtitle"><?php esc_html_e('Run your chatbot from your phone: chats, leads, knowledge, settings and content. Each phone gets its own sign-in that you can revoke here; your AI keys stay on this site.', 'mxchat'); ?></p>
+                </div>
+
+                <div class="mxch-card">
+                    <div class="mxch-card-header">
+                        <h3 class="mxch-card-title"><?php esc_html_e('Pair a phone', 'mxchat'); ?></h3>
+                    </div>
+                    <div class="mxch-card-body">
+                        <ol class="mxch-app-steps">
+                            <li><?php esc_html_e('Install the MxChat app on your phone.', 'mxchat'); ?></li>
+                            <li><?php esc_html_e('Show a pairing code below.', 'mxchat'); ?></li>
+                            <li><?php esc_html_e('In the app, tap Scan QR code. Or scan it with the phone camera.', 'mxchat'); ?></li>
+                        </ol>
+                        <button type="button" class="mxch-btn mxch-btn-primary" id="mxch-app-pair-btn"><?php esc_html_e('Show pairing code', 'mxchat'); ?></button>
+                        <div class="mxch-app-pair" id="mxch-app-pair" hidden>
+                            <div class="mxch-app-qr" id="mxch-app-qr" aria-label="<?php esc_attr_e('Pairing QR code', 'mxchat'); ?>"></div>
+                            <div class="mxch-app-pair-meta">
+                                <p class="mxch-app-pair-timer" id="mxch-app-pair-timer"></p>
+                                <p class="mxch-field-description"><?php esc_html_e('The code works once. On the phone itself? Use this link instead:', 'mxchat'); ?></p>
+                                <a class="mxch-btn mxch-btn-secondary mxch-btn-sm" id="mxch-app-pair-link" href="#"><?php esc_html_e('Open in the MxChat app', 'mxchat'); ?></a>
+                                <p class="mxch-app-paired" id="mxch-app-paired" hidden></p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="mxch-card">
+                    <div class="mxch-card-header">
+                        <h3 class="mxch-card-title"><?php esc_html_e('Paired phones', 'mxchat'); ?></h3>
+                    </div>
+                    <div class="mxch-card-body">
+                        <table class="mxch-api-endpoints-table mxch-app-devices">
+                            <thead><tr><th><?php esc_html_e('Phone', 'mxchat'); ?></th><th><?php esc_html_e('Paired by', 'mxchat'); ?></th><th><?php esc_html_e('Last used', 'mxchat'); ?></th><th></th></tr></thead>
+                            <tbody id="mxch-app-devices"><tr><td colspan="4"><?php esc_html_e('Loading…', 'mxchat'); ?></td></tr></tbody>
+                        </table>
+                        <p class="mxch-field-description"><?php esc_html_e('Revoking signs that phone out at once. The site API token above is separate and is not affected.', 'mxchat'); ?></p>
+                    </div>
+                </div>
+            </div>
+            <?php endif; ?>
 
             <!-- Privacy Section -->
             <div id="api-privacy" class="mxch-section">
@@ -585,6 +693,18 @@ function mxchat_render_api_admin_page() {
         }
         .mxch-api-privacy-list li + li { border-top: 1px solid var(--mxch-card-border, #e2e4e9); }
         .mxch-api-bullet { flex-shrink: 0; margin-top: 2px; color: var(--mxch-primary, #7873f5); }
+
+<?php if ($app_preview) : ?>
+        .mxch-app-steps { margin: 0 0 16px 18px; font-size: 14px; line-height: 1.7; }
+        .mxch-app-pair { display: flex; gap: 24px; align-items: center; flex-wrap: wrap; margin-top: 18px; }
+        .mxch-app-qr { width: 220px; height: 220px; background: #fff; border: 1px solid var(--mxch-card-border, #e2e4e9); border-radius: 12px; padding: 8px; box-sizing: border-box; }
+        .mxch-app-qr svg { width: 100%; height: 100%; display: block; }
+        .mxch-app-qr.is-expired { opacity: .25; }
+        .mxch-app-pair-meta { flex: 1; min-width: 220px; }
+        .mxch-app-pair-timer { font-weight: 600; margin: 0 0 8px; }
+        .mxch-app-paired { margin: 12px 0 0; color: #13703f; font-weight: 600; }
+        .mxch-app-devices .mxch-btn { white-space: nowrap; }
+<?php endif; ?>
 
         .mxch-card-subtitle {
             font-size: 12px;

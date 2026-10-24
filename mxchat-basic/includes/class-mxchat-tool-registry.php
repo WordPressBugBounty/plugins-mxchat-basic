@@ -235,6 +235,16 @@ class MxChat_Tool_Registry {
                 'emits_ui'      => true,
                 'ui_self_saves' => true,
             ),
+            // plan 578297: xAI, through the same request code as the Content
+            // screen and mxchat_generate_media_image().
+            'mxchat_generate_xai_image' => array(
+                'label'       => __('Generate Image (xAI)', 'mxchat'),
+                'description' => __('Create an image from a text description using xAI Grok Imagine. The query should describe the image to make.', 'mxchat'),
+                'emits_ui'      => true,
+                'ui_self_saves' => true,
+                'requires_key'  => 'xai_api_key',
+                'setup_note'    => __('Powered by xAI Grok Imagine — requires an xAI API key. Add it under Settings → API Keys.', 'mxchat'),
+            ),
             // Cautious (default-off) core callbacks — selectable but opt-in:
             'mxchat_handle_email_capture' => array(
                 'label'       => __('Collect Email', 'mxchat'),

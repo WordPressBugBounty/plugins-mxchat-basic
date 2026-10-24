@@ -5048,6 +5048,9 @@ select option:disabled {
     background-clip: unset;
 }
 
+/* The colour variants below belong to .status-badge only: unscoped, their white
+   !important text also hit add-on badges that share the class name, such as Image
+   Analysis' green ACTIVE key badges, which turned white on pale green (plan 70d9ad). */
 .status-badge {
     display: inline-block;
     padding: 6px 12px;
@@ -5058,19 +5061,19 @@ select option:disabled {
     letter-spacing: 0.5px;
 }
 
-.status-active {
+.status-badge.status-active {
     background: linear-gradient(135deg, #10b981 0%, #059669 100%);
     color: #ffffff !important;
     -webkit-text-fill-color: #ffffff !important;
 }
 
-.status-moderate {
+.status-badge.status-moderate {
     background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
     color: #ffffff !important;
     -webkit-text-fill-color: #ffffff !important;
 }
 
-.status-quiet {
+.status-badge.status-quiet {
     background: linear-gradient(135deg, #8b5cf6 0%, #7c3aed 100%);
     color: #ffffff !important;
     -webkit-text-fill-color: #ffffff !important;

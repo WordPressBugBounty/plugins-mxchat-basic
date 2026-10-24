@@ -376,18 +376,15 @@ public static function notification_recipients($options = null) {
 }
 
 /**
- * Centralized embedding model registry. Single source of truth for dimensions
- * and provider, so model-switch protection logic doesn't drift across files.
+ * Embedding model registry (dimensions, provider, label) for model-switch
+ * protection. Derived from MxChat_Model_Catalog::embedding_models(), the only
+ * embedding list (plan 32e648).
  */
 public static function embedding_model_registry() {
-    return array(
-        'text-embedding-ada-002' => array('dims' => 1536, 'provider' => 'openai',  'label' => 'Ada 2'),
-        'text-embedding-3-small' => array('dims' => 1536, 'provider' => 'openai',  'label' => 'TE3 Small'),
-        'text-embedding-3-large' => array('dims' => 3072, 'provider' => 'openai',  'label' => 'TE3 Large'),
-        'voyage-3-large'         => array('dims' => 2048, 'provider' => 'voyage',  'label' => 'Voyage-3 Large'),
-        'gemini-embedding-001'   => array('dims' => 1536, 'provider' => 'gemini',  'label' => 'Gemini Embedding'),
-        'gemini-embedding-2'     => array('dims' => 1536, 'provider' => 'gemini',  'label' => 'Gemini Embedding 2'), // direct task M2
-    );
+    if (!class_exists('MxChat_Model_Catalog')) {
+        require_once __DIR__ . '/class-mxchat-model-catalog.php';
+    }
+    return MxChat_Model_Catalog::embedding_registry();
 }
 
 public static function embedding_model_dimensions($model) {
@@ -469,16 +466,12 @@ public static function standard_embedding_dimension($options = null) {
         $options = is_array($options) ? $options : array();
     }
     $selected_model = $options['embedding_model'] ?? 'text-embedding-ada-002';
-    $model_dimensions = array(
-        'text-embedding-ada-002' => 1536,
-        'text-embedding-3-small' => 1536,
-        'text-embedding-3-large' => 3072,
-        'voyage-2'               => 1024,
-        'voyage-large-2'         => 1536,
-        'voyage-3-large'         => 2048,
-        'gemini-embedding-001'   => 1536,
-        'gemini-embedding-2'     => 1536,
-    );
+    // Catalog sizes plus the legacy ids a site may still have saved (plan 32e648).
+    $registry = self::embedding_model_registry(); // loads the catalog class
+    $model_dimensions = MxChat_Model_Catalog::legacy_embedding_dimensions();
+    foreach ($registry as $id => $entry) {
+        $model_dimensions[$id] = $entry['dims'];
+    }
     if (strpos($selected_model, 'voyage-3-large') === 0) {
         return intval($options['voyage_output_dimension'] ?? 2048);
     }
@@ -1347,6 +1340,38 @@ public static function generate_query_embedding($text, $api_key, $bot_id = 'defa
 }
 
 /**
+ * Input tokens the provider reported for the most recent embedding call made
+ * here (plan 93f0bd), so the chat turn can show what its query embeddings
+ * cost beside the reply. Null when the last call failed or the provider sent
+ * no usage (Gemini's embedContent reports none).
+ */
+private static $last_embedding_usage = null;
+
+/**
+ * @return array|null array('in' => int) for the last embedding call, or null.
+ */
+public static function last_embedding_usage() {
+    return self::$last_embedding_usage;
+}
+
+/**
+ * Record the usage block of a successful OpenAI-shaped (prompt_tokens) or
+ * Voyage (total_tokens) embedding response.
+ */
+private static function record_embedding_usage($response_body) {
+    $in = null;
+    if (is_array($response_body) && isset($response_body['usage']) && is_array($response_body['usage'])) {
+        foreach (array('prompt_tokens', 'total_tokens') as $key) {
+            if (isset($response_body['usage'][$key]) && is_numeric($response_body['usage'][$key])) {
+                $in = max(0, (int) $response_body['usage'][$key]);
+                break;
+            }
+        }
+    }
+    self::$last_embedding_usage = ($in !== null) ? array('in' => $in) : null;
+}
+
+/**
  * UPDATED: Generate an embedding for the given text using bot-specific configuration.
  *
  * @param string $text    The text to be embedded.
@@ -1355,6 +1380,8 @@ public static function generate_query_embedding($text, $api_key, $bot_id = 'defa
  * @return array|null     The embedding vector or null on failure.
  */
 private static function generate_embedding($text, $api_key, $bot_id = 'default') {
+    self::$last_embedding_usage = null; // plan 93f0bd: never a stale figure from an earlier call
+
     // Get bot-specific options
     if ($bot_id === 'default' || !class_exists('MxChat_Multi_Bot_Manager')) {
         $options = get_option('mxchat_options');
@@ -1407,10 +1434,10 @@ private static function generate_embedding($text, $api_key, $bot_id = 'default')
             'outputDimensionality' => 1536
         ];
         
-        // Prepare headers for Gemini (API key as query parameter)
-        $endpoint .= '?key=' . $api_key;
+        // Gemini takes the key in the x-goog-api-key header (plan f4c0bf), never the URL
         $headers = [
-            'Content-Type' => 'application/json'
+            'Content-Type'   => 'application/json',
+            'x-goog-api-key' => $api_key,
         ];
     } else {
         // OpenAI/Voyage API format
@@ -1471,6 +1498,7 @@ private static function generate_embedding($text, $api_key, $bot_id = 'default')
         // OpenAI/Voyage API response format
         if (isset($response_body['data'][0]['embedding']) && is_array($response_body['data'][0]['embedding'])) {
             self::stamp_active_embedding_model($selected_model);
+            self::record_embedding_usage($response_body); // plan 93f0bd
             return $response_body['data'][0]['embedding'];
         } else {
             return self::embedding_failure_error($response, $selected_model, $api_key, $bot_id);
@@ -1549,6 +1577,7 @@ private static function embedding_failure_error($response, $selected_model, $api
  * @return array|string   Embedding vector on success; error string on failure.
  */
 public static function generate_embedding_custom($text, $options) {
+    self::$last_embedding_usage = null; // plan 93f0bd
     if (empty($text)) {
         return 'No text provided for embedding generation';
     }
@@ -1608,6 +1637,7 @@ public static function generate_embedding_custom($text, $options) {
         // Stamp the custom model identity so the active-embedding-model mismatch
         // warning reflects the real (custom) model rather than the built-in setting.
         self::stamp_active_embedding_model('custom:' . $model);
+        self::record_embedding_usage($body); // plan 93f0bd
         return $body['data'][0]['embedding'];
     }
     return self::log_custom_embedding_failure('Invalid embedding response from custom provider.', $model, $api_key);
@@ -2847,5 +2877,77 @@ private static function pdf_rtl_cp_to_utf8($cp) {
         return chr(0xE0 | ($cp >> 12)) . chr(0x80 | (($cp >> 6) & 0x3F)) . chr(0x80 | ($cp & 0x3F));
     }
     return chr(0xF0 | ($cp >> 18)) . chr(0x80 | (($cp >> 12) & 0x3F)) . chr(0x80 | (($cp >> 6) & 0x3F)) . chr(0x80 | ($cp & 0x3F));
+}
+
+/**
+ * Let developers adjust a streamed provider request before cURL sends it (plan 2ae397).
+ *
+ * Streamed replies use cURL directly, so WordPress's http_request_args filter
+ * never sees them. The chat widget's streaming paths, the admin streaming test
+ * and the Editor Assistant stream (plan d46bd3) all pass their request through
+ * here, and the mxchat_stream_request filter can add a header (a proxy's
+ * customer id, for example), point the request at another URL or change the
+ * JSON body. With no filter attached the url, headers and body go out exactly
+ * as built, and an unchanged body is never re-encoded.
+ *
+ * @param string $url      Endpoint.
+ * @param array  $headers  cURL header lines ('Name: value').
+ * @param string $body     JSON body as built by the caller.
+ * @param string $provider openrouter, openai, openai_responses, custom, claude, xai or deepseek.
+ * @param string $model    Model id.
+ * @param string $bot_id   Bot the reply is for.
+ * @return array [url, headers, body]
+ */
+public static function filter_stream_request($url, array $headers, $body, $provider, $model, $bot_id = 'default') {
+    if (!has_filter('mxchat_stream_request')) {
+        return array($url, $headers, $body);
+    }
+
+    $decoded    = json_decode((string) $body, true);
+    $body_array = is_array($decoded) ? $decoded : array();
+
+    /**
+     * Filter a streamed chat request before it is sent.
+     *
+     * @param array  $request  ['url' => string, 'headers' => string[] ('Name: value'), 'body' => array (decoded JSON)].
+     * @param string $provider openrouter, openai, openai_responses, custom, claude, xai or deepseek.
+     * @param string $model    Model id.
+     * @param string $bot_id   Bot the reply is for ('default' or a Multi-Bot id).
+     */
+    $request = apply_filters('mxchat_stream_request', array(
+        'url'     => $url,
+        'headers' => $headers,
+        'body'    => $body_array,
+    ), $provider, $model, $bot_id);
+
+    if (!is_array($request)) {
+        return array($url, $headers, $body);
+    }
+
+    $new_url = (isset($request['url']) && is_string($request['url']) && $request['url'] !== '') ? $request['url'] : $url;
+
+    $new_headers = $headers;
+    if (isset($request['headers']) && is_array($request['headers'])) {
+        $new_headers = array();
+        foreach ($request['headers'] as $name => $value) {
+            if (!is_scalar($value)) {
+                continue;
+            }
+            // Accept 'Name: value' lines and 'Name' => 'value' pairs alike.
+            $new_headers[] = is_string($name) ? $name . ': ' . $value : (string) $value;
+        }
+    }
+
+    $new_body = $body;
+    if (isset($request['body'])) {
+        if (is_string($request['body'])) {
+            $new_body = $request['body'];
+        } elseif (is_array($request['body']) && $request['body'] !== $body_array) {
+            $encoded  = json_encode($request['body']);
+            $new_body = ($encoded !== false) ? $encoded : $body;
+        }
+    }
+
+    return array($new_url, $new_headers, $new_body);
 }
 }

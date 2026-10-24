@@ -562,7 +562,7 @@ function mxchat_render_content_page($admin_instance) {
                         <div class="mxch-field">
                             <label class="mxch-field-label" for="mxch-image-model"><?php esc_html_e('Image Model', 'mxchat'); ?></label>
                             <div class="mxch-field-control">
-                                <?php $image_model = $options['content_image_model'] ?? 'gpt-image-2.5-flare'; ?>
+                                <?php $image_model = $options['content_image_model'] ?? (method_exists('MxChat_Model_Catalog', 'image_default_model') ? MxChat_Model_Catalog::image_default_model('openai') : 'gpt-image-2.5-flare'); // plan 463f28 ?>
                                 <?php
                                 // Direct task M4 (2026-10-16): only current image models are
                                 // offered. A saved model whose provider has shut it down, or
@@ -611,7 +611,13 @@ function mxchat_render_content_page($admin_instance) {
                             <label class="mxch-field-label" for="mxch-image-quality"><?php esc_html_e('Image Quality', 'mxchat'); ?></label>
                             <div class="mxch-field-control">
                                 <?php $image_quality = $options['content_image_quality'] ?? 'auto'; ?>
-                                <?php $quality_supported = (strpos($image_model, 'gpt-image') === 0); ?>
+                                <?php
+                                // Fix on the way with plan 9b9f58: every OpenAI image id the engine sends a quality for
+                                // (chatgpt-image-latest, a saved dall-e id moved to its replacement), not just gpt-image.
+                                $quality_supported = method_exists('MxChat_Model_Catalog', 'image_model_provider')
+                                    ? (MxChat_Model_Catalog::image_model_provider($image_model) === 'openai')
+                                    : (strpos($image_model, 'gpt-image') === 0);
+                                ?>
                                 <select id="mxch-image-quality" data-field="content_image_quality" class="mxch-cg-select"<?php echo $quality_supported ? '' : ' disabled'; ?>>
                                     <option value="auto" <?php selected($image_quality, 'auto'); ?>><?php esc_html_e('Auto (default)', 'mxchat'); ?></option>
                                     <option value="low" <?php selected($image_quality, 'low'); ?>><?php esc_html_e('Low (fastest, cheapest)', 'mxchat'); ?></option>
@@ -625,7 +631,7 @@ function mxchat_render_content_page($admin_instance) {
                             var m = document.getElementById('mxch-image-model');
                             var q = document.getElementById('mxch-image-quality');
                             if (!m || !q || q._wired) { return; } q._wired = true;
-                            function sync(){ q.disabled = (m.value || '').indexOf('gpt-image') !== 0; }
+                            function sync(){ q.disabled = !/^(gpt-image|chatgpt-image|dall-e)/.test(m.value || ''); }
                             m.addEventListener('change', sync);
                             sync();
                         })();</script>

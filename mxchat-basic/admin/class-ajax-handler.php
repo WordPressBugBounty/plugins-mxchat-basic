@@ -295,7 +295,8 @@ public function mxchat_test_provider_key_callback() {
             $headers = array('Authorization' => 'Bearer ' . $key);
             break;
         case 'gemini':
-            $url = add_query_arg(array('pageSize' => 1, 'key' => $key), 'https://generativelanguage.googleapis.com/v1beta/models');
+            $url = 'https://generativelanguage.googleapis.com/v1beta/models?pageSize=1';
+            $headers = array('x-goog-api-key' => $key); // plan f4c0bf: key in a header, never the URL
             break;
         case 'claude':
             $url = 'https://api.anthropic.com/v1/models';
@@ -407,6 +408,24 @@ public function mxchat_save_setting_callback() {
         case 'mxchat_smart_asset_loading':
             $sal_value = ($value === 'on' || $value === '1') ? 'on' : 'off';
             update_option('mxchat_smart_asset_loading', $sal_value);
+            wp_send_json_success(['message' => esc_html__('Setting saved', 'mxchat')]);
+            return;
+
+        // "Delete leads after" on the Transcripts retention card (plan 50fb99).
+        // STANDALONE option, same pattern: never touches mxchat_options or the
+        // transcripts option. Only a listed choice is stored; "never" removes
+        // the option so the site is back to the default (keep every lead).
+        case 'mxchat_lead_retention':
+            $lr_choices = class_exists('MxChat_Session_Store') ? MxChat_Session_Store::lead_retention_choices() : array('never' => '');
+            $lr_value   = sanitize_key((string) $value);
+            if (!array_key_exists($lr_value, $lr_choices)) {
+                wp_send_json_error(['message' => esc_html__('Invalid lead retention period', 'mxchat')]);
+            }
+            if ($lr_value === 'never') {
+                delete_option('mxchat_lead_retention');
+            } else {
+                update_option('mxchat_lead_retention', $lr_value, false);
+            }
             wp_send_json_success(['message' => esc_html__('Setting saved', 'mxchat')]);
             return;
 

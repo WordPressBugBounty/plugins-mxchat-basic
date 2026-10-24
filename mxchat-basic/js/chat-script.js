@@ -61,6 +61,15 @@ jQuery(document).ready(function($) {
             if (callback) callback();
             return;
         }
+        // The page's first nonce rides on the dynamic-settings request (plan
+        // feeb79): one /nonce?with_settings=1 call instead of two ~1 ms apart,
+        // the second of which the endpoint's 2-second per-IP limit answered 429.
+        // When that request fails this falls through to its own fetch below.
+        if (dynamicSettingsState !== 'done') {
+            dynamicSettingsWaiters.push(function () { withFreshNonce(callback); });
+            if (dynamicSettingsState === 'idle') fetchDynamicSettings();
+            return;
+        }
         if (callback) nonceRefreshCallbacks.push(callback);
         if (nonceRefreshState === 'pending') return;
         nonceRefreshState = 'pending';
@@ -118,26 +127,37 @@ jQuery(document).ready(function($) {
     // On any failure we keep the inline values silently (nonce-fallback
     // posture). At most one request per page load, only if a widget opens.
     var dynamicSettingsState = 'idle'; // 'idle' | 'pending' | 'done'
+    var dynamicSettingsWaiters = []; // withFreshNonce() calls waiting on it (plan feeb79)
 
     function mxchatRefreshDynamicSettings() {
         if (dynamicSettingsState !== 'idle') return;
         if (typeof mxchatChat === 'undefined') return;
+        fetchDynamicSettings();
+    }
+
+    // The one ?with_settings=1 request per page load. Also issues the page's
+    // first nonce, so withFreshNonce() waits on it instead of racing it.
+    function fetchDynamicSettings() {
         dynamicSettingsState = 'pending';
 
         var applied = function (data) {
             dynamicSettingsState = 'done';
-            if (!data) return; // endpoint unavailable — inline values stand.
-            if (data.nonce) {
+            if (data && data.nonce) {
                 // Seed the nonce cache too: saves the first send's REST
                 // round-trip and keeps us under the endpoint's rate limit.
                 cachedFreshNonce = data.nonce;
                 cachedFreshNonceFetchedAt = Date.now();
                 mxchatChat.nonce = data.nonce;
             }
-            if (data.settings && typeof data.settings === 'object') {
+            if (data && data.settings && typeof data.settings === 'object') {
                 $.extend(mxchatChat, data.settings);
                 mxchatRebuildHeaderMenus();
             }
+            // No data = endpoint unavailable: inline values stand, and each
+            // waiting withFreshNonce() call runs its own fetch and fallback.
+            var waiting = dynamicSettingsWaiters;
+            dynamicSettingsWaiters = [];
+            waiting.forEach(function (cb) { try { cb(); } catch (e) {} });
         };
 
         fetch(getRestNonceUrl() + '?with_settings=1', {
@@ -252,6 +272,12 @@ jQuery(document).ready(function($) {
 
             if (instance.sessionId) {
                 return instance.sessionId;
+            }
+
+            // An embedded chat waiting for cookie consent starts no session:
+            // no session cookie, nonce request or page tracking (plan 2b137b).
+            if (mxchatEmbeddedConsentPending(botId)) {
+                return null;
             }
 
             // Check for existing session from cookie or localStorage
@@ -839,6 +865,9 @@ function mxchatHandleStreamAbort(botId, accumulatedContent, callback) {
 // Update your existing sendMessage function
 function sendMessage(botId) {
     botId = botId || 'default';
+    if (mxchatEmbeddedConsentBlocksSend(botId)) {
+        return;
+    }
     MxChatInstances.ensureSession(botId);
     var $chatInput = getElement(botId, 'chat-input');
     var message = $chatInput.val();
@@ -890,6 +919,9 @@ function sendMessage(botId) {
 // Update your existing sendMessageToChatbot function
 function sendMessageToChatbot(message, botId) {
     botId = botId || 'default';
+    if (mxchatEmbeddedConsentBlocksSend(botId)) {
+        return;
+    }
     MxChatInstances.ensureSession(botId);
 
     // ADD PROMPT HOOK HERE
@@ -989,6 +1021,9 @@ function getMxChatBotId(element) {
 
 function callMxChat(message, callback, botId) {
     botId = botId || getMxChatBotId();
+    if (mxchatEmbeddedConsentBlocksSend(botId)) {
+        return;
+    }
 
     // Streaming fallbacks land here: drop any leftover stream handle and
     // return the button to its send state (no-op for plain non-stream turns).
@@ -1255,6 +1290,9 @@ function callMxChat(message, callback, botId) {
 
 function callMxChatStream(message, callback, botId) {
     botId = botId || getMxChatBotId();
+    if (mxchatEmbeddedConsentBlocksSend(botId)) {
+        return;
+    }
 
     // Store the message in case we need to retry after session reset
     getElement(botId, 'mxchat-chatbot-wrapper').find('.mxchat-input-holder textarea').data('pending-message', message);
@@ -1766,13 +1804,17 @@ function isStreamingSupported(model) {
 
     const modelPrefix = model.split('-')[0].toLowerCase();
 
-    // Support streaming for OpenAI, Claude, Grok, DeepSeek, and OpenRouter models
-    const isSupported = modelPrefix === 'gpt' || 
-                        modelPrefix === 'o1' || 
-                        modelPrefix === 'claude' || 
-                        modelPrefix === 'grok' || 
-                        modelPrefix === 'deepseek' || 
-                        model === 'openrouter';  // Add this line - check full model name for OpenRouter
+    // Support streaming for OpenAI, Claude, Grok, DeepSeek, OpenRouter and the
+    // Custom (OpenAI-compatible) provider: every provider the server can stream
+    // (plan d6c505). Gemini has no streaming route on the server, so it stays on
+    // the regular request.
+    const isSupported = modelPrefix === 'gpt' ||
+                        modelPrefix === 'o1' ||
+                        modelPrefix === 'claude' ||
+                        modelPrefix === 'grok' ||
+                        modelPrefix === 'deepseek' ||
+                        model === 'openrouter' ||  // check full model name for OpenRouter
+                        model === 'custom-provider';
     
     return isSupported;
 }
@@ -2160,13 +2202,61 @@ $(function() {
     // Embedded (non-floating) widgets are open from the moment the page
     // renders — refresh dynamic settings at init (plan-32db95). Floating
     // widgets refresh on first launcher open instead.
+    // An embedded chat waiting for cookie consent refreshes when it is
+    // revealed instead (plan 2b137b).
     var hasEmbeddedWidget = $('.mxchat-chatbot-wrapper').filter(function() {
-        return !$(this).closest('.floating-chatbot').length;
+        return !$(this).closest('.floating-chatbot').length && !$(this).hasClass('no-consent');
     }).length > 0;
     if (hasEmbeddedWidget) {
         mxchatRefreshDynamicSettings();
     }
 });
+
+// Whether a reply's html part puts anything on screen. A part made only of
+// markup that renders nothing (a script, a style block, comments, whitespace),
+// such as the Add to Cart reply's script, or an element carrying the hidden
+// attribute (the Add to Cart reply's cart signal since mxchat-woo 1.7.15),
+// or one whose inline style says display none (plan 0634d7), gets no line
+// breaks in front of it, so it leaves no empty lines in the bubble (plan
+// 4bca7e). Any other element counts as visible, even an empty one a script
+// fills later. Parsed in an inert template, so nothing in it runs or loads
+// here. Same rule as MxChat_Admin::mxchat_transcript_part_kind() in PHP.
+function mxchatHtmlHasVisibleContent(html) {
+    var inlineDisplayNone = /(?:^|;)\s*display\s*:\s*none\s*(?:!\s*important\s*)?(?:;|$)/i;
+    if (!html) {
+        return false;
+    }
+    var tpl = document.createElement('template');
+    if (!('content' in tpl)) {
+        return true;
+    }
+    tpl.innerHTML = html;
+    var nodes = tpl.content.childNodes;
+    for (var i = 0; i < nodes.length; i++) {
+        var node = nodes[i];
+        if (node.nodeType === 3 && node.textContent.trim() !== '') {
+            return true;
+        }
+        if (node.nodeType === 1 && !/^(SCRIPT|STYLE|LINK|META|TEMPLATE|NOSCRIPT)$/.test(node.tagName) && !node.hasAttribute('hidden')
+            && !inlineDisplayNone.test(node.getAttribute('style') || '')) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// What goes between a reply's text and its html part (plans 4bca7e, 45d9b5).
+// Nothing in front of a part that renders nothing. Reply text that already
+// ends in a paragraph (linkify() wraps reply text in paragraphs, and so does
+// the replay) is followed by that paragraph's own bottom margin, one normal
+// paragraph gap; the two line breaks used to add two blank lines on top of
+// it. Text that does not end in a paragraph keeps the two line breaks.
+function mxchatHtmlPartSeparator(textHtml, html) {
+    if (!mxchatHtmlHasVisibleContent(html)) {
+        return '';
+    }
+    return /<\/p>\s*$/i.test(String(textHtml || '')) ? '' : '<br><br>';
+}
 
 function appendMessage(sender, messageText = '', messageHtml = '', images = [], isTemporary = false, botId = 'default') {
     try {
@@ -2233,9 +2323,10 @@ function appendMessage(sender, messageText = '', messageHtml = '', images = [], 
 
         // Append HTML content if provided
         if (messageHtml && sender !== "user") {
-            // Only add line breaks if there's actual text content before the HTML
+            // Only separate the HTML from actual text content before it, and
+            // only when the HTML puts something on screen (plans 4bca7e, 45d9b5)
             if (fullMessage && fullMessage.trim()) {
-                fullMessage += '<br><br>' + messageHtml;
+                fullMessage += mxchatHtmlPartSeparator(fullMessage, messageHtml) + messageHtml;
             } else {
                 fullMessage = messageHtml;
             }
@@ -2389,9 +2480,10 @@ function replaceLastMessage(sender, responseText, responseHtml = '', images = []
     var fullMessage = linkify(responseText);
 
     if (responseHtml) {
-        // Only add line breaks if there's actual text content before the HTML
+        // Only separate the HTML from actual text content before it, and
+        // only when the HTML puts something on screen (plans 4bca7e, 45d9b5)
         if (fullMessage && fullMessage.trim()) {
-            fullMessage += '<br><br>' + responseHtml;
+            fullMessage += mxchatHtmlPartSeparator(fullMessage, responseHtml) + responseHtml;
         } else {
             fullMessage = responseHtml;
         }
@@ -3088,37 +3180,6 @@ function convertNewlinesToBreaks(text) {
     // NOTIFICATION SYSTEM
     // ====================================
     
-    function createNotificationBadge() {
-        const chatButton = document.getElementById('floating-chatbot-button');
-
-        if (!chatButton) return;
-
-        // Remove any existing badge first
-        const existingBadge = chatButton.querySelector('.chat-notification-badge');
-        if (existingBadge) {
-            existingBadge.remove();
-        }
-    
-        notificationBadge = document.createElement('div');
-        notificationBadge.className = 'chat-notification-badge';
-        notificationBadge.style.cssText = `
-            display: none;
-            position: absolute;
-            top: -5px;
-            right: -5px;
-            background-color: red;
-            color: white;
-            border-radius: 50%;
-            padding: 4px 8px;
-            font-size: 12px;
-            font-weight: bold;
-            z-index: 10001;
-        `;
-        chatButton.style.position = 'relative';
-        chatButton.appendChild(notificationBadge);
-        
-    }
-    
     function showNotification(botId) {
         botId = botId || 'default';
         const badge = getElementDOM(botId, 'chat-notification-badge');
@@ -3137,48 +3198,10 @@ function convertNewlinesToBreaks(text) {
         }
     }
 
-    function startNotificationChecking(botId) {
-        botId = botId || 'default';
-        const chatPersistenceEnabled = mxchatChat.chat_persistence_toggle === 'on';
-        if (!chatPersistenceEnabled) return;
-
-        createNotificationBadge(botId);
-        var instance = MxChatInstances.get(botId);
-        instance.notificationCheckInterval = setInterval(function() {
-            checkForNewMessages(botId);
-        }, 30000); // Check every 30 seconds
-    }
-
-    function stopNotificationChecking(botId) {
-        botId = botId || 'default';
-        var instance = MxChatInstances.get(botId);
-        if (instance.notificationCheckInterval) {
-            clearInterval(instance.notificationCheckInterval);
-        }
-    }
-    
-    function checkForNewMessages() {
-        const sessionId = getChatSession();
-        const chatPersistenceEnabled = mxchatChat.chat_persistence_toggle === 'on';
-        
-        if (!chatPersistenceEnabled) return;
-    
-        $.ajax({
-            url: mxchatChat.ajax_url,
-            type: 'POST',
-            data: {
-                action: 'mxchat_check_new_messages',
-                session_id: sessionId,
-                last_seen_id: lastSeenMessageId,
-                nonce: mxchatChat.nonce
-            },
-            success: function(response) {
-                if (response.success && response.data.hasNewMessages) {
-                    showNotification();
-                }
-            }
-        });
-    }
+    // Plan 0c480a: the old 30-second unread-badge poll helpers were removed. Nothing ever started them and no
+    // server handler existed for their AJAX action. Live-agent replies reach the widget through
+    // checkForAgentMessages() below (mxchat_fetch_new_messages every 5 s in agent mode), which also shows the
+    // badge via showNotification().
 
 
 // ====================================
@@ -3259,6 +3282,22 @@ function checkForAgentMessages(botId) {
     // CHAT HISTORY & PERSISTENCE
     // ====================================
 
+// A stored bot row that is MxChat-generated markup (forms, product cards,
+// galleries, generated images, a script) rather than reply text. The server
+// stores a reply's text and its html part as two rows; replay joins them
+// back into one bubble (plan e19ea8). Same family check as the replay's
+// raw-html branch below, plus markup that renders nothing (a script part).
+function mxchatIsStoredHtmlPart(content) {
+    if (/<[a-z][^>]*class\s*=\s*["'][^"']*\bmxchat-/i.test(content) ||
+        content.includes("<form") ||
+        content.includes("<input") ||
+        content.includes("<select") ||
+        content.includes("<textarea")) {
+        return true;
+    }
+    return /^\s*</.test(content) && !mxchatHtmlHasVisibleContent(content);
+}
+
 function loadChatHistory(botId, onComplete) {
     botId = botId || 'default';
     var instance = MxChatInstances.get(botId);
@@ -3338,10 +3377,48 @@ function loadChatHistory(botId, onComplete) {
                             var $mxIntro = $chatBox.find('.mxchat-intro-message').first().detach();
                             $chatBox.empty();
 
+                            // The bot bubble the next html part of the same
+                            // turn joins (plan e19ea8), and its row's time.
+                            var $mxTurnBubble = null;
+                            var mxTurnBubbleTs = 0;
+                            var mxTurnBubbleHasHtml = false;
+
                             $.each(response.data.conversation, function(index, message) {
                                 // Skip agent messages if persistence is off
                                 if (!chatPersistenceEnabled && message.role === 'agent') {
                                     return;
+                                }
+
+                                // A reply's html part is stored as its own row
+                                // after the reply's text. Live, both were one
+                                // bubble: join the part to the bot bubble just
+                                // before it when no other row came between and
+                                // it was written in the same request (plan
+                                // e19ea8). A part that renders nothing (the Add
+                                // to Cart or checkout script) already ran live
+                                // and is not replayed. A YouTube embed stays its
+                                // own bubble, as a streamed reply shows it.
+                                if (message.role === 'bot' && typeof message.content === 'string') {
+                                    var mxPart = decodeHTMLEntities(message.content.replace(/\\'/g, "'").replace(/\\"/g, '"'));
+                                    if (mxPart.trim() !== '' && mxchatIsStoredHtmlPart(mxPart)) {
+                                        var mxPartTs = parseInt(message.timestamp, 10) || 0;
+                                        var mxIsEmbed = /\bmxchat-youtube-embed\b/.test(mxPart);
+                                        var mxRendersNothing = !mxchatHtmlHasVisibleContent(mxPart);
+                                        var mxSameTurn = $mxTurnBubble && !mxIsEmbed &&
+                                            (!mxPartTs || !mxTurnBubbleTs || Math.abs(mxPartTs - mxTurnBubbleTs) <= 10000);
+                                        if (mxRendersNothing || mxSameTurn) {
+                                            if (!mxRendersNothing) {
+                                                var mxSep = (!mxTurnBubbleHasHtml && $.trim($mxTurnBubble.text()) !== '') ? mxchatHtmlPartSeparator($mxTurnBubble.html(), mxPart) : '';
+                                                $mxTurnBubble.append(mxSep + mxPart);
+                                                mxTurnBubbleHasHtml = true;
+                                            }
+                                            if (message.id) {
+                                                highestMessageId = Math.max(highestMessageId, message.id);
+                                                instance.processedMessageIds.add(message.id);
+                                            }
+                                            return;
+                                        }
+                                    }
                                 }
 
                                 var messageClass, messageBgColor, messageFontColor;
@@ -3405,6 +3482,16 @@ function loadChatHistory(botId, onComplete) {
                                 }
 
                                 $fragment.append(messageElement);
+
+                                // Only a bot bubble from this turn takes the
+                                // turn's html parts; any other row ends the turn.
+                                if (message.role === 'bot' && !/\bmxchat-youtube-embed\b/.test(content)) {
+                                    $mxTurnBubble = messageElement;
+                                    mxTurnBubbleTs = parseInt(message.timestamp, 10) || 0;
+                                    mxTurnBubbleHasHtml = mxchatIsStoredHtmlPart(content);
+                                } else {
+                                    $mxTurnBubble = null;
+                                }
 
                                 // Track message IDs
                                 if (message.id) {
@@ -3576,29 +3663,155 @@ function loadChatHistory(botId, onComplete) {
     // CONSENT & COMPLIANCE (GDPR)
     // ====================================
 
+    // A setting arrives as "1" from the normal loader (wp_localize_script), as
+    // a JSON true from the delayed and On User Interaction loader, or as "on"
+    // as the settings store it: every loading mode reads it the same way (M7g).
+    function isSettingOn(value) {
+        return value === true || value === 'on' || value === '1' || value === 1;
+    }
+
+    // MxChat's Complianz integration is switched on.
+    function isComplianzEnabled() {
+        return isSettingOn(mxchatChat.complianz_toggle);
+    }
+
+    // Complianz's browser API is on the page.
+    function isComplianzReady() {
+        return typeof cmplz_has_consent === 'function' && typeof complianz !== 'undefined';
+    }
+
+    // The server found Complianz active on the site (plan 352c55), so its
+    // script is coming even when a Delay JavaScript setup holds it back.
+    function isComplianzExpected() {
+        return isSettingOn(mxchatChat.complianz_active);
+    }
+
+    // The consent check every opener goes through (plan 993fbf): the
+    // visitor's click, the pre-chat bubble, Trigger, the Multi-Bot handoff and
+    // any custom code clicking the launcher. With the integration on, the chat
+    // opens only with Complianz's marketing consent; while Complianz's script
+    // is expected but not loaded yet, it stays closed.
+    function consentAllowsOpen() {
+        if (!isComplianzEnabled()) {
+            return true;
+        }
+        if (isComplianzReady()) {
+            return cmplz_has_consent('marketing') === true;
+        }
+        return !isComplianzExpected();
+    }
+
+    // ---- Embedded chats (shortcode floating="no", the inline block) -------
+    // With the integration on, the server renders an embedded chat hidden and
+    // marked no-consent, with a one-line placeholder in its place (plan
+    // 2b137b). Until consent, nothing of it runs: no settings, nonce, session,
+    // email check or history request, no mxchat:opened, no send. That work is
+    // queued here and runs once, when the chat is revealed in place.
+    var mxchatEmbeddedConsentWork = {};
+
+    function mxchatConsentPlaceholder(botId) {
+        return document.getElementById('mxchat-consent-placeholder-' + (botId || 'default'));
+    }
+
+    // The bot is an embedded chat the server gated, still waiting for consent.
+    function mxchatEmbeddedConsentPending(botId) {
+        botId = botId || 'default';
+        var wrapper = getElementDOM(botId, 'mxchat-chatbot-wrapper');
+        return !!(wrapper && wrapper.classList.contains('no-consent') && isEmbeddedBot(botId));
+    }
+
+    // A send to a gated embedded chat (a script, an add-on) goes nowhere and
+    // leaves no thinking bubble behind.
+    function mxchatEmbeddedConsentBlocksSend(botId) {
+        if (!mxchatEmbeddedConsentPending(botId)) {
+            return false;
+        }
+        getElement(botId, 'chat-box').find('.temporary-message').remove();
+        return true;
+    }
+
+    // Run now, or once the embedded chat is revealed.
+    function mxchatWhenEmbeddedConsented(botId, work) {
+        botId = botId || 'default';
+        if (!mxchatEmbeddedConsentPending(botId)) {
+            work();
+            return;
+        }
+        if (!mxchatEmbeddedConsentWork) {
+            mxchatEmbeddedConsentWork = {};
+        }
+        (mxchatEmbeddedConsentWork[botId] = mxchatEmbeddedConsentWork[botId] || []).push(work);
+    }
+
+    // Consent given (or nothing to ask): the chat replaces its placeholder.
+    function mxchatShowEmbeddedChat(botId) {
+        botId = botId || 'default';
+        var placeholder = mxchatConsentPlaceholder(botId);
+        var wrapper = getElementDOM(botId, 'mxchat-chatbot-wrapper');
+        if (!placeholder || !wrapper || !isEmbeddedBot(botId)) {
+            return;
+        }
+        placeholder.hidden = true;
+        wrapper.classList.remove('no-consent');
+        var work = (mxchatEmbeddedConsentWork && mxchatEmbeddedConsentWork[botId]) || [];
+        if (mxchatEmbeddedConsentWork) {
+            delete mxchatEmbeddedConsentWork[botId];
+        }
+        work.forEach(function(fn) {
+            try { fn(); } catch (e) { /* one failing step never blocks the rest */ }
+        });
+    }
+
+    // Consent withdrawn: the placeholder comes back, a reply still streaming
+    // ends and keyboard focus leaves the chat, as the floating window does
+    // (plan 8df5b3).
+    function mxchatHideEmbeddedChat(botId) {
+        botId = botId || 'default';
+        var placeholder = mxchatConsentPlaceholder(botId);
+        var wrapper = getElementDOM(botId, 'mxchat-chatbot-wrapper');
+        if (!placeholder || !wrapper || !isEmbeddedBot(botId)) {
+            return;
+        }
+        if (!wrapper.classList.contains('no-consent')) {
+            mxchatStopStreaming(botId);
+            wrapper.classList.add('no-consent');
+            if (wrapper.contains(document.activeElement)) {
+                document.activeElement.blur();
+            }
+        }
+        placeholder.hidden = false;
+    }
+
+    function watchComplianzConsent(botId) {
+        // Initial check
+        checkConsentAndShowChat(botId);
+
+        // Listen for consent changes
+        $(document).on('cmplz_status_change', function(event) {
+            checkConsentAndShowChat(botId);
+        });
+    }
+
     function initializeChatVisibility(botId) {
         botId = botId || 'default';
-        // The Complianz setting arrives as "1" from the normal loader
-        // (wp_localize_script), as a JSON true from the delayed and On User
-        // Interaction loader, or as "on" as the settings store it: every
-        // loading mode asks for consent the same way (M7g).
-        const complianzToggle = mxchatChat.complianz_toggle;
-        const complianzEnabled = complianzToggle === true ||
-                                complianzToggle === 'on' ||
-                                complianzToggle === '1' ||
-                                complianzToggle === 1;
+        const complianzEnabled = isComplianzEnabled();
 
-        if (complianzEnabled && typeof cmplz_has_consent === "function" && typeof complianz !== 'undefined') {
-            // Initial check
-            checkConsentAndShowChat(botId);
-
-            // Listen for consent changes
-            $(document).on('cmplz_status_change', function(event) {
-                checkConsentAndShowChat(botId);
-            });
+        if (complianzEnabled && isComplianzReady()) {
+            watchComplianzConsent(botId);
+        } else if (complianzEnabled && isComplianzExpected()) {
+            // Complianz is active but its script is not on the page yet: a
+            // Delay JavaScript setup can hold it back while this script runs
+            // (plan 352c55). The launcher stays as the server rendered it,
+            // hidden and marked no-consent, until Complianz loads and answers.
+            var complianzWait = setInterval(function() {
+                if (isComplianzReady()) {
+                    clearInterval(complianzWait);
+                    watchComplianzConsent(botId);
+                }
+            }, 250);
         } else {
-            // If Complianz is not enabled (or its script is not on the page),
-            // always show. The window's no-consent mark is cleared with the
+            // If Complianz is not enabled (or not installed while the setting
+            // is on), always show. The window's no-consent mark is cleared with the
             // launcher's, so once this script has run both marks mean the same
             // thing in every loading mode: consent is needed and not given.
             getElement(botId, 'floating-chatbot-button')
@@ -3606,6 +3819,7 @@ function loadChatHistory(botId, onComplete) {
                 .removeClass('hidden no-consent')
                 .fadeTo(500, 1);
             getElement(botId, 'floating-chatbot').removeClass('no-consent');
+            mxchatShowEmbeddedChat(botId);
 
             // Also check pre-chat message when Complianz is not enabled
             checkPreChatDismissal(botId);
@@ -3629,6 +3843,7 @@ function loadChatHistory(botId, onComplete) {
                 .removeClass('hidden')
                 .fadeTo(500, 1);
             $chatbot.removeClass('no-consent');
+            mxchatShowEmbeddedChat(botId);
 
             // Show pre-chat message if not dismissed
             checkPreChatDismissal(botId);
@@ -3641,6 +3856,22 @@ function loadChatHistory(botId, onComplete) {
                         .addClass('hidden');
                 });
             $chatbot.addClass('no-consent');
+
+            // Consent withdrawn while the chat is open (plan 8df5b3): close the
+            // window too, as the title bar does, end a reply still streaming,
+            // and take keyboard focus out of it so nothing more can be typed
+            // or sent. The launcher stays hidden until consent is given again.
+            if ($chatbot.hasClass('visible')) {
+                mxchatStopStreaming(botId);
+                $chatbot.removeClass('visible').addClass('hidden').removeAttr('aria-modal');
+                $widget.attr('aria-expanded', 'false');
+                enableScroll();
+                if ($chatbot[0] && $chatbot[0].contains(document.activeElement)) {
+                    document.activeElement.blur();
+                }
+            }
+
+            mxchatHideEmbeddedChat(botId);
 
             // Hide pre-chat message when no consent
             $preChat.hide();
@@ -3771,6 +4002,11 @@ $(document).on('click', '.mxchat-youtube-embed .mxchat-youtube-facade', function
         var $preChat = getElement(botId, 'pre-chat-message');
 
         if ($chatbot.hasClass('hidden')) {
+            // Every launcher click lands here, scripted ones included: no
+            // opening without the cookie consent Complianz requires (993fbf).
+            if (!consentAllowsOpen()) {
+                return;
+            }
             $chatbot.removeClass('hidden').addClass('visible')
                     .attr('aria-modal', 'true').attr('role', 'dialog');
             $(this).addClass('hidden').attr('aria-expanded', 'true');
@@ -4537,16 +4773,21 @@ if (mxchatChat && mxchatChat.email_collection_enabled === 'on') {
 
         if (emailBlocker) {
             if (isEmbeddedBot(botId)) {
-                // Embedded bots are always visible — check now
-                resolveEmailState(botId);
+                // Embedded bots are always visible — check now (once
+                // revealed, when waiting for cookie consent: plan 2b137b)
+                mxchatWhenEmbeddedConsented(botId, function() {
+                    resolveEmailState(botId);
+                });
             }
             // Floating bots: handled in the widget open handler
         } else if (isEmbeddedBot(botId)) {
             // Embedded bot, no email collection — load history with loader
             var chatPersistenceEnabled = typeof mxchatChat !== 'undefined' && mxchatChat.chat_persistence_toggle === 'on';
             if (chatPersistenceEnabled) {
-                MxChatInstances.ensureSession(botId);
-                showChatContainerForBot(botId);
+                mxchatWhenEmbeddedConsented(botId, function() {
+                    MxChatInstances.ensureSession(botId);
+                    showChatContainerForBot(botId);
+                });
             }
         }
     });
@@ -4556,7 +4797,7 @@ if (mxchatChat && mxchatChat.email_collection_enabled === 'on') {
     $(document).on('click', '.pre-chat-message', function() {
         var botId = getBotIdFromElement(this);
         var $chatbot = getElement(botId, 'floating-chatbot');
-        if ($chatbot.hasClass('hidden')) {
+        if ($chatbot.hasClass('hidden') && consentAllowsOpen()) {
             $chatbot.removeClass('hidden').addClass('visible');
             getElement(botId, 'floating-chatbot-button').addClass('hidden');
             handlePreChatDismissal(botId);
@@ -4711,8 +4952,17 @@ $(document).on('click', '.chat-box a[href]:not([data-tracked])', function(e) {
         initializeChatVisibility(botId);
         // An embedded widget is on screen from the first paint; a floating one
         // reports mxchat:opened when its window is shown (plan 65c9b6).
+        // An embedded chat waiting for cookie consent reports it (and
+        // refreshes its settings) when revealed (plan 2b137b).
         if (isEmbeddedBot(botId)) {
-            mxchatFireOpened(botId);
+            if (mxchatEmbeddedConsentPending(botId)) {
+                mxchatWhenEmbeddedConsented(botId, function() {
+                    mxchatRefreshDynamicSettings();
+                    mxchatFireOpened(botId);
+                });
+            } else {
+                mxchatFireOpened(botId);
+            }
         } else {
             mxchatWatchForOpen(botId);
         }
@@ -4733,6 +4983,10 @@ $(document).on('click', '.chat-box a[href]:not([data-tracked])', function(e) {
     window.getPageContext = getPageContext;
     window.updateStreamingMessage = updateStreamingMessage;
     window.MxChatInstances = MxChatInstances;
+    // Add-ons wait on core's own nonce refresh (cache, in-flight request and
+    // admin-ajax fallback shared) instead of guessing its timing (plan 3301ab).
+    // Feature-detect it: core 3.2.26 and older do not define it.
+    window.mxchatWithFreshNonce = withFreshNonce;
     window.getElement = getElement;
     window.getElementDOM = getElementDOM;
     window.getBotIdFromElement = getBotIdFromElement;

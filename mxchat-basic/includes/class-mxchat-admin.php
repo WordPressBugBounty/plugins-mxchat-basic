@@ -140,8 +140,6 @@ class MxChat_Admin {
 
         add_action('admin_notices', array($this, 'display_admin_notices'));
 
-        add_action('wp_ajax_mxchat_test_streaming_actual', [$this, 'mxchat_handle_test_streaming_actual']);
-        add_action('wp_ajax_mxchat_test_streaming', [$this, 'mxchat_handle_test_streaming']); // Keep existing as fallback
         add_action('wp_ajax_mxchat_test_vectorstore_connection', array($this, 'mxchat_test_vectorstore_connection'));
 
         // wp_ajax_mxchat_save_selected_bot is registered (and handled) in
@@ -729,289 +727,6 @@ public function mxchat_create_content_page() {
     mxchat_render_content_page($this);
 }
 
-/**
- * Test actual streaming functionality in the WordPress environment
- */
-public function mxchat_handle_test_streaming_actual() {
-    check_ajax_referer('mxchat_test_streaming_nonce', 'nonce');
-
-    // A nonce is not authorization (plan-mxchat-20260731-c63fb6). This handler
-    // reads the site's provider keys and spends them on an outbound call, so it
-    // is billable abuse for any logged-in user who obtained the nonce.
-    if (!current_user_can('manage_options')) {
-        wp_send_json_error(['message' => esc_html__('Unauthorized', 'mxchat')], 403);
-    }
-
-    // Check if headers have already been sent
-    if (headers_sent()) {
-        wp_send_json_error(['message' => 'Headers already sent - streaming not possible']);
-        return;
-    }
-
-    // Check for required functions
-    if (!function_exists('curl_init')) {
-        wp_send_json_error(['message' => 'cURL not available - streaming requires cURL']);
-        return;
-    }
-
-    // Get user's selected model and API key
-    $options = get_option('mxchat_options', []);
-    $selected_model = $options['model'] ?? 'gpt-5.6-sol';
-
-    // Get the provider from the model
-    $model_parts = explode('-', $selected_model);
-    $provider = strtolower($model_parts[0]);
-
-    // Get the appropriate API key
-    $api_key = '';
-    switch ($provider) {
-        case 'gpt':
-        case 'o1':
-            $api_key = $options['api_key'] ?? '';
-            break;
-        case 'claude':
-            $api_key = $options['claude_api_key'] ?? '';
-            break;
-        case 'grok':
-            $api_key = $options['xai_api_key'] ?? '';
-            break;
-        case 'deepseek':
-            $api_key = $options['deepseek_api_key'] ?? '';
-            break;
-        case 'gemini':
-            $api_key = $options['gemini_api_key'] ?? '';
-            break;
-        default:
-            // Default to OpenAI for unknown models
-            $api_key = $options['api_key'] ?? '';
-            $provider = 'gpt';
-            break;
-    }
-
-    if (empty($api_key)) {
-        wp_send_json_error(['message' => "API key not configured for {$provider} provider"]);
-        return;
-    }
-
-    // Test streaming with the selected model and provider
-    try {
-        $this->perform_streaming_test($provider, $selected_model, $api_key);
-    } catch (Exception $e) {
-        wp_send_json_error(['message' => 'Streaming test exception: ' . $e->getMessage()]);
-    }
-}
-
-/**
- * Perform the actual streaming test
- */
-private function perform_streaming_test($provider, $model, $api_key) {
-    // Set streaming headers
-    header('Content-Type: text/event-stream');
-    header('Cache-Control: no-cache');
-    header('X-Accel-Buffering: no'); // Disable nginx buffering
-
-    // Prepare test message
-    $test_message = "Please respond with exactly: 'Streaming test successful!' - send this as a short response for testing.";
-
-    // Configure API request based on provider
-    $url = '';
-    $headers = [];
-    $body = [];
-
-    switch ($provider) {
-        case 'gpt':
-        case 'o1':
-            $url = 'https://api.openai.com/v1/chat/completions';
-            $headers = [
-                'Content-Type: application/json',
-                'Authorization: Bearer ' . $api_key
-            ];
-            $body = [
-                'model' => $model,
-                'messages' => [['role' => 'user', 'content' => $test_message]],
-                'max_tokens' => 50,
-                'temperature' => 0.3,
-                'stream' => true
-            ];
-            break;
-
-        case 'claude':
-            $url = 'https://api.anthropic.com/v1/messages';
-            $headers = [
-                'Content-Type: application/json',
-                'x-api-key: ' . $api_key,
-                'anthropic-version: 2023-06-01'
-            ];
-            $body = [
-                'model' => $model,
-                'messages' => [['role' => 'user', 'content' => $test_message]],
-                'max_tokens' => 50,
-                'temperature' => 0.3,
-                'stream' => true
-            ];
-            // Claude flagships from Opus 4.7 onward reject the temperature
-            // param outright (400). Reuse the catalog's decision — this path
-            // previously sent temperature unconditionally, so the streaming
-            // test was broken for Opus 4.7/4.8, Fable 5 and Sonnet 5.
-            if (class_exists('MxChat_Model_Catalog')
-                && method_exists('MxChat_Model_Catalog', 'supports_temperature')
-                && !MxChat_Model_Catalog::supports_temperature($model)) {
-                unset($body['temperature']);
-            }
-            break;
-
-        case 'grok':
-            $url = 'https://api.x.ai/v1/chat/completions';
-            $headers = [
-                'Content-Type: application/json',
-                'Authorization: Bearer ' . $api_key
-            ];
-            $body = [
-                'model' => $model,
-                'messages' => [['role' => 'user', 'content' => $test_message]],
-                'max_tokens' => 50,
-                'temperature' => 0.3,
-                'stream' => true
-            ];
-            break;
-
-        case 'deepseek':
-            $url = 'https://api.deepseek.com/v1/chat/completions';
-            $headers = [
-                'Content-Type: application/json',
-                'Authorization: Bearer ' . $api_key
-            ];
-            $body = [
-                'model' => $model,
-                'messages' => [['role' => 'user', 'content' => $test_message]],
-                'max_tokens' => 50,
-                'temperature' => 0.3,
-                'stream' => true,
-                // DeepSeek V4 defaults to thinking mode ON — reasoning would
-                // consume the 50-token test budget and return no visible text.
-                'thinking' => ['type' => 'disabled']
-            ];
-            break;
-
-        default:
-            echo "data: " . json_encode(['error' => 'Unsupported provider for streaming test: ' . $provider]) . "\n\n";
-            flush();
-            return;
-    }
-
-    // Initialize cURL
-    $ch = curl_init();
-    curl_setopt($ch, CURLOPT_URL, $url);
-    curl_setopt($ch, CURLOPT_RETURNTRANSFER, false);
-    curl_setopt($ch, CURLOPT_POST, true);
-    curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($body));
-    curl_setopt($ch, CURLOPT_HTTPHEADER, $headers);
-    curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, true);
-    curl_setopt($ch, CURLOPT_TIMEOUT, 30);
-    curl_setopt($ch, CURLOPT_WRITEFUNCTION, function($ch, $data) use ($provider) {
-        return $this->process_streaming_test_data($data, $provider);
-    });
-
-    // Send initial test message
-    echo "data: " . json_encode(['content' => '[Starting streaming test...]']) . "\n\n";
-    flush();
-
-    $result = curl_exec($ch);
-    $http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-    $curl_error = curl_error($ch);
-    curl_close($ch);
-
-    if ($curl_error) {
-        echo "data: " . json_encode(['error' => 'cURL Error: ' . $curl_error]) . "\n\n";
-        flush();
-        return;
-    }
-
-    if ($http_code !== 200) {
-        echo "data: " . json_encode(['error' => 'API returned HTTP ' . $http_code]) . "\n\n";
-        flush();
-        return;
-    }
-
-    // Send completion signal
-    echo "data: [DONE]\n\n";
-    flush();
-}
-
-/**
- * Process streaming data for the test
- */
-private function process_streaming_test_data($data, $provider) {
-    static $chunk_count = 0;
-
-    $lines = explode("\n", $data);
-
-    foreach ($lines as $line) {
-        if (trim($line) === '') {
-            continue;
-        }
-
-        // Handle different provider formats
-        if ($provider === 'claude') {
-            // Claude uses event: and data: format
-            if (strpos($line, 'data: ') === 0) {
-                $json_str = substr($line, 6);
-                $json = json_decode($json_str, true);
-
-                if (isset($json['type']) && $json['type'] === 'content_block_delta') {
-                    if (isset($json['delta']['text'])) {
-                        $chunk_count++;
-                        echo "data: " . json_encode([
-                            'content' => $json['delta']['text'],
-                            'test_chunk' => $chunk_count
-                        ]) . "\n\n";
-                        flush();
-                    }
-                }
-            }
-        } else {
-            // OpenAI, X.AI, DeepSeek format
-            if (strpos($line, 'data: ') === 0) {
-                $json_str = substr($line, 6);
-
-                if ($json_str === '[DONE]') {
-                    // Don't echo [DONE] here, let the main function handle it
-                    continue;
-                }
-
-                $json = json_decode($json_str, true);
-                if (isset($json['choices'][0]['delta']['content'])) {
-                    $chunk_count++;
-                    echo "data: " . json_encode([
-                        'content' => $json['choices'][0]['delta']['content'],
-                        'test_chunk' => $chunk_count
-                    ]) . "\n\n";
-                    flush();
-                }
-            }
-        }
-    }
-
-    return strlen($data);
-}
-
-/**
- * Updated version of your existing test method (keep this as a fallback)
- */
-public function mxchat_handle_test_streaming() {
-    check_ajax_referer('mxchat_test_streaming_nonce', 'nonce');
-
-    // plan-mxchat-20260731-c63fb6 — the delegate below checks this too, but
-    // fail here so the alias never becomes a bypass if that call is refactored.
-    if (!current_user_can('manage_options')) {
-        wp_send_json_error(['message' => esc_html__('Unauthorized', 'mxchat')], 403);
-    }
-
-    // Use the actual streaming test instead
-    $this->mxchat_handle_test_streaming_actual();
-}
-
-
 public function register_pinecone_settings() {
     register_setting(
         'mxchat_pinecone_addon_options',
@@ -1533,7 +1248,8 @@ public function mxchat_create_transcripts_page() {
     $total_chats = $wpdb->get_var("SELECT COUNT(DISTINCT session_id) FROM $table_name") ?: 0;
     $total_messages = $wpdb->get_var("SELECT COUNT(*) FROM $table_name") ?: 0;
 
-    // Count unique users with detailed breakdown
+    // Count unique users with detailed breakdown. Bot replies are saved with role 'bot' (plan 0c480a: the old
+    // role != 'assistant' filter excluded nothing); 'assistant' stays in the list for any older rows.
     $total_users = $wpdb->get_var("
         SELECT COUNT(DISTINCT
             CASE
@@ -1553,7 +1269,7 @@ public function mxchat_create_transcripts_page() {
             END
         )
         FROM $table_name
-        WHERE role != 'assistant'
+        WHERE role NOT IN ('assistant', 'bot')
     ");
 
     // Get user type breakdown
@@ -1567,7 +1283,7 @@ public function mxchat_create_transcripts_page() {
         SELECT COUNT(DISTINCT user_identifier)
         FROM $table_name
         WHERE (user_email = '' OR user_email IS NULL)
-        AND role != 'assistant'
+        AND role NOT IN ('assistant', 'bot')
         AND user_identifier NOT LIKE 'Tech-Savvy User'
         AND user_identifier NOT LIKE 'Detail-Oriented User'
         AND user_identifier NOT LIKE 'Language Learner'
@@ -2183,11 +1899,13 @@ public function export_chat_transcripts() {
     global $wpdb;
     $table_name = $wpdb->prefix . 'mxchat_chat_transcripts';
 
-    // Get all transcripts ordered by session and timestamp
+    // Get all transcripts ordered by session and timestamp; id breaks ties so
+    // a reply's text and html part saved in the same second keep their write
+    // order (plan c09fbc, as in mxchat_fetch_conversation()).
     $results = $wpdb->get_results(
         "SELECT session_id, user_email, user_identifier, role, message, timestamp
         FROM {$table_name}
-        ORDER BY session_id, timestamp ASC"
+        ORDER BY session_id, timestamp ASC, id ASC"
     );
 
     if (empty($results)) {
@@ -2561,6 +2279,33 @@ public function mxchat_delete_leads() {
 }
 
 /**
+ * Link-click rows (clicked URL, visitor IP and user agent) for these sessions,
+ * removed the way the privacy eraser removes them (MxChat_Privacy::
+ * erase_session()), so every delete path takes the same set (C2, fixed on the
+ * way from lane C3's read).
+ *
+ * @param string[] $session_ids Sanitized session ids.
+ */
+private static function mxchat_delete_session_link_clicks(array $session_ids) {
+    global $wpdb;
+    static $has_clicks = null;
+    $session_ids = array_values(array_filter(array_map('strval', $session_ids), 'strlen'));
+    if (empty($session_ids)) {
+        return;
+    }
+    $table = $wpdb->prefix . 'mxchat_url_clicks';
+    if ($has_clicks === null) {
+        $has_clicks = $wpdb->get_var($wpdb->prepare('SHOW TABLES LIKE %s', $table)) === $table;
+    }
+    if (!$has_clicks) {
+        return;
+    }
+    foreach ($session_ids as $sid) {
+        $wpdb->delete($table, ['session_id' => $sid], ['%s']);
+    }
+}
+
+/**
  * Wipe address-less leads by session id (c0cfaf) — the session-keyed twin of
  * mxchat_wipe_leads_by_email(). Same per-session option cleanup; no
  * email-keyed orphan sweep, because these leads have no address to sweep on.
@@ -2604,6 +2349,14 @@ private static function mxchat_wipe_leads_by_session(array $session_ids) {
             $wpdb->delete($translations_table, ['session_id' => $sid], ['%s']);
         }
     }
+
+    // Ratings and link clicks go with their conversations, as the privacy
+    // eraser and mxchat_wipe_leads_by_email() remove them (79c1be, C2).
+    $session_ids = array_values(array_filter($session_ids, 'strlen'));
+    if (!empty($session_ids) && function_exists('mxchat_delete_session_ratings')) {
+        mxchat_delete_session_ratings($session_ids);
+    }
+    self::mxchat_delete_session_link_clicks($session_ids);
 
     return ['deleted_sessions' => $deleted_sessions, 'deleted_rows' => $deleted_rows];
 }
@@ -2657,10 +2410,11 @@ private static function mxchat_wipe_leads_by_email(array $emails) {
             }
         }
 
-        // Ratings go with their conversations (79c1be).
+        // Ratings go with their conversations (79c1be), and so do link clicks (C2).
         if (!empty($session_ids) && function_exists('mxchat_delete_session_ratings')) {
             mxchat_delete_session_ratings($session_ids);
         }
+        self::mxchat_delete_session_link_clicks($session_ids);
     }
 
     // Table-side twin of the option sweep below (5658f2): orphan pre-chat
@@ -3350,8 +3104,12 @@ public function mxchat_translate_messages() {
     $numbered_messages = [];
     foreach ($messages as $i => $msg) {
         $content = isset($msg['content']) ? trim($msg['content']) : '';
+        // Numbered by the message's own index, the number the reply is parsed
+        // by below: the Transcripts view numbers rows, and a row that shows
+        // nothing (plan e19ea8) leaves a gap.
+        $n = isset($msg['index']) ? (int) $msg['index'] : $i;
         if (!empty($content)) {
-            $numbered_messages[] = "[MSG" . $i . "]" . $content . "[/MSG" . $i . "]";
+            $numbered_messages[] = "[MSG" . $n . "]" . $content . "[/MSG" . $n . "]";
         }
     }
 
@@ -3709,12 +3467,13 @@ private function translate_with_gemini($api_key, $model, $system_prompt, $text) 
     if ($model === 'gemini-3-pro-preview') {
         $model = 'gemini-3.1-pro-preview';
     }
-    $url = 'https://generativelanguage.googleapis.com/v1beta/models/' . $model . ':generateContent?key=' . $api_key;
+    $url = 'https://generativelanguage.googleapis.com/v1beta/models/' . $model . ':generateContent';
 
     $response = wp_remote_post($url, [
         'timeout' => 60,
         'headers' => [
-            'Content-Type' => 'application/json'
+            'Content-Type'   => 'application/json',
+            'x-goog-api-key' => $api_key, // plan f4c0bf: key in a header, never the URL
         ],
         'body' => wp_json_encode([
             'contents' => [
@@ -4044,9 +3803,10 @@ public function mxchat_fetch_conversation() {
         }
     }
 
-    // Get all messages
+    // Get all messages. Rows saved in the same second (a reply's text and its
+    // html part) keep the order they were written in (plan e19ea8).
     $messages = $wpdb->get_results($wpdb->prepare(
-        "SELECT * FROM {$table_name} WHERE session_id = %s ORDER BY timestamp ASC",
+        "SELECT * FROM {$table_name} WHERE session_id = %s ORDER BY timestamp ASC, id ASC",
         $session_id
     ));
 
@@ -4092,6 +3852,16 @@ public function mxchat_fetch_conversation() {
         'span' => ['class' => []],
         'del' => [], 'ins' => [],
     ];
+    // plan 9ddc82: a form the bot showed (mxchat-forms: labels, inputs,
+    // textareas, selects) is shown with its fields, so the admin sees what the
+    // visitor saw. Bot and agent rows only; no name, id, form or event
+    // attributes, hidden inputs dropped, and every control disabled below.
+    $form_allowed_html = [
+        'label' => ['class' => []],
+        'input' => ['type' => [], 'class' => [], 'placeholder' => [], 'value' => [], 'checked' => []],
+        'textarea' => ['class' => [], 'placeholder' => [], 'rows' => []],
+        'option' => ['value' => [], 'selected' => []],
+    ];
     // format_transcript_message() turns URLs and [text](url) into links with
     // regexes that cannot tell text from an attribute value, so a URL inside an
     // allowed attribute (a visitor's span class, an AI reply's title) came out
@@ -4114,12 +3884,18 @@ public function mxchat_fetch_conversation() {
         $is_agent = ($msg->role === 'agent');
         $is_bot   = ($msg->role === 'bot' || $msg->role === 'assistant');
 
-        $content = wp_kses(stripslashes($msg->message), $transcript_allowed_html);
-        $formatted_content = force_balance_tags(wp_kses($this->format_transcript_message($content), $formatted_allowed_html));
+        if ($is_user) {
+            $content = wp_kses(stripslashes($msg->message), $transcript_allowed_html);
+            $formatted_content = force_balance_tags(wp_kses($this->format_transcript_message($content), $formatted_allowed_html));
+        } else {
+            $content = wp_kses(stripslashes($msg->message), array_merge($transcript_allowed_html, $form_allowed_html));
+            $formatted_content = self::mxchat_transcript_readonly_controls(force_balance_tags(wp_kses($this->format_transcript_message($content), array_merge($formatted_allowed_html, $form_allowed_html))));
+        }
 
         $has_rag = $is_bot && !empty($msg->rag_context);
 
         $usage = null;
+        $retrieval_usage = null;
         if ($is_bot) {
             $u_in     = isset($msg->tokens_in) ? (int) $msg->tokens_in : null;
             $u_cached = isset($msg->tokens_cached) ? (int) $msg->tokens_cached : null;
@@ -4139,7 +3915,31 @@ public function mxchat_fetch_conversation() {
                 }
                 $usage_total['replies']++;
             }
+            // plan 65366b: tokens of the calls made to find the answer (query
+            // embeddings since 93f0bd, vector store file_search, search query
+            // rewrite), shown apart from the
+            // reply's own numbers, which stay as they are.
+            $r_in  = isset($msg->retrieval_tokens_in) ? (int) $msg->retrieval_tokens_in : null;
+            $r_out = isset($msg->retrieval_tokens_out) ? (int) $msg->retrieval_tokens_out : null;
+            if ($r_in !== null || $r_out !== null) {
+                $retrieval_usage = [
+                    'in'    => $r_in,
+                    'out'   => $r_out,
+                    'label' => $this->mxchat_transcript_usage_label($r_in, null, $r_out),
+                ];
+                /* translators: %s: token counts such as "2,134 in, 85 out" */
+                $retrieval_usage['text']  = sprintf(__('plus retrieval/search %s', 'mxchat'), $retrieval_usage['label']);
+                $retrieval_usage['title'] = __("Tokens the AI provider reported for finding the answer before this reply: turning the visitor's question into an embedding for the knowledge base search, the OpenAI Vector Store search, rewriting the visitor's words into a search query, and the product searches an add-on such as WooCommerce ran for this turn. Not included in the reply's own numbers.", 'mxchat'); // embedding added by plan 93f0bd, add-on product searches by 85d8b7 (97a730)
+            }
         }
+
+        // plan e19ea8: whether this bot row is a reply's html part, read from
+        // the stored markup (the filtered content has lost its scripts' tags
+        // and hidden attributes). The Transcripts view joins a part to the
+        // reply before it, as the live chat showed it; a part that renders
+        // nothing (the Add to Cart script, the cart signal) is not shown.
+        $part = self::mxchat_transcript_part_kind($msg->role, $msg->message);
+        $row_ts = strtotime($msg->timestamp . ' UTC');
 
         $formatted_messages[] = [
             'id' => $msg->id,
@@ -4147,11 +3947,14 @@ public function mxchat_fetch_conversation() {
             'is_user' => $is_user,
             'is_agent' => $is_agent,
             'is_bot' => $is_bot,
-            'content' => $formatted_content,
-            'timestamp' => wp_date('g:i A', strtotime($msg->timestamp . ' UTC')),
-            'full_timestamp' => wp_date('F j, Y g:i A', strtotime($msg->timestamp . ' UTC')),
+            'content' => ($part === 'none') ? '' : $formatted_content,
+            'timestamp' => wp_date('g:i A', $row_ts),
+            'full_timestamp' => wp_date('F j, Y g:i A', $row_ts),
+            'ts' => $row_ts ? (int) $row_ts : 0,
+            'part' => $part,
             'has_rag' => $has_rag,
-            'usage' => $usage
+            'usage' => $usage,
+            'retrieval_usage' => $retrieval_usage
         ];
     }
     $usage_summary = null;
@@ -4203,6 +4006,117 @@ public function mxchat_fetch_conversation() {
         'usage_total' => $usage_summary
     ]);
     wp_die();
+}
+
+/**
+ * plan 9ddc82: form controls in a filtered transcript message, read-only.
+ * Hidden inputs are removed (the visitor never saw them), and every input,
+ * textarea and select is disabled, so nothing in Transcripts can be typed
+ * into, toggled or submitted. Runs on markup wp_kses() has already
+ * normalised, so the tag names are lower case and attributes quoted.
+ *
+ * @param string $html Filtered message markup.
+ * @return string
+ */
+private static function mxchat_transcript_readonly_controls($html) {
+    if (strpos($html, '<input') === false && strpos($html, '<textarea') === false && strpos($html, '<select') === false) {
+        return $html;
+    }
+    $html = preg_replace('/<input\b[^>]*\btype\s*=\s*(["\'])\s*hidden\s*\1[^>]*>/i', '', $html);
+    return preg_replace('/<(input|textarea|select)\b/i', '<$1 disabled', $html);
+}
+
+/**
+ * plan e19ea8: what a stored row is to the Transcripts view. The server
+ * stores a reply's text and its html part (product cards, a gallery, a
+ * form) as two rows; the live chat showed them as one message. Same test
+ * as the widget's replay (chat-script.js mxchatIsStoredHtmlPart and
+ * mxchatHtmlHasVisibleContent), so both views join the same rows.
+ *
+ * @param string $role    Row role.
+ * @param string $message Stored message, unfiltered.
+ * @return string '' (not an html part), 'html', 'embed' (a YouTube embed,
+ *                its own message) or 'none' (renders nothing: a script, a
+ *                hidden element; not shown). Public so other transcript
+ *                outputs can make the same call.
+ */
+public static function mxchat_transcript_part_kind($role, $message) {
+    if ($role !== 'bot' || !is_string($message) || $message === '') {
+        return '';
+    }
+    $part = html_entity_decode(str_replace(array("\\'", '\\"'), array("'", '"'), $message), ENT_QUOTES | ENT_HTML5, 'UTF-8');
+    if (preg_replace('/^[\s\x{00A0}]+|[\s\x{00A0}]+$/u', '', $part) === '') {
+        return '';
+    }
+    $is_part = preg_match('/<[a-z][^>]*class\s*=\s*["\'][^"\']*\bmxchat-/i', $part)
+        || strpos($part, '<form') !== false
+        || strpos($part, '<input') !== false
+        || strpos($part, '<select') !== false
+        || strpos($part, '<textarea') !== false;
+    if (!$is_part && !preg_match('/^[\s\x{00A0}]*</u', $part)) {
+        return '';
+    }
+    if (!self::mxchat_transcript_html_has_visible_content($part)) {
+        return 'none';
+    }
+    if (!$is_part) {
+        return '';
+    }
+    return preg_match('/\bmxchat-youtube-embed\b/', $part) ? 'embed' : 'html';
+}
+
+/**
+ * plan e19ea8: whether markup puts anything on screen, judged on its
+ * top-level nodes as chat-script.js mxchatHtmlHasVisibleContent() does: text,
+ * or any element other than script, style, link, meta, template or noscript
+ * that does not carry the hidden attribute or an inline display none style
+ * (plan 0634d7, same pattern as the widget's inlineDisplayNone).
+ *
+ * @param string $html
+ * @return bool
+ */
+private static function mxchat_transcript_html_has_visible_content($html) {
+    if ($html === '') {
+        return false;
+    }
+    if (!class_exists('DOMDocument')) {
+        return true; // Cannot tell: show it, as before.
+    }
+    $doc = new DOMDocument();
+    $previous = libxml_use_internal_errors(true);
+    $loaded = $doc->loadHTML('<?xml encoding="UTF-8"?><div>' . $html . '</div>', LIBXML_HTML_NOIMPLIED | LIBXML_HTML_NODEFDTD);
+    libxml_clear_errors();
+    libxml_use_internal_errors($previous);
+    if (!$loaded) {
+        return true;
+    }
+    // The wrapper's children, plus anything a stray closing tag pushed out of it.
+    $nodes = array();
+    $in_wrapper = false;
+    foreach ($doc->childNodes as $top) {
+        if (!$in_wrapper) {
+            if ($top->nodeType === XML_ELEMENT_NODE) {
+                $in_wrapper = true;
+                foreach ($top->childNodes as $child) {
+                    $nodes[] = $child;
+                }
+            }
+            continue;
+        }
+        $nodes[] = $top;
+    }
+    foreach ($nodes as $node) {
+        if ($node->nodeType === XML_TEXT_NODE && preg_replace('/^[\s\x{00A0}]+|[\s\x{00A0}]+$/u', '', $node->textContent) !== '') {
+            return true;
+        }
+        if ($node->nodeType === XML_ELEMENT_NODE
+            && !in_array(strtolower($node->nodeName), array('script', 'style', 'link', 'meta', 'template', 'noscript'), true)
+            && !$node->hasAttribute('hidden')
+            && !preg_match('/(?:^|;)\s*display\s*:\s*none\s*(?:!\s*important\s*)?(?:;|$)/i', (string) $node->getAttribute('style'))) {
+            return true;
+        }
+    }
+    return false;
 }
 
 /**
@@ -4805,6 +4719,8 @@ public function mxchat_delete_chat_history() {
     if (!empty($deleted_session_ids) && function_exists('mxchat_delete_session_ratings')) {
         mxchat_delete_session_ratings($deleted_session_ids);
     }
+    // Link clicks too, as the privacy eraser and the retention sweep do (C2).
+    self::mxchat_delete_session_link_clicks($deleted_session_ids);
 
     // Opt-in full-lead wipe: sweep every remaining row + every option key (including
     // chat_deleted preservation) for each affected email. Reuses the same internal
@@ -6158,13 +6074,17 @@ public function mxchat_add_intent_ajax() {
         // Insert each phrase individually with its own embedding
         $phrases_table = $wpdb->prefix . 'mxchat_intent_phrases';
         $failed_phrases = array();
+        $embedding_error = '';
         foreach ($individual_phrases as $phrase) {
             $phrase = trim($phrase);
             if (empty($phrase)) continue;
 
             $embedding_vector = $this->mxchat_generate_embedding($phrase);
-            if (is_wp_error($embedding_vector)) {
+            // mxchat_generate_embedding() returns an error string on failure,
+            // never a WP_Error: anything but a vector is a failure (C2).
+            if (!is_array($embedding_vector)) {
                 $failed_phrases[] = $phrase;
+                $embedding_error = is_wp_error($embedding_vector) ? $embedding_vector->get_error_message() : (string) $embedding_vector;
                 continue;
             }
 
@@ -6178,11 +6098,19 @@ public function mxchat_add_intent_ajax() {
             );
         }
 
-        $response = array('id' => $intent_id);
+        // A phrase without a vector can never match, and the Actions page
+        // reports only an error: take the new action back out and say why,
+        // with the message the other add/edit handlers use (C2).
         if (!empty($failed_phrases)) {
-            $response['failed_phrases'] = $failed_phrases;
+            $wpdb->delete($phrases_table, array('intent_id' => $intent_id), array('%d'));
+            $wpdb->delete($table_name, array('id' => $intent_id), array('%d'));
+            wp_send_json_error(trim(sprintf(
+                __('Error generating embeddings for phrases: %s. Check your embedding API.', 'mxchat'),
+                implode(', ', $failed_phrases)
+            ) . ' ' . $embedding_error));
         }
-        wp_send_json_success($response);
+
+        wp_send_json_success(array('id' => $intent_id));
 
     } else {
         // Legacy mode: combine all phrases into one embedding (backwards compatible)
@@ -6193,12 +6121,15 @@ public function mxchat_add_intent_ajax() {
 
         // Generate embedding (combine phrases into single string for embedding)
         $embedding_vector = $this->mxchat_generate_embedding(implode(' ', $phrases_array));
-        if (is_wp_error($embedding_vector)) {
-            // Fallback: store without embedding
-            $serialized_vector = null;
-        } else {
-            $serialized_vector = maybe_serialize($embedding_vector);
+        if (!is_array($embedding_vector)) { // an error string on failure (C2)
+            // The column cannot hold "no embedding" (NOT NULL), and an action
+            // without one never matches: report the failure instead (C2).
+            wp_send_json_error(trim(sprintf(
+                __('Error generating embeddings for phrases: %s. Check your embedding API.', 'mxchat'),
+                implode(', ', $phrases_array)
+            ) . ' ' . (is_wp_error($embedding_vector) ? $embedding_vector->get_error_message() : (string) $embedding_vector)));
         }
+        $serialized_vector = maybe_serialize($embedding_vector);
 
         // Insert
         $result = $wpdb->insert(
@@ -6268,7 +6199,7 @@ public function mxchat_edit_intent_ajax() {
 
         // Generate new embedding (combine phrases into single string for embedding)
         $embedding_vector = $this->mxchat_generate_embedding(implode(' ', $phrases_array));
-        if (is_wp_error($embedding_vector)) {
+        if (!is_array($embedding_vector)) { // an error string on failure (C2)
             // Keep existing embedding
             $update_data = array(
                 'intent_label' => $intent_label,
@@ -6372,8 +6303,9 @@ public function mxchat_add_phrase_ajax() {
 
     // Generate embedding for this single phrase
     $embedding_vector = $this->mxchat_generate_embedding($phrase);
-    if (is_wp_error($embedding_vector)) {
-        wp_send_json_error(__('Failed to generate embedding: ', 'mxchat') . $embedding_vector->get_error_message());
+    if (!is_array($embedding_vector)) { // an error string on failure (C2)
+        $embedding_error = is_wp_error($embedding_vector) ? $embedding_vector->get_error_message() : (string) $embedding_vector;
+        wp_send_json_error(__('Failed to generate embedding: ', 'mxchat') . $embedding_error);
     }
 
     $phrases_table = $wpdb->prefix . 'mxchat_intent_phrases';
@@ -6616,6 +6548,15 @@ private function mxchat_get_available_callbacks($grouped = false, $include_all =
             'group'       => __('Other Features', 'mxchat'),
             'icon'        => 'art',
             'description' => __('Create images with Imagen from Google (requires Gemini API key)', 'mxchat'),
+            'addon'       => false,
+            'installed'   => true
+        ),
+        'mxchat_generate_xai_image' => array(
+            'label'       => __('Generate Image (xAI)', 'mxchat'),
+            'pro_only'    => false,
+            'group'       => __('Other Features', 'mxchat'),
+            'icon'        => 'art',
+            'description' => __('Create images with Grok Imagine from xAI (requires xAI API key)', 'mxchat'),
             'addon'       => false,
             'installed'   => true
         ),
@@ -8750,20 +8691,11 @@ public function fetch_openrouter_models() {
 
 // Callback function for embedding model selection
 public function embedding_model_callback() {
-    $models = array(
-        esc_html__('OpenAI Embeddings', 'mxchat') => array(
-            'text-embedding-3-small' => esc_html__('TE3 Small (1536, Efficient)', 'mxchat'),
-            'text-embedding-ada-002' => esc_html__('Ada 2 (1536, Recommended)', 'mxchat'),
-            'text-embedding-3-large' => esc_html__('TE3 Large (3072, Powerful)', 'mxchat'),
-        ),
-        esc_html__('Voyage AI Embeddings', 'mxchat') => array(
-            'voyage-3-large' => esc_html__('Voyage-3 Large (2048, Most Capable)', 'mxchat'),
-        ),
-        esc_html__('Google Gemini Embeddings', 'mxchat') => array(
-            'gemini-embedding-001' => esc_html__('Gemini Embedding (1536, Stable)', 'mxchat'),
-            'gemini-embedding-2'   => esc_html__('Gemini Embedding 2 (1536, Newest)', 'mxchat'),
-        )
-    );
+    // Plan 32e648: built from the catalog, the only embedding list.
+    if (!class_exists('MxChat_Model_Catalog')) {
+        require_once plugin_dir_path(__FILE__) . 'class-mxchat-model-catalog.php';
+    }
+    $models = MxChat_Model_Catalog::embedding_dropdown_groups();
     $selected_model = isset($this->options['embedding_model']) ? esc_attr($this->options['embedding_model']) : 'text-embedding-ada-002';
     // With custom-provider embeddings on, this picker is inert — the effective
     // model comes from the Custom Embedding Model field (plan ae02cb). Autosave
@@ -8771,6 +8703,18 @@ public function embedding_model_callback() {
     // a missing-key save; JS keeps the state in sync with the toggle live.
     $custom_embeddings_on = !empty($this->options['custom_provider_for_embeddings']) && $this->options['custom_provider_for_embeddings'] === 'on';
     echo '<select id="embedding_model" name="embedding_model"' . ($custom_embeddings_on ? ' disabled' : '') . '>';
+    // Plan 51a55d: a saved id the catalog does not list (legacy voyage-2 and
+    // the like) is shown as the selected "(legacy)" option with the dimension
+    // the site really embeds at, instead of the browser falling back to the
+    // first catalog option. Choosing it again keeps it (plan 61e761).
+    $raw_selected = isset($this->options['embedding_model']) && is_string($this->options['embedding_model']) ? $this->options['embedding_model'] : '';
+    if ($raw_selected !== '' && !in_array($raw_selected, MxChat_Model_Catalog::embedding_model_ids(), true)) {
+        $legacy_dims = MxChat_Utils::standard_embedding_dimension($this->options);
+        echo '<optgroup label="' . esc_attr__('Saved model', 'mxchat') . '">';
+        /* translators: 1: the saved embedding model id, 2: its vector size */
+        echo '<option value="' . esc_attr($raw_selected) . '" selected=\'selected\'>' . esc_html(sprintf(__('%1$s (%2$d, legacy)', 'mxchat'), $raw_selected, $legacy_dims)) . '</option>';
+        echo '</optgroup>';
+    }
     foreach ($models as $group_label => $group_models) {
         echo '<optgroup label="' . esc_attr($group_label) . '">';
         foreach ($group_models as $model_value => $model_label) {
@@ -10461,6 +10405,24 @@ private function enqueue_core_admin_assets($plugin_url, $version) {
 
     // Core admin scripts
     wp_enqueue_script('mxchat-admin-js', $plugin_url . 'js/mxchat-admin.js', array('jquery'), $version, true);
+
+    // plan bf8e9e: WordPress notices go inside the shell's content column on
+    // every MxChat page, including pages (core and add-ons) that do not load
+    // the shared shell script. Notices-only mode: tabs, menu and copy buttons
+    // stay with each page's own script.
+    $this->mxchat_enqueue_admin_notices_script($plugin_url, $version);
+}
+
+/**
+ * plan bf8e9e: js/admin-sidebar.js in notices-only mode (it moves the page's
+ * top-level WordPress notices into .mxch-content and wires nothing else). Its
+ * own handle, so a page that also loads the full shell script keeps it.
+ *
+ * @param string $plugin_url Plugin base URL with trailing slash.
+ * @param string $version    Asset version.
+ */
+private function mxchat_enqueue_admin_notices_script($plugin_url, $version) {
+    wp_enqueue_script('mxchat-admin-notices-js', add_query_arg('mxch_notices_only', '1', $plugin_url . 'js/admin-sidebar.js'), array(), $version, true);
 }
 
 /**
@@ -10483,6 +10445,7 @@ private function mxchat_enqueue_transcripts_readonly_assets() {
     wp_enqueue_style('mxchat-admin-sidebar-css', $plugin_url . 'css/admin-sidebar.css', array(), $version);
     wp_enqueue_style('mxchat-chat-transcripts-css', $plugin_url . 'css/chat-transcripts.css', array('mxchat-admin-sidebar-css'), $version);
     wp_enqueue_script('mxchat-transcripts-js', $plugin_url . 'js/mxchat_transcripts.js', array('jquery'), $version, true);
+    $this->mxchat_enqueue_admin_notices_script($plugin_url, $version); // plan bf8e9e
 
     wp_localize_script('mxchat-transcripts-js', 'mxchatAdmin', array(
         'ajax_url'     => admin_url('admin-ajax.php'),
@@ -10595,7 +10558,9 @@ private function enqueue_page_specific_assets($current_page, $plugin_url, $versi
             wp_enqueue_script('mxchat-actions-js', $plugin_url . 'js/mxchat_actions.js', array('jquery'), $version, true);
 
             // Localize script data for actions page
-            $is_activated = get_option('mxchat_pro_license_status') === 'active';
+            // Plan 0c480a: the same licence state the rest of core uses (mxchat_license_status via
+            // is_license_active()); mxchat_pro_license_status is never saved, so this was always false.
+            $is_activated = $this->is_activated;
             wp_localize_script('mxchat-actions-js', 'mxchActionsData', array(
                 'ajaxUrl' => admin_url('admin-ajax.php'),
                 'nonce' => wp_create_nonce('mxchat_actions_nonce'),
@@ -10821,6 +10786,8 @@ private function localize_admin_scripts($current_page) {
         require_once plugin_dir_path(__FILE__) . 'class-mxchat-model-catalog.php';
     }
     wp_localize_script('mxchat-admin-js', 'mxchatChatModelCatalog', MxChat_Model_Catalog::js_picker_shape());
+    // Embedding picker grid from the same catalog (plan 32e648).
+    wp_localize_script('mxchat-admin-js', 'mxchatEmbeddingModelCatalog', MxChat_Model_Catalog::embedding_js_picker_shape());
 
     // Page-specific localizations
     $this->localize_page_specific_scripts($current_page);
@@ -11304,8 +11271,19 @@ if (isset($input['rate_limits_global']) && is_array($input['rate_limits_global']
             require_once plugin_dir_path(__FILE__) . 'class-mxchat-model-catalog.php';
         }
         $allowed_models = MxChat_Model_Catalog::embedding_model_ids();
-        if (in_array($input['embedding_model'], $allowed_models)) {
+        if (in_array($input['embedding_model'], $allowed_models, true)) {
             $new_input['embedding_model'] = sanitize_text_field($input['embedding_model']);
+        } else {
+            // Plan 61e761: an id the catalog does not list (legacy voyage-2,
+            // voyage-large-2, a retired Gemini id) keeps the stored value, so
+            // saving any other setting never switches the embedding model and
+            // the stored vectors keep matching (embeddings are never switched
+            // automatically, M4 rule). Nothing stored: dropped as before.
+            $stored_options = get_option('mxchat_options', array());
+            $stored_embed   = (is_array($stored_options) && isset($stored_options['embedding_model']) && is_string($stored_options['embedding_model'])) ? $stored_options['embedding_model'] : '';
+            if ($stored_embed !== '') {
+                $new_input['embedding_model'] = sanitize_text_field($stored_embed);
+            }
         }
     }
 
@@ -11318,11 +11296,16 @@ if (isset($input['model'])) {
         }
         $allowed_models = MxChat_Model_Catalog::chat_model_ids();
 
-        if (in_array($input['model'], $allowed_models)) {
-            $new_input['model'] = sanitize_text_field($input['model']);
+        // Plan 67fb63: a retired id moves to its catalog replacement (same
+        // provider); any other id the catalog does not know (a hand-typed or
+        // custom id) keeps the stored value. Never a silent cross-provider swap.
+        $resolved_model = MxChat_Model_Catalog::resolve_retired($input['model']);
+        if (in_array($resolved_model, $allowed_models, true)) {
+            $new_input['model'] = sanitize_text_field($resolved_model);
         } else {
-            // Fallback for any deprecated model
-            $new_input['model'] = 'gpt-5.6-sol';
+            $stored_options = get_option('mxchat_options', array());
+            $stored_model   = (is_array($stored_options) && !empty($stored_options['model']) && is_string($stored_options['model'])) ? $stored_options['model'] : '';
+            $new_input['model'] = sanitize_text_field($stored_model !== '' ? $stored_model : $input['model']);
         }
     }
 }
@@ -12159,10 +12142,10 @@ public function mxchat_handle_delete_all_prompts() {
 
          // Prepare headers based on provider
          if (strpos($selected_model, 'gemini-embedding') === 0) {
-             // Gemini uses API key as query parameter
-             $endpoint .= '?key=' . $api_key;
+             // Gemini takes the key in the x-goog-api-key header (plan f4c0bf), never the URL
              $headers = array(
-                 'Content-Type' => 'application/json'
+                 'Content-Type'   => 'application/json',
+                 'x-goog-api-key' => $api_key,
              );
          } else {
              // OpenAI/Voyage use Bearer token

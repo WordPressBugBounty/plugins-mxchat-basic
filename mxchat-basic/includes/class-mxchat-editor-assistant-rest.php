@@ -408,9 +408,8 @@ class MxChat_Editor_Assistant_REST {
         }
         // Gemini's REST shape — system prompt rides as a separate system_instruction.
         $url = sprintf(
-            'https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent?key=%s',
-            rawurlencode($model),
-            rawurlencode($api_key)
+            'https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent',
+            rawurlencode($model)
         );
         $body = array(
             'system_instruction' => array(
@@ -428,7 +427,7 @@ class MxChat_Editor_Assistant_REST {
         );
         $response = wp_remote_post($url, array(
             'timeout' => 45,
-            'headers' => array('Content-Type' => 'application/json'),
+            'headers' => array('Content-Type' => 'application/json', 'x-goog-api-key' => $api_key), // plan f4c0bf
             'body'    => wp_json_encode($body),
         ));
         if (is_wp_error($response)) {

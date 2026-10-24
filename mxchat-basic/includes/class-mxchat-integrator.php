@@ -74,10 +74,25 @@ class MxChat_Integrator {
     // plan 705b6c — above 0 while the AI Tools loop runs: rows a tool saves in
     // the middle of the loop take no usage; the reply saved after it takes all.
     private $mxchat_usage_hold = 0;
+    // plan 65366b — usage of the calls made to find the answer (OpenAI Vector
+    // Store file_search, the search query rewrite). Kept apart from the reply's
+    // usage; the bot row that takes the reply's usage takes this too, in its
+    // own columns, so the reply's numbers stay what that reply cost.
+    private $mxchat_retrieval_usage = null;
+    // plan f6ac97 — the last query embedding this request made, so the
+    // knowledge base search reuses the vector the Actions match just made for
+    // the same text with the same settings instead of paying for it again.
+    // 'counted' is set once its tokens are in the turn's retrieval figure.
+    private $mxchat_embedding_memo = null;
     // M7a — every bot row this request saved, and the ones the matched Action
     // saved itself, so the chat handler does not store them a second time.
     private $mxchat_bot_rows_saved = array();
     private $mxchat_action_rows = array();
+    // plan 77f518 — true while an AI Tools call runs a core search / image
+    // callback: the bot rows it would save itself (its intro line, the raw web
+    // results) are not what the visitor sees, so they are not stored; the
+    // model's reply and the tool's html are saved by the FC outcome handler.
+    private $mxchat_fc_mute_saves = false;
 
 /**
  * Setup streaming headers - call this right before actually streaming
@@ -344,9 +359,10 @@ public function __construct() {
     add_action('wp_ajax_nopriv_mxchat_check_pre_chat_message_status', array($this, 'mxchat_check_pre_chat_message_status'));
     add_action('wp_ajax_mxchat_fetch_conversation_history', [$this, 'mxchat_fetch_conversation_history']);
     add_action('wp_ajax_nopriv_mxchat_fetch_conversation_history', [$this, 'mxchat_fetch_conversation_history']);
-    add_action('wp_ajax_mxchat_add_to_cart', [$this, 'mxchat_add_to_cart']);
-    add_action('wp_ajax_nopriv_mxchat_add_to_cart', [$this, 'mxchat_add_to_cart']);
-    
+    // mxchat_add_to_cart (admin-ajax) is owned by the WooCommerce add-on (plan
+    // 500d2e). Core registered it here for a method it does not have, and that
+    // ran first, so every call was a PHP fatal before the add-on could answer.
+
     // Add REST API routes registration
     add_action('rest_api_init', array($this, 'register_routes'));
     add_action('wp_ajax_mxchat_fetch_new_messages', array($this, 'mxchat_fetch_new_messages'));
@@ -407,6 +423,15 @@ public function __construct() {
     add_action('mxchat_send_delayed_transcript', array($this, 'mxchat_send_delayed_transcript'), 10, 1);
 
     add_filter('mxchat_check_actions_only', array($this, 'check_actions_for_addons'), 10, 4);
+
+    // plan 85d8b7: add-ons report the tokens of retrieval calls they make for
+    // this turn (mxchat-woo's product-search embeddings) into its retrieval figure.
+    add_action('mxchat_add_retrieval_usage', array($this, 'mxchat_add_external_retrieval_usage'), 10, 2);
+
+    // plan a8610f: add-ons that write the reply text themselves (mxchat-woo's
+    // filtered-search intro, recommendations, cart / order replies) report that
+    // call's model and tokens as the reply's.
+    add_action('mxchat_add_reply_usage', array($this, 'mxchat_add_external_reply_usage'), 10, 4);
 
 
 }
@@ -747,13 +772,21 @@ public function mxchat_issue_chat_send_nonce(WP_REST_Request $request) {
         // rate-limiting at sub-second granularity needs Redis or DB row locks
         // — out of scope for this endpoint, which is already cheap.
         $key = 'mxchat_nonce_rl_' . md5($ip);
-        if (get_transient($key)) {
+        // plan 1d0382: store when the last request came and measure the 2 s
+        // window from it. Transient expiry is whole-second, so a bare 2 s TTL
+        // held the gate shut for anything between 2.0 and 3.0 s. The TTL of 3
+        // only keeps the row around; the comparison decides. A legacy value
+        // (the old 1) is not a timestamp and counts as expired.
+        $now  = microtime(true);
+        $last = get_transient($key);
+        $last = (is_numeric($last) && (float) $last > 1000000000) ? (float) $last : 0.0;
+        if ($last > 0 && ($now - $last) < 2.0) {
             return new WP_REST_Response(array(
                 'error'   => 'rate_limited',
                 'message' => __('Too many nonce requests. Try again shortly.', 'mxchat'),
             ), 429);
         }
-        set_transient($key, 1, 2);
+        set_transient($key, sprintf('%.4F', $now), 3);
     }
 
     // The widget calls this endpoint without an X-WP-Nonce header, so WordPress does not
@@ -1086,10 +1119,38 @@ private function mxchat_user_message_for_humans($message, $session_id, $context)
     return (is_string($readable) && trim($readable) !== '') ? $readable : $message;
 }
 
+/**
+ * Store the visitor's own message for this chat turn. One place for the
+ * normal path and the pre-process branch (a Forms message-count form or
+ * wizard, a Perplexity web search), so a turn an add-on answers keeps the
+ * message that triggered it in Transcripts (plan 1457f3). A vision turn
+ * stores the visitor's original text plus the image count.
+ *
+ * @param string $session_id Chat session id.
+ * @param string $message    The sanitized message as the handler received it.
+ */
+private function mxchat_save_turn_user_message($session_id, $message) {
+    if (isset($_POST['vision_processed']) && $_POST['vision_processed'] && isset($_POST['original_user_message'])) {
+        // For vision messages, save the original user message with image indicator
+        $original_message = sanitize_textarea_field($_POST['original_user_message']);
+        if (isset($_POST['vision_images_count']) && $_POST['vision_images_count'] > 0) {
+            $image_count = intval($_POST['vision_images_count']);
+            $original_message .= " [{$image_count} image(s)]";
+        }
+        $this->mxchat_save_chat_message($session_id, 'user', $this->mxchat_user_message_for_humans($original_message, $session_id, 'transcript'));
+    } else {
+        // Regular message - save as normal
+        $this->mxchat_save_chat_message($session_id, 'user', $this->mxchat_user_message_for_humans($message, $session_id, 'transcript'));
+    }
+}
+
 private function mxchat_save_chat_message($session_id, $role, $message, $originating_page = null, $rag_context = null) {
     global $wpdb;
     $table_name = $wpdb->prefix . 'mxchat_chat_transcripts';
     //error_log("[DEBUG] mxchat_save_chat_message -> START for session_id: {$session_id}, role: {$role}");
+    if ($role === 'bot' && $this->mxchat_fc_mute_saves) {
+        return false; // plan 77f518
+    }
     if ($role === 'bot') {
         $this->mxchat_bot_rows_saved[] = (string) $message; // M7a
     }
@@ -1120,9 +1181,11 @@ private function mxchat_save_chat_message($session_id, $role, $message, $origina
         }
     }
     
-    // 1) Extract agent name if present
+    // 1) Extract agent name if present. Live-agent replies only: a visitor
+    //    whose message starts with the same prefix must not rename the chat
+    //    (plan cf3784).
     $agent_name = '';
-    if (preg_match('/^Agent: (.*?) - /', $message, $matches)) {
+    if ($role === 'agent' && preg_match('/^Agent: (.*?) - /', $message, $matches)) {
         $agent_name = $matches[1];
         $message    = str_replace("Agent: $agent_name - ", '', $message);
         if (empty(MxChat_Session_Store::get($session_id, 'agent_name'))) {
@@ -1274,6 +1337,15 @@ private function mxchat_save_chat_message($session_id, $role, $message, $origina
                 $usage_fields[$column] = min(4294967295, max(0, (int) $usage[$key]));
             }
         }
+        // plan 65366b: retrieval / search tokens in their own columns (3.2.27
+        // migration flag), never added to the reply's numbers.
+        if (!empty($usage['retrieval']) && is_array($usage['retrieval']) && get_option('mxchat_transcripts_retrieval_usage_columns')) {
+            foreach (array('in' => 'retrieval_tokens_in', 'out' => 'retrieval_tokens_out') as $key => $column) {
+                if (isset($usage['retrieval'][$key]) && $usage['retrieval'][$key] !== null) {
+                    $usage_fields[$column] = min(4294967295, max(0, (int) $usage['retrieval'][$key]));
+                }
+            }
+        }
         $insert_data = array_merge($insert_data, $usage_fields);
     }
 
@@ -1406,13 +1478,16 @@ private function schedule_delayed_transcript_email($session_id) {
 /**
  * Check if chat messages contain contact information (email or phone number)
  *
- * @param array $messages Array of message objects with 'message' property
- * @param object|null $session_data Session data object with user_email property
+ * @param array  $messages    Array of message objects with 'message' property
+ * @param string $known_email The visitor's email already on the session (the
+ *                            pre-chat form's), see mxchat_transcript_email_visitor().
  * @return bool True if contact info found, false otherwise
  */
-private function chat_contains_contact_info($messages, $session_data = null) {
-    // Check if session already has a stored email
-    if ($session_data && !empty($session_data->user_email)) {
+private function chat_contains_contact_info($messages, $known_email = '') {
+    // Check if session already has a stored email (plan 7954b8: the session
+    // store's visitor_email, which the pre-chat form writes; the old read of a
+    // user_email column that table never had always came back empty).
+    if (is_string($known_email) && trim($known_email) !== '') {
         return true;
     }
 
@@ -1450,6 +1525,263 @@ private function chat_contains_contact_info($messages, $session_data = null) {
 }
 
 /**
+ * plan e19ea8: the emailed transcript's entries, one per message as the live
+ * chat showed it. The server stores a reply's text and its html part (product
+ * cards, a gallery, a form) as two rows; the part joins the Assistant entry
+ * just before it when no other row came between and it was written within
+ * 10 seconds of it, after a blank line. A part that shows nothing (the Add to
+ * Cart script, the hidden cart signal) is left out; a YouTube embed stays its
+ * own entry. Same rule as the widget replay and the Transcripts view, using
+ * MxChat_Admin::mxchat_transcript_part_kind(). Message text is kept exactly as
+ * stored, as before; without that method every row is its own entry, as before.
+ *
+ * @param array $messages Rows with role, message and timestamp, in order.
+ * @return array[] Entries with timestamp, label and message.
+ */
+private function mxchat_transcript_email_entries($messages) {
+    $can_tell_parts = class_exists('MxChat_Admin') && method_exists('MxChat_Admin', 'mxchat_transcript_part_kind');
+    $entries = array();
+    $turn = null; // Index of the Assistant entry a part may join, and its time.
+    foreach ((array) $messages as $msg) {
+        $part = $can_tell_parts ? MxChat_Admin::mxchat_transcript_part_kind($msg->role, $msg->message) : '';
+        if ($part === 'none') {
+            continue;
+        }
+        $ts = strtotime($msg->timestamp . ' UTC');
+        // plan 7fde1c: the attachment is plain text, so an html part (product
+        // cards, a form, a gallery, a generated image, a YouTube embed) is
+        // written as readable lines instead of its markup.
+        $text = ($part === 'html' || $part === 'embed') ? $this->mxchat_transcript_email_plain_part($msg->message) : $msg->message;
+        if ($part === '' && ($msg->role === 'bot' || $msg->role === 'agent')) {
+            $text = $this->mxchat_transcript_email_plain_text($msg->message);
+        }
+        if ($part !== '' && trim($text) === '') {
+            continue;
+        }
+        if ($part === 'html' && $turn !== null && (!$ts || !$turn['ts'] || abs($ts - $turn['ts']) <= 10)) {
+            $joined = &$entries[$turn['index']]['message'];
+            $joined = (trim((string) $joined) === '') ? $text : $joined . "\n\n" . $text;
+            unset($joined);
+            continue;
+        }
+        // 'agent' rows are live-agent (human) replies — label them as such in
+        // the emailed transcript, same distinction the Transcripts viewer draws.
+        $role_label = ($msg->role === 'user') ? 'User' : (($msg->role === 'agent') ? 'Live Agent' : 'Assistant');
+        $entries[] = array('timestamp' => $msg->timestamp, 'label' => $role_label, 'message' => $text);
+        $turn = ($msg->role === 'bot' && $part !== 'embed') ? array('index' => count($entries) - 1, 'ts' => $ts) : null;
+    }
+    return $entries;
+}
+
+/**
+ * plan 7954b8: the visitor details the emailed transcript prints. They live in
+ * the session store's visitor_name / visitor_email columns (the pre-chat form
+ * and the Forms / Anywhere add-ons write them through MxChat_Session_Store,
+ * which also reads a session not yet moved out of wp_options); the old code
+ * read user_identifier / user_email, columns that table never had. Other
+ * column names are read only when the row carries them.
+ *
+ * @param string      $session_id   Validated session id.
+ * @param object|null $session_data The session's mxchat_sessions row.
+ * @return array 'name', 'email' and 'started' ('' when unknown).
+ */
+private function mxchat_transcript_email_visitor($session_id, $session_data) {
+    $read = function ($field, $columns) use ($session_id, $session_data) {
+        if (class_exists('MxChat_Session_Store') && method_exists('MxChat_Session_Store', 'get')) {
+            $value = MxChat_Session_Store::get($session_id, $field, '');
+            if (is_scalar($value) && trim((string) $value) !== '') {
+                return trim((string) $value);
+            }
+        }
+        foreach ($columns as $column) {
+            if (is_object($session_data) && isset($session_data->$column) && is_scalar($session_data->$column) && trim((string) $session_data->$column) !== '') {
+                return trim((string) $session_data->$column);
+            }
+        }
+        return '';
+    };
+    return array(
+        'name'    => $read('name', array('visitor_name', 'user_identifier')),
+        'email'   => $read('email', array('visitor_email', 'user_email')),
+        'started' => (is_object($session_data) && !empty($session_data->created_at)) ? (string) $session_data->created_at : '',
+    );
+}
+
+/**
+ * plan 7fde1c: an html part of a reply as plain text for the emailed .txt.
+ * Product cards become "- name - price - link", a form its field labels and
+ * choices, a gallery or generated image its title and image link, a YouTube
+ * embed "Video: title - link"; other markup its visible text with links
+ * written out. Scripts, styles, hidden elements, buttons and inputs are left
+ * out. Without the DOM extension the tags are stripped.
+ *
+ * @param string $html Stored html part.
+ * @return string
+ */
+private function mxchat_transcript_email_plain_part($html, $keep_blank_lines = false) {
+    $html = str_replace(array("\\'", '\\"'), array("'", '"'), (string) $html);
+    $out = '';
+    $doc = null;
+    if (class_exists('DOMDocument')) {
+        $doc = new DOMDocument();
+        $previous = libxml_use_internal_errors(true);
+        $loaded = $doc->loadHTML('<?xml encoding="UTF-8"?><div>' . $html . '</div>', LIBXML_HTML_NOIMPLIED | LIBXML_HTML_NODEFDTD);
+        libxml_clear_errors();
+        libxml_use_internal_errors($previous);
+        if (!$loaded) {
+            $doc = null;
+        }
+    }
+    if ($doc) {
+        foreach ($doc->childNodes as $node) {
+            $this->mxchat_transcript_email_plain_node($node, $out);
+        }
+    } else {
+        $out = html_entity_decode(wp_strip_all_tags(preg_replace('/<(br|\/p|\/div|\/li)\b[^>]*>/i', "\n", $html)), ENT_QUOTES | ENT_HTML5, 'UTF-8');
+    }
+    $lines = array();
+    foreach (explode("\n", str_replace("\xC2\xA0", ' ', $out)) as $line) {
+        $line = trim(preg_replace('/[ \t]+/', ' ', $line));
+        if ($line !== '' && $line !== '-') {
+            $lines[] = $line;
+        } elseif ($keep_blank_lines && $line === '' && $lines && end($lines) !== '') {
+            $lines[] = '';
+        }
+    }
+    return trim(implode("\n", $lines));
+}
+
+/**
+ * Fix on the way with plan 7fde1c: a bot or live-agent TEXT row is shown in
+ * the chat as html, so inline formatting in it (bold, links, line breaks,
+ * lists) is written as plain text too, keeping the row's own paragraphs.
+ * A row with no html tag is returned exactly as stored, as before.
+ *
+ * @param string $message Stored bot / agent message.
+ * @return string
+ */
+private function mxchat_transcript_email_plain_text($message) {
+    $message = (string) $message;
+    if (!preg_match('/<\/?(strong|b|em|i|u|s|a|br|p|ul|ol|li|h[1-6]|span|div|img|code|pre|blockquote|table|thead|tbody|tr|td|th|hr|sup|sub|small|mark)\b[^>]*>/i', $message)) {
+        return $message;
+    }
+    $plain = $this->mxchat_transcript_email_plain_part(preg_replace('/\r\n|\r|\n/', '<br>', $message), true);
+    return $plain !== '' ? $plain : $message;
+}
+
+/**
+ * plan 7fde1c: one node of mxchat_transcript_email_plain_part(), appended to $out.
+ *
+ * @param DOMNode $node
+ * @param string  $out
+ */
+private function mxchat_transcript_email_plain_node($node, &$out) {
+    if ($node->nodeType === XML_TEXT_NODE) {
+        $out .= preg_replace('/\s+/u', ' ', $node->textContent);
+        return;
+    }
+    if ($node->nodeType !== XML_ELEMENT_NODE) {
+        return;
+    }
+    $tag = strtolower($node->nodeName);
+    if ($node->hasAttribute('hidden') || in_array($tag, array('script', 'style', 'link', 'meta', 'template', 'noscript', 'button', 'input', 'select', 'textarea', 'svg', 'iframe'), true)) {
+        return;
+    }
+    $class = ' ' . preg_replace('/\s+/', ' ', $node->getAttribute('class')) . ' ';
+    $xpath = new DOMXPath($node->ownerDocument);
+    $find = function ($query) use ($xpath, $node) {
+        $found = $xpath->query($query, $node);
+        return ($found && $found->length) ? $found->item(0) : null;
+    };
+    $by_class = function ($name) use ($find) {
+        return $find('.//*[contains(concat(" ", normalize-space(@class), " "), " ' . $name . ' ")]');
+    };
+    $text = function ($n) {
+        return $n ? trim(preg_replace('/\s+/u', ' ', $n->textContent)) : '';
+    };
+    $attr = function ($n, $name) {
+        return ($n && $n->nodeType === XML_ELEMENT_NODE) ? trim($n->getAttribute($name)) : '';
+    };
+
+    if (strpos($class, ' mxchat-featured-item ') !== false) {
+        $title = $by_class('mxchat-featured-item-title');
+        $name = $title ? $text($title) : $text($find('.//a'));
+        $url = $attr(($title && strtolower($title->nodeName) === 'a') ? $title : $find('.//a[@href]'), 'href');
+        $parts = array_filter(array($name, $text($by_class('mxchat-featured-item-price')), $url), 'strlen');
+        $out .= "\n- " . implode(' - ', $parts) . "\n";
+        return;
+    }
+    if (strpos($class, ' mxchat-youtube-embed ') !== false) {
+        $link = $attr($by_class('mxchat-youtube-link'), 'href');
+        if ($link === '' && $node->getAttribute('data-video-id') !== '') {
+            $link = 'https://www.youtube.com/watch?v=' . rawurlencode($node->getAttribute('data-video-id'));
+        }
+        $parts = array_filter(array($text($by_class('mxchat-youtube-title')), $link), 'strlen');
+        $out .= "\n" . __('Video', 'mxchat') . ': ' . implode(' - ', $parts) . "\n";
+        return;
+    }
+    if (strpos($class, ' mxchat-image-item ') !== false) {
+        $src = $attr($find('.//img'), 'src');
+        $link = $attr($find('.//a[@href]'), 'href');
+        $parts = array_filter(array($text($by_class('mxchat-image-title')), $src), 'strlen');
+        $out .= "\n- " . __('Image', 'mxchat') . ': ' . implode(' - ', $parts) . (($link !== '' && $link !== $src) ? ' (' . $link . ')' : '') . "\n";
+        return;
+    }
+    if (strpos($class, ' mxchat-form-field ') !== false) {
+        $label = $by_class('mxchat-form-label');
+        $label = $label ? $text($label) : $text($find('.//label'));
+        $choices = array();
+        foreach ($xpath->query('.//*[contains(concat(" ", normalize-space(@class), " "), " mxchat-choice-text ")] | .//option', $node) as $choice) {
+            if ($text($choice) !== '') {
+                $choices[] = $text($choice);
+            }
+        }
+        if ($label !== '' || $choices) {
+            $out .= "\n- " . $label . ($choices ? ($label !== '' ? ': ' : '') . implode(' / ', $choices) : '') . "\n";
+        }
+        return;
+    }
+    if ($tag === 'img') {
+        $src = $attr($node, 'src');
+        if ($src !== '') {
+            $alt = $attr($node, 'alt');
+            $out .= "\n" . __('Image', 'mxchat') . ': ' . ($alt !== '' ? $alt . ' - ' : '') . $src . "\n";
+        }
+        return;
+    }
+    if ($tag === 'a') {
+        $href = $attr($node, 'href');
+        $label = $text($node);
+        if ($label === '') {
+            foreach ($node->childNodes as $child) {
+                $this->mxchat_transcript_email_plain_node($child, $out);
+            }
+            return;
+        }
+        $out .= $label . (($href !== '' && $href !== $label && strpos($href, '#') !== 0 && stripos($href, 'javascript:') !== 0) ? ' (' . $href . ')' : '');
+        return;
+    }
+    if ($tag === 'br') {
+        $out .= "\n";
+        return;
+    }
+    $block = in_array($tag, array('div', 'p', 'ul', 'ol', 'li', 'table', 'tr', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'form', 'section', 'article', 'header', 'footer', 'figure', 'figcaption', 'blockquote', 'pre', 'fieldset', 'legend', 'dl', 'dt', 'dd'), true);
+    if ($tag === 'li') {
+        $out .= "\n- ";
+    } elseif ($block) {
+        $out .= "\n";
+    } elseif ($tag === 'td' || $tag === 'th') {
+        $out .= ' ';
+    }
+    foreach ($node->childNodes as $child) {
+        $this->mxchat_transcript_email_plain_node($child, $out);
+    }
+    if ($block) {
+        $out .= "\n";
+    }
+}
+
+/**
  * Send the delayed transcript email with .txt attachment
  */
 public function mxchat_send_delayed_transcript($session_id) {
@@ -1474,12 +1806,14 @@ public function mxchat_send_delayed_transcript($session_id) {
         return false;
     }
 
-    // Get all messages for this session
+    // Get all messages for this session. Rows saved in the same second (a
+    // reply's text and its html part) keep the order they were written in
+    // (plan e19ea8, as the Transcripts view).
     $table_name = $wpdb->prefix . 'mxchat_chat_transcripts';
     $messages = $wpdb->get_results($wpdb->prepare(
         "SELECT role, message, timestamp FROM {$table_name}
          WHERE session_id = %s
-         ORDER BY timestamp ASC",
+         ORDER BY timestamp ASC, id ASC",
         $session_id
     ));
 
@@ -1494,9 +1828,11 @@ public function mxchat_send_delayed_transcript($session_id) {
         $session_id
     ));
 
+    $visitor = $this->mxchat_transcript_email_visitor($session_id, $session_data);
+
     // Check if contact info is required and if it's present
     $require_contact = !empty($options['mxchat_auto_email_transcript_require_contact']);
-    if ($require_contact && !$this->chat_contains_contact_info($messages, $session_data)) {
+    if ($require_contact && !$this->chat_contains_contact_info($messages, $visitor['email'])) {
         // Contact info required but not found - skip sending
         return false;
     }
@@ -1506,21 +1842,18 @@ public function mxchat_send_delayed_transcript($session_id) {
     $transcript_content .= "================\n\n";
     $transcript_content .= "Session ID: " . $session_id . "\n";
     
-    if ($session_data) {
-        $transcript_content .= "User: " . ($session_data->user_identifier ?: 'Guest') . "\n";
-        $transcript_content .= "Email: " . ($session_data->user_email ?: 'Not provided') . "\n";
-        $transcript_content .= "Started: " . $session_data->created_at . "\n";
+    $transcript_content .= "User: " . ($visitor['name'] !== '' ? $visitor['name'] : 'Guest') . "\n";
+    $transcript_content .= "Email: " . ($visitor['email'] !== '' ? $visitor['email'] : 'Not provided') . "\n";
+    if ($visitor['started'] !== '') {
+        $transcript_content .= "Started: " . $visitor['started'] . "\n";
     }
     
     $transcript_content .= "\n" . str_repeat("=", 50) . "\n\n";
     
     // Add messages
-    foreach ($messages as $msg) {
-        // 'agent' rows are live-agent (human) replies — label them as such in
-        // the emailed transcript, same distinction the Transcripts viewer draws.
-        $role_label = ($msg->role === 'user') ? 'User' : (($msg->role === 'agent') ? 'Live Agent' : 'Assistant');
-        $transcript_content .= "[{$msg->timestamp}] {$role_label}:\n";
-        $transcript_content .= $msg->message . "\n\n";
+    foreach ($this->mxchat_transcript_email_entries($messages) as $entry) {
+        $transcript_content .= "[{$entry['timestamp']}] {$entry['label']}:\n";
+        $transcript_content .= $entry['message'] . "\n\n";
     }
     
     // Create temporary file for attachment using WP_Filesystem
@@ -1542,10 +1875,8 @@ public function mxchat_send_delayed_transcript($session_id) {
     $message = "Please find attached the full chat transcript.\n\n";
     $message .= "Session ID: {$session_id}\n";
     
-    if ($session_data) {
-        $message .= "User: " . ($session_data->user_identifier ?: 'Guest') . "\n";
-        $message .= "Email: " . ($session_data->user_email ?: 'Not provided') . "\n";
-    }
+    $message .= "User: " . ($visitor['name'] !== '' ? $visitor['name'] : 'Guest') . "\n";
+    $message .= "Email: " . ($visitor['email'] !== '' ? $visitor['email'] : 'Not provided') . "\n";
     
     $message .= "\nView online: " . admin_url('admin.php?page=mxchat-transcripts');
     
@@ -2264,9 +2595,16 @@ public function mxchat_handle_chat_request() {
 
         // If the pre-processing returned a result (not the original message), use it directly
         if (is_array($pre_processed_result) && isset($pre_processed_result['text'])) {
-            // Save the AI response
-            $this->mxchat_save_chat_message($session_id, 'bot', $pre_processed_result['text']);
-            
+            // The visitor's message first, as on the normal path (plan 1457f3).
+            $this->mxchat_save_turn_user_message($session_id, $message);
+
+            // Save the AI response. A form or wizard with no intro message
+            // answers an empty text beside its html: store only the html row
+            // then, so Transcripts shows no empty bot bubble (plan c09d6f).
+            if (trim((string) $pre_processed_result['text']) !== '' || empty($pre_processed_result['html'])) {
+                $this->mxchat_save_chat_message($session_id, 'bot', $pre_processed_result['text']);
+            }
+
             // Save HTML content if provided
             if (!empty($pre_processed_result['html'])) {
                 $this->mxchat_save_chat_message($session_id, 'bot', $pre_processed_result['html']);
@@ -2288,18 +2626,7 @@ public function mxchat_handle_chat_request() {
         }
 
         // Save the user's message - handle vision processed messages differently
-        if (isset($_POST['vision_processed']) && $_POST['vision_processed'] && isset($_POST['original_user_message'])) {
-            // For vision messages, save the original user message with image indicator
-            $original_message = sanitize_textarea_field($_POST['original_user_message']);
-            if (isset($_POST['vision_images_count']) && $_POST['vision_images_count'] > 0) {
-                $image_count = intval($_POST['vision_images_count']);
-                $original_message .= " [{$image_count} image(s)]";
-            }
-            $this->mxchat_save_chat_message($session_id, 'user', $this->mxchat_user_message_for_humans($original_message, $session_id, 'transcript'));
-        } else {
-            // Regular message - save as normal
-            $this->mxchat_save_chat_message($session_id, 'user', $this->mxchat_user_message_for_humans($message, $session_id, 'transcript'));
-        }
+        $this->mxchat_save_turn_user_message($session_id, $message);
 
         
     if (is_email($message)) {
@@ -2436,8 +2763,12 @@ public function mxchat_handle_chat_request() {
             }
         }
 
-        // Step 1: Check for new PDF URL in the message
-        if (!isset($_POST['vision_processed']) && preg_match('/https?:\/\/[^\s"]+/i', $message, $matches)) {
+        // Step 1: Check for new PDF URL in the message.
+        // Only when PDFs are switched on (Show PDF upload button), the same switch the
+        // upload handler checks: with it off, a link in a message is never downloaded,
+        // parsed or embedded, and falls through to the normal chat below.
+        $pdf_switch = $current_options['show_pdf_upload_button'] ?? ($this->options['show_pdf_upload_button'] ?? 'on');
+        if ($pdf_switch === 'on' && !isset($_POST['vision_processed']) && preg_match('/https?:\/\/[^\s"]+/i', $message, $matches)) {
             // Trailing punctuation belongs to the sentence, not to the address (plan f7ab5a):
             // "see https://x/guide.pdf, thanks" used to fetch "guide.pdf,".
             $new_pdf_url = rtrim($matches[0], ".,;:!?)'\"");
@@ -2623,10 +2954,21 @@ public function mxchat_handle_chat_request() {
         if (!is_string($retrieval_query) || trim($retrieval_query) === '') {
             $retrieval_query = $message;
         }
-        $user_message_embedding = $this->mxchat_generate_embedding($retrieval_query, $api_key);
-        
+        // plan f6ac97: with the OpenAI Vector Store serving this turn the
+        // knowledge base is searched by text, so the query embedding only
+        // feeds a session PDF / Word lookup; without one it is not made.
+        // Otherwise it reuses the Actions match's vector when the text is the
+        // same (mxchat_generate_embedding()).
+        $session_docs = (get_transient('mxchat_pdf_url_' . $session_id) && get_transient('mxchat_include_pdf_in_context_' . $session_id))
+            || (get_transient('mxchat_word_url_' . $session_id) && get_transient('mxchat_include_word_in_context_' . $session_id));
+        $skip_query_embedding = !$session_docs && $this->mxchat_vectorstore_serves_turn($bot_id);
+        $user_message_embedding = $skip_query_embedding ? array() : $this->mxchat_generate_embedding($retrieval_query, $api_key);
+        if (!$skip_query_embedding) {
+            $this->mxchat_usage_add_query_embedding($user_message_embedding); // plan 93f0bd
+        }
+
         // Check if the embedding generation returned an error
-        if (is_array($user_message_embedding) && isset($user_message_embedding['error'])) {
+        if (!$skip_query_embedding && is_array($user_message_embedding) && isset($user_message_embedding['error'])) {
             $error_message = $user_message_embedding['error'];
             $error_code = $user_message_embedding['error_code'] ?? 'embedding_error';
 
@@ -2651,7 +2993,7 @@ public function mxchat_handle_chat_request() {
         }
 
         // Check if the embedding is valid
-        if (!is_array($user_message_embedding) || empty($user_message_embedding)) {
+        if (!$skip_query_embedding && (!is_array($user_message_embedding) || empty($user_message_embedding))) {
             $error_message = esc_html__('Unable to process your message. The embedding service is not responding correctly.', 'mxchat');
 
             // FIXED: Send error in appropriate format based on streaming mode
@@ -3225,6 +3567,7 @@ private function mxchat_check_intent_and_invoke_callback($message, $user_id, $se
     
     // Generate the user embedding
     $user_embedding = $this->mxchat_generate_embedding($message, $this->options['api_key']);
+    $this->mxchat_usage_add_query_embedding($user_embedding); // plan 93f0bd
 
     // Check if embedding generation returned an error
     if (is_array($user_embedding) && isset($user_embedding['error'])) {
@@ -3606,6 +3949,77 @@ public function mxchat_generate_gemini_image($message, $user_id, $session_id) {
     }
 }
 
+/**
+ * In-chat xAI image generation (plan 578297), the Action / AI Tool "Generate
+ * Image (xAI)". The request, the download and the Media Library save are the
+ * Content screen's and mxchat_generate_media_image()'s own
+ * (MxChat_Content_Generator::generate_image_to_library()), so the three xAI
+ * image paths stay one. The model is the catalog image section's xAI default
+ * (Grok Imagine 2.0 today); filter mxchat_xai_image_model (string $model) to
+ * choose another xAI image model. Replies and saves exactly like the OpenAI
+ * and Gemini callbacks: a text row and the image row, once.
+ */
+public function mxchat_generate_xai_image($message, $user_id, $session_id) {
+    $prompt = esc_html__('Create an image of ', 'mxchat') . sanitize_text_field($message);
+
+    $options = is_array($this->options) ? $this->options : array();
+    if (empty($options['xai_api_key'])) {
+        $response_text = esc_html__("xAI API key is not configured.", 'mxchat');
+        $this->mxchat_save_chat_message($session_id, 'bot', $response_text);
+        return ['text' => $response_text, 'html' => '', 'images' => []];
+    }
+
+    $default = method_exists('MxChat_Model_Catalog', 'image_default_model') ? MxChat_Model_Catalog::image_default_model('xai') : 'grok-imagine-image';
+    $model   = (string) apply_filters('mxchat_xai_image_model', $default);
+    if (method_exists('MxChat_Model_Catalog', 'resolve_retired_image')) {
+        $model = (string) MxChat_Model_Catalog::resolve_retired_image($model);
+    }
+    if (strpos($model, 'grok') !== 0) {
+        $model = $default; // Only an xAI image model goes to xAI.
+    }
+
+    $result = null;
+    if (class_exists('MxChat_Content_Generator') && method_exists('MxChat_Content_Generator', 'generate_image_to_library')) {
+        $result = MxChat_Content_Generator::generate_image_to_library($prompt, $model, $options, array('aspect' => '1:1', 'resolution' => '1k'), array(
+            'prefix'    => 'mxchat-xai',
+            'post_data' => array(
+                'post_title' => 'mxchat-xai',
+                'meta_input' => array('_mxchat_generated' => $model),
+            ),
+        ));
+    }
+
+    if (is_array($result) && !empty($result['url'])) {
+        $image_url = esc_url_raw($result['url']);
+
+        $response_html = '<img src="' . esc_url($image_url) . '" alt="' . esc_attr__('Generated Image', 'mxchat') . '" class="mxchat-generated-image" />';
+        $response_text = esc_html__('Here is the image I generated:', 'mxchat');
+
+        $this->mxchat_save_chat_message($session_id, 'bot', $response_text);
+        $this->mxchat_save_chat_message($session_id, 'bot', $response_html);
+
+        $this->fallbackResponse = [
+            'text'   => $response_text,
+            'html'   => $response_html,
+            'images' => [$image_url]
+        ];
+
+        return $this->fallbackResponse;
+    }
+
+    $response_text = esc_html__("I'm sorry, but I couldn't generate an image based on your request.", 'mxchat');
+
+    $this->mxchat_save_chat_message($session_id, 'bot', $response_text);
+
+    $this->fallbackResponse = [
+        'text'   => $response_text,
+        'html'   => '',
+        'images' => []
+    ];
+
+    return $this->fallbackResponse;
+}
+
 private function mxchat_save_generated_image($base64_data, $mime_type = 'image/png', $prefix = 'mxchat-generated') {
     // Map the real mime type to a matching file extension so the saved file's
     // extension always agrees with its bytes. A mismatch (e.g. Imagen returning
@@ -3668,7 +4082,11 @@ private function mxchat_save_generated_image($base64_data, $mime_type = 'image/p
  * everyday image generation"). Probed with this exact body: HTTP 200, PNG.
  * Filter mxchat_openai_image_model (string $model) to choose another.
  */
-private function mxchat_generate_openai_image($prompt, $api_key, $model = 'gpt-image-2.5-flare', $timeout = 60) {
+private function mxchat_generate_openai_image($prompt, $api_key, $model = '', $timeout = 60) {
+    if ($model === '') {
+        // Plan 463f28: the catalog image section's OpenAI default (gpt-image-2.5-flare today).
+        $model = method_exists('MxChat_Model_Catalog', 'image_default_model') ? MxChat_Model_Catalog::image_default_model('openai') : 'gpt-image-2.5-flare';
+    }
     $model = (string) apply_filters('mxchat_openai_image_model', $model);
     $api_url = 'https://api.openai.com/v1/images/generations';
     $body = json_encode([
@@ -3766,7 +4184,8 @@ private function mxchat_generate_custom_image($prompt, $timeout = 90) {
  * generateContent image model. The function keeps its old name for callers.
  */
 private function mxchat_generate_imagen_image($prompt, $api_key, $timeout = 90) {
-    $model   = (string) apply_filters('mxchat_gemini_image_model', 'gemini-nano-banana-2.1');
+    // Plan 463f28: the catalog image section's Google default (gemini-nano-banana-2.1 today).
+    $model   = (string) apply_filters('mxchat_gemini_image_model', method_exists('MxChat_Model_Catalog', 'image_default_model') ? MxChat_Model_Catalog::image_default_model('gemini') : 'gemini-nano-banana-2.1');
     $api_url = 'https://generativelanguage.googleapis.com/v1beta/models/' . rawurlencode($model) . ':generateContent';
 
     $body = wp_json_encode([
@@ -4078,7 +4497,79 @@ public function mxchat_handle_image_search_request($message, $user_id, $session_
  * @return string The refined search query
  */
 public function mxchat_interpret_search_query($user_query) {
-    $system_prompt = esc_html__("Interpret the user's request to provide only the essential keywords or phrases for image searching. Remove conversational language, politeness, or extra context. Return a concise search query that doesn't lose any of the original meaning.", 'mxchat');
+    // plan 036577 — every provider's answer goes through one cleanup: a model
+    // that wraps the query in markdown, quotes or a period would otherwise put
+    // them in the Brave query and in the "Here are some images of" line.
+    $query = $this->mxchat_interpret_search_query_raw($user_query);
+    $clean = $this->mxchat_clean_search_query($query);
+    return $clean !== '' ? $clean : $query;
+}
+
+/**
+ * Strip markdown emphasis / code marks, one pair of surrounding quotes and a
+ * trailing period from a rewritten search query (plan 036577). An ellipsis or
+ * an abbreviation's inner periods stay ("U.S. parks").
+ */
+private function mxchat_clean_search_query($query) {
+    $q = trim((string) $query);
+    $q = trim(preg_replace('/\*+|`+|(?<![A-Za-z0-9])__+|__+(?![A-Za-z0-9])/', '', $q));
+    $quotes = array('"' => '"', "'" => "'", "\u{201C}" => "\u{201D}", "\u{2018}" => "\u{2019}");
+    foreach ($quotes as $open => $close) {
+        if (strlen($q) > strlen($open) + strlen($close) && strpos($q, $open) === 0 && substr($q, -strlen($close)) === $close) {
+            $q = trim(substr($q, strlen($open), -strlen($close)));
+            break;
+        }
+    }
+    if (substr($q, -1) === '.' && substr($q, -3) !== '...') {
+        $q = rtrim(substr($q, 0, -1));
+    }
+    return $q;
+}
+
+/**
+ * Output budget for a search query rewrite (plan a36651). A reasoning model
+ * spends its budget thinking first: at the old 20-token cap every reasoning
+ * gpt-5 / gpt-6 id answered an empty query (finish_reason length, 20
+ * reasoning tokens), and 20 also cut a long multi-attribute question mid-word
+ * on the non-reasoning OpenAI, Claude and DeepSeek ids. 256 leaves room for
+ * the thoughts and a short query on a model that may reason (as Gemini,
+ * be6cbb); 48 bounds the query alone elsewhere (as xAI, 8e065b).
+ *
+ * @param string $model Model id the rewrite is sent to.
+ * @return int
+ */
+private function mxchat_search_query_token_cap($model) {
+    $model = (string) $model;
+    $modern_openai = (class_exists('MxChat_Model_Catalog') && method_exists('MxChat_Model_Catalog', 'is_modern_openai'))
+        ? MxChat_Model_Catalog::is_modern_openai($model)
+        : (strpos($model, 'gpt-5') === 0 || strpos($model, 'gpt-6') === 0);
+    $thinking_claude = strpos($model, 'claude-fable-') === 0 || strpos($model, 'claude-opus-5') === 0; // as mxchat_claude_max_tokens()
+    return ($modern_openai || $thinking_claude) ? 256 : 48;
+}
+
+/**
+ * The rewritten query from an OpenAI-compatible chat completion (plan a36651).
+ * A reply the cap cut off, or an empty one, is never used: the visitor's
+ * message is searched instead, as on the Gemini and xAI paths.
+ *
+ * @param mixed  $body       Decoded response body.
+ * @param string $user_query The visitor's message.
+ * @return string
+ */
+private function mxchat_search_query_from_chat_body($body, $user_query) {
+    $finish_reason = isset($body['choices'][0]['finish_reason']) ? (string) $body['choices'][0]['finish_reason'] : '';
+    $content = (isset($body['choices'][0]['message']['content']) && is_string($body['choices'][0]['message']['content']))
+        ? sanitize_text_field(trim($body['choices'][0]['message']['content']))
+        : '';
+    if ($finish_reason === 'length' || $content === '') {
+        return sanitize_text_field($user_query);
+    }
+    return $content;
+}
+
+private function mxchat_interpret_search_query_raw($user_query) {
+    $system_prompt = esc_html__("Interpret the user's request to provide only the essential keywords or phrases for image searching. Remove conversational language, politeness, or extra context. Return a concise search query that doesn't lose any of the original meaning.", 'mxchat')
+        . ' ' . esc_html__('Reply with the plain search query only: no markdown, no quotes and no trailing period.', 'mxchat');
 
     // Get options and determine the selected model
     $options = $this->options ?? get_option('mxchat_options');
@@ -4155,10 +4646,15 @@ private function interpret_query_with_custom($user_query, $system_prompt) {
             ['role' => 'system', 'content' => $system_prompt],
             ['role' => 'user',   'content' => sanitize_text_field($user_query)],
         ],
-        $token_key => 20,
+        $token_key => $this->mxchat_search_query_token_cap($cfg['model']), // plan a36651 (was 20)
     ];
     if ($this->mxchat_openai_supports_temperature_for($cfg['model'])) {
         $payload['temperature'] = 0.2;
+    }
+    // The catalog's reasoning level, as the custom chat path sends (plan a36651).
+    $effort = $this->mxchat_reasoning_effort_for($cfg['model'], 'chat');
+    if ($effort !== null) {
+        $payload['reasoning_effort'] = $effort;
     }
     $args = [
         'headers' => $this->mxchat_custom_provider_assoc_headers($cfg),
@@ -4167,13 +4663,18 @@ private function interpret_query_with_custom($user_query, $system_prompt) {
         'timeout' => 15,
     ];
     $response = wp_remote_post($cfg['chat_url'], $args);
+    if (!is_wp_error($response) && isset($payload['reasoning_effort'])
+        && $this->mxchat_is_reasoning_effort_rejection(wp_remote_retrieve_response_code($response), wp_remote_retrieve_body($response))) {
+        unset($payload['reasoning_effort']); // retry once without it (plan 25b972)
+        $args['body'] = wp_json_encode($payload);
+        $response = wp_remote_post($cfg['chat_url'], $args);
+    }
     if (is_wp_error($response)) {
         return sanitize_text_field($user_query);
     }
     $body = json_decode(wp_remote_retrieve_body($response), true);
-    return isset($body['choices'][0]['message']['content'])
-        ? sanitize_text_field(trim($body['choices'][0]['message']['content']))
-        : sanitize_text_field($user_query);
+    $this->mxchat_usage_add_retrieval('chat', is_array($body) && isset($body['usage']) ? $body['usage'] : null); // plan 65366b
+    return $this->mxchat_search_query_from_chat_body($body, $user_query);
 }
 
 /**
@@ -4211,10 +4712,15 @@ private function interpret_query_with_openai($user_query, $system_prompt, $api_k
             ['role' => 'system', 'content' => $system_prompt],
             ['role' => 'user', 'content' => sanitize_text_field($user_query)],
         ],
-        $token_key => 20,
+        $token_key => $this->mxchat_search_query_token_cap($model), // plan a36651 (was 20)
     ];
     if ($this->mxchat_openai_supports_temperature_for($model)) {
         $payload['temperature'] = 0.2;
+    }
+    // The catalog's reasoning level, as the chat path sends (plan a36651).
+    $effort = $this->mxchat_reasoning_effort_for($model, 'chat');
+    if ($effort !== null) {
+        $payload['reasoning_effort'] = $effort;
     }
     $args = [
         'headers' => [
@@ -4227,14 +4733,19 @@ private function interpret_query_with_openai($user_query, $system_prompt, $api_k
     ];
 
     $response = wp_remote_post($url, $args);
+    if (!is_wp_error($response) && isset($payload['reasoning_effort'])
+        && $this->mxchat_is_reasoning_effort_rejection(wp_remote_retrieve_response_code($response), wp_remote_retrieve_body($response))) {
+        unset($payload['reasoning_effort']); // retry once without it (plan 25b972)
+        $args['body'] = wp_json_encode($payload);
+        $response = wp_remote_post($url, $args);
+    }
     if (is_wp_error($response)) {
         return sanitize_text_field($user_query);
     }
 
     $body = json_decode(wp_remote_retrieve_body($response), true);
-    return isset($body['choices'][0]['message']['content']) 
-        ? sanitize_text_field(trim($body['choices'][0]['message']['content'])) 
-        : sanitize_text_field($user_query);
+    $this->mxchat_usage_add_retrieval('chat', is_array($body) && isset($body['usage']) ? $body['usage'] : null); // plan 65366b
+    return $this->mxchat_search_query_from_chat_body($body, $user_query);
 }
 
 /**
@@ -4398,7 +4909,7 @@ private function interpret_query_with_claude($user_query, $system_prompt, $api_k
         'messages' => [
             ['role' => 'user', 'content' => sanitize_text_field($user_query)]
         ],
-        'max_tokens' => 20,
+        'max_tokens' => $this->mxchat_search_query_token_cap($model), // plan a36651 (was 20)
         'temperature' => 0.2,
     ];
     if ($this->mxchat_claude_omits_temperature($model)) { unset($payload['temperature']); }
@@ -4420,6 +4931,11 @@ private function interpret_query_with_claude($user_query, $system_prompt, $api_k
     }
 
     $body = json_decode(wp_remote_retrieve_body($response), true);
+    $this->mxchat_usage_add_retrieval('claude', is_array($body) && isset($body['usage']) ? $body['usage'] : null); // plan 65366b
+    // A reply the cap cut off is never used (plan a36651, as be6cbb / 8e065b).
+    if (isset($body['stop_reason']) && $body['stop_reason'] === 'max_tokens') {
+        return sanitize_text_field($user_query);
+    }
     // claude-fable-5 prepends a thinking block to content — take the first
     // TEXT block, not content[0].
     foreach ((array) ($body['content'] ?? array()) as $block) {
@@ -4440,7 +4956,7 @@ private function interpret_query_with_gemini($user_query, $system_prompt, $api_k
     }
     // v1beta for every model (plan be6cbb): thinkingConfig is accepted there, and
     // the chat path already sends every Gemini request to v1beta.
-    $url = "https://generativelanguage.googleapis.com/v1beta/models/{$model}:generateContent?key=" . urlencode($api_key);
+    $url = "https://generativelanguage.googleapis.com/v1beta/models/{$model}:generateContent";
 
     // A thinking model spends its output budget on thoughts first. With a 20-token
     // cap and no thinking setting, every Gemini 3 Flash and Pro id answered
@@ -4462,7 +4978,8 @@ private function interpret_query_with_gemini($user_query, $system_prompt, $api_k
 
     $args = [
         'headers' => [
-            'Content-Type' => 'application/json',
+            'Content-Type'   => 'application/json',
+            'x-goog-api-key' => $api_key, // plan f4c0bf: key in a header, never the URL
         ],
         'body' => wp_json_encode([
             'contents' => [
@@ -4485,6 +5002,7 @@ private function interpret_query_with_gemini($user_query, $system_prompt, $api_k
     }
 
     $body = json_decode(wp_remote_retrieve_body($response), true);
+    $this->mxchat_usage_add_retrieval('gemini', is_array($body) && isset($body['usageMetadata']) ? $body['usageMetadata'] : null); // plan 65366b
     // A reply the cap cut off is never used: "red" would pass the not-empty test
     // below and be searched in place of the visitor's sentence (plan be6cbb).
     $finish_reason = isset($body['candidates'][0]['finishReason']) ? (string) $body['candidates'][0]['finishReason'] : '';
@@ -4548,6 +5066,7 @@ private function interpret_query_with_xai($user_query, $system_prompt, $api_key,
     }
 
     $body = json_decode(wp_remote_retrieve_body($response), true);
+    $this->mxchat_usage_add_retrieval('chat', is_array($body) && isset($body['usage']) ? $body['usage'] : null); // plan 65366b
     // A reply the cap cut off is never used (plan 8e065b, as be6cbb for Gemini):
     // "... pit z" would pass the not-empty test below and be searched.
     $finish_reason = isset($body['choices'][0]['finish_reason']) ? (string) $body['choices'][0]['finish_reason'] : '';
@@ -4583,9 +5102,9 @@ private function interpret_query_with_deepseek($user_query, $system_prompt, $api
                 ['role' => 'user', 'content' => sanitize_text_field($user_query)],
             ],
             'temperature' => 0.2,
-            'max_tokens' => 20,
+            'max_tokens' => $this->mxchat_search_query_token_cap($model), // plan a36651 (was 20)
             // DeepSeek V4 defaults to thinking mode ON (temperature ignored,
-            // reasoning burns the 20-token budget); keep the legacy
+            // reasoning burns the token budget); keep the legacy
             // deepseek-chat semantics = non-thinking.
             'thinking' => ['type' => 'disabled'],
         ]),
@@ -4599,11 +5118,8 @@ private function interpret_query_with_deepseek($user_query, $system_prompt, $api
     }
     
     $body = json_decode(wp_remote_retrieve_body($response), true);
-    if (isset($body['choices'][0]['message']['content'])) {
-        return sanitize_text_field(trim($body['choices'][0]['message']['content']));
-    }
-    
-    return sanitize_text_field($user_query);
+    $this->mxchat_usage_add_retrieval('chat', is_array($body) && isset($body['usage']) ? $body['usage'] : null); // plan 65366b
+    return $this->mxchat_search_query_from_chat_body($body, $user_query); // plan a36651
 }
 
 //very good
@@ -4706,14 +5222,22 @@ private function mxchat_fetch_pdf_body($pdf_url) {
     if (!$this->mxchat_is_safe_pdf_url($pdf_url)) {
         return false;
     }
+    // Downloads stop at a size cap (filter mxchat_pdf_max_download_bytes, default 20 MB);
+    // a file that reaches it is refused rather than parsed half-read.
+    $max_bytes = (int) apply_filters('mxchat_pdf_max_download_bytes', 20 * MB_IN_BYTES);
     $response = wp_safe_remote_get($pdf_url, [
-        'timeout' => 60,
-        'headers' => ['User-Agent' => function_exists('mxchat_ingest_user_agent') ? mxchat_ingest_user_agent() : 'MxChat PDF Processor']
+        'timeout'             => 60,
+        'limit_response_size' => $max_bytes > 0 ? $max_bytes + 1 : null,
+        'headers'             => ['User-Agent' => function_exists('mxchat_ingest_user_agent') ? mxchat_ingest_user_agent() : 'MxChat PDF Processor']
     ]);
     if (is_wp_error($response) || wp_remote_retrieve_response_code($response) !== 200) {
         return false;
     }
-    return (string) wp_remote_retrieve_body($response);
+    $body = (string) wp_remote_retrieve_body($response);
+    if ($max_bytes > 0 && strlen($body) > $max_bytes) {
+        return false;
+    }
+    return $body;
 }
 
 /**
@@ -4835,6 +5359,7 @@ private function fetch_and_split_pdf_pages($pdf_source, $max_pages, $prefetched_
             $body = is_string($prefetched_body) ? $prefetched_body : $this->mxchat_fetch_pdf_body($pdf_source);
             if ($body === false) {
                 //error_log("BASIC PROCESSING: Failed to download PDF");
+                @unlink($temp_file); // plan 8f33c2: no empty temp file per failed link
                 return false;
             }
 
@@ -7436,6 +7961,16 @@ private function mxchat_generate_embedding($text, $api_key) {
         $options = get_option('mxchat_options');
         $selected_model = $options['embedding_model'] ?? 'text-embedding-ada-002';
 
+        // plan f6ac97: the same text with the same key and embedding settings
+        // as the last successful call in this request gets that call's vector
+        // (the Actions match and the knowledge base search used to embed the
+        // visitor's message twice per turn). A different model, key or text
+        // (a rewritten retrieval query) still makes its own call.
+        $memo_key = md5(serialize(array((string) $text, (string) $api_key, $options)));
+        if (is_array($this->mxchat_embedding_memo) && $this->mxchat_embedding_memo['key'] === $memo_key) {
+            return $this->mxchat_embedding_memo['vector'];
+        }
+
         // Contract checks live HERE — the widget surfaces these exact strings
         // and codes. Transport lives in MxChat_Utils::generate_query_embedding()
         // (single provider-routing implementation for query + index, 876edb).
@@ -7481,6 +8016,10 @@ private function mxchat_generate_embedding($text, $api_key) {
 
         if (is_wp_error($result)) {
             return $this->mxchat_map_embedding_error($result);
+        }
+
+        if (is_array($result) && !empty($result) && !isset($result['error'])) {
+            $this->mxchat_embedding_memo = array('key' => $memo_key, 'vector' => $result, 'counted' => false);
         }
 
         return $result;
@@ -7582,25 +8121,30 @@ private function mxchat_map_embedding_error($err) {
     ];
 }
 
+/**
+ * plan f6ac97: whether the OpenAI Vector Store serves this bot's knowledge base
+ * search: it is turned on for the bot and the bot's chat model is an OpenAI
+ * one (otherwise Pinecone or the WordPress database does). The one rule
+ * mxchat_find_relevant_content() routes by and the chat handler reads to
+ * leave out a query embedding nothing would use.
+ */
+private function mxchat_vectorstore_serves_turn($bot_id) {
+    $bot_vectorstore_config = $this->get_bot_vectorstore_config($bot_id);
+    if (empty($bot_vectorstore_config['use_vectorstore'])) {
+        return false;
+    }
+    $bot_options = $this->get_bot_options($bot_id);
+    $current_options = !empty($bot_options) ? $bot_options : get_option('mxchat_options', array());
+    return $this->is_openai_chat_model($current_options['model'] ?? 'gpt-5.6-sol');
+}
+
 private function mxchat_find_relevant_content($user_embedding, $bot_id = 'default', $user_query = '') {
     //error_log("MXCHAT DEBUG: find_relevant_content called with bot_id: " . $bot_id);
 
-    // Check for OpenAI Vector Store first (takes priority when enabled)
-    $bot_vectorstore_config = $this->get_bot_vectorstore_config($bot_id);
-
-    if ($bot_vectorstore_config['use_vectorstore']) {
-        // Get current model to verify it's an OpenAI model
-        $bot_options = $this->get_bot_options($bot_id);
-        $mxchat_options = get_option('mxchat_options', array());
-        $current_options = !empty($bot_options) ? $bot_options : $mxchat_options;
-        $selected_model = $current_options['model'] ?? 'gpt-5.6-sol';
-
-        if ($this->is_openai_chat_model($selected_model)) {
-            //error_log("MXCHAT DEBUG: Using OpenAI Vector Store for knowledge retrieval");
-            return $this->find_relevant_content_openai_vectorstore($user_query, $bot_id, $bot_vectorstore_config);
-        } else {
-            //error_log("MXCHAT DEBUG: Vector Store enabled but model is not OpenAI (" . $selected_model . "), skipping Vector Store");
-        }
+    // Check for OpenAI Vector Store first (takes priority when enabled, and
+    // only with an OpenAI chat model; see mxchat_vectorstore_serves_turn()).
+    if ($this->mxchat_vectorstore_serves_turn($bot_id)) {
+        return $this->find_relevant_content_openai_vectorstore($user_query, $bot_id, $this->get_bot_vectorstore_config($bot_id));
     }
 
     // Get bot-specific Pinecone configuration
@@ -9634,6 +10178,9 @@ private function find_relevant_content_openai_vectorstore($user_query, $bot_id =
         return '';
     }
     $result = json_decode($response_body, true);
+    // plan 65366b: the file_search call runs on the chat model and is billed;
+    // its tokens show beside the reply as the retrieval figure.
+    $this->mxchat_usage_add_retrieval('responses', is_array($result) && isset($result['usage']) ? $result['usage'] : null);
 
     if (json_last_error() !== JSON_ERROR_NONE) {
         //error_log("MXCHAT VECTORSTORE ERROR: JSON decode error: " . json_last_error_msg());
@@ -10748,6 +11295,12 @@ private function mxchat_fc_execute_tool_inner($tool_name, $args, $orig_message, 
         'similarity_threshold' => 0.0, 'enabled' => 1, 'enabled_bots' => null,
     );
 
+    // plan 77f518 — core search / image callbacks save their own bot rows
+    // (intro text, gallery, raw web results). Under AI Tools the visitor sees
+    // the model's reply plus the tool's html instead, so mute those saves; the
+    // html is queued below and saved after the reply, like an add-on's.
+    $mute_saves = empty($tool['is_addon'])
+        && (!empty($tool['ui_self_saves']) || $fn === 'mxchat_handle_search_request');
     try {
         if (!empty($tool['is_addon'])) {
             // plan 347b62 — the model's FULL argument object rides along as a
@@ -10757,6 +11310,7 @@ private function mxchat_fc_execute_tool_inner($tool_name, $args, $orig_message, 
             $fc_args = $this->mxchat_fc_args_for_handler($args, $tool);
             $result = apply_filters($fn, false, $query, $user_id, $session_id, $synthetic_intent, $fc_args);
         } elseif (method_exists($this, $fn)) {
+            $this->mxchat_fc_mute_saves = $mute_saves;
             $result = call_user_func(array($this, $fn), $query, $user_id, $session_id, $synthetic_intent, null);
         } else {
             return array('ok' => false, 'content' => 'Tool implementation not found.');
@@ -10764,6 +11318,8 @@ private function mxchat_fc_execute_tool_inner($tool_name, $args, $orig_message, 
     } catch (\Throwable $e) {
         $this->mxchat_fc_log("tool {$fn} threw: " . $e->getMessage());
         return array('ok' => false, 'content' => 'The tool failed to run.');
+    } finally {
+        $this->mxchat_fc_mute_saves = false;
     }
 
     // plan-mxchat-20260617-48a57a — surface UI-bearing tool output.
@@ -10790,6 +11346,9 @@ private function mxchat_fc_execute_tool_inner($tool_name, $args, $orig_message, 
         $self_saves = array_key_exists('ui_self_saves', $tool)
             ? !empty($tool['ui_self_saves'])
             : empty($tool['is_addon']);
+        if ($mute_saves) {
+            $self_saves = false; // plan 77f518: its own save was muted above
+        }
         if ($ui['html'] !== '' && !$self_saves) {
             // plan 73468d — do NOT persist here. An execute-time save lands
             // BEFORE the model's caption text in the transcript, so replay
@@ -11147,8 +11706,8 @@ private function mxchat_fc_loop_gemini($prov, $system, $relevant_content, $conve
     // v1beta/models/gemini-3.5-flash:generateContent). v1beta is a superset, so every model
     // reachable on v1 is also reachable here.
     $api_version = 'v1beta';
-    $url = 'https://generativelanguage.googleapis.com/' . $api_version . '/models/' . $prov['model'] . ':generateContent?key=' . $prov['key'];
-    $headers = array('Content-Type' => 'application/json');
+    $url = 'https://generativelanguage.googleapis.com/' . $api_version . '/models/' . $prov['model'] . ':generateContent';
+    $headers = array('Content-Type' => 'application/json', 'x-goog-api-key' => $prov['key']); // plan f4c0bf
     $used_tool = false;
     $calls_made = 0;
     $tool_texts = array();
@@ -11725,6 +12284,30 @@ private function mxchat_generate_response($relevant_content, $api_key, $xai_api_
         return $error_response;
     }
 }
+/**
+ * Let developers adjust a streamed chat request before cURL sends it (plan 2ae397).
+ *
+ * Streamed replies use cURL directly, so WordPress's http_request_args filter
+ * never sees them. Every streaming path passes its request through here, and
+ * the mxchat_stream_request filter can add a header (a proxy's customer id,
+ * for example), point the request at another URL or change the JSON body.
+ * With no filter attached the url, headers and body go out exactly as built,
+ * and an unchanged body is never re-encoded.
+ *
+ * @param string $url      Endpoint.
+ * @param array  $headers  cURL header lines ('Name: value').
+ * @param string $body     JSON body as built by the caller.
+ * @param string $provider openrouter, openai, openai_responses, custom, claude, xai or deepseek.
+ * @param string $model    Model id.
+ * @param string $bot_id   Bot the reply is for.
+ * @return array [url, headers, body]
+ */
+private function mxchat_stream_request_args($url, array $headers, $body, $provider, $model, $bot_id = 'default') {
+    // plan d46bd3: the filter logic lives in MxChat_Utils so the admin streaming
+    // test and the Editor Assistant stream share it.
+    return MxChat_Utils::filter_stream_request($url, $headers, $body, $provider, $model, $bot_id);
+}
+
 private function mxchat_generate_response_openrouter_stream($selected_model, $openrouter_api_key, $conversation_history, $relevant_content, $session_id, $testing_data = null) {
     try {
         $bot_id = $this->get_current_bot_id($session_id);
@@ -11820,16 +12403,25 @@ private function mxchat_generate_response_openrouter_stream($selected_model, $op
             $this->mxchat_usage_stream_begin('chat', $selected_model); // plan 705b6c
 
             $ch = curl_init();
-            curl_setopt($ch, CURLOPT_URL, 'https://openrouter.ai/api/v1/chat/completions');
+            // plan 2ae397: mxchat_stream_request may add headers or change the url / body.
+            list($stream_url, $stream_headers, $stream_body) = $this->mxchat_stream_request_args(
+                'https://openrouter.ai/api/v1/chat/completions',
+                array(
+                    'Content-Type: application/json',
+                    'Authorization: Bearer ' . $openrouter_api_key,
+                    'HTTP-Referer: ' . home_url(),
+                    'X-Title: ' . get_bloginfo('name')
+                ),
+                $body,
+                'openrouter',
+                $selected_model,
+                $bot_id
+            );
+            curl_setopt($ch, CURLOPT_URL, $stream_url);
             curl_setopt($ch, CURLOPT_RETURNTRANSFER, false);
             curl_setopt($ch, CURLOPT_POST, true);
-            curl_setopt($ch, CURLOPT_POSTFIELDS, $body);
-            curl_setopt($ch, CURLOPT_HTTPHEADER, array(
-                'Content-Type: application/json',
-                'Authorization: Bearer ' . $openrouter_api_key,
-                'HTTP-Referer: ' . home_url(),
-                'X-Title: ' . get_bloginfo('name')
-            ));
+            curl_setopt($ch, CURLOPT_POSTFIELDS, $stream_body);
+            curl_setopt($ch, CURLOPT_HTTPHEADER, $stream_headers);
             curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, true);
             curl_setopt($ch, CURLOPT_TIMEOUT, 60);
 
@@ -12079,14 +12671,23 @@ private function mxchat_generate_response_openai_stream($selected_model, $api_ke
             $this->mxchat_usage_stream_begin('chat', $selected_model); // plan 705b6c
 
             $ch = curl_init();
-            curl_setopt($ch, CURLOPT_URL, 'https://api.openai.com/v1/chat/completions');
+            // plan 2ae397: mxchat_stream_request may add headers or change the url / body.
+            list($stream_url, $stream_headers, $stream_body) = $this->mxchat_stream_request_args(
+                'https://api.openai.com/v1/chat/completions',
+                array(
+                    'Content-Type: application/json',
+                    'Authorization: Bearer ' . $api_key
+                ),
+                $body,
+                'openai',
+                $selected_model,
+                $bot_id
+            );
+            curl_setopt($ch, CURLOPT_URL, $stream_url);
             curl_setopt($ch, CURLOPT_RETURNTRANSFER, false);
             curl_setopt($ch, CURLOPT_POST, true);
-            curl_setopt($ch, CURLOPT_POSTFIELDS, $body);
-            curl_setopt($ch, CURLOPT_HTTPHEADER, array(
-                'Content-Type: application/json',
-                'Authorization: Bearer ' . $api_key
-            ));
+            curl_setopt($ch, CURLOPT_POSTFIELDS, $stream_body);
+            curl_setopt($ch, CURLOPT_HTTPHEADER, $stream_headers);
             curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, true);
             curl_setopt($ch, CURLOPT_TIMEOUT, 60);
 
@@ -12478,11 +13079,20 @@ private function mxchat_generate_response_custom_stream($selected_model, $conver
             $this->mxchat_usage_stream_begin('chat', $cfg['model']); // plan 705b6c
 
             $ch = curl_init();
-            curl_setopt($ch, CURLOPT_URL, $cfg['chat_url']);
+            // plan 2ae397: mxchat_stream_request may add headers or change the url / body.
+            list($stream_url, $stream_headers, $stream_body) = $this->mxchat_stream_request_args(
+                $cfg['chat_url'],
+                $cfg['headers'],
+                $body,
+                'custom',
+                $cfg['model'],
+                $bot_id
+            );
+            curl_setopt($ch, CURLOPT_URL, $stream_url);
             curl_setopt($ch, CURLOPT_RETURNTRANSFER, false);
             curl_setopt($ch, CURLOPT_POST, true);
-            curl_setopt($ch, CURLOPT_POSTFIELDS, $body);
-            curl_setopt($ch, CURLOPT_HTTPHEADER, $cfg['headers']);
+            curl_setopt($ch, CURLOPT_POSTFIELDS, $stream_body);
+            curl_setopt($ch, CURLOPT_HTTPHEADER, $stream_headers);
             curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, true);
             curl_setopt($ch, CURLOPT_TIMEOUT, 120);
 
@@ -12906,14 +13516,23 @@ private function mxchat_web_search_streaming_response($request_body, $api_key, $
     $this->setup_streaming_headers();
 
     $ch = curl_init();
-    curl_setopt($ch, CURLOPT_URL, 'https://api.openai.com/v1/responses');
+    // plan 2ae397: mxchat_stream_request may add headers or change the url / body.
+    list($stream_url, $stream_headers, $stream_body) = $this->mxchat_stream_request_args(
+        'https://api.openai.com/v1/responses',
+        array(
+            'Content-Type: application/json',
+            'Authorization: Bearer ' . $api_key
+        ),
+        json_encode($request_body),
+        'openai_responses',
+        (isset($request_body['model']) ? (string) $request_body['model'] : ''),
+        $bot_id
+    );
+    curl_setopt($ch, CURLOPT_URL, $stream_url);
     curl_setopt($ch, CURLOPT_RETURNTRANSFER, false);
     curl_setopt($ch, CURLOPT_POST, true);
-    curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($request_body));
-    curl_setopt($ch, CURLOPT_HTTPHEADER, array(
-        'Content-Type: application/json',
-        'Authorization: Bearer ' . $api_key
-    ));
+    curl_setopt($ch, CURLOPT_POSTFIELDS, $stream_body);
+    curl_setopt($ch, CURLOPT_HTTPHEADER, $stream_headers);
     curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, true);
     curl_setopt($ch, CURLOPT_TIMEOUT, 120);
 
@@ -13180,15 +13799,24 @@ private function mxchat_generate_response_claude_stream($selected_model, $claude
             $this->mxchat_usage_stream_begin('claude', $selected_model); // plan 705b6c
 
             $ch = curl_init();
-            curl_setopt($ch, CURLOPT_URL, 'https://api.anthropic.com/v1/messages');
+            // plan 2ae397: mxchat_stream_request may add headers or change the url / body.
+            list($stream_url, $stream_headers, $stream_body) = $this->mxchat_stream_request_args(
+                'https://api.anthropic.com/v1/messages',
+                array(
+                    'Content-Type: application/json',
+                    'x-api-key: ' . $claude_api_key,
+                    'anthropic-version: 2023-06-01'
+                ),
+                $body,
+                'claude',
+                $selected_model,
+                $bot_id
+            );
+            curl_setopt($ch, CURLOPT_URL, $stream_url);
             curl_setopt($ch, CURLOPT_RETURNTRANSFER, false);
             curl_setopt($ch, CURLOPT_POST, true);
-            curl_setopt($ch, CURLOPT_POSTFIELDS, $body);
-            curl_setopt($ch, CURLOPT_HTTPHEADER, array(
-                'Content-Type: application/json',
-                'x-api-key: ' . $claude_api_key,
-                'anthropic-version: 2023-06-01'
-            ));
+            curl_setopt($ch, CURLOPT_POSTFIELDS, $stream_body);
+            curl_setopt($ch, CURLOPT_HTTPHEADER, $stream_headers);
             curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, true);
             curl_setopt($ch, CURLOPT_TIMEOUT, 60);
 
@@ -13440,14 +14068,23 @@ private function mxchat_generate_response_xai_stream($selected_model, $xai_api_k
             $this->mxchat_usage_stream_begin('chat', $selected_model); // plan 705b6c
 
             $ch = curl_init();
-            curl_setopt($ch, CURLOPT_URL, 'https://api.x.ai/v1/chat/completions');
+            // plan 2ae397: mxchat_stream_request may add headers or change the url / body.
+            list($stream_url, $stream_headers, $stream_body) = $this->mxchat_stream_request_args(
+                'https://api.x.ai/v1/chat/completions',
+                array(
+                    'Content-Type: application/json',
+                    'Authorization: Bearer ' . $xai_api_key
+                ),
+                $body,
+                'xai',
+                $selected_model,
+                $bot_id
+            );
+            curl_setopt($ch, CURLOPT_URL, $stream_url);
             curl_setopt($ch, CURLOPT_RETURNTRANSFER, false);
             curl_setopt($ch, CURLOPT_POST, true);
-            curl_setopt($ch, CURLOPT_POSTFIELDS, $body);
-            curl_setopt($ch, CURLOPT_HTTPHEADER, array(
-                'Content-Type: application/json',
-                'Authorization: Bearer ' . $xai_api_key
-            ));
+            curl_setopt($ch, CURLOPT_POSTFIELDS, $stream_body);
+            curl_setopt($ch, CURLOPT_HTTPHEADER, $stream_headers);
             curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, true);
             curl_setopt($ch, CURLOPT_TIMEOUT, 60);
 
@@ -13680,14 +14317,23 @@ private function mxchat_generate_response_deepseek_stream($selected_model, $deep
             $this->mxchat_usage_stream_begin('chat', $selected_model); // plan 705b6c
 
             $ch = curl_init();
-            curl_setopt($ch, CURLOPT_URL, 'https://api.deepseek.com/v1/chat/completions');
+            // plan 2ae397: mxchat_stream_request may add headers or change the url / body.
+            list($stream_url, $stream_headers, $stream_body) = $this->mxchat_stream_request_args(
+                'https://api.deepseek.com/v1/chat/completions',
+                array(
+                    'Content-Type: application/json',
+                    'Authorization: Bearer ' . $deepseek_api_key
+                ),
+                $body,
+                'deepseek',
+                $selected_model,
+                $bot_id
+            );
+            curl_setopt($ch, CURLOPT_URL, $stream_url);
             curl_setopt($ch, CURLOPT_RETURNTRANSFER, false);
             curl_setopt($ch, CURLOPT_POST, true);
-            curl_setopt($ch, CURLOPT_POSTFIELDS, $body);
-            curl_setopt($ch, CURLOPT_HTTPHEADER, array(
-                'Content-Type: application/json',
-                'Authorization: Bearer ' . $deepseek_api_key
-            ));
+            curl_setopt($ch, CURLOPT_POSTFIELDS, $stream_body);
+            curl_setopt($ch, CURLOPT_HTTPHEADER, $stream_headers);
             curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, true);
             curl_setopt($ch, CURLOPT_TIMEOUT, 60);
 
@@ -14042,6 +14688,73 @@ private function mxchat_usage_add($shape, $model, $raw) {
     $this->mxchat_reply_usage = $acc;
 }
 
+/**
+ * plan 93f0bd: fold the input tokens of the query embedding just made into
+ * this turn's retrieval figure (beside 65366b's vector store and query-rewrite
+ * tokens). Reads what MxChat_Utils recorded for that call; an older Utils
+ * without the getter, a failed call or a provider that reports no usage
+ * (Gemini embedContent) adds nothing.
+ */
+private function mxchat_usage_add_query_embedding($embedding) {
+    // plan f6ac97: a vector reused from the request's earlier call was not
+    // billed again, so it is counted once (with that call).
+    if (is_array($this->mxchat_embedding_memo) && $embedding === $this->mxchat_embedding_memo['vector']) {
+        if ($this->mxchat_embedding_memo['counted']) {
+            return;
+        }
+        $this->mxchat_embedding_memo['counted'] = true;
+    }
+    if (!is_array($embedding) || isset($embedding['error'])
+        || !class_exists('MxChat_Utils') || !method_exists('MxChat_Utils', 'last_embedding_usage')) {
+        return;
+    }
+    $u = MxChat_Utils::last_embedding_usage();
+    if (is_array($u) && isset($u['in'])) {
+        $this->mxchat_usage_add_retrieval('chat', array('prompt_tokens' => (int) $u['in']));
+    }
+}
+
+/** plan 65366b: add one retrieval / search query-rewrite call's usage (in and out), kept apart from the reply's. */
+private function mxchat_usage_add_retrieval($shape, $raw) {
+    $u = $this->mxchat_usage_normalize($shape, $raw);
+    if ($u === null) {
+        return;
+    }
+    $acc = is_array($this->mxchat_retrieval_usage) ? $this->mxchat_retrieval_usage : array('in' => null, 'out' => null);
+    foreach (array('in', 'out') as $k) {
+        if ($u[$k] !== null) {
+            $acc[$k] = (int) $acc[$k] + $u[$k];
+        }
+    }
+    $this->mxchat_retrieval_usage = $acc;
+}
+
+/**
+ * plan 85d8b7: listener for do_action('mxchat_add_retrieval_usage', $tokens_in,
+ * $tokens_out) - an add-on hands over the usage of a retrieval call it made
+ * while answering this turn (mxchat-woo: each product-search embedding). Added
+ * to the turn's retrieval figure only, never to the reply's numbers; a value
+ * that is not a count (null, text) adds nothing.
+ */
+public function mxchat_add_external_retrieval_usage($tokens_in = null, $tokens_out = null) {
+    $this->mxchat_usage_add_retrieval('chat', array('prompt_tokens' => $tokens_in, 'completion_tokens' => $tokens_out));
+}
+
+/**
+ * plan a8610f: listener for do_action('mxchat_add_reply_usage', $model,
+ * $tokens_in, $tokens_out, $tokens_cached) - an add-on that writes the reply
+ * text itself (mxchat-woo's mxchat_call_ai_api replies) hands over that call's
+ * model and usage. Added to the reply's numbers like a core provider call; the
+ * first model reported is kept, and a value that is not a count adds nothing.
+ */
+public function mxchat_add_external_reply_usage($model = '', $tokens_in = null, $tokens_out = null, $tokens_cached = null) {
+    $raw = array('prompt_tokens' => $tokens_in, 'completion_tokens' => $tokens_out);
+    if ($tokens_cached !== null) {
+        $raw['prompt_tokens_details'] = array('cached_tokens' => $tokens_cached);
+    }
+    $this->mxchat_usage_add('chat', is_string($model) ? $model : '', $raw);
+}
+
 /** plan 705b6c: a provider stream is starting (called per attempt, so a retried connect starts clean). */
 private function mxchat_usage_stream_begin($shape, $model) {
     $this->mxchat_stream_usage = array('shape' => $shape, 'model' => (string) $model, 'raw' => array());
@@ -14093,6 +14806,14 @@ private function mxchat_usage_take() {
     $this->mxchat_usage_stream_commit();
     $u = $this->mxchat_reply_usage;
     $this->mxchat_reply_usage = null;
+    // plan 65366b: the retrieval / search figure rides along (also on a reply
+    // that made no AI call of its own, e.g. an image-search result).
+    $r = $this->mxchat_retrieval_usage;
+    $this->mxchat_retrieval_usage = null;
+    if (is_array($r)) {
+        $u = is_array($u) ? $u : array('model' => null, 'in' => null, 'cached' => null, 'out' => null);
+        $u['retrieval'] = $r;
+    }
     return is_array($u) ? $u : null;
 }
 
@@ -15206,13 +15927,14 @@ private function mxchat_generate_response_gemini($selected_model, $gemini_api_ke
     // Grounding (the google_search tool) is a v1beta feature, so force v1beta whenever
     // it's active — otherwise a stable model on v1 would silently drop the tool.
     $api_version = ($grounding_active || strpos($selected_model, 'preview') !== false || strpos($selected_model, 'exp') !== false) ? 'v1beta' : 'v1';
-    $api_endpoint = 'https://generativelanguage.googleapis.com/' . $api_version . '/models/' . $selected_model . ':generateContent?key=' . $gemini_api_key;
+    $api_endpoint = 'https://generativelanguage.googleapis.com/' . $api_version . '/models/' . $selected_model . ':generateContent';
     
     // Set up the API request
     $args = [
         'body'        => $body,
         'headers'     => [
-            'Content-Type' => 'application/json',
+            'Content-Type'   => 'application/json',
+            'x-goog-api-key' => $gemini_api_key, // plan f4c0bf: key in a header, never the URL
         ],
         'timeout'     => 60,
         'redirection' => 5,
@@ -15432,137 +16154,6 @@ private function mxchat_gemini_log_no_text($model, $http_code, $finish_reason, $
     ));
 }
 
-
-public function test_streaming_request() {
-    $options = get_option('mxchat_options', []);
-    $model = $options['model'] ?? 'gpt-5.6-sol';
-
-    // Detect provider from model prefix
-    $provider = strtolower(explode('-', $model)[0]);
-
-    $sample_prompt = 'Hello! Can you stream this response back to me?';
-    $messages = [['role' => 'user', 'content' => $sample_prompt]];
-    $headers = [];
-    $body = [];
-    $url = '';
-    $api_key = '';
-
-    switch ($provider) {
-        case 'gpt':
-        case 'o1':
-            $api_key = $options['api_key'] ?? '';
-            if (empty($api_key)) return '❌ Missing API key for OpenAI';
-            $url = 'https://api.openai.com/v1/chat/completions';
-            $headers = [
-                'Content-Type: application/json',
-                'Authorization: Bearer ' . $api_key
-            ];
-            $body = [
-                'model' => $model,
-                'messages' => $messages,
-                'stream' => true
-            ];
-            break;
-
-        case 'claude':
-            $api_key = $options['claude_api_key'] ?? '';
-            if (empty($api_key)) return '❌ Missing API key for Claude';
-            $url = 'https://api.anthropic.com/v1/messages';
-            $headers = [
-                'Content-Type: application/json',
-                'x-api-key: ' . $api_key,
-                'anthropic-version: 2023-06-01'
-            ];
-            $body = [
-                'model' => $model,
-                'messages' => $messages,
-                'max_tokens' => 100,
-                'stream' => true
-            ];
-            break;
-
-        case 'grok':
-            $api_key = $options['xai_api_key'] ?? '';
-            if (empty($api_key)) return '❌ Missing API key for X.AI';
-            $url = 'https://api.x.ai/v1/chat/completions';
-            $headers = [
-                'Content-Type: application/json',
-                'Authorization: Bearer ' . $api_key
-            ];
-            $body = [
-                'model' => $model,
-                'messages' => $messages,
-                'stream' => true
-            ];
-            break;
-
-        case 'deepseek':
-            if (empty($deepseek_api_key)) {
-                $error_response = [
-                    'error' => esc_html__('DeepSeek API key is not configured', 'mxchat'),
-                    'error_code' => 'missing_deepseek_api_key'
-                ];
-                if ($testing_data !== null) {
-                    $error_response['testing_data'] = $testing_data;
-                }
-                return $error_response;
-            }
-            if ($streaming) {
-                return $this->mxchat_generate_response_deepseek_stream(
-                    $selected_model,
-                    $deepseek_api_key,
-                    $conversation_history,
-                    $relevant_content,
-                    $session_id,
-                    $testing_data  // Pass testing data
-                );
-            } else {
-                $response = $this->mxchat_generate_response_deepseek(
-                    $selected_model,
-                    $deepseek_api_key,
-                    $conversation_history,
-                    $relevant_content,
-                    $session_id
-                );
-            }
-            break;
-
-        case 'gemini':
-            $api_key = $options['gemini_api_key'] ?? '';
-            if (empty($api_key)) return '❌ Missing API key for Gemini';
-            $url = 'https://generativelanguage.googleapis.com/v1beta/models/' . $model . ':streamGenerateContent?key=' . $api_key;
-            $headers = ['Content-Type: application/json'];
-            $body = [
-                'contents' => [['role' => 'user', 'parts' => [['text' => $sample_prompt]]]],
-                'generationConfig' => ['temperature' => 0.7]
-            ];
-            break;
-
-        default:
-            return '❌ Unsupported provider: ' . $provider;
-    }
-
-    // Do the actual streaming test
-    $ch = curl_init($url);
-    curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($body));
-    curl_setopt($ch, CURLOPT_HTTPHEADER, $headers);
-    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-    curl_setopt($ch, CURLOPT_TIMEOUT, 15);
-    curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, true);
-
-    $response = curl_exec($ch);
-    $http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-    $error = curl_error($ch);
-    curl_close($ch);
-
-    if ($error) return "❌ cURL error: $error";
-    if ($http_code !== 200) {
-        $error_message = json_decode($response, true)['error']['message'] ?? 'Unknown';
-        return "❌ HTTP $http_code: $error_message";
-    }
-
-    return true;
-}
 
 public function mxchat_dismiss_pre_chat_message() {
     // Get and sanitize the user identifier
@@ -15788,6 +16379,9 @@ public function mxchat_enqueue_scripts_styles($force = false) {
         'contextual_awareness_toggle' => isset($this->options['contextual_awareness_toggle']) ? $this->options['contextual_awareness_toggle'] : 'off',
         'link_target_toggle' => $this->options['link_target_toggle'] ?? 'off',
         'complianz_toggle' => isset($this->options['complianz_toggle']) && $this->options['complianz_toggle'] === 'on',
+        // Complianz is active on this site, so the widget waits for its script
+        // even when a Delay JavaScript setup holds it back (plan 352c55).
+        'complianz_active' => function_exists('cmplz_has_consent') || defined('cmplz_version'),
         'user_message_bg_color' => $this->options['user_message_bg_color'] ?? '#fff',
         'user_message_font_color' => $this->options['user_message_font_color'] ?? '#212121',
         'bot_message_bg_color' => $this->options['bot_message_bg_color'] ?? '#212121',
@@ -15872,6 +16466,9 @@ public function mxchat_output_delayed_script_loader() {
         'contextual_awareness_toggle' => isset($this->options['contextual_awareness_toggle']) ? $this->options['contextual_awareness_toggle'] : 'off',
         'link_target_toggle' => $this->options['link_target_toggle'] ?? 'off',
         'complianz_toggle' => isset($this->options['complianz_toggle']) && $this->options['complianz_toggle'] === 'on',
+        // Complianz is active on this site, so the widget waits for its script
+        // even when a Delay JavaScript setup holds it back (plan 352c55).
+        'complianz_active' => function_exists('cmplz_has_consent') || defined('cmplz_version'),
         'user_message_bg_color' => $this->options['user_message_bg_color'] ?? '#fff',
         'user_message_font_color' => $this->options['user_message_font_color'] ?? '#212121',
         'bot_message_bg_color' => $this->options['bot_message_bg_color'] ?? '#212121',
@@ -15946,6 +16543,41 @@ public function mxchat_output_delayed_script_loader() {
                 document.body.appendChild(jq);
             }
         }
+
+        // The launcher paints before this script loads (plan 332252), so the
+        // visitor's first click on it can come before chat-script.js has
+        // bound its handler. Remember that click (Enter or Space too), start
+        // the load now, and replay it once through core's own handler when
+        // core is ready, so one click opens the chat (plan 01b3d2). Consent
+        // and the pre-chat form apply exactly as to any click.
+        var pendingLauncher = null;
+        var replayTimer = null;
+        function rememberLauncherClick(e) {
+            if (typeof window.callMxChat === 'function') return;
+            if (e.type === 'keydown' && e.key !== 'Enter' && e.key !== ' ' && e.key !== 'Spacebar') return;
+            var launcher = e.target && e.target.closest ? e.target.closest('.floating-chatbot-button') : null;
+            if (!launcher) return;
+            pendingLauncher = launcher;
+            loadMxChatScript();
+            if (replayTimer) return;
+            var waited = 0;
+            replayTimer = setInterval(function() {
+                if (typeof window.callMxChat !== 'function') {
+                    waited += 50;
+                    if (waited > 20000) clearInterval(replayTimer);
+                    return;
+                }
+                clearInterval(replayTimer);
+                document.removeEventListener('click', rememberLauncherClick);
+                document.removeEventListener('keydown', rememberLauncherClick);
+                var chatWindow = document.getElementById(pendingLauncher.id.replace('floating-chatbot-button', 'floating-chatbot'));
+                if (chatWindow && chatWindow.classList.contains('hidden')) {
+                    pendingLauncher.click();
+                }
+            }, 50);
+        }
+        document.addEventListener('click', rememberLauncherClick);
+        document.addEventListener('keydown', rememberLauncherClick);
 
         <?php if ($loading_strategy === 'on_interaction'): ?>
         // Load on user interaction
@@ -16248,7 +16880,21 @@ public function check_rate_limit($bot_id = null) {
         
         // Get the user's primary role using reset() to safely get the first element
         $user_roles = $user->roles;
-        
+
+        /**
+         * Filter the roles a logged-in user is rate-limited by (plan eead8c).
+         *
+         * The first role of the returned array is the one whose limit applies,
+         * so returning the roles unchanged keeps today's behaviour (the first
+         * role WordPress stored). Reorder them to pick, for example, the most
+         * or least restrictive role of a user who holds several.
+         *
+         * @param string[] $user_roles The user's roles, in stored order.
+         * @param WP_User  $user       The current user.
+         * @param string   $bot_id     The bot the message is for ('default' or a Multi-Bot id).
+         */
+        $user_roles = apply_filters('mxchat_filter_roles_rate_limit', $user_roles, $user, $bot_id);
+
         // Safely get the first role regardless of array key structure
         if (!empty($user_roles) && is_array($user_roles)) {
             $role = reset($user_roles); // This safely gets the first element regardless of key

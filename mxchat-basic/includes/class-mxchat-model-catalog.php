@@ -296,46 +296,124 @@ class MxChat_Model_Catalog {
     }
 
     /**
-     * Embedding models grouped by provider. Order within a provider matches
-     * the order shown in the Settings dropdown.
+     * Embedding models grouped by provider: THE ONLY embedding list (plan
+     * 32e648). The Settings select (MxChat_Admin::embedding_model_callback()),
+     * the Select Embedding Model picker (js/mxchat-admin.js, localized as
+     * mxchatEmbeddingModelCatalog), MxChat_Utils::embedding_model_registry()
+     * and MxChat_Utils::standard_embedding_dimension() all derive from it.
+     * Order within a provider is the order both pickers show; the recommended
+     * model (cheap, smart, fast: TE3 Small, Maxwell 2026-10-16) is first.
+     *
+     * Per provider: 'group_label' is the Settings select optgroup.
+     * Per model:    'dims'               vector size every index is built for
+     *               'select_label'       the Settings select option text
+     *               'picker_description' the picker card text
+     * Embeddings are NEVER switched automatically: changing this list never
+     * changes a site's saved embedding model.
      */
     public static function embedding_models() {
         return array(
             'openai' => array(
-                'label'      => __('OpenAI', 'mxchat'),
-                'key_option' => 'api_key',
+                'label'       => __('OpenAI', 'mxchat'),
+                'group_label' => __('OpenAI Embeddings', 'mxchat'),
+                'key_option'  => 'api_key',
                 'models' => array(
-                    'text-embedding-ada-002' => array('label' => 'Ada 2',          'description' => __('1536 dim, recommended', 'mxchat')),
-                    'text-embedding-3-small' => array('label' => 'TE3 Small',      'description' => __('1536 dim, efficient', 'mxchat')),
-                    'text-embedding-3-large' => array('label' => 'TE3 Large',      'description' => __('3072 dim, powerful', 'mxchat')),
+                    'text-embedding-3-small' => array('label' => 'TE3 Small', 'dims' => 1536, 'description' => __('1536 dim, recommended', 'mxchat'), 'select_label' => __('TE3 Small (1536, Recommended)', 'mxchat'), 'picker_description' => __('Recommended: fast and cost-effective embeddings (1536 dimensions, 8K context)', 'mxchat')),
+                    'text-embedding-ada-002' => array('label' => 'Ada 2',     'dims' => 1536, 'description' => __('1536 dim, older', 'mxchat'),       'select_label' => __('Ada 2 (1536, Older)', 'mxchat'),           'picker_description' => __('Older OpenAI embeddings (1536 dimensions, 8K context)', 'mxchat')),
+                    'text-embedding-3-large' => array('label' => 'TE3 Large', 'dims' => 3072, 'description' => __('3072 dim, powerful', 'mxchat'),    'select_label' => __('TE3 Large (3072, Powerful)', 'mxchat'),    'picker_description' => __('High-performance embeddings (3072 dimensions, 8K context)', 'mxchat')),
                 ),
             ),
             'voyage' => array(
-                'label'      => __('Voyage AI', 'mxchat'),
-                'key_option' => 'voyage_api_key',
+                'label'       => __('Voyage AI', 'mxchat'),
+                'group_label' => __('Voyage AI Embeddings', 'mxchat'),
+                'key_option'  => 'voyage_api_key',
                 'models' => array(
-                    'voyage-3-large' => array('label' => 'Voyage-3 Large', 'description' => __('2048 dim, most capable', 'mxchat')),
+                    'voyage-3-large' => array('label' => 'Voyage-3 Large', 'dims' => 2048, 'description' => __('2048 dim, most capable', 'mxchat'), 'select_label' => __('Voyage-3 Large (2048, Most Capable)', 'mxchat'), 'picker_description' => __('Advanced semantic search embeddings (2048 dimensions, 32K context)', 'mxchat')),
                 ),
             ),
             'gemini' => array(
-                'label'      => __('Google Gemini', 'mxchat'),
-                'key_option' => 'gemini_api_key',
+                'label'       => __('Google Gemini', 'mxchat'),
+                'group_label' => __('Google Gemini Embeddings', 'mxchat'),
+                'key_option'  => 'gemini_api_key',
                 'models' => array(
                     // Google's deprecations page: shutdown no sooner than 2028-05-14,
                     // replacement gemini-embedding-2. Embeddings are NEVER switched
                     // automatically (stored vectors would stop matching): once the
                     // date passes, retired_embedding_map() lists it and core shows a
                     // re-embed notice instead (direct task M4, rule E).
-                    'gemini-embedding-001' => array('label' => 'Gemini Embedding', 'description' => __('1536 dim', 'mxchat'), 'deprecated_on' => '2028-05-14', 'replacement' => 'gemini-embedding-2'),
+                    'gemini-embedding-001' => array('label' => 'Gemini Embedding', 'dims' => 1536, 'description' => __('1536 dim', 'mxchat'), 'deprecated_on' => '2028-05-14', 'replacement' => 'gemini-embedding-2', 'select_label' => __('Gemini Embedding (1536, Stable)', 'mxchat'), 'picker_description' => __('Stable SOTA embeddings (1536 dimensions, 8K context)', 'mxchat')),
                     // Direct task M2 (2026-10-16): Google's current embedding model
                     // (its deprecations page names it the replacement for the older
                     // text-embedding ids). Probed: outputDimensionality 1536 returns
                     // 1536 values, the size every Gemini embed path requests. Added
                     // as a choice only; no saved embedding model is changed.
-                    'gemini-embedding-2'   => array('label' => 'Gemini Embedding 2', 'description' => __('1536 dim, newest', 'mxchat')),
+                    'gemini-embedding-2'   => array('label' => 'Gemini Embedding 2', 'dims' => 1536, 'description' => __('1536 dim, newest', 'mxchat'), 'select_label' => __('Gemini Embedding 2 (1536, Newest)', 'mxchat'), 'picker_description' => __('Newest Google embeddings (1536 dimensions, 8K context)', 'mxchat')),
                 ),
             ),
         );
+    }
+
+    /**
+     * Vector sizes of embedding ids no longer offered that a site may still
+     * have saved (plan 32e648: moved here from standard_embedding_dimension()
+     * unchanged, so their dimension resolves exactly as before). Not offered,
+     * not in embedding_model_ids(), not in the Settings select.
+     */
+    public static function legacy_embedding_dimensions() {
+        return array(
+            'voyage-2'       => 1024,
+            'voyage-large-2' => 1536,
+        );
+    }
+
+    /**
+     * id => array('dims', 'provider', 'label') for every catalog embedding
+     * model (plan 32e648). Backs MxChat_Utils::embedding_model_registry().
+     */
+    public static function embedding_registry() {
+        $out = array();
+        foreach (self::embedding_models() as $provider_slug => $provider) {
+            foreach ($provider['models'] as $id => $entry) {
+                $out[$id] = array('dims' => (int) $entry['dims'], 'provider' => $provider_slug, 'label' => $entry['label']);
+            }
+        }
+        return $out;
+    }
+
+    /**
+     * Settings select shape: optgroup label => array(id => option text).
+     * Rendered by MxChat_Admin::embedding_model_callback() (plan 32e648).
+     */
+    public static function embedding_dropdown_groups() {
+        $out = array();
+        foreach (self::embedding_models() as $provider) {
+            $group = array();
+            foreach ($provider['models'] as $id => $entry) {
+                $group[$id] = $entry['select_label'];
+            }
+            $out[$provider['group_label']] = $group;
+        }
+        return $out;
+    }
+
+    /**
+     * Picker shape for js/mxchat-admin.js (localized as
+     * mxchatEmbeddingModelCatalog): provider slug => array of
+     * { value, label, description } (plan 32e648).
+     */
+    public static function embedding_js_picker_shape() {
+        $out = array();
+        foreach (self::embedding_models() as $provider_slug => $provider) {
+            $out[$provider_slug] = array();
+            foreach ($provider['models'] as $id => $entry) {
+                $out[$provider_slug][] = array(
+                    'value'       => $id,
+                    'label'       => $entry['label'],
+                    'description' => $entry['picker_description'],
+                );
+            }
+        }
+        return $out;
     }
 
     /**
@@ -608,9 +686,9 @@ class MxChat_Model_Catalog {
     }
 
     /**
-     * Image-GENERATION model lifecycle (direct task M4). The catalog does not
-     * list image models as pickers (each surface keeps its own short list),
-     * but their retirements live HERE, in one place, so the content generator,
+     * Image-GENERATION model lifecycle (direct task M4). The offered image
+     * models are listed in image_generation_models() / image_editing_models()
+     * (plan 463f28), and their retirements live HERE, in one place, so the content generator,
      * Admin Chat and Vision move a saved image model the same way, and a dated
      * one starts resolving on its date by itself.
      *
@@ -761,6 +839,75 @@ class MxChat_Model_Catalog {
             return 'gemini';
         }
         return '';
+    }
+
+    /**
+     * Image section readers (plan 463f28). Every surface that offers or accepts
+     * an image model reads its ids from image_generation_models() /
+     * image_editing_models() through these: core's in-chat image functions and
+     * Content screen, Admin Chat's picker and resolver, Vision's editing picker.
+     * The add-ons call them behind a method_exists guard and keep their own ids
+     * only as the fallback for an older core, so an image-model refresh is one
+     * edit here.
+     */
+
+    /**
+     * Offered image-generation ids in catalog order; one provider's
+     * (openai | xai | gemini) when $provider is given.
+     *
+     * @return string[]
+     */
+    public static function image_model_ids($provider = '') {
+        $ids = array();
+        foreach (self::image_generation_models() as $slug => $group) {
+            if ($provider === '' || $provider === $slug) {
+                $ids = array_merge($ids, array_keys($group['models']));
+            }
+        }
+        return $ids;
+    }
+
+    /**
+     * A provider's default image-generation model: its first offered id
+     * ('' for a provider with no image models).
+     */
+    public static function image_default_model($provider) {
+        $ids = self::image_model_ids((string) $provider);
+        return $ids ? $ids[0] : '';
+    }
+
+    /**
+     * Display name for an image model id: the catalog label of an offered
+     * (generation or editing) model, else the lifecycle name of a retired or
+     * retiring one, else ''.
+     */
+    public static function image_model_label($model_id) {
+        $model_id = (string) $model_id;
+        foreach (self::image_generation_models() as $group) {
+            if (isset($group['models'][$model_id])) {
+                return $group['models'][$model_id];
+            }
+        }
+        $editing = self::image_editing_models();
+        if (isset($editing[$model_id])) {
+            return $editing[$model_id];
+        }
+        $rows = self::image_model_lifecycle();
+        return isset($rows[$model_id]['from_label']) ? $rows[$model_id]['from_label'] : '';
+    }
+
+    /**
+     * Image-EDITING models offered for a new pick (mxchat-vision's Editing
+     * Model picker), fast model first. Google only: Vision edits through
+     * Gemini generateContent, and a "pro-image" id takes its 4K path.
+     *
+     * @return array id => label
+     */
+    public static function image_editing_models() {
+        return array(
+            'gemini-3.1-flash-lite-image' => __('Nano Banana 2 Lite (fastest, lowest cost)', 'mxchat'),
+            'gemini-3-pro-image'          => __('Nano Banana Pro (Gemini 3 Pro Image)', 'mxchat'),
+        );
     }
 
     /**
@@ -1499,11 +1646,19 @@ class MxChat_Model_Catalog {
      * generator and the editor assistant carry the same two-prefix test
      * inline (they exist for the window where this class is not loaded).
      *
+     * plan 2dc5f3: the o-series reasoning ids (o1, o3, o3-mini, o4-mini, and
+     * their dated snapshots) take the same parameters. The catalog offers none
+     * of them, but one saved by hand or by an add-on was sent max_tokens and a
+     * custom temperature (both 400). Advanced Content's frozen fallback
+     * (is_reasoning_family_fallback) already treated them this way. They are
+     * in none of the reasoning_effort_for() maps, so no effort is guessed.
+     *
      * @param string $model Chat model id.
      * @return bool
      */
     public static function is_modern_openai($model) {
         $model = (string) $model;
-        return strpos($model, 'gpt-5') === 0 || strpos($model, 'gpt-6') === 0;
+        return strpos($model, 'gpt-5') === 0 || strpos($model, 'gpt-6') === 0
+            || preg_match('/^o[1-9](?:-|$)/', $model) === 1;
     }
 }

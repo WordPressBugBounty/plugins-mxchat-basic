@@ -69,7 +69,9 @@
 .mxch-admin-wrapper {
     display: flex;
     height: calc(100vh - 32px);
-    margin-left: -20px;
+    /* No negative margin: the shell is fixed, so #wpcontent's 20px padding
+       never applies to it, and -20px slid it under the admin menu (plan 70d9ad). */
+    margin-left: 0;
     background: var(--mxch-content-bg);
     overflow: hidden;
     position: fixed;
@@ -82,6 +84,14 @@
 /* Account for collapsed admin menu */
 .folded .mxch-admin-wrapper {
     left: 36px;
+}
+
+/* The shell is a fixed panel filling the screen, so WordPress's footer line
+   ("Thank you for creating with WordPress", the version) would paint over its
+   bottom wherever the admin menu is short enough to leave it on screen (the
+   folded menu, 783-960px). It has nothing to show on these pages (plan 70d9ad). */
+body:has(.mxch-admin-wrapper) #wpfooter {
+    display: none;
 }
 
 /* Account for admin bar on mobile */
@@ -110,7 +120,7 @@ body.rtl .mxch-admin-wrapper {
     left: 0;
     right: 160px; /* WordPress admin menu width (now on the right) */
     margin-left: 0;
-    margin-right: -20px;
+    margin-right: 0;
 }
 
 /* Collapsed/folded admin menu (narrower) on RTL */
@@ -948,6 +958,10 @@ body.rtl .mxch-nav-link.active {
 .mxch-card-body .form-table input[type="number"] {
     width: 100%;
     max-width: 100%;
+    /* WordPress gives inputs a small side margin (3px on phones); at full width
+       that pushed the field past its cell (plan 70d9ad). */
+    margin-left: 0;
+    margin-right: 0;
     padding: 10px 14px;
     font-size: 14px;
     border: 1px solid var(--mxch-input-border);
@@ -1076,6 +1090,24 @@ body.rtl .mxch-nav-link.active {
     grid-column: 1 / -1;
     grid-row: 2;
     margin: 0;
+}
+
+/* The Custom Provider (OpenAI-compatible) block shares the api-key-wrapper
+   class but is a stack of labelled rows, not one key + button: keep it a block
+   (the two-column grid pushed its Azure quick start and half its fields past
+   the card), and let long URLs and example addresses wrap (plan 70d9ad). */
+.mxch-card-body .form-table .api-key-wrapper.mxchat-cp {
+    display: block;
+}
+
+.mxch-card-body .form-table .api-key-wrapper.mxchat-cp .mxchat-cp-row > .description {
+    margin: 6px 0 0;
+}
+
+.mxch-admin-wrapper .mxchat-cp .mxchat-cp-azure code,
+.mxch-admin-wrapper .mxchat-cp .description,
+.mxch-admin-wrapper .mxchat-cp .mxchat-cp-intro {
+    overflow-wrap: anywhere;
 }
 
 /* Checkbox styling */
@@ -1371,6 +1403,93 @@ body.rtl .mxch-nav-link.active {
     justify-content: space-between;
     gap: var(--mxch-spacing-sm);
     margin-top: var(--mxch-spacing-sm);
+}
+
+/* Settings > Optimization: one row per page-cache plugin (name + status pill,
+   then the exclusion string and its Copy button). The column is
+   minmax(0, 1fr) so a long exclusion scrolls inside its code box instead of
+   widening the card (plan 70d9ad). */
+.mxch-cache-compat-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 12px;
+    margin-top: var(--mxch-spacing-md);
+}
+
+.mxch-cache-compat-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    min-width: 0;
+    padding: 12px 14px;
+    background: #f8fafc;
+    border: 1px solid var(--mxch-card-border);
+    border-radius: var(--mxch-radius-md);
+}
+
+.mxch-cache-compat-name {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex: 0 0 auto;
+    min-width: 0;
+}
+
+.mxch-cache-compat-label {
+    font-weight: 500;
+}
+
+.mxch-cache-compat-exclusion {
+    display: flex;
+    align-items: center;
+    gap: var(--mxch-spacing-sm);
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+.mxch-cache-compat-exclusion code {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow-x: auto;
+    white-space: nowrap;
+    padding: 4px 8px;
+    background: #fff;
+    border: 1px solid var(--mxch-card-border);
+    border-radius: var(--mxch-radius-sm);
+    font-size: 12px;
+    color: var(--mxch-text-secondary);
+}
+
+.mxch-cache-compat-exclusion .mxch-btn {
+    flex: 0 0 auto;
+}
+
+/* On a phone the exclusion string gets its own line under the name. */
+@media screen and (max-width: 600px) {
+    .mxch-cache-compat-row {
+        flex-wrap: wrap;
+    }
+
+    .mxch-cache-compat-exclusion {
+        flex-basis: 100%;
+    }
+}
+
+/* WordPress admin notices moved into the content column by admin-sidebar.js
+   (plan bf8e9e): full column width, spaced like a card above the page
+   header instead of WordPress's 15px side margins. */
+.mxch-content > div.notice,
+.mxch-content > div.updated,
+.mxch-content > div.error,
+.mxch-content > div.update-nag {
+    margin: 0 0 var(--mxch-spacing-lg);
+    box-sizing: border-box;
+    max-width: 100%;
+}
+
+.mxch-content > div.update-nag {
+    display: block;
 }
 
 /* ==========================================================================
@@ -1984,11 +2103,17 @@ body.rtl .mxch-nav-link.active {
         flex-direction: column;
     }
 
-    /* Card headers stack on mobile */
+    /* Card headers stack on mobile. Each item keeps its own width (a status
+       pill or a button stays its natural size, the title still wraps) instead of
+       stretching to the card's width (plan 70d9ad). */
     .mxch-card-header {
         flex-direction: column;
-        align-items: stretch;
+        align-items: flex-start;
         gap: 12px;
+    }
+
+    .mxch-card-header > * {
+        max-width: 100%;
     }
 
     /* Content header adjustments */
@@ -1998,6 +2123,28 @@ body.rtl .mxch-nav-link.active {
 
     .mxch-content-title {
         font-size: 20px;
+    }
+}
+
+/* 783-960px: WordPress keeps its admin menu on screen, folded to 36px, so the
+   shell starts right of it instead of under it (plan 70d9ad). */
+@media screen and (min-width: 783px) and (max-width: 960px) {
+    .mxch-admin-wrapper {
+        left: 36px;
+        margin-left: 0;
+    }
+
+    body.rtl .mxch-admin-wrapper {
+        left: 0;
+        right: 36px;
+        margin-right: 0;
+    }
+
+    /* The admin bar is still 32px tall here (46px only at 782px and below):
+       the slide-in menu and its overlay open flush under it. */
+    .mxch-mobile-overlay,
+    .mxch-mobile-menu {
+        top: 32px;
     }
 }
 
@@ -2155,6 +2302,13 @@ body.rtl .mxch-nav-link.active {
 /* Make input containers relative for absolute positioning */
 .mxch-admin-wrapper .mxch-field-control {
     position: relative;
+}
+
+/* A textarea printed with cols="50" is 398px wide; on a phone that runs past
+   the card. Never wider than its field (plan 70d9ad). */
+.mxch-admin-wrapper .mxch-field-control textarea {
+    max-width: 100%;
+    box-sizing: border-box;
 }
 
 /* Feedback inside slider container */

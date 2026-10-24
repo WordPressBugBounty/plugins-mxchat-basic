@@ -381,7 +381,7 @@ private function mxchat_get_gemini_embedding($text, $options, $model) {
         return null;
     }
 
-    $url = "https://generativelanguage.googleapis.com/v1beta/models/{$model}:embedContent?key={$api_key}";
+    $url = "https://generativelanguage.googleapis.com/v1beta/models/{$model}:embedContent";
 
     $request_body = array(
         'model' => "models/{$model}",
@@ -400,7 +400,8 @@ private function mxchat_get_gemini_embedding($text, $options, $model) {
 
     $response = wp_remote_post($url, array(
         'headers' => array(
-            'Content-Type' => 'application/json'
+            'Content-Type'   => 'application/json',
+            'x-goog-api-key' => $api_key, // plan f4c0bf: key in a header, never the URL
         ),
         'body' => json_encode($request_body),
         'timeout' => 15

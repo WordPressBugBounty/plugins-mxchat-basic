@@ -2214,6 +2214,12 @@ textarea.mxch-cg-meta-input {
     border-color: var(--mxch-primary, #7873f5);
 }
 
+/* Plan 7af04a (fixed on the way): WordPress core's input[type="text"] padding
+   outranks .mxch-seod-search, so the placeholder started under the icon. */
+.mxch-seod-search-wrap .mxch-seod-search {
+    padding-left: 30px;
+}
+
 /* Table */
 
 .mxch-seod-table-wrap {

@@ -109,6 +109,8 @@ private function mxchat_init_hooks() {
     add_action('pre_post_update', array($this, 'mxchat_store_pre_update_status'), 10, 2);
     add_action('post_updated', array($this, 'mxchat_handle_post_update'), 10, 3);
     add_action('post_updated', array($this, 'mxchat_handle_pattern_update'), 10, 3);
+    add_action('transition_post_status', array($this, 'mxchat_handle_pattern_unpublish'), 10, 3);
+    add_action('before_delete_post', array($this, 'mxchat_handle_pattern_delete'), 10, 2);
     add_action('mxchat_pattern_resync', array($this, 'mxchat_run_pattern_resync_batch'));
     // The knowledge base's own read of a published page (plan c26d40) is kept out of page
     // caches: every read carries a unique cache-busting argument, so a cached copy would
@@ -4487,11 +4489,22 @@ public function ajax_mxchat_get_content_list() {
                 $row_post = get_post($id);
                 $parts    = $this->mxchat_post_body_text((string) $row_post->post_content);
                 if ($this->mxchat_rendered_page_wanted($row_post, mb_strlen($this->mxchat_rendered_norm($parts['known']), 'UTF-8'))) {
-                    $remembered = $this->mxchat_indexed_words_remembered($row_post);
-                    if ($remembered !== null) {
-                        $word_count = $remembered;
+                    // The excerpt comes from the same text as the count (plan 4e8976), unless the
+                    // owner wrote one. Until the count arrives it is the saved body as the import
+                    // reads it (never get_the_excerpt's run-together tag strip); a record from
+                    // before 4e8976 holds no excerpt, so that row is counted once more.
+                    $manual     = has_excerpt($id);
+                    $remembered = $this->mxchat_indexed_memory($row_post);
+                    if ($remembered !== null && ($manual || isset($remembered['excerpt']))) {
+                        $word_count = (int) $remembered['words'];
+                        if (!$manual) {
+                            $excerpt = (string) $remembered['excerpt'];
+                        }
                     } else {
                         $words_pending = true;
+                        if (!$manual) {
+                            $excerpt = $this->mxchat_indexed_excerpt($parts['body'], $parts['acf_blocks']['text']);
+                        }
                     }
                 }
             }
@@ -4598,16 +4611,22 @@ public function ajax_mxchat_count_indexed_words() {
     }
     $ids = isset($_POST['post_ids']) ? (array) wp_unslash($_POST['post_ids']) : array();
     $ids = array_slice(array_values(array_unique(array_filter(array_map('absint', $ids)))), 0, 10);
-    $until  = microtime(true) + 6;
-    $counts = array();
+    $until    = microtime(true) + 6;
+    $counts   = array();
+    $excerpts = array();
     foreach ($ids as $id) {
         if (!empty($counts) && microtime(true) >= $until) {
             break;
         }
-        $post = get_post($id);
-        $counts[$id] = ($post instanceof WP_Post && $post->post_type !== 'attachment') ? $this->mxchat_count_indexed_words($post) : null;
+        $post    = get_post($id);
+        $excerpt = null;
+        $counts[$id] = ($post instanceof WP_Post && $post->post_type !== 'attachment') ? $this->mxchat_count_indexed_words($post, $excerpt) : null;
+        // The row's excerpt from the same text (plan 4e8976); a manual excerpt is the owner's own.
+        if ($excerpt !== null && !has_excerpt($post)) {
+            $excerpts[$id] = $excerpt;
+        }
     }
-    wp_send_json_success(array('counts' => (object) $counts));
+    wp_send_json_success(array('counts' => (object) $counts, 'excerpts' => (object) $excerpts));
 }
 
 /**
@@ -4615,36 +4634,44 @@ public function ajax_mxchat_count_indexed_words() {
  * page's text where the rendered-page fallback uses it, otherwise the saved body, plus the
  * ACF Block lines (M6). The same reading as the import itself (raw post fields).
  *
- * @param WP_Post $post
+ * @param WP_Post     $post
+ * @param string|null $excerpt Set to the row's excerpt from the same text (plan 4e8976).
  * @return int
  */
-private function mxchat_count_indexed_words($post) {
+private function mxchat_count_indexed_words($post, &$excerpt = null) {
     $parts    = $this->mxchat_post_body_text((string) $post->post_content);
     $rendered = $this->mxchat_rendered_page_body($post, $parts['known']);
     $body     = $rendered['used'] ? $rendered['text'] : $parts['body'];
     $words    = str_word_count($body) + ($parts['acf_blocks']['text'] !== '' ? str_word_count($parts['acf_blocks']['text']) : 0);
+    $excerpt  = $this->mxchat_indexed_excerpt($body, $parts['acf_blocks']['text']);
     // A passing failure (a busy or blocked loopback, a server error) is not remembered: the
     // saved body's count is shown and the next view asks again.
     if ($rendered['settled']) {
-        $this->mxchat_remember_indexed_words((int) $post->ID, $words);
+        $this->mxchat_remember_indexed_words((int) $post->ID, $words, $excerpt);
     }
     return $words;
 }
 
 /**
  * Remember a post's indexed word count for the import list (M6), with the post's modified
- * time. Written only after the published page was read; an unchanged count is rewritten at
- * most once an hour, so a save that changes nothing does not write every time.
+ * time, and since plan 4e8976 the row's excerpt from the same text. Written only after the
+ * published page was read; an unchanged record is rewritten at most once an hour, so a save
+ * that changes nothing does not write every time.
  */
-private function mxchat_remember_indexed_words($post_id, $words) {
+private function mxchat_remember_indexed_words($post_id, $words, $excerpt = null) {
     $modified = (string) get_post_field('post_modified_gmt', $post_id, 'raw');
     $was      = get_post_meta($post_id, self::INDEXED_WORDS_META, true);
     if (is_array($was) && isset($was['words'], $was['modified'], $was['time'])
         && (int) $was['words'] === (int) $words && (string) $was['modified'] === $modified
+        && ($excerpt === null || (isset($was['excerpt']) && (string) $was['excerpt'] === (string) $excerpt))
         && (time() - (int) $was['time']) < HOUR_IN_SECONDS) {
         return;
     }
-    update_post_meta($post_id, self::INDEXED_WORDS_META, array('words' => (int) $words, 'modified' => $modified, 'time' => time()));
+    $record = array('words' => (int) $words, 'modified' => $modified, 'time' => time());
+    if ($excerpt !== null) {
+        $record['excerpt'] = (string) $excerpt;
+    }
+    update_post_meta($post_id, self::INDEXED_WORDS_META, $record);
 }
 
 /**
@@ -4656,6 +4683,18 @@ private function mxchat_remember_indexed_words($post_id, $words) {
  * @return int|null
  */
 private function mxchat_indexed_words_remembered($post) {
+    $was = $this->mxchat_indexed_memory($post);
+    return $was === null ? null : (int) $was['words'];
+}
+
+/**
+ * The whole remembered record (M6; 'excerpt' since plan 4e8976, absent from older records),
+ * under the same rules as mxchat_indexed_words_remembered(), or null.
+ *
+ * @param WP_Post $post
+ * @return array|null
+ */
+private function mxchat_indexed_memory($post) {
     $was = get_post_meta($post->ID, self::INDEXED_WORDS_META, true);
     if (!is_array($was) || !isset($was['words'], $was['modified'], $was['time'])) {
         return null;
@@ -4663,7 +4702,7 @@ private function mxchat_indexed_words_remembered($post) {
     if ((string) $was['modified'] !== (string) $post->post_modified_gmt || (time() - (int) $was['time']) > WEEK_IN_SECONDS) {
         return null;
     }
-    return (int) $was['words'];
+    return $was;
 }
 
 
@@ -5015,7 +5054,7 @@ public function ajax_mxchat_process_selected_content() {
 
     // The import list shows this page's word count from now on without reading it (M6).
     if (!empty($prepared['page_settled'])) {
-        $this->mxchat_remember_indexed_words($post_id, $prepared['body_words']);
+        $this->mxchat_remember_indexed_words($post_id, $prepared['body_words'], $prepared['body_excerpt']);
     }
 
     $operation_type = $is_update ? 'update' : 'new';
@@ -5180,10 +5219,37 @@ private function mxchat_auto_sync_existing_only($post_type) {
  * from the store auto-sync writes to (Pinecone or the WordPress table).
  */
 private function mxchat_kb_has_entry($source_url, $post_id = 0) {
-    if ($post_id && !empty($this->existing_only_known[$post_id])) {
+    if ($post_id && (!empty($this->existing_only_known[$post_id]) || get_post_meta($post_id, self::KB_UNPUBLISHED_META, true) === '1')) {
         return true;
     }
     return $source_url && MxChat_Utils::count_chunks_for_url($source_url, 'default') > 0;
+}
+
+/**
+ * Post meta set when Auto-Sync removes a post's entry because the post left 'publish' while
+ * its type keeps imported entries up to date only (plan 8e8c75): the post was in the
+ * knowledge base, so publishing it again adds it back. Cleared when the entry is written
+ * again or a developer filter excludes the post.
+ */
+const KB_UNPUBLISHED_META = '_mxchat_kb_unpublished_entry';
+
+/**
+ * Before Auto-Sync removes the entry of a post that is leaving 'publish' (plan 8e8c75):
+ * under "Keep imported entries up to date only", remember that the post had one.
+ *
+ * @param WP_Post  $post
+ * @param string[] $urls The addresses about to be removed.
+ */
+private function mxchat_remember_unpublished_entry($post, array $urls) {
+    if (!($post instanceof WP_Post) || !$this->mxchat_auto_sync_existing_only($post->post_type)) {
+        return;
+    }
+    foreach (array_unique(array_filter($urls)) as $url) {
+        if (MxChat_Utils::count_chunks_for_url($url, 'default') > 0) {
+            update_post_meta($post->ID, self::KB_UNPUBLISHED_META, '1');
+            return;
+        }
+    }
 }
 
 /**
@@ -5716,10 +5782,10 @@ private function mxchat_generate_embedding($text, $bot_id = 'default') {
 
     // Prepare headers based on provider
     if (strpos($selected_model, 'gemini-embedding') === 0) {
-        // Gemini uses API key as query parameter
-        $endpoint .= '?key=' . $api_key;
+        // Gemini takes the key in the x-goog-api-key header (plan f4c0bf), never the URL
         $headers = array(
-            'Content-Type' => 'application/json'
+            'Content-Type'   => 'application/json',
+            'x-goog-api-key' => $api_key,
         );
     } else {
         // OpenAI/Voyage use Bearer token
@@ -6339,11 +6405,12 @@ public function mxchat_get_acf_fields_for_post($post_id) {
  * drafts and private pages work and no page is fetched. Without ACF this returns nothing.
  *
  * @param string $content Raw post_content (synced patterns already inlined by the caller).
- * @return array 'text' (one "Label: value" line per field, a blank line between blocks)
- *               and 'count' (fields emitted).
+ * @return array 'text' (one "Label: value" line per field, a blank line between blocks),
+ *               'count' (fields emitted) and 'pdf_ids' (Media Library PDFs chosen in the
+ *               blocks' fields, for the ACF to PDF extraction opt-in; plan fe91ec).
  */
 private function mxchat_acf_block_fields_text($content) {
-    $result = array('text' => '', 'count' => 0);
+    $result = array('text' => '', 'count' => 0, 'pdf_ids' => array());
     if (!is_string($content) || strpos($content, 'wp:acf/') === false
         || !function_exists('parse_blocks') || !function_exists('acf_setup_meta')
         || !function_exists('acf_reset_meta') || !function_exists('get_field_objects')) {
@@ -6356,7 +6423,9 @@ private function mxchat_acf_block_fields_text($content) {
     }
 
     $sections = array();
-    $this->mxchat_collect_acf_block_sections(parse_blocks($content), $excluded, $sections, 0);
+    $pdf_ids  = array();
+    $this->mxchat_collect_acf_block_sections(parse_blocks($content), $excluded, $sections, 0, $pdf_ids);
+    $result['pdf_ids'] = array_values(array_unique(array_map('intval', $pdf_ids)));
 
     foreach ($sections as $lines) {
         $result['count'] += count($lines);
@@ -6372,7 +6441,7 @@ private function mxchat_acf_block_fields_text($content) {
  * Walk parsed blocks (and their innerBlocks) in document order, collecting the
  * "Label: value" lines of every acf/* block that carries data (plan d99057).
  */
-private function mxchat_collect_acf_block_sections($blocks, $excluded, &$sections, $depth) {
+private function mxchat_collect_acf_block_sections($blocks, $excluded, &$sections, $depth, &$pdf_ids = null) {
     if (!is_array($blocks) || $depth > 20) {
         return;
     }
@@ -6382,21 +6451,23 @@ private function mxchat_collect_acf_block_sections($blocks, $excluded, &$section
         }
         $name = isset($block['blockName']) ? (string) $block['blockName'] : '';
         if (strpos($name, 'acf/') === 0 && !empty($block['attrs']['data']) && is_array($block['attrs']['data'])) {
-            $lines = $this->mxchat_acf_block_lines($block['attrs']['data'], $excluded);
+            $lines = $this->mxchat_acf_block_lines($block['attrs']['data'], $excluded, $pdf_ids);
             if (!empty($lines)) {
                 $sections[] = $lines;
             }
         }
         if (!empty($block['innerBlocks'])) {
-            $this->mxchat_collect_acf_block_sections($block['innerBlocks'], $excluded, $sections, $depth + 1);
+            $this->mxchat_collect_acf_block_sections($block['innerBlocks'], $excluded, $sections, $depth + 1, $pdf_ids);
         }
     }
 }
 
 /**
- * The "Label: value" lines of one ACF Block's data (plan d99057).
+ * The "Label: value" lines of one ACF Block's data (plan d99057). $pdf_ids, when given,
+ * collects the Media Library PDFs held by the block's fields that are not excluded
+ * (plan fe91ec), read with the same walker the post-meta fields use.
  */
-private function mxchat_acf_block_lines($data, $excluded) {
+private function mxchat_acf_block_lines($data, $excluded, &$pdf_ids = null) {
     // Content-addressed id in ACF's own "block_" form: ACF caches loaded values per id,
     // so a block can never be answered with another block's values.
     $block_id = 'block_' . md5(wp_json_encode($data));
@@ -6420,6 +6491,9 @@ private function mxchat_acf_block_lines($data, $excluded) {
         $field_key = isset($field['key']) ? $field['key'] : '';
         if (in_array($field_key, $excluded, true) || in_array($field_name, $excluded, true)) {
             continue;
+        }
+        if (is_array($pdf_ids) && isset($field['value'])) {
+            $this->mxchat_collect_pdf_attachment_ids_from_acf_value($field['value'], $pdf_ids);
         }
         $value = $this->mxchat_acf_block_plain_text($this->mxchat_format_acf_field_value(isset($field['value']) ? $field['value'] : null, $field_name));
         if ($value === '') {
@@ -7488,6 +7562,7 @@ public function mxchat_handle_post_update($post_id, $post, $update) {
         // mxchat_handle_status_transition already deleted for this post earlier in this
         // request (it fires first inside wp_insert_post); skip the redundant round-trip.
         if ($source_url && empty($this->transition_deleted_posts[$post_id])) {
+            $this->mxchat_remember_unpublished_entry($post, array($source_url));
             // Chunk-aware deletion (routes to Pinecone or WP DB and removes base + all chunks)
             MxChat_Utils::delete_chunks_for_url($source_url, 'default');
         }
@@ -7605,6 +7680,7 @@ private function mxchat_index_published_post($post_id, $post) {
         $filtered = $this->mxchat_index_filters($post, 'auto_sync', 'default');
         if ($filtered === null) {
             $this->mxchat_remove_excluded_entry($source_url);
+            delete_post_meta($post_id, self::KB_UNPUBLISHED_META);
             return false;
         }
         $post = $filtered;
@@ -7634,7 +7710,7 @@ private function mxchat_index_published_post($post_id, $post) {
         $final_content = $prepared['content'];
         // The import list shows this page's word count without reading it (M6).
         if (!empty($prepared['page_settled'])) {
-            $this->mxchat_remember_indexed_words($post_id, $prepared['body_words']);
+            $this->mxchat_remember_indexed_words($post_id, $prepared['body_words'], $prepared['body_excerpt']);
         }
 
         // Embedding decision — custom-provider-aware. Gating on a cloud API key
@@ -7653,6 +7729,7 @@ private function mxchat_index_published_post($post_id, $post) {
         $this->indexed_in_request[$post_id] = ++$this->index_seq;
 
         if ($this->mxchat_kb_entry_is_current($source_url, $final_content)) {
+            delete_post_meta($post_id, self::KB_UNPUBLISHED_META);
             $this->apply_role_restriction_to_post($post_id, $source_url);
             return true;
         }
@@ -7667,6 +7744,7 @@ private function mxchat_index_published_post($post_id, $post) {
 
         //   After successful storage, apply role restriction based on tags
         if (!is_wp_error($result)) {
+            delete_post_meta($post_id, self::KB_UNPUBLISHED_META); // back in (plan 8e8c75)
             $this->apply_role_restriction_to_post($post_id, $source_url);
         }
         return !is_wp_error($result);
@@ -7799,9 +7877,9 @@ private function mxchat_prepare_post_content_for_indexing($post_id, $post, $args
     // ADD ACF FIELDS SUPPORT
     $acf_fields = $this->mxchat_get_acf_fields_for_post($post_id);
     $pdf_extracted_count = 0;
+    $pdf_attachment_ids  = array();
     if (!empty($acf_fields)) {
         $acf_content_parts = array();
-        $pdf_attachment_ids = array();
 
         foreach ($acf_fields as $field_name => $field_value) {
             $formatted_value = $this->mxchat_format_acf_field_value($field_value, $field_name, $post_id);
@@ -7822,30 +7900,36 @@ private function mxchat_prepare_post_content_for_indexing($post_id, $post, $args
         if (!empty($acf_content_parts)) {
             $content .= "\n\n" . implode("\n", $acf_content_parts);
         }
+    }
 
-        // Extract text from each unique PDF found in ACF fields and append as a labeled section
-        if ($extract_acf_pdfs && !empty($pdf_attachment_ids)) {
-            $pdf_attachment_ids = array_unique(array_filter(array_map('intval', $pdf_attachment_ids)));
-            $pdf_sections = array();
-            foreach ($pdf_attachment_ids as $att_id) {
-                $pdf_text = $this->mxchat_extract_pdf_text_by_attachment_id($att_id);
-                if (!empty($pdf_text)) {
-                    $pdf_title = get_the_title($att_id);
-                    $pdf_url = wp_get_attachment_url($att_id);
-                    $header = 'PDF Attachment';
-                    if (!empty($pdf_title)) {
-                        $header .= ': ' . $pdf_title;
-                    }
-                    if (!empty($pdf_url)) {
-                        $header .= ' (' . $pdf_url . ')';
-                    }
-                    $pdf_sections[] = $header . "\n" . $pdf_text;
-                    $pdf_extracted_count++;
+    // PDFs chosen in File fields inside ACF Blocks (plan fe91ec), after the post-meta ones,
+    // under the same opt-in and size cap.
+    if ($extract_acf_pdfs && !empty($acf_blocks['pdf_ids'])) {
+        $pdf_attachment_ids = array_merge($pdf_attachment_ids, $acf_blocks['pdf_ids']);
+    }
+
+    // Extract text from each unique PDF found in ACF fields and append as a labeled section
+    if ($extract_acf_pdfs && !empty($pdf_attachment_ids)) {
+        $pdf_attachment_ids = array_unique(array_filter(array_map('intval', $pdf_attachment_ids)));
+        $pdf_sections = array();
+        foreach ($pdf_attachment_ids as $att_id) {
+            $pdf_text = $this->mxchat_extract_pdf_text_by_attachment_id($att_id);
+            if (!empty($pdf_text)) {
+                $pdf_title = get_the_title($att_id);
+                $pdf_url = wp_get_attachment_url($att_id);
+                $header = 'PDF Attachment';
+                if (!empty($pdf_title)) {
+                    $header .= ': ' . $pdf_title;
                 }
+                if (!empty($pdf_url)) {
+                    $header .= ' (' . $pdf_url . ')';
+                }
+                $pdf_sections[] = $header . "\n" . $pdf_text;
+                $pdf_extracted_count++;
             }
-            if (!empty($pdf_sections)) {
-                $content .= "\n\nAttached PDFs:\n" . implode("\n\n", $pdf_sections);
-            }
+        }
+        if (!empty($pdf_sections)) {
+            $content .= "\n\nAttached PDFs:\n" . implode("\n\n", $pdf_sections);
         }
     }
 
@@ -7879,7 +7963,19 @@ private function mxchat_prepare_post_content_for_indexing($post_id, $post, $args
         'page_settled'        => $rendered['settled'],
         // M6: words in the body and ACF Block text as indexed, the import list's count.
         'body_words'          => str_word_count($body_text) + ($acf_blocks['text'] !== '' ? str_word_count($acf_blocks['text']) : 0),
+        // Plan 4e8976: the import list's excerpt, from the same text.
+        'body_excerpt'        => $this->mxchat_indexed_excerpt($body_text, $acf_blocks['text']),
     );
+}
+
+/**
+ * The import list's excerpt for a post whose text the import reads from its published page
+ * (plan 4e8976): the first 20 words of the body and ACF Block text as indexed, the text the
+ * row's word count is taken from, so the row never shows stale or run-together post_content.
+ */
+private function mxchat_indexed_excerpt($body, $blocks = '') {
+    $text = trim((string) $body . ((string) $blocks !== '' ? "\n\n" . $blocks : ''));
+    return wp_trim_words($text, 20, '...');
 }
 
 /**
@@ -8383,6 +8479,53 @@ public function mxchat_handle_pattern_update($pattern_id, $post_after, $post_bef
         return;
     }
 
+    $this->mxchat_queue_pattern_resync((int) $pattern_id);
+}
+
+/**
+ * A published synced pattern was unpublished, made private or trashed (plan 63a2e8): the
+ * import reads only published patterns, so the pages that use it are re-synced without its
+ * text, through the same routes an edit takes. Hooked to transition_post_status, which core
+ * fires for wp_update_post, wp_trash_post and direct status changes alike.
+ *
+ * @param string  $new_status
+ * @param string  $old_status
+ * @param WP_Post $post
+ */
+public function mxchat_handle_pattern_unpublish($new_status, $old_status, $post) {
+    if (!($post instanceof WP_Post) || $post->post_type !== 'wp_block' || $old_status !== 'publish' || $new_status === 'publish') {
+        return;
+    }
+    if (wp_is_post_revision($post->ID)) {
+        return;
+    }
+    $this->mxchat_queue_pattern_resync((int) $post->ID);
+}
+
+/**
+ * A published synced pattern is about to be deleted outright (plan 63a2e8; a force delete
+ * fires no post_updated and no status change). Hooked to before_delete_post: the pages are
+ * looked up now, while the pattern still exists, and re-synced after the delete (at shutdown,
+ * or by the cron job written here), when the import no longer finds the pattern.
+ *
+ * @param int          $post_id
+ * @param WP_Post|null $post
+ */
+public function mxchat_handle_pattern_delete($post_id, $post = null) {
+    $post = ($post instanceof WP_Post) ? $post : get_post($post_id);
+    if (!($post instanceof WP_Post) || $post->post_type !== 'wp_block' || $post->post_status !== 'publish') {
+        return;
+    }
+    $this->mxchat_queue_pattern_resync((int) $post->ID);
+}
+
+/**
+ * Re-sync the pages that use a synced pattern (plan 3f95de; shared by the edit, unpublish and
+ * delete hooks since plan 63a2e8): a handful inline at shutdown, more through the cron job.
+ *
+ * @param int $pattern_id
+ */
+private function mxchat_queue_pattern_resync($pattern_id) {
     $pattern_id = (int) $pattern_id;
     $found      = $this->mxchat_find_pattern_users($pattern_id);
     if (empty($found['ids'])) {
@@ -8593,19 +8736,20 @@ public function mxchat_resync_pattern_users($pattern_id, $since = null) {
 /**
  * The posts that reference a synced pattern in a shape the import inlines
  * (mxchat_reference_shapes): published, of a post type whose Auto-Sync switch is on, one
- * entry per post, oldest first, at most mxchat_pattern_resync_cap (default 50).
+ * entry per post, oldest first, at most mxchat_pattern_resync_cap (default 50). Since plan
+ * 18ac6d also the posts that use a published pattern holding this one, up to two levels of
+ * holders (the depth the import inlines).
  *
  * A prepared LIKE narrows the candidates ("ref":ID for the block comment; the shortcode
  * name plus attr="ID", attr='ID' or attr=ID for each reference shortcode), then each
  * candidate is confirmed with the regex and id reading the import itself uses, so a
- * reference to 1234 never counts as one to 123.
+ * reference to 1234 never counts as one to 123 (mxchat_posts_referencing).
  *
  * @param int $pattern_id
  * @return array 'ids' => int[], 'capped' => bool (more posts reference it than the cap
  *               lets through), 'cap' => int
  */
 private function mxchat_find_pattern_users($pattern_id) {
-    global $wpdb;
     $pattern_id = (int) $pattern_id;
     $cap        = max(0, (int) apply_filters('mxchat_pattern_resync_cap', 50, $pattern_id));
     $out        = array('ids' => array(), 'capped' => false, 'cap' => $cap);
@@ -8632,7 +8776,59 @@ private function mxchat_find_pattern_users($pattern_id) {
         return $out;
     }
 
-    $shapes = $this->mxchat_reference_shapes();
+    // Nested patterns (plan 18ac6d): the import inlines a pattern held by a pattern, three
+    // references deep from the page (mxchat_inline_referenced_content), so a page that uses a
+    // published pattern holding this one, or one more level up, carries this pattern's text
+    // too. Walk the holders up two levels, cycle-safe, and take the users of each.
+    $shapes   = $this->mxchat_reference_shapes();
+    $targets  = array($pattern_id => true);
+    $frontier = array($pattern_id);
+    for ($level = 1; $level <= 2 && !empty($frontier); $level++) {
+        $next = array();
+        foreach ($frontier as $target) {
+            foreach ($this->mxchat_posts_referencing($target, array('wp_block'), $shapes) as $holder) {
+                if (!isset($targets[$holder])) {
+                    $targets[$holder] = true;
+                    $next[]           = $holder;
+                }
+            }
+        }
+        $frontier = $next;
+    }
+
+    $ids = array();
+    foreach (array_keys($targets) as $target) {
+        foreach ($this->mxchat_posts_referencing($target, $types, $shapes) as $id) {
+            $ids[$id] = $id;
+        }
+    }
+    ksort($ids);
+    if (count($ids) > $cap) {
+        $out['capped'] = true;
+        $ids           = array_slice($ids, 0, $cap, true);
+    }
+    $out['ids'] = array_values($ids);
+    return $out;
+}
+
+/**
+ * Published posts of the given types that reference a post id in one of the reference shapes,
+ * ids ascending (plan 3f95de; split out of mxchat_find_pattern_users by plan 18ac6d).
+ *
+ * A prepared LIKE narrows the candidates, then each candidate is confirmed with the regex and
+ * id reading the import itself uses, so a reference to 1234 never counts as one to 123.
+ *
+ * @param int      $pattern_id
+ * @param string[] $types
+ * @param array[]  $shapes     mxchat_reference_shapes()
+ * @return int[]
+ */
+private function mxchat_posts_referencing($pattern_id, array $types, array $shapes) {
+    global $wpdb;
+    $pattern_id = (int) $pattern_id;
+    if ($pattern_id <= 0 || empty($types) || empty($shapes)) {
+        return array();
+    }
     $where  = array();
     $params = $types;
     foreach ($shapes as $shape) {
@@ -8656,17 +8852,12 @@ private function mxchat_find_pattern_users($pattern_id) {
     $ids = array();
     foreach ((array) $candidates as $id) {
         $id = (int) $id;
-        if ($id <= 0 || isset($ids[$id]) || !$this->mxchat_content_references((string) get_post_field('post_content', $id, 'raw'), $pattern_id, $shapes)) {
+        if ($id <= 0 || isset($ids[$id]) || $id === $pattern_id || !$this->mxchat_content_references((string) get_post_field('post_content', $id, 'raw'), $pattern_id, $shapes)) {
             continue;
-        }
-        if (count($ids) >= $cap) {
-            $out['capped'] = true;
-            break;
         }
         $ids[$id] = $id;
     }
-    $out['ids'] = array_values($ids);
-    return $out;
+    return array_values($ids);
 }
 
 /**
@@ -8758,6 +8949,7 @@ public function mxchat_handle_status_transition($new_status, $old_status, $post)
         $urls[] = $previous_url;
     }
 
+    $this->mxchat_remember_unpublished_entry($post, $urls);
     foreach (array_unique($urls) as $url) {
         MxChat_Utils::delete_chunks_for_url($url, 'default');
     }
@@ -9632,6 +9824,16 @@ private function mxchat_reimport_post_text($url, $bot_id, $route, $post = null, 
 }
 
 /**
+ * The non-empty trimmed lines of a text, as array keys (plan ae963e). Split on an escaped
+ * newline after CRLF and lone CR are made LF, so the result never depends on the line
+ * endings of this file or of the stored text.
+ */
+private function mxchat_reimport_line_set($text) {
+    $text = str_replace(array("\r\n", "\r"), "\n", (string) $text);
+    return array_flip(array_filter(array_map('trim', explode("\n", $text)), 'strlen'));
+}
+
+/**
  * Decide what to do with one entry. Makes no embedding call and writes nothing.
  *
  * @return array{outcome:string,reasons:array,note:string,mode:string,fresh:string,title:string,post_id:int,is_file:bool}
@@ -9684,8 +9886,7 @@ private function mxchat_reimport_evaluate(array $entry, $bot_id) {
     // More than one import route can have written an entry (a product is built
     // one way by auto-sync and another by the bulk import). Take the route whose
     // text shares the most lines with what is stored.
-    $stored_lines = array_flip(array_filter(array_map('trim', explode("
-", $stored)), 'strlen'));
+    $stored_lines = $this->mxchat_reimport_line_set($stored);
     $repair = null;
     $best   = -1;
     foreach ($fresh['texts'] as $route => $text) {
@@ -9704,8 +9905,7 @@ private function mxchat_reimport_evaluate(array $entry, $bot_id) {
             }
         }
         if ($same_doc && !empty($reasons)) {
-            $shared = count(array_intersect_key($stored_lines, array_flip(array_filter(array_map('trim', explode("
-", $text)), 'strlen'))));
+            $shared = count(array_intersect_key($stored_lines, $this->mxchat_reimport_line_set($text)));
             if ($shared > $best) {
                 $best   = $shared;
                 $repair = array('reasons' => $reasons, 'fresh' => $text);
@@ -9766,7 +9966,7 @@ private function mxchat_reimport_evaluate(array $entry, $bot_id) {
             $best = -1;
             foreach ($fresh['texts'] as $text) {
                 $text   = $this->mxchat_reimport_storable($text);
-                $shared = count(array_intersect_key($stored_lines, array_flip(array_filter(array_map('trim', explode("\n", $text)), 'strlen'))));
+                $shared = count(array_intersect_key($stored_lines, $this->mxchat_reimport_line_set($text)));
                 if ($shared > $best) {
                     $best = $shared;
                     $result['fresh'] = $text;
@@ -10383,6 +10583,8 @@ public function mxchat_handle_post_delete($post_id) {
         return;
     }
 
+    $this->mxchat_remember_trashed_entry($post, $source_url);
+
     // Use chunk-aware deletion (handles both chunked and non-chunked content)
     $delete_result = MxChat_Utils::delete_chunks_for_url($source_url, 'default');
 
@@ -10392,6 +10594,25 @@ public function mxchat_handle_post_delete($post_id) {
 
     delete_transient('mxchat_prev_url_' . $post_id);
     delete_transient('mxchat_prev_status_' . $post_id);
+}
+
+/**
+ * Plan 2e5c8c: trashing a post whose type keeps imported entries up to date only
+ * remembers that it had an entry (8e8c75's flag), so restoring and publishing it
+ * adds it back. A permanent delete clears the flag. Runs before the entry is removed.
+ *
+ * @param WP_Post|null $post
+ * @param string       $source_url The pre-trash address about to be removed.
+ */
+private function mxchat_remember_trashed_entry($post, $source_url) {
+    if (!($post instanceof WP_Post)) {
+        return;
+    }
+    if (current_filter() === 'wp_trash_post') {
+        $this->mxchat_remember_unpublished_entry($post, array($source_url));
+    } elseif (current_filter() === 'before_delete_post') {
+        delete_post_meta($post->ID, self::KB_UNPUBLISHED_META);
+    }
 }
 
 /**
@@ -10452,6 +10673,7 @@ private function mxchat_store_product_embedding($product) {
     if ($product_post instanceof WP_Post) {
         if ($this->mxchat_index_filters($product_post, 'auto_sync', 'default') === null) {
             $this->mxchat_remove_excluded_entry($source_url);
+            delete_post_meta($product_id, self::KB_UNPUBLISHED_META);
             return;
         }
         if ($this->mxchat_auto_sync_existing_only('product') && !$this->mxchat_kb_has_entry($source_url, $product_id)) {
@@ -10473,6 +10695,7 @@ private function mxchat_store_product_embedding($product) {
     $api_key = $preflight['api_key'];
 
     if ($this->mxchat_kb_entry_is_current($source_url, $content)) {
+        delete_post_meta($product_id, self::KB_UNPUBLISHED_META);
         $this->apply_role_restriction_to_post($product_id, $source_url);
         return;
     }
@@ -10487,6 +10710,7 @@ private function mxchat_store_product_embedding($product) {
 
     //   After successful storage, apply role restriction based on tags
     if (!is_wp_error($result)) {
+        delete_post_meta($product_id, self::KB_UNPUBLISHED_META); // back in (plan 2e5c8c)
         $this->apply_role_restriction_to_post($product_id, $source_url);
     }
 
@@ -10504,6 +10728,8 @@ public function mxchat_handle_product_delete($post_id) {
     if (!$source_url) {
         return;
     }
+
+    $this->mxchat_remember_trashed_entry(get_post($post_id), $source_url);
 
     // Chunk-aware deletion (routes to Pinecone or WP DB and removes base + all chunks)
     MxChat_Utils::delete_chunks_for_url($source_url, 'default');
