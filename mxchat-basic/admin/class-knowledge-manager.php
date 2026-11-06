@@ -4284,7 +4284,12 @@ public function ajax_mxchat_get_content_list() {
     $post_type = isset($_GET['post_type']) ? sanitize_text_field($_GET['post_type']) : 'all';
     $post_status = isset($_GET['post_status']) ? sanitize_text_field($_GET['post_status']) : 'publish';
     $processed_filter = isset($_GET['processed_filter']) ? sanitize_text_field($_GET['processed_filter']) : 'all';
-    
+    // The list shows the data of the bot selected on the Knowledge screen (plan e869bf).
+    $bot_id = isset($_GET['bot_id']) ? sanitize_key($_GET['bot_id']) : 'default';
+    if ($bot_id === '') {
+        $bot_id = 'default';
+    }
+
     // Build query args
     $args = array(
         'posts_per_page' => $per_page,
@@ -4392,12 +4397,29 @@ public function ajax_mxchat_get_content_list() {
     // Get processed data from storage
     $processed_data = array();
     
-    $pinecone_options = get_option('mxchat_pinecone_addon_options', array());
-    $use_pinecone = ($pinecone_options['mxchat_use_pinecone'] ?? '0') === '1';
+    $pinecone_options = $this->mxchat_content_list_pinecone_options($bot_id);
 
-    if ($use_pinecone && !empty($pinecone_options['mxchat_pinecone_api_key'])) {
-        // Get fresh data from Pinecone - no caching
-        $processed_data = $this->mxchat_get_pinecone_processed_content($pinecone_options);
+    $filtered_by_status = in_array($processed_filter, array('processed', 'unprocessed'), true);
+
+    if ($pinecone_options !== null) {
+        // All Content reads Pinecone after the query below, for the posts on this page only
+        // (plan e869bf). The two filters need the set before the query, so they keep the
+        // scan; a scan that could not read Pinecone says so instead of reading as empty.
+        if ($filtered_by_status) {
+            $scan_error = '';
+            $processed_data = $this->mxchat_scan_pinecone_for_processed_content($pinecone_options, $scan_error, $bot_id);
+            if ($scan_error !== '') {
+                wp_send_json_success(array(
+                    'items' => array(),
+                    'total' => 0,
+                    'total_pages' => 0,
+                    'current_page' => $page,
+                    'processed_count' => 0,
+                    'status_error' => $this->mxchat_content_list_status_error($scan_error)
+                ));
+                exit;
+            }
+        }
     } else {
         // WordPress DB checking with better URL matching for all post types
         global $wpdb;
@@ -4449,8 +4471,9 @@ public function ajax_mxchat_get_content_list() {
     $processed_ids = array_keys($processed_data);
     
     // Handle processed/unprocessed filter
-    if ($processed_filter === 'processed' && !empty($processed_ids)) {
-        $args['post__in'] = $processed_ids;
+    if ($processed_filter === 'processed') {
+        // Nothing in the knowledge base lists nothing, not every post (plan e869bf).
+        $args['post__in'] = !empty($processed_ids) ? $processed_ids : array(0);
     } elseif ($processed_filter === 'unprocessed' && !empty($processed_ids)) {
         $args['post__not_in'] = $processed_ids;
     }
@@ -4462,6 +4485,21 @@ public function ajax_mxchat_get_content_list() {
     // WP_Query in the request.
     if ($attachment_where) {
         remove_filter('posts_where', $attachment_where);
+    }
+
+    // Pinecone: look up this page's posts by vector id (plan e869bf). The answer beats the
+    // scan on a filtered page, whose chunk counts stop at what its random queries returned.
+    $status_unknown = false;
+    $status_error = '';
+    if ($pinecone_options !== null && !empty($query->posts)) {
+        $fetch_error = '';
+        $page_status = $this->mxchat_get_pinecone_manager()->mxchat_scan_pinecone_for_processed_content($pinecone_options, wp_list_pluck($query->posts, 'ID'), $fetch_error);
+        $processed_data = $page_status + $processed_data;
+        $processed_ids = array_keys($processed_data);
+        if ($fetch_error !== '' && !$filtered_by_status) {
+            $status_unknown = true;
+            $status_error = $this->mxchat_content_list_status_error($fetch_error);
+        }
     }
 
     $content_items = array();
@@ -4577,22 +4615,58 @@ public function ajax_mxchat_get_content_list() {
                 'processed_date' => $processed_date,
                 'db_record_id' => $db_record_id,
                 'data_source' => $data_source,
-                'chunk_count' => $chunk_count
+                'chunk_count' => $chunk_count,
+                'status_unknown' => $status_unknown && !$is_processed
             );
         }
         wp_reset_postdata();
     }
-    
+
     $response = array(
         'items' => $content_items,
         'total' => $query->found_posts,
         'total_pages' => $query->max_num_pages,
         'current_page' => $page,
-        'processed_count' => count($processed_ids)
+        'processed_count' => count($processed_ids),
+        'status_error' => $status_error
     );
-    
+
     wp_send_json_success($response);
     exit;
+}
+
+/**
+ * The Pinecone options the import list reads for a bot, or null when that bot's content goes
+ * to the WordPress table (plan e869bf). Same decision as the store itself: a bot Multi-Bot
+ * gives a host reads its own index and namespace, a bot on the shared database reads the
+ * table, and a bot Multi-Bot does not know falls back to the site's own setting.
+ *
+ * @param string $bot_id
+ * @return array|null
+ */
+private function mxchat_content_list_pinecone_options($bot_id) {
+    $config = $this->get_bot_pinecone_config($bot_id);
+    if (empty($config)) {
+        $config = $this->get_bot_pinecone_config('default');
+    }
+    if (empty($config['use_pinecone']) || empty($config['api_key']) || empty($config['host'])) {
+        return null;
+    }
+    return $this->mxchat_get_pinecone_manager()->mxchat_get_bot_pinecone_options($bot_id);
+}
+
+/**
+ * The list's message when Pinecone could not be read (plan e869bf).
+ *
+ * @param string $reason What the request answered, for example HTTP 401.
+ * @return string
+ */
+private function mxchat_content_list_status_error($reason) {
+    return sprintf(
+        /* translators: %s: what Pinecone answered, for example HTTP 401 */
+        __('Pinecone could not be read (%s), so this list cannot show what is already in the knowledge base. Nothing was changed. Check your Pinecone settings and try again.', 'mxchat'),
+        $reason
+    );
 }
 
 /** Post meta holding the import list's word count for a page read from its published page (M6). */
@@ -4992,13 +5066,10 @@ public function ajax_mxchat_process_selected_content() {
     $bot_pinecone_config = $this->get_bot_pinecone_config($bot_id);
     $use_pinecone = !empty($bot_pinecone_config) && ($bot_pinecone_config['use_pinecone'] ?? false);
     
-    if ($use_pinecone && !empty($bot_pinecone_config['api_key'])) {
-        // Check Pinecone for this bot
-        $pinecone_data = $this->mxchat_get_pinecone_processed_content($bot_pinecone_config);
-        if (isset($pinecone_data[$post_id])) {
-            $is_update = true;
-        }
-    } else {
+    // On Pinecone an import upserts over the same ids whether or not the post is already
+    // there, so nothing is looked up per post (plan e869bf). The lookup that sat here passed
+    // option keys it could not read, returned before any request, and left this false.
+    if (!$use_pinecone || empty($bot_pinecone_config['api_key'])) {
         // Check WordPress DB (same as before since it's shared)
         global $wpdb;
         $table_name = $wpdb->prefix . 'mxchat_system_prompt_content';
@@ -5522,9 +5593,10 @@ public function mxchat_fetch_pinecone_vectors_by_ids($pinecone_options, $vector_
 /**
  * Get embedding dimensions based on the selected model.
  */
-private function mxchat_get_embedding_dimensions() {
+private function mxchat_get_embedding_dimensions($bot_id = 'default') {
     // See MxChat_Pinecone_Manager::mxchat_get_embedding_dimensions() — same answer (plan 418afd).
-    $options = get_option('mxchat_options', array());
+    $bot_options = $this->get_bot_options($bot_id);
+    $options = !empty($bot_options) ? $bot_options : get_option('mxchat_options', array());
     $dimension = MxChat_Utils::expected_embedding_dimension($options);
     if (!is_wp_error($dimension) && (int) $dimension > 0) {
         return (int) $dimension;
@@ -5534,8 +5606,17 @@ private function mxchat_get_embedding_dimensions() {
 
 /**
  * Scan Pinecone for processed content
+ *
+ * The import list's two status filters use this (plan e869bf); All Content looks posts up by
+ * vector id instead. Random queries cannot see past 10,000 records each.
+ *
+ * @param array       $pinecone_options
+ * @param string|null $error  Set to the reason when no query could read Pinecone, '' otherwise.
+ * @param string      $bot_id The bot whose embedding model sizes the query vector.
+ * @return array Processed data keyed by post ID
  */
-public function mxchat_scan_pinecone_for_processed_content($pinecone_options) {
+public function mxchat_scan_pinecone_for_processed_content($pinecone_options, &$error = null, $bot_id = 'default') {
+    $error = '';
     $api_key = $pinecone_options['mxchat_pinecone_api_key'] ?? '';
     $host = $pinecone_options['mxchat_pinecone_host'] ?? '';
     // plan 793b82: this scan was namespace-blind — on a namespaced setup it
@@ -5552,7 +5633,9 @@ public function mxchat_scan_pinecone_for_processed_content($pinecone_options) {
         $seen_ids = array();
 
         // Get correct dimensions for the configured embedding model
-        $dimensions = $this->mxchat_get_embedding_dimensions();
+        $dimensions = $this->mxchat_get_embedding_dimensions($bot_id);
+        $answered = 0;
+        $last_error = '';
 
         // Try 3 different random vectors to get better coverage
         for ($i = 0; $i < 3; $i++) {
@@ -5584,47 +5667,82 @@ public function mxchat_scan_pinecone_for_processed_content($pinecone_options) {
             // Document index (plan 362c31): same random-vector sweep through documents/search.
             if (class_exists('MxChat_Pinecone_Documents') && MxChat_Pinecone_Documents::is_document_options($pinecone_options)) {
                 $doc_hits = MxChat_Pinecone_Documents::search_dense($random_vector, 10000, null, MxChat_Pinecone_Documents::cfg_from_options($pinecone_options), array('source_url', 'created_at'));
-                foreach ((is_wp_error($doc_hits) ? array() : $doc_hits) as $match) {
+                if (is_wp_error($doc_hits)) {
+                    $last_error = $doc_hits->get_error_message();
+                    continue;
+                }
+                $answered++;
+                foreach ($doc_hits as $match) {
                     $match_id = $match['id'] ?? '';
                     if (!empty($match_id) && !isset($seen_ids[$match_id])) {
                         $all_matches[] = $match;
                         $seen_ids[$match_id] = true;
                     }
                 }
+                // Fewer than the ceiling means this query already saw every record.
+                if (count($doc_hits) < 10000) {
+                    break;
+                }
                 continue;
             }
 
-            $response = wp_remote_post($query_url, array(
-                'headers' => array(
-                    'Api-Key' => $api_key,
-                    'Content-Type' => 'application/json'
-                ),
-                'body' => json_encode($query_data),
-                'timeout' => 30
-            ));
+            // plan 8b8651: a companion plugin may answer from its own vector store.
+            $data = MxChat_Utils::pre_vector_query($query_data, array('source' => 'content_scan', 'bot_id' => $bot_id, 'namespace' => $namespace));
 
-            if (is_wp_error($response)) {
-                continue;
+            if ($data === null) {
+                $response = wp_remote_post($query_url, array(
+                    'headers' => array(
+                        'Api-Key' => $api_key,
+                        'Content-Type' => 'application/json'
+                    ),
+                    'body' => json_encode($query_data),
+                    'timeout' => 30
+                ));
+
+                if (is_wp_error($response)) {
+                    $last_error = $response->get_error_message();
+                    continue;
+                }
+
+                $response_code = wp_remote_retrieve_response_code($response);
+
+                if ($response_code !== 200) {
+                    $last_error = 'HTTP ' . $response_code;
+                    continue;
+                }
+
+                $body = wp_remote_retrieve_body($response);
+                $data = json_decode($body, true);
+                unset($body);
             }
 
-            $response_code = wp_remote_retrieve_response_code($response);
-
-            if ($response_code !== 200) {
+            if (!is_array($data)) {
+                $last_error = 'HTTP 200 with an unreadable answer';
                 continue;
             }
-
-            $body = wp_remote_retrieve_body($response);
-            $data = json_decode($body, true);
+            $answered++;
 
             if (isset($data['matches'])) {
                 foreach ($data['matches'] as $match) {
                     $match_id = $match['id'] ?? '';
                     if (!empty($match_id) && !isset($seen_ids[$match_id])) {
+                        // Keep only what the list reads: each match also carries its chunk text (plan e869bf).
+                        $match['metadata'] = array_intersect_key($match['metadata'] ?? array(), array('source_url' => 1, 'created_at' => 1, 'last_updated' => 1));
                         $all_matches[] = $match;
                         $seen_ids[$match_id] = true;
                     }
                 }
+                // Fewer than the ceiling means this query already saw every record.
+                if (count($data['matches']) < 10000) {
+                    break;
+                }
             }
+            unset($data);
+        }
+
+        if ($answered === 0) {
+            $error = $last_error;
+            return array();
         }
 
         // Convert matches to processed data format, grouping by URL to count chunks
@@ -5687,6 +5805,7 @@ public function mxchat_scan_pinecone_for_processed_content($pinecone_options) {
         return $processed_data;
 
     } catch (Exception $e) {
+        $error = $e->getMessage();
         return array();
     }
 }
@@ -7234,12 +7353,8 @@ private function mxchat_import_attachment($post, $bot_id) {
     $bot_pinecone_config = $this->get_bot_pinecone_config($bot_id);
     $use_pinecone        = !empty($bot_pinecone_config) && ($bot_pinecone_config['use_pinecone'] ?? false);
 
-    if ($use_pinecone && !empty($bot_pinecone_config['api_key'])) {
-        $pinecone_data = $this->mxchat_get_pinecone_processed_content($bot_pinecone_config);
-        if (isset($pinecone_data[$post_id])) {
-            $is_update = true;
-        }
-    } else {
+    // Nothing to look up on Pinecone: see the post path (plan e869bf).
+    if (!$use_pinecone || empty($bot_pinecone_config['api_key'])) {
         global $wpdb;
         $table_name = $wpdb->prefix . 'mxchat_system_prompt_content';
         $existing_record = $wpdb->get_row($wpdb->prepare(
@@ -12331,7 +12446,7 @@ public function mxchat_create_queue_table() {
         meta_value longtext,
         PRIMARY KEY  (id),
         KEY queue_id (queue_id),
-        KEY meta_key (meta_key)
+        KEY meta_key (meta_key(191))
     ) $charset_collate;";
     
     dbDelta($meta_sql);

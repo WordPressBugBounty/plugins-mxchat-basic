@@ -623,6 +623,18 @@ function getPageContext() {
             '.menu',
             'script',
             'style',
+            // plan 9cf8b5: only text a visitor can see. With JavaScript on, a
+            // noscript fallback's markup is plain text here, and a firewall
+            // reads it as an attack; hidden and template content is not on
+            // the page at all.
+            'noscript',
+            'template',
+            '[hidden]',
+            '[aria-hidden="true"]',
+            '[style*="display:none"]',
+            '[style*="display: none"]',
+            '[style*="visibility:hidden"]',
+            '[style*="visibility: hidden"]',
             '.comments',
             '#comments',
             '.breadcrumb',
@@ -682,6 +694,51 @@ function getPageContext() {
     }
 
     return null;
+}
+
+/**
+ * The page context as base64 of its UTF-8 JSON (plan 9cf8b5), sent as
+ * page_context_b64 so a security firewall never sees the page's raw text
+ * (quotes, code, markup) in the chat request. '' when the browser cannot
+ * encode it; the caller then sends the plain page_context field as before.
+ */
+function mxchatPageContextB64(pageContext) {
+    try {
+        var bytes = new TextEncoder().encode(JSON.stringify(pageContext));
+        var bin = '';
+        for (var i = 0; i < bytes.length; i += 0x8000) {
+            bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+        }
+        return window.btoa(bin);
+    } catch (e) {
+        return '';
+    }
+}
+
+/**
+ * True for a chat-send reply that is a firewall's block page rather than
+ * WordPress (plan 9cf8b5): a 403 or 406 whose body is not JSON and is not
+ * WordPress's own "-1" nonce refusal.
+ */
+function mxchatIsFirewallBlock(status, body) {
+    if (status !== 403 && status !== 406) {
+        return false;
+    }
+    var text = $.trim(String(body || ''));
+    if (text === '-1' || text === '0') {
+        return false;
+    }
+    try {
+        JSON.parse(text);
+        return false;
+    } catch (e) {
+        return true;
+    }
+}
+
+function mxchatFirewallBlockedMessage() {
+    return (typeof mxchatChat !== 'undefined' && mxchatChat.firewall_blocked_message) ||
+        "Your message was blocked by this site's security firewall. Please try again, or contact the site owner.";
 }
 
 //   Track originating page when chat starts
@@ -1019,8 +1076,11 @@ function getMxChatBotId(element) {
     return chatbotWrapper ? chatbotWrapper.getAttribute('data-bot-id') || 'default' : 'default';
 }
 
-function callMxChat(message, callback, botId) {
+function callMxChat(message, callback, botId, sendOptions) {
     botId = botId || getMxChatBotId();
+    // plan 9cf8b5: { noPageContext: true } is the one retry after a firewall
+    // block page (and the streaming path's fallback after one).
+    sendOptions = sendOptions || {};
     if (mxchatEmbeddedConsentBlocksSend(botId)) {
         return;
     }
@@ -1036,7 +1096,7 @@ function callMxChat(message, callback, botId) {
     getElement(botId, 'mxchat-chatbot-wrapper').find('.mxchat-input-holder textarea').data('pending-message', message);
 
     // Get page context if contextual awareness is enabled
-    const pageContext = getPageContext();
+    const pageContext = sendOptions.noPageContext ? null : getPageContext();
 
     // Get instance for session start timestamp (used when persistence is OFF)
     var instance = MxChatInstances.get(botId);
@@ -1069,9 +1129,14 @@ function callMxChat(message, callback, botId) {
         session_start_timestamp: instance.sessionStartTimestamp || 0
     };
 
-    // Add page context if available
+    // Add page context if available, encoded (plan 9cf8b5)
     if (pageContext) {
-        ajaxData.page_context = JSON.stringify(pageContext);
+        var pageContextB64 = mxchatPageContextB64(pageContext);
+        if (pageContextB64) {
+            ajaxData.page_context_b64 = pageContextB64;
+        } else {
+            ajaxData.page_context = JSON.stringify(pageContext);
+        }
     }
 
     // CHECK FOR VISION FLAGS AND ADD THEM
@@ -1258,6 +1323,23 @@ function callMxChat(message, callback, botId) {
         error: function(xhr, status, error) {
             let errorMessage = "An unexpected error occurred.";
 
+            // plan 9cf8b5: a security firewall's block page. Retry once without
+            // the page context (the usual trigger); if that is blocked too, say
+            // so instead of blaming the session.
+            if (mxchatIsFirewallBlock(xhr.status, xhr.responseText)) {
+                if (pageContext && !sendOptions.noPageContext) {
+                    callMxChat(message, callback, botId, { noPageContext: true });
+                    return;
+                }
+                replaceLastMessage("bot", mxchatFirewallBlockedMessage(), '', [], botId);
+                return;
+            }
+            // WordPress's own nonce refusal ("-1", which also parses as JSON).
+            if (xhr.status === 403 && $.trim(String(xhr.responseText || '')) === '-1') {
+                replaceLastMessage("bot", "Access denied: Your session may have expired. Please refresh the page.", '', [], botId);
+                return;
+            }
+
             // Try to parse the response if it's JSON
             try {
                 const responseJson = JSON.parse(xhr.responseText);
@@ -1333,9 +1415,14 @@ function callMxChatStream(message, callback, botId) {
     // Pass session start timestamp so AI context matches what user sees
     formData.append('session_start_timestamp', instance.sessionStartTimestamp || 0);
 
-    // Add page context if available
+    // Add page context if available, encoded (plan 9cf8b5)
     if (pageContext) {
-        formData.append('page_context', JSON.stringify(pageContext));
+        var streamPageContextB64 = mxchatPageContextB64(pageContext);
+        if (streamPageContextB64) {
+            formData.append('page_context_b64', streamPageContextB64);
+        } else {
+            formData.append('page_context', JSON.stringify(pageContext));
+        }
     }
 
     // CHECK FOR VISION FLAGS AND ADD THEM
@@ -1393,7 +1480,11 @@ function callMxChatStream(message, callback, botId) {
             // Try to get error details from response
             return responseClone.json().then(errorData => {
                 throw { isServerError: true, data: errorData };
-            }).catch(() => {
+            }).catch((parseError) => {
+                // plan 9cf8b5: a non-JSON 403/406 is a firewall's block page.
+                if (!(parseError && parseError.isServerError) && (response.status === 403 || response.status === 406)) {
+                    throw { isFirewallBlock: true, status: response.status };
+                }
                 throw new Error('Network response was not ok');
             });
         }
@@ -1579,6 +1670,13 @@ function callMxChatStream(message, callback, botId) {
     })
         .catch(error => {
             if (mxchatHandleStreamAbort(botId, accumulatedContent, callback)) return;
+            // plan 9cf8b5: blocked by a firewall. The non-streaming send is the
+            // one retry, without the page context.
+            if (error && error.isFirewallBlock) {
+                getElement(botId, 'chat-box').find('.bot-message.temporary-message').remove();
+                callMxChat(message, callback, botId, { noPageContext: true });
+                return;
+            }
             // Check if we have server error data with chat mode
             if (error && error.isServerError && error.data) {
                 // Check for chat mode in error data

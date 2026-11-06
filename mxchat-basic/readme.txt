@@ -5,7 +5,7 @@ Tags: ai chatbot, chatgpt, woocommerce, customer support, content generation
 Requires at least: 5.3
 Tested up to: 7.1
 Requires PHP: 7.4
-Stable tag: 3.2.27
+Stable tag: 3.2.28
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -272,7 +272,7 @@ Yes. On the Licenses page of their mxchat.ai account, the license holder can tur
 
 == Developer Hooks & Filters ==
 
-MxChat has filter hooks for developers who want to extend it without editing plugin files, including mxchat_should_index_post (return false to leave a post out of the knowledge base; it also receives import, auto_sync or reimport as the context), mxchat_before_process_post (change a post before it is indexed, or return false to skip it), mxchat_system_instructions (adjust the system prompt for each reply), mxchat_gemini_safety_settings (Gemini safety thresholds), mxchat_reference_shortcodes (shortcodes whose referenced content is imported), mxchat_index_use_rendered_page (return true or false to decide whether a post's published page is read for its text), mxchat_filter_roles_rate_limit (reorder a logged-in user's roles to choose which role's rate limit applies; the first role in the list is used), mxchat_lead_retention_days (how many days a lead is kept after the visitor's last chat; 0 keeps leads) and mxchat_stream_request (add headers to, or change the address or body of, a streamed chat request; WordPress's own HTTP filters do not reach streamed replies). Add-ons can also call mxchat_generate_media_image() to create an image with the site's image model and save it to the Media Library. Every hook is documented with code examples at [mxchat.ai](https://mxchat.ai/mxchat-developer-hooks-filters/).
+MxChat has filter hooks for developers who want to extend it without editing plugin files, including mxchat_should_index_post (return false to leave a post out of the knowledge base; it also receives import, auto_sync or reimport as the context), mxchat_before_process_post (change a post before it is indexed, or return false to skip it), mxchat_system_instructions (adjust the system prompt for each reply), mxchat_gemini_safety_settings (Gemini safety thresholds), mxchat_reference_shortcodes (shortcodes whose referenced content is imported), mxchat_index_use_rendered_page (return true or false to decide whether a post's published page is read for its text), mxchat_filter_roles_rate_limit (reorder a logged-in user's roles to choose which role's rate limit applies; the first role in the list is used), mxchat_lead_retention_days (how many days a lead is kept after the visitor's last chat; 0 keeps leads), mxchat_error_response (replace the error message a chat visitor sees; it receives the error code and the session, bot, streaming and provider details, and administrators still see the original), mxchat_stream_request (add headers to, or change the address or body of, a streamed chat request; WordPress's own HTTP filters do not reach streamed replies) and mxchat_pre_vector_query (answer a Pinecone vector query from your own store; return null to let it go to Pinecone). Add-ons can also call mxchat_generate_media_image() to create an image with the site's image model and save it to the Media Library. Every hook is documented with code examples at [mxchat.ai](https://mxchat.ai/mxchat-developer-hooks-filters/).
 
 == External services ==
 
@@ -287,6 +287,8 @@ To answer chats and generate content, MxChat sends requests with your own API ke
 
 Pro license management uses mxchat.ai, the plugin's own website, and only on sites where a Pro license key has been entered. Activate License and Deactivate License send the key, the purchase email and the site's domain when the administrator clicks them; the Pro & Extensions page checks whether the domain is linked; and once a day the site asks whether its domain is still switched on, also sending the plugin version. No visitor data or site content is sent, and a network error or outage never changes anything on the site. mxchat.ai - [Terms](https://mxchat.ai/terms-of-service/) | [Privacy](https://mxchat.ai/privacy-policy/)
 
+Instant alerts for the MxChat mobile app use MxChat's notification service, hosted on Google Firebase (us-central1-mxchat-78eb1.cloudfunctions.net), and only on sites where a paired phone has turned alerts on. When a visitor starts a chat, writes again, asks for a person or leaves an email, the site sends that phone's alert key, the kind of event and the chat's ID. What was said, and the visitor's name, email and address, are never sent; the phone reads the chat from your site itself. mxchat.ai - [Terms](https://mxchat.ai/terms-of-service/) | [Privacy](https://mxchat.ai/privacy-policy/)
+
 == Screenshots ==
 
 1. **Chat Transcripts Insights** - Review and analyze conversations insights to see engagement rate, peak activity, and user distribution.
@@ -299,6 +301,21 @@ Pro license management uses mxchat.ai, the plugin's own website, and only on sit
 *(Note: Screenshots will be added in future updates)*
 
 == Changelog ==
+
+= 3.2.28 - November 5, 2026 =
+* New: Developers can replace the error messages visitors see in the chat with their own wording using the new mxchat_error_response filter, and answer knowledge base queries from their own vector store using the new mxchat_pre_vector_query filter.
+* Fixed: With Contextual Awareness on, security firewalls such as Cloudflare or Wordfence no longer block chat messages. The page text is sent in a firewall-safe form without hidden page content, and a blocked message is retried once without it.
+* Improved: When a security firewall still blocks a message, the chat says so instead of reporting an expired session.
+* Fixed: The chatbot again remembers earlier messages that contain an ampersand, bold text, links or code, instead of leaving them out of the conversation and answering earlier questions again.
+* Fixed: With Pinecone, the Select WordPress Content list now looks up only the posts on the page you are viewing, so it opens far faster on a large knowledge base and shows each post's full chunk count. It shows the data of the bot you selected, and a post imported before a move to https or a change to or from www, or one that lost its first chunk, still reads as In Knowledge Base. A page imported under an address with an anchor or a query string shows under the In Knowledge Base filter only. If Pinecone cannot be read, the list says so instead of marking everything as not in the knowledge base.
+* Fixed: The In Knowledge Base filter no longer lists every post when nothing has been imported.
+* Fixed: With Citation Links on, answers drawn from an uploaded document or PDF with no Source URL now name the file, and the page of a PDF, in plain text. Before, the file was named only when a visitor asked where the answer came from.
+* Fixed: On older databases, the tables for transcripts, ratings, translations, Pinecone roles and the import queue could be refused with no message, so those features quietly did nothing. They are now created, a table that could not be created is tried again instead of being recorded as done, and a missing table no longer slows every page. A transcripts table those databases could not convert is now converted in the background, so replies with emoji are saved and no page waits on it.
+* Fixed: The Test Streaming Compatibility button no longer adds a conversation to Transcripts.
+* Fixed: Provider outages are handled more cleanly. A request that timed out is no longer repeated, so a stalled provider holds a chat for about two minutes instead of six. Claude and Gemini errors are no longer saved as bot replies in Transcripts, visitors no longer see technical details when a custom provider or embedding request fails, and a reply that drops partway no longer shows twice.
+* Fixed: On a site that reaches the internet through a proxy set in wp-config.php, streamed replies, the Editor Assistant and article images now use that proxy instead of trying to connect directly.
+* Fixed: Behind Cloudflare, visitors no longer share one limit when the chat refreshes its security check, and click tracking and the new-chat email record the visitor's address instead of Cloudflare's.
+* Fixed: On narrow screens an MxChat information notice no longer covers the open admin menu and blocks its links. Notices now sit in the page's content column on the Theme and Admin AI Chat screens too.
 
 = 3.2.27 - October 24, 2026 =
 * Fixed: Security hardening and general security improvements.
@@ -385,6 +402,9 @@ Pro license management uses mxchat.ai, the plugin's own website, and only on sit
 Older releases are archived in the plugin's full version history on WordPress.org.
 
 == Upgrade Notice ==
+
+= 3.2.28 =
+Contextual Awareness no longer trips firewalls, blocked messages say so, the chatbot remembers messages with an ampersand, formatting or code, answers name uploaded files, tables install on older databases, a filter sets chat error messages, and the Pinecone list follows the selected bot.
 
 = 3.2.27 =
 Includes important security improvements. Adds lead auto-delete, xAI images and REST transcript filters, Complianz consent covers embedded chats, and many Transcripts, model, sync and layout fixes. Update recommended.

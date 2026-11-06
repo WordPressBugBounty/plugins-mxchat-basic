@@ -186,7 +186,13 @@ function loadContent() {
         post_status: $statusFilter.val(),
         processed_filter: $processedFilter.val()
     };
-    
+
+    // The list shows the selected bot's data (plan e869bf).
+    const listBotId = $('#mxchat-bot-selector').val();
+    if (listBotId && listBotId !== 'default') {
+        data.bot_id = listBotId;
+    }
+
     //console.log('Loading content for page', currentPage, 'with filters:', data);
     
     $.ajax({
@@ -202,7 +208,7 @@ function loadContent() {
                 let items = response.data.items;
                 
                 if (items.length > 0) {
-                    renderContentItems(items);
+                    renderContentItems(items, response.data.status_error);
                     countPendingWords(items);
                     renderPagination(parseInt(response.data.current_page), parseInt(response.data.total_pages));
                     
@@ -216,6 +222,10 @@ function loadContent() {
                 } else {
                     displayNoResults($processedFilter.val());
                 }
+            } else if (response.success && response.data.status_error) {
+                // Pinecone could not be read: an empty list here would read as "nothing imported".
+                $contentList.html($('<div class="mxchat-kb-error">').text(response.data.status_error));
+                $pagination.empty();
             } else {
                 displayNoResults($processedFilter.val());
             }
@@ -360,8 +370,8 @@ function displayNoResults(processedStatus) {
     const plainText = function(text) { return escapeText(decodeEntities(text)); };
 
     // Render content items
-    function renderContentItems(items) {
-        let html = '';
+    function renderContentItems(items, statusError) {
+        let html = statusError ? '<div class="mxchat-kb-error mxchat-kb-status-error">' + escapeText(statusError) + '</div>' : '';
 
         items.forEach(function(item) {
             const isSelected = selectedItems.has(item.id);
@@ -373,7 +383,11 @@ function displayNoResults(processedStatus) {
             if (isProcessed) {
                 badgeText = chunkCount > 1 ? `In Knowledge Base (${chunkCount} chunks)` : 'In Knowledge Base';
             }
-            const badgeClass = isProcessed ? 'mxchat-kb-processed-badge' : 'mxchat-kb-unprocessed-badge';
+            let badgeClass = isProcessed ? 'mxchat-kb-processed-badge' : 'mxchat-kb-unprocessed-badge';
+            if (item.status_unknown) {
+                badgeText = (mxchatSelector.i18n && mxchatSelector.i18n.statusUnknown) || 'Status unknown';
+                badgeClass = 'mxchat-kb-unknown-badge';
+            }
 
 
             html += `
@@ -384,7 +398,7 @@ function displayNoResults(processedStatus) {
                     <div class="mxchat-kb-content-details">
                         <div class="mxchat-kb-content-title">
                             <a href="${escapeText(item.permalink)}" target="_blank">${plainText(item.title)}</a>
-                            <span class="${badgeClass}">${badgeText}</span>
+                            <span class="${badgeClass}">${escapeText(badgeText)}</span>
                             ${isProcessed ? '<span class="mxchat-kb-last-updated">Last updated: ' + plainText(item.processed_date) + '</span>' : ''}
                         </div>
                         <div class="mxchat-kb-content-meta">

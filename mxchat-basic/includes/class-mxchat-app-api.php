@@ -71,6 +71,10 @@ class MxChat_App_Api {
             array('/app/settings/field', WP_REST_Server::CREATABLE, 'handle_settings_field'),
             array('/app/addons', WP_REST_Server::READABLE, 'handle_addons'),
             array('/app/devices/revoke', WP_REST_Server::CREATABLE, 'handle_device_revoke'),
+            // Instant alerts for the phone making the request; the read is per phone too (4th element).
+            array('/app/devices/push', WP_REST_Server::READABLE, 'handle_push_get', true),
+            array('/app/devices/push', WP_REST_Server::CREATABLE, 'handle_push_set'),
+            array('/app/devices/push/test', WP_REST_Server::CREATABLE, 'handle_push_test'),
         );
         // Pairing is the one route without a token: the single-use code is the credential.
         register_rest_route(self::REST_NAMESPACE, '/app/pair', array(
@@ -81,8 +85,9 @@ class MxChat_App_Api {
             ),
         ));
         foreach ($routes as $route) {
-            // Every POST changes something or spends AI credit: paired phones only.
-            $write = $route[1] !== WP_REST_Server::READABLE;
+            // Every POST changes something or spends AI credit: paired phones only. So does a read that
+            // belongs to one phone (its alert settings): the site token is not a phone.
+            $write = $route[1] !== WP_REST_Server::READABLE || !empty($route[3]);
             register_rest_route(self::REST_NAMESPACE, $route[0], array(
                 array(
                     'methods'             => $route[1],
@@ -247,6 +252,11 @@ class MxChat_App_Api {
 
         add_filter('wp_die_ajax_handler', array($this, 'die_handler'), PHP_INT_MAX);
         add_filter('wp_die_handler', array($this, 'die_handler'), PHP_INT_MAX);
+        // The handler's wp_send_json() is what this route wants; WordPress would report it as a mistake inside a REST callback.
+        $allow_send_json = function ($trigger, $function_name) {
+            return $function_name === 'wp_send_json' ? false : $trigger;
+        };
+        add_filter('doing_it_wrong_trigger_error', $allow_send_json, 10, 2);
         ob_start();
         $error = null;
         try {
@@ -259,6 +269,7 @@ class MxChat_App_Api {
         $output = (string) ob_get_clean();
         remove_filter('wp_die_ajax_handler', array($this, 'die_handler'), PHP_INT_MAX);
         remove_filter('wp_die_handler', array($this, 'die_handler'), PHP_INT_MAX);
+        remove_filter('doing_it_wrong_trigger_error', $allow_send_json, 10);
         $_POST    = $saved_post;
         $_REQUEST = $saved_request;
 
@@ -329,6 +340,8 @@ class MxChat_App_Api {
             'addons'         => class_exists('MxChat_App_Addons') ? MxChat_App_Addons::all() : array(),
             'features'       => class_exists('MxChat_App_Addons') ? MxChat_App_Addons::features() : array(),
             'chats_today'    => $chats_today,
+            // Instant alerts (/app/devices/push); older sites leave the field out.
+            'push'           => class_exists('MxChat_App_Push') && MxChat_App_Push::enabled(),
         ));
     }
 
@@ -846,16 +859,18 @@ class MxChat_App_Api {
     }
 
     public function handle_settings_save($request) {
-        $body  = (array) $request->get_json_params();
-        $key   = (string) ($body['key'] ?? '');
-        $value = $body['value'] ?? '';
-        $value = is_scalar($value) ? (string) $value : '';
+        $body = (array) $request->get_json_params();
+        $key  = is_scalar($body['key'] ?? null) ? (string) $body['key'] : '';
 
         $field  = $this->setting_field($key);
         $is_key = array_key_exists($key, $this->key_fields());
         if (!$field && !$is_key) {
             return new WP_Error('mxchat_app_bad_setting', __('That setting cannot be changed from the app.', 'mxchat'), array('status' => 400));
         }
+        if (!isset($body['value']) || !is_scalar($body['value'])) {
+            return $this->bad_setting_value();
+        }
+        $value = (string) $body['value'];
 
         // The admin autosave stores most fields as given and leaves cleaning to the options.php sanitizer,
         // which is not attached outside wp-admin; clean by type first so the stored value is the same.
@@ -892,6 +907,14 @@ class MxChat_App_Api {
         return rest_ensure_response(array('saved' => true, 'key' => $key, 'value' => $field['type'] === 'number' ? (int) $now : (string) $now));
     }
 
+    /**
+     * A settings value that is missing or is not one text, number or true/false is a malformed request.
+     * It used to be saved as '', which blanks the setting: only an explicit '' clears one (plan 228083).
+     */
+    private function bad_setting_value() {
+        return new WP_Error('mxchat_app_bad_value', __('That value cannot be saved.', 'mxchat'), array('status' => 400));
+    }
+
     /** The full settings schema (MxChat_App_Settings): sections → groups → fields, values filled in. */
     public function handle_settings_schema($request) {
         return rest_ensure_response(array('version' => 1, 'sections' => MxChat_App_Settings::schema()));
@@ -903,12 +926,15 @@ class MxChat_App_Api {
      */
     public function handle_settings_field($request) {
         $body  = (array) $request->get_json_params();
-        $id    = (string) ($body['id'] ?? '');
+        $id    = is_scalar($body['id'] ?? null) ? (string) $body['id'] : '';
         $field = MxChat_App_Settings::field($id);
         if (!$field || in_array($field['type'] ?? '', array('info'), true)) {
             return new WP_Error('mxchat_app_bad_setting', __('That setting cannot be changed from the app.', 'mxchat'), array('status' => 400));
         }
-        $value = MxChat_App_Settings::clean($field, $body['value'] ?? '');
+        if (!isset($body['value']) || !is_scalar($body['value'])) {
+            return $this->bad_setting_value();
+        }
+        $value = MxChat_App_Settings::clean($field, $body['value']);
         if (is_wp_error($value)) {
             return $value;
         }
@@ -1446,5 +1472,68 @@ class MxChat_App_Api {
             return new WP_Error('mxchat_app_no_device', __('This request is not from a paired phone.', 'mxchat'), array('status' => 400));
         }
         return rest_ensure_response(array('revoked' => MxChat_App_Auth::revoke($id), 'device_id' => $id));
+    }
+
+    // ------------------------------------------------------------------
+    // Instant alerts for this phone (MxChat_App_Push)
+    // ------------------------------------------------------------------
+
+    private function this_device() {
+        $devices = MxChat_App_Auth::devices();
+        return ($this->device_id !== '' && isset($devices[$this->device_id]) && is_array($devices[$this->device_id])) ? $devices[$this->device_id] : null;
+    }
+
+    private static function no_device() {
+        return new WP_Error('mxchat_app_no_device', __('This request is not from a paired phone.', 'mxchat'), array('status' => 400));
+    }
+
+    /** {"enabled": bool, "events": {new_chat, messages, handoff, lead}}; the key itself never goes back. */
+    private function push_reply($device) {
+        if (!$device) {
+            return self::no_device();
+        }
+        $push = MxChat_App_Auth::push_of($device);
+        return rest_ensure_response(array('enabled' => $push['key'] !== '', 'events' => $push['events']));
+    }
+
+    public function handle_push_get($request) {
+        return $this->push_reply($this->this_device());
+    }
+
+    /** {"push_key": "mxp_..." | "" (alerts off), "events": {...} (partial)}; either may be left out. */
+    public function handle_push_set($request) {
+        $body = (array) $request->get_json_params();
+        $key  = null;
+        if (array_key_exists('push_key', $body)) {
+            $key = is_string($body['push_key']) ? trim($body['push_key']) : false;
+            if ($key === false || ($key !== '' && !MxChat_App_Auth::valid_push_key($key))) {
+                return new WP_Error('mxchat_app_bad_push_key', __('That alert key is not valid. Turn instant alerts off and on again in the app.', 'mxchat'), array('status' => 400));
+            }
+        }
+        $events = null;
+        if (isset($body['events'])) {
+            if (!is_array($body['events'])) {
+                return new WP_Error('mxchat_app_bad_push_events', __('events must map event names to true or false.', 'mxchat'), array('status' => 400));
+            }
+            $events = array();
+            foreach ($body['events'] as $event => $on) {
+                if (is_string($event) && array_key_exists($event, MxChat_App_Auth::PUSH_DEFAULTS)) {
+                    $events[$event] = rest_sanitize_boolean($on);
+                }
+            }
+        }
+        if ($key === null && $events === null) {
+            return $this->push_reply($this->this_device());
+        }
+        return $this->push_reply(MxChat_App_Auth::set_push($this->device_id, $key, $events));
+    }
+
+    /** A "test" alert to this phone only, waiting for the relay: {"sent": sent|gone|unknown|rate_limited|error|no_key}. */
+    public function handle_push_test($request) {
+        if (!$this->this_device()) {
+            return self::no_device();
+        }
+        $sent = class_exists('MxChat_App_Push') ? MxChat_App_Push::test($this->device_id) : 'error';
+        return rest_ensure_response(array('sent' => $sent));
     }
 }

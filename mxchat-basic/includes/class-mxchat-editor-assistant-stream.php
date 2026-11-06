@@ -270,6 +270,9 @@ class MxChat_Editor_Assistant_Stream {
         }
         $ch = curl_init();
         curl_setopt($ch, CURLOPT_URL, $url);
+        if (class_exists('MxChat_Utils') && method_exists('MxChat_Utils', 'curl_use_wp_proxy')) {
+            MxChat_Utils::curl_use_wp_proxy($ch, $url); // plan ad6e8f
+        }
         curl_setopt($ch, CURLOPT_RETURNTRANSFER, false);
         curl_setopt($ch, CURLOPT_POST, true);
         curl_setopt($ch, CURLOPT_POSTFIELDS, $json_body);

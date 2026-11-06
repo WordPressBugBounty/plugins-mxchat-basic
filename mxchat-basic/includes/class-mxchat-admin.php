@@ -5904,7 +5904,8 @@ public function mxchat_fetch_actions_list() {
             ? $available_callbacks[$action->callback_function]
             : array('label' => $action->callback_function, 'icon' => 'admin-generic');
 
-        $enabled_bots = json_decode($action->enabled_bots, true);
+        // The column is NULL on actions made before it existed.
+        $enabled_bots = json_decode((string) $action->enabled_bots, true);
         if (!is_array($enabled_bots)) {
             $enabled_bots = array('default');
         }
@@ -10659,7 +10660,6 @@ private function enqueue_page_specific_assets($current_page, $plugin_url, $versi
 
             wp_localize_script('mxchat-test-streaming-js', 'mxchatTestStreamingAjax', [
                 'ajax_url' => admin_url('admin-ajax.php'),
-                'nonce' => wp_create_nonce('mxchat_test_streaming_nonce'),
                 'settings_nonce' => wp_create_nonce('mxchat_save_setting_nonce')
             ]);
 
@@ -10819,6 +10819,8 @@ private function localize_page_specific_scripts($current_page) {
                     'skippedHeading'     => __('Skipped', 'mxchat'),
                     // M6: shown while a page-builder page's word count is read from its published page.
                     'countingWords'      => __('Counting words…', 'mxchat'),
+                    // Pinecone could not be read, so the row is neither in nor out (plan e869bf).
+                    'statusUnknown'      => __('Status unknown', 'mxchat'),
                     /* translators: %d: number of items skipped */
                     'skippedCount'       => __('%d skipped', 'mxchat'),
                     /* translators: %d: number of items skipped */

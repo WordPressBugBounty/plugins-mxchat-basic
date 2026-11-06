@@ -149,6 +149,86 @@ class MxChat_App_Auth {
         }
     }
 
+    // ------------------------------------------------------------------
+    // Instant alerts: the phone's relay key and the events it wants, on its device record
+    // (push = {key, events, updated}; sent by MxChat_App_Push, gone with the phone when it is revoked)
+    // ------------------------------------------------------------------
+
+    /** The events a phone gets until it chooses (on when alerts are first turned on, except every message). */
+    const PUSH_DEFAULTS = array('new_chat' => true, 'messages' => false, 'handoff' => true, 'lead' => true);
+
+    /** A relay push key as the relay hands them out. */
+    public static function valid_push_key($key) {
+        return is_string($key) && preg_match('/^mxp_[A-Za-z0-9_-]{30,60}$/', $key) === 1;
+    }
+
+    /** @return array{key:string,events:array<string,bool>} the key ('' = alerts off) and every event, defaults filled in */
+    public static function push_of(array $device) {
+        $push   = isset($device['push']) && is_array($device['push']) ? $device['push'] : array();
+        $stored = isset($push['events']) && is_array($push['events']) ? $push['events'] : array();
+        $events = self::PUSH_DEFAULTS;
+        foreach ($events as $event => $on) {
+            if (array_key_exists($event, $stored)) {
+                $events[$event] = (bool) $stored[$event];
+            }
+        }
+        $key = isset($push['key']) && is_string($push['key']) ? $push['key'] : '';
+        return array('key' => $key, 'events' => $events);
+    }
+
+    /**
+     * Change one phone's alert settings. $key: null keeps it, '' turns alerts off for this phone (the events are
+     * kept for next time). $events: only the events named change. The list is read fresh right before the write,
+     * so a phone revoked meanwhile is not put back.
+     *
+     * @return array|null the device, or null when it is no longer paired
+     */
+    public static function set_push($device_id, $key = null, $events = null) {
+        $devices = self::fresh_devices();
+        if (!isset($devices[$device_id]) || !is_array($devices[$device_id])) {
+            return null;
+        }
+        $push = self::push_of($devices[$device_id]);
+        if (is_array($events)) {
+            foreach ($events as $event => $on) {
+                if (array_key_exists($event, $push['events'])) {
+                    $push['events'][$event] = (bool) $on;
+                }
+            }
+        }
+        $devices[$device_id]['push'] = array(
+            'key'     => $key === null ? $push['key'] : (string) $key,
+            'events'  => $push['events'],
+            'updated' => time(),
+        );
+        self::save_devices($devices);
+        return $devices[$device_id];
+    }
+
+    /** The relay no longer knows this key ("gone" / "unknown"): every phone holding it stops getting alerts. */
+    public static function clear_push_key($key) {
+        $devices = self::fresh_devices();
+        $changed = false;
+        foreach ($devices as $id => $device) {
+            if (is_array($device) && isset($device['push']['key']) && is_string($device['push']['key'])
+                && $device['push']['key'] !== '' && hash_equals($device['push']['key'], (string) $key)) {
+                $devices[$id]['push']['key']     = '';
+                $devices[$id]['push']['updated'] = time();
+                $changed = true;
+            }
+        }
+        if ($changed) {
+            self::save_devices($devices);
+        }
+        return $changed;
+    }
+
+    /** The list as the database has it now, not as this request first read it (a reply can take a while). */
+    private static function fresh_devices() {
+        wp_cache_delete(self::DEVICES_OPTION, 'options');
+        return self::devices();
+    }
+
     /** For the app and the admin list: no hashes. */
     public static function public_device(array $device) {
         $user = get_userdata((int) $device['user_id']);
@@ -192,7 +272,7 @@ class MxChat_App_Auth {
      * @return array|WP_Error
      */
     public static function pair($code, $name, $platform) {
-        $ip_key = 'mxchat_app_pair_tries_' . md5((string) ($_SERVER['REMOTE_ADDR'] ?? ''));
+        $ip_key = 'mxchat_app_pair_tries_' . md5(MxChat_User::mxchat_get_client_ip());
         $tries  = (int) get_transient($ip_key);
         if ($tries >= 10) {
             return new WP_Error('mxchat_app_pair_limited', __('Too many pairing attempts. Wait a few minutes and scan a new code.', 'mxchat'), array('status' => 429));

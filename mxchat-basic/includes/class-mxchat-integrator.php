@@ -4,6 +4,9 @@ if (!defined('ABSPATH')) {
 }
 
 class MxChat_Integrator {
+    /** How the context labels an uploaded file with no Source URL (plan 025ea2); citation_source_rule() looks for it. */
+    const UPLOAD_SOURCE_NOTE = 'an uploaded file, not a web page: it has no link';
+
     private $options;
     private $prompts_options;
     private $chat_count;
@@ -93,6 +96,9 @@ class MxChat_Integrator {
     // results) are not what the visitor sees, so they are not stored; the
     // model's reply and the tool's html are saved by the FC outcome handler.
     private $mxchat_fc_mute_saves = false;
+    // The admin's Test Streaming Compatibility request: a real turn, but not a
+    // conversation, so nothing it says is saved and no one is told about it.
+    private $mxchat_streaming_test = false;
 
 /**
  * Setup streaming headers - call this right before actually streaming
@@ -165,12 +171,14 @@ private function mxchat_provider_call_with_retry($url, $args, $provider_hint = '
  * that are very likely to clear within a few seconds.
  *
  * Transient signals:
- *  - WP_Error with timeout / connection / dns / ssl
+ *  - WP_Error with connection / dns / ssl
  *  - HTTP 429, 502, 503, 504
  *  - Provider-specific overload bodies (gemini "overloaded", openai
  *    "server_error", anthropic "overloaded_error", xai/grok "Rate limit")
  *
  * NOT transient (return false — fail-fast):
+ *  - A request that ran out its timeout (plan 2f10bc): each repeat waits the whole
+ *    timeout again, which held a turn and a PHP worker for six minutes on a hung provider
  *  - 200/2xx (success)
  *  - 401, 403, 404, 422 (auth / config errors — retrying wastes the
  *    budget; the user needs to fix something)
@@ -180,10 +188,11 @@ private function mxchat_provider_call_with_retry($url, $args, $provider_hint = '
  */
 private function mxchat_is_transient_provider_error($response, $provider_hint = '') {
     if (is_wp_error($response)) {
-        $code = $response->get_error_code();
-        return in_array($code, array('http_request_failed', 'connection_failed', 'connection_timeout'), true)
-            || stripos((string) $response->get_error_message(), 'timed out') !== false
-            || stripos((string) $response->get_error_message(), 'timeout') !== false;
+        $message = (string) $response->get_error_message();
+        if (stripos($message, 'timed out') !== false || stripos($message, 'timeout') !== false) {
+            return false; // plan 2f10bc
+        }
+        return in_array($response->get_error_code(), array('http_request_failed', 'connection_failed'), true);
     }
 
     $status = (int) wp_remote_retrieve_response_code($response);
@@ -238,10 +247,9 @@ private function mxchat_is_transient_provider_error($response, $provider_hint = 
  */
 private function mxchat_is_transient_provider_error_raw($http_code, $body, $provider_hint = '', $curl_errno = 0) {
     if ($curl_errno) {
-        // cURL transport-level error (timeout, connection failure, DNS, etc.)
-        // Match the same WP_Error timeout/connection signals the array variant treats as transient.
+        // cURL transport-level error (connection failure, DNS, etc.), the same signals the
+        // array variant treats as transient. A timeout is not one of them (plan 2f10bc).
         return in_array($curl_errno, array(
-            CURLE_OPERATION_TIMEDOUT,
             CURLE_COULDNT_CONNECT,
             CURLE_COULDNT_RESOLVE_HOST,
             CURLE_SSL_CONNECT_ERROR,
@@ -494,6 +502,11 @@ public function get_dynamic_widget_settings($fresh = false) {
         'reset_chat_label' => !empty($options['reset_chat_label']) ? esc_html($options['reset_chat_label']) : esc_html__('Start new chat', 'mxchat'),
         'reset_chat_confirm' => esc_html__('Start a new chat? This clears the current conversation.', 'mxchat'),
         'stop_button_label' => esc_html__('Stop response', 'mxchat'),
+        // plan 9cf8b5: shown when a security firewall blocks a chat request
+        // (a non-JSON 403/406), through the be30c9 error filter with its own code.
+        'firewall_blocked_message' => function_exists('mxchat_visitor_error')
+            ? mxchat_visitor_error(esc_html__('Your message was blocked by this site\'s security firewall. Please try again, or contact the site owner.', 'mxchat'), 'firewall_blocked', array('streaming' => ($options['enable_streaming_toggle'] ?? 'on') === 'on'))
+            : esc_html__('Your message was blocked by this site\'s security firewall. Please try again, or contact the site owner.', 'mxchat'),
         // Screen-reader-only text inside the thinking-dots bubble (plan 67f126):
         // the dots themselves are decorative, so without this the waiting state
         // is silent to assistive tech.
@@ -641,23 +654,30 @@ private function mxchat_fetch_conversation_history_for_ai($session_id, $session_
     ];
 
     foreach (array_reverse($history) as $entry) {
-        // Preserve code blocks while sanitizing other HTML
-        $clean_content = wp_kses($entry['content'], $allowed_tags);
+        $raw_content = (string) $entry['content'];
 
-        // Detect code blocks in content
-        $has_code = false;
-// Replace the HTML check with:
-// Allow messages that contain code blocks or are plain text
-if (strpos($clean_content, '<pre') === false &&
-    strpos($clean_content, '<code') === false &&
-    $clean_content !== strip_tags($entry['content'])) {
-    continue;
-}
-
-        // Skip entries that lost significant content during sanitization
-        if (!$has_code && $clean_content !== strip_tags($entry['content'])) {
+        // A stored html part of a reply (product card, form, image gallery,
+        // video embed) is markup for the visitor's screen, not conversation:
+        // leave it out, as before. Same family test the widget's history
+        // replay uses (an element with an mxchat- class, or form controls).
+        if (preg_match('/<[a-z][^>]*class\s*=\s*["\'][^"\']*\bmxchat-/i', $raw_content)
+            || preg_match('/<(form|input|select|textarea)\b/i', $raw_content)) {
             continue;
         }
+
+        // Preserve code blocks while sanitizing other HTML
+        $clean_content = wp_kses($raw_content, $allowed_tags);
+
+        // plan e00ace: keep every row that still has text once sanitized. The
+        // old test compared wp_kses() output with strip_tags() of the original,
+        // which never matched for a reply with "&" (wp_kses writes &amp;), bold,
+        // a link or a code block, so those turns silently left the model's
+        // history and the bot answered earlier questions again.
+        if (trim(wp_strip_all_tags($clean_content)) === '') {
+            continue;
+        }
+        // The model reads the ampersand the visitor saw, not its entity.
+        $clean_content = str_replace('&amp;', '&', $clean_content);
 
         // More accurate token estimation (1 token â‰ˆ 4 characters)
         $token_estimate = ceil(mb_strlen($clean_content, 'UTF-8') / 4);
@@ -761,11 +781,11 @@ public function register_routes() {
  * @since 3.2.7
  */
 public function mxchat_issue_chat_send_nonce(WP_REST_Request $request) {
-    $ip = '';
-    if (!empty($_SERVER['REMOTE_ADDR'])) {
-        $ip = preg_replace('#[^0-9a-fA-F:\.]#', '', wp_unslash((string) $_SERVER['REMOTE_ADDR']));
-    }
-    if ($ip !== '') {
+    // plan ad6e8f: the resolver the chat rate limit uses. Behind Cloudflare
+    // REMOTE_ADDR is an edge address many visitors share, so one visitor's
+    // request refused the next visitor's for 2 seconds.
+    $ip = MxChat_User::mxchat_get_client_ip();
+    if ($ip !== 'unknown') {
         // Best-effort rate limit. WP transients with sub-second TTL are racy
         // (parallel bursts can squeak through before set_transient completes);
         // we use 2s to make the gate slightly more reliable. Real production
@@ -1148,6 +1168,9 @@ private function mxchat_save_chat_message($session_id, $role, $message, $origina
     global $wpdb;
     $table_name = $wpdb->prefix . 'mxchat_chat_transcripts';
     //error_log("[DEBUG] mxchat_save_chat_message -> START for session_id: {$session_id}, role: {$role}");
+    if ($this->mxchat_streaming_test) {
+        return false;
+    }
     if ($role === 'bot' && $this->mxchat_fc_mute_saves) {
         return false; // plan 77f518
     }
@@ -1363,12 +1386,17 @@ private function mxchat_save_chat_message($session_id, $role, $message, $origina
     $message_id = (int) $wpdb->insert_id;
     MxChat_Utils::flush_session_history_cache($session_id);
 
+    // The MxChat app's instant alerts (MxChat_App_Push) start here: the row id and role, never the text.
+    if ($message_id) {
+        do_action('mxchat_app_message_saved', $session_id, $role, $message_id);
+    }
+
     // 9) Send notification email if this is the first user message in a new session
     if ($wpdb->insert_id && $is_new_session && $role === 'user') {
         $this->send_new_chat_notification($session_id, array(
             'identifier' => $user_identifier,
             'email' => $saved_email ?: $user_email,
-            'ip' => $_SERVER['REMOTE_ADDR']
+            'ip' => MxChat_User::mxchat_get_client_ip()
         ));
     }
     
@@ -1416,7 +1444,7 @@ private function send_new_chat_notification($session_id, $user_info = array()) {
     
     $user_identifier = isset($user_info['identifier']) ? $user_info['identifier'] : 'Guest';
     $user_email = isset($user_info['email']) ? $user_info['email'] : 'Not provided';
-    $user_ip = isset($user_info['ip']) ? $user_info['ip'] : $_SERVER['REMOTE_ADDR'];
+    $user_ip = isset($user_info['ip']) ? $user_info['ip'] : MxChat_User::mxchat_get_client_ip();
     
     $message = sprintf(
         "A new chat session has started on your website.\n\n" .
@@ -1973,7 +2001,12 @@ public function mxchat_handle_save_email_and_response() {
 
     // 1) Always store email in the session store (one row per session, 5658f2)
     if (!empty($email)) {
+        $previous_email = (string) MxChat_Session_Store::get($session_id, 'email', '');
         MxChat_Session_Store::set($session_id, 'email', $email);
+        // A new lead: the MxChat app's instant alert (not again for the same address in this chat).
+        if ($previous_email !== $email) {
+            do_action('mxchat_app_lead_captured', $session_id);
+        }
     }
 
     //   Store name if provided
@@ -2217,6 +2250,62 @@ public function mxchat_lead_capture_gate($bot_id, $session_id, $current_options)
 }
 
 /**
+ * A chat error's visitor-facing text through mxchat_visitor_error() and the
+ * mxchat_error_response filter (plan be30c9), with this request's context.
+ *
+ * @param string      $message    The message the visitor would see.
+ * @param string      $code       The error code sent with it (never changed).
+ * @param string|null $session_id Null reads the request's session_id.
+ * @param string|null $bot_id     Null reads the request's bot_id.
+ * @return string
+ */
+private function mxchat_chat_error_text($message, $code, $session_id = null, $bot_id = null) {
+    // plan 2f10bc: these can carry a host, a port or raw provider text. The site owner
+    // sees them in the chat; a visitor gets the generic line.
+    if (in_array($code, array('custom_provider_network_error', 'custom_provider_http_error', 'custom_provider_response_shape', 'embedding_connection_error', 'embedding_api_error', 'embedding_custom_connection_error', 'embedding_custom_api_error'), true)
+        && !current_user_can('manage_options')) {
+        $message = $this->mxchat_friendly_chat_error(0, '');
+    }
+    if (!function_exists('mxchat_visitor_error')) {
+        return (string) $message;
+    }
+    if ($session_id === null) {
+        $session_id = isset($_POST['session_id']) ? MxChat_Utils::sanitize_session_id(wp_unslash($_POST['session_id'])) : '';
+    }
+    if ($bot_id === null) {
+        $bot_id = isset($_POST['bot_id']) ? sanitize_key(wp_unslash($_POST['bot_id'])) : 'default';
+    }
+    $bot_id = ($bot_id === '') ? 'default' : $bot_id;
+    return mxchat_visitor_error($message, $code, array(
+        'session_id' => (string) $session_id,
+        'bot_id'     => $bot_id,
+        'streaming'  => (bool) $this->is_streaming,
+        'provider'   => $this->mxchat_error_provider($bot_id),
+    ));
+}
+
+/**
+ * The provider of a bot's chat model, for the error filter's context: the
+ * names the mxchat_stream_request filter uses (openai, claude, gemini, xai,
+ * deepseek, openrouter, custom), or '' when unknown.
+ */
+private function mxchat_error_provider($bot_id) {
+    $opts  = $this->get_bot_options($bot_id);
+    $model = !empty($opts['model']) ? (string) $opts['model'] : (string) ($this->options['model'] ?? '');
+    $model = strtolower($model);
+    if ($model === 'openrouter') { return 'openrouter'; }
+    if ($model === 'custom-provider') { return 'custom'; }
+    switch (explode('-', $model)[0]) {
+        case 'gpt': case 'o1': case 'o3': case 'o4': return 'openai';
+        case 'claude': return 'claude';
+        case 'gemini': return 'gemini';
+        case 'grok': return 'xai';
+        case 'deepseek': return 'deepseek';
+    }
+    return '';
+}
+
+/**
  * Send error response in appropriate format based on streaming mode
  * ADDED: Helper method to consistently handle errors in both streaming and non-streaming modes
  *
@@ -2224,6 +2313,7 @@ public function mxchat_lead_capture_gate($bot_id, $session_id, $current_options)
  * @param string $error_code Optional error code for debugging
  */
 private function send_error_response($error_message, $error_code = 'api_error') {
+    $error_message = $this->mxchat_chat_error_text($error_message, $error_code);
     if ($this->is_streaming) {
         echo "data: " . json_encode([
             'error' => true,
@@ -2258,6 +2348,7 @@ public function mxchat_handle_chat_request() {
     //   Check if this is a streaming request
     //   Allow force_streaming_test parameter to bypass the setting check (for admin compatibility testing)
     $force_streaming_test = isset($_POST['force_streaming_test']) && $_POST['force_streaming_test'] === '1' && current_user_can('administrator');
+    $this->mxchat_streaming_test = $force_streaming_test;
     $is_streaming = isset($_POST['action']) && $_POST['action'] === 'mxchat_stream_chat' &&
                    ($force_streaming_test || (isset($current_options['enable_streaming_toggle']) && $current_options['enable_streaming_toggle'] === 'on'));
 
@@ -2292,7 +2383,7 @@ public function mxchat_handle_chat_request() {
         if ($ban_handler->check_ban($user_ip, 'ip')) {
             wp_send_json([
                 'success' => false,
-                'message' => esc_html__('Access denied. Your IP address has been banned.', 'mxchat'),
+                'message' => $this->mxchat_chat_error_text(esc_html__('Access denied. Your IP address has been banned.', 'mxchat'), 'banned_ip', null, $bot_id),
                 'status' => 'banned'
             ]);
             wp_die();
@@ -2318,7 +2409,7 @@ public function mxchat_handle_chat_request() {
             if ($ban_handler->check_ban($email_to_check, 'email')) {
                 wp_send_json([
                     'success' => false,
-                    'message' => esc_html__('Access denied. Your email address has been banned.', 'mxchat'),
+                    'message' => $this->mxchat_chat_error_text(esc_html__('Access denied. Your email address has been banned.', 'mxchat'), 'banned_email', null, $bot_id),
                     'status' => 'banned'
                 ]);
                 wp_die();
@@ -2355,7 +2446,7 @@ public function mxchat_handle_chat_request() {
     if ($rate_limit_result !== true) {
         wp_send_json([
             'success' => false,
-            'message' => $rate_limit_result['message'],
+            'message' => $this->mxchat_chat_error_text($rate_limit_result['message'], 'rate_limit_exceeded', null, $bot_id),
             'status' => 'rate_limit_exceeded'
         ]);
         wp_die();
@@ -2374,7 +2465,7 @@ public function mxchat_handle_chat_request() {
     }
 
     if (empty($session_id)) {
-        wp_send_json_error(esc_html__('Session ID is missing.', 'mxchat'));
+        wp_send_json_error($this->mxchat_chat_error_text(esc_html__('Session ID is missing.', 'mxchat'), 'missing_session', '', $bot_id));
         wp_die();
     }
 
@@ -2383,7 +2474,7 @@ public function mxchat_handle_chat_request() {
     $current_user_identifier = MxChat_User::mxchat_get_user_identifier();
     $session_owner = MxChat_Session_Store::get($session_id, 'owner');
 
-    if (!$session_owner || $session_owner !== $current_user_identifier) {
+    if (!$force_streaming_test && (!$session_owner || $session_owner !== $current_user_identifier)) {
         MxChat_Session_Store::set($session_id, 'owner', $current_user_identifier);
     }
 
@@ -2404,7 +2495,7 @@ public function mxchat_handle_chat_request() {
 
     // Validate and sanitize the incoming message
     if (empty($_POST['message'])) {
-        wp_send_json_error(esc_html__('No message received.', 'mxchat'));
+        wp_send_json_error($this->mxchat_chat_error_text(esc_html__('No message received.', 'mxchat'), 'empty_message', $session_id, $bot_id));
         wp_die();
     }
 
@@ -2419,7 +2510,7 @@ public function mxchat_handle_chat_request() {
             wp_send_json([
                 'success' => false,
                 /* translators: %d: maximum allowed characters */
-                'message' => sprintf(esc_html__('Your message is too long. Please keep it under %d characters.', 'mxchat'), $mxchat_max_input_length),
+                'message' => $this->mxchat_chat_error_text(sprintf(esc_html__('Your message is too long. Please keep it under %d characters.', 'mxchat'), $mxchat_max_input_length), 'message_too_long', $session_id, $bot_id),
                 'status'  => 'message_too_long'
             ]);
             wp_die();
@@ -2484,8 +2575,21 @@ public function mxchat_handle_chat_request() {
 
         //   Get page context if provided
         $page_context = null;
-        if (isset($_POST['page_context']) && !empty($_POST['page_context'])) {
+        // plan 9cf8b5: the widget sends the page context as base64 of its JSON
+        // (page_context_b64) so a security firewall never sees the page's raw
+        // text. The plain page_context field from older cached scripts and
+        // add-ons is still read when no encoded one decodes.
+        $page_context_raw = '';
+        if (!empty($_POST['page_context_b64']) && is_string($_POST['page_context_b64'])) {
+            $page_context_decoded = base64_decode(wp_unslash($_POST['page_context_b64']), true);
+            if (is_string($page_context_decoded) && $page_context_decoded !== '') {
+                $page_context_raw = $page_context_decoded;
+            }
+        }
+        if ($page_context_raw === '' && isset($_POST['page_context']) && !empty($_POST['page_context']) && is_string($_POST['page_context'])) {
             $page_context_raw = stripslashes($_POST['page_context']);
+        }
+        if ($page_context_raw !== '') {
             $page_context = json_decode($page_context_raw, true);
             
             // Validate page context structure
@@ -2632,7 +2736,9 @@ public function mxchat_handle_chat_request() {
     if (is_email($message)) {
             // Add the email to Loops
             $this->add_email_to_loops($message);
-            
+            // A lead left in the chat: the MxChat app's instant alert.
+            do_action('mxchat_app_lead_captured', $session_id);
+
             // Get the user's success message instruction using current_options
             $user_success_message = $current_options['email_capture_response'] ?? __('Thank you for providing your email! You\'ve been added to our list.', 'mxchat');
             
@@ -2651,7 +2757,9 @@ public function mxchat_handle_chat_request() {
                 
                 // Add the extracted email to Loops
                 $this->add_email_to_loops($extracted_email);
-                
+                // A lead left in the chat: the MxChat app's instant alert.
+                do_action('mxchat_app_lead_captured', $session_id);
+
                 // Get the user's success message instruction using current_options
                 $user_success_message = $current_options['email_capture_response'] ?? __('Thank you for providing your email! You\'ve been added to our list.', 'mxchat');
                 
@@ -2757,7 +2865,7 @@ public function mxchat_handle_chat_request() {
 
                     wp_send_json_success($agent_response);
                 } catch (\Exception $e) {
-                    wp_send_json_error(esc_html__('Failed to send message to agent', 'mxchat'));
+                    wp_send_json_error($this->mxchat_chat_error_text(esc_html__('Failed to send message to agent', 'mxchat'), 'agent_send_failed', $session_id, $bot_id));
                 }
                 wp_die();
             }
@@ -2855,7 +2963,7 @@ public function mxchat_handle_chat_request() {
 
                     $pdf_error_response = [
                         'success' => false,
-                        'message' => $this->fallbackResponse['text']
+                        'message' => $this->mxchat_chat_error_text($this->fallbackResponse['text'], 'pdf_error', $session_id, $bot_id)
                     ];
                     
                     if ($testing_data !== null) {
@@ -2937,6 +3045,10 @@ public function mxchat_handle_chat_request() {
         // Get session start timestamp - when persistence is OFF, only include messages from this page load
         $session_start_timestamp = isset($_POST['session_start_timestamp']) ? intval($_POST['session_start_timestamp']) : 0;
         $conversation_history = $this->mxchat_fetch_conversation_history_for_ai($session_id, $session_start_timestamp);
+        if ($this->mxchat_streaming_test) {
+            // The model reads the message from the saved rows, and this request saves none.
+            $conversation_history[] = array('role' => 'user', 'content' => $message);
+        }
         $this->mxchat_increment_chat_count();
         
         // Generate embedding for the user's query - USE BOT-SPECIFIC API KEY
@@ -2969,8 +3081,8 @@ public function mxchat_handle_chat_request() {
 
         // Check if the embedding generation returned an error
         if (!$skip_query_embedding && is_array($user_message_embedding) && isset($user_message_embedding['error'])) {
-            $error_message = $user_message_embedding['error'];
             $error_code = $user_message_embedding['error_code'] ?? 'embedding_error';
+            $error_message = $this->mxchat_chat_error_text($user_message_embedding['error'], $error_code, $session_id, $bot_id);
 
             // FIXED: Send error in appropriate format based on streaming mode
             if ($is_streaming) {
@@ -2994,7 +3106,7 @@ public function mxchat_handle_chat_request() {
 
         // Check if the embedding is valid
         if (!$skip_query_embedding && (!is_array($user_message_embedding) || empty($user_message_embedding))) {
-            $error_message = esc_html__('Unable to process your message. The embedding service is not responding correctly.', 'mxchat');
+            $error_message = $this->mxchat_chat_error_text(esc_html__('Unable to process your message. The embedding service is not responding correctly.', 'mxchat'), 'invalid_embedding', $session_id, $bot_id);
 
             // FIXED: Send error in appropriate format based on streaming mode
             if ($is_streaming) {
@@ -3273,12 +3385,12 @@ if ($testing_data !== null && !empty($this->current_valid_urls)) {
 
         $response = $this->mxchat_generate_response(
             $context_content,
-            $current_options['api_key'] ?? $this->options['api_key'],
-            $current_options['xai_api_key'] ?? $this->options['xai_api_key'],
-            $current_options['claude_api_key'] ?? $this->options['claude_api_key'],
-            $current_options['deepseek_api_key'] ?? $this->options['deepseek_api_key'],
-            $current_options['gemini_api_key'] ?? $this->options['gemini_api_key'],
-            $current_options['openrouter_api_key'] ?? $this->options['openrouter_api_key'],
+            $current_options['api_key'] ?? $this->options['api_key'] ?? '',
+            $current_options['xai_api_key'] ?? $this->options['xai_api_key'] ?? '',
+            $current_options['claude_api_key'] ?? $this->options['claude_api_key'] ?? '',
+            $current_options['deepseek_api_key'] ?? $this->options['deepseek_api_key'] ?? '',
+            $current_options['gemini_api_key'] ?? $this->options['gemini_api_key'] ?? '',
+            $current_options['openrouter_api_key'] ?? $this->options['openrouter_api_key'] ?? '',
             $conversation_history,
             $is_streaming,
             $session_id,
@@ -3301,8 +3413,8 @@ if ($testing_data !== null && !empty($this->current_valid_urls)) {
             // If we get here, streaming fell back to regular response, continue
             // But if there's an error, we need to send it as SSE format since headers are already set
             if (is_array($response) && isset($response['error'])) {
-                $error_message = $response['error'];
                 $error_code = $response['error_code'] ?? 'api_error';
+                $error_message = $this->mxchat_chat_error_text($response['error'], $error_code, $session_id, $bot_id);
                 // Send error in SSE format that the client JS can handle
                 echo "data: " . json_encode([
                     'error' => true,
@@ -3320,7 +3432,7 @@ if ($testing_data !== null && !empty($this->current_valid_urls)) {
         // Check if the response is an error array (non-streaming mode)
         if (is_array($response) && isset($response['error'])) {
             wp_send_json_error([
-                'error_message' => $response['error'],
+                'error_message' => $this->mxchat_chat_error_text($response['error'], $response['error_code'] ?? 'api_error', $session_id, $bot_id),
                 'error_code' => $response['error_code'] ?? 'api_error'
             ]);
             wp_die();
@@ -3571,8 +3683,8 @@ private function mxchat_check_intent_and_invoke_callback($message, $user_id, $se
 
     // Check if embedding generation returned an error
     if (is_array($user_embedding) && isset($user_embedding['error'])) {
-        $error_message = $user_embedding['error'];
         $error_code = $user_embedding['error_code'] ?? 'embedding_error';
+        $error_message = $this->mxchat_chat_error_text($user_embedding['error'], $error_code, $session_id, $current_bot_id);
 
         // FIXED: Send error in appropriate format based on streaming mode
         if ($this->is_streaming) {
@@ -3596,7 +3708,7 @@ private function mxchat_check_intent_and_invoke_callback($message, $user_id, $se
 
     // Check if embedding is valid
     if (!is_array($user_embedding) || empty($user_embedding)) {
-        $error_message = esc_html__('Unable to process your message. The embedding service is not responding correctly.', 'mxchat');
+        $error_message = $this->mxchat_chat_error_text(esc_html__('Unable to process your message. The embedding service is not responding correctly.', 'mxchat'), 'invalid_embedding', $session_id, $current_bot_id);
 
         // FIXED: Send error in appropriate format based on streaming mode
         if ($this->is_streaming) {
@@ -5771,6 +5883,9 @@ function mxchat_fetch_new_messages() {
     wp_die();
 }
 public function mxchat_live_agent_handover($message, $user_id, $session_id) {
+    // The visitor asked for a person: the MxChat app's instant alert (whether or not an agent is available).
+    do_action('mxchat_app_handoff_requested', $session_id, 'slack');
+
     // First check if live agents are available.
     // Outside the SLACK availability schedule this behaves exactly like the
     // manual toggle being off — same away message, same stay-in-AI-mode path
@@ -6261,6 +6376,9 @@ private function mxchat_recent_handoff_history($session_id, $count = 5) {
  * out-of-band (email, phone, its own chat).
  */
 public function mxchat_webhook_live_agent_handover($message, $user_id, $session_id) {
+    // The visitor asked for a person: the MxChat app's instant alert (whether or not an agent is available).
+    do_action('mxchat_app_handoff_requested', $session_id, 'webhook');
+
     // Availability gate — mirrors Slack/Telegram: the manual status toggle AND
     // the webhook channel's own schedule. Backstop only; off-hours the tool is
     // normally withheld from the model by the registry.
@@ -6565,6 +6683,9 @@ private function generate_channel_name($session_id) {
  * Creates a forum topic in the Telegram group and notifies agents
  */
 public function mxchat_telegram_live_agent_handover($message, $user_id, $session_id) {
+    // The visitor asked for a person: the MxChat app's instant alert (whether or not an agent is available).
+    do_action('mxchat_app_handoff_requested', $session_id, 'telegram');
+
     // Check if Telegram agents are available. Telegram has its OWN availability
     // schedule, independent of Slack's (plan 99d7a4 — each Integrations tab
     // owns its scheduler). Backstop only; the tool is normally withheld
@@ -8748,7 +8869,7 @@ private function find_relevant_content_wordpress($user_embedding, $bot_id = 'def
         if ($citation_links_enabled) {
             $content .= "CRITICAL: When creating hyperlinks, always use proper markdown format with descriptive text: " .
                        "[descriptive text](url). NEVER use empty brackets like [](url). The text in brackets must describe what the link is about. " .
-                       "Only cite references that have a URL. Do not cite or add source labels to Information sections that have no URL.";
+                       $this->citation_source_rule($content);
         } else {
             $content .= "IMPORTANT: Do not include any citation links, source URLs, or hyperlinks in your responses. " .
                        "Simply provide helpful answers based on the reference information without citing sources.";
@@ -8756,6 +8877,22 @@ private function find_relevant_content_wordpress($user_embedding, $bot_id = 'def
     }
 
     return trim($content);
+}
+
+/**
+ * The closing citation rule of the response guidelines (plan 228083). Unchanged unless the
+ * references hold an uploaded file with no Source URL: "only cite references that have a URL"
+ * also stopped the model naming that file, so a plain answer never did, though the 3.2.24
+ * changelog and the docs say answers name the file and page in plain text.
+ *
+ * @param string $content Context built so far, with its Source lines.
+ * @return string
+ */
+private function citation_source_rule($content) {
+    if (strpos($content, self::UPLOAD_SOURCE_NOTE) === false) {
+        return "Only cite references that have a URL. Do not cite or add source labels to Information sections that have no URL.";
+    }
+    return "Only link to references that have a URL. A reference with a Source line is an uploaded file with no link: cite it by naming that file, and its page when one is given, in plain text, as you would link a web page. Do not cite or add source labels to Information sections that have no URL.";
 }
 
 /**
@@ -8785,7 +8922,7 @@ private function append_source_citation(&$content, &$valid_urls, $source_url, $b
         } else {
             // A page of an uploaded PDF names its page (plan dcc19d).
             $pdf_page = MxChat_Utils::upload_source_page($source_url);
-            $content .= "Source: " . MxChat_Utils::upload_source_name($source_url) . ($pdf_page > 0 ? ", page " . $pdf_page : "") . " (an uploaded file, not a web page: it has no link)\n\n";
+            $content .= "Source: " . MxChat_Utils::upload_source_name($source_url) . ($pdf_page > 0 ? ", page " . $pdf_page : "") . " (" . self::UPLOAD_SOURCE_NOTE . ")\n\n";
         }
         return;
     }
@@ -9038,48 +9175,56 @@ private function find_relevant_content_pinecone($user_embedding, $bot_id = 'defa
     //error_log("  - Endpoint: " . $api_endpoint);
     //error_log("  - Namespace in request: " . (!empty($namespace) ? $namespace : 'NOT SET'));
     
-    $response = wp_remote_post($api_endpoint, array(
-        'headers' => array(
-            'Api-Key' => $api_key,
-            'accept' => 'application/json',
-            'content-type' => 'application/json'
-        ),
-        'body' => wp_json_encode($request_body),
-        'timeout' => 30
-    ));
+    // plan 8b8651: a companion plugin may answer from its own vector store. Its
+    // matches pass the same threshold and role checks below.
+    $results = MxChat_Utils::pre_vector_query($request_body, array('source' => 'chat', 'bot_id' => $bot_id, 'namespace' => $namespace));
+    $from_companion = ($results !== null);
+
+    if (!$from_companion) {
+        $response = wp_remote_post($api_endpoint, array(
+            'headers' => array(
+                'Api-Key' => $api_key,
+                'accept' => 'application/json',
+                'content-type' => 'application/json'
+            ),
+            'body' => wp_json_encode($request_body),
+            'timeout' => 30
+        ));
     
-    if (is_wp_error($response)) {
-        //error_log("MXCHAT DEBUG ERROR: WP Error in Pinecone request: " . $response->get_error_message());
-        // Store empty array for valid URLs
-        $this->current_valid_urls = [];
-        return '';
-    }
+        if (is_wp_error($response)) {
+            //error_log("MXCHAT DEBUG ERROR: WP Error in Pinecone request: " . $response->get_error_message());
+            // Store empty array for valid URLs
+            $this->current_valid_urls = [];
+            return '';
+        }
     
-    $response_code = wp_remote_retrieve_response_code($response);
-    //error_log("MXCHAT DEBUG: Pinecone response code: " . $response_code);
+        $response_code = wp_remote_retrieve_response_code($response);
+        //error_log("MXCHAT DEBUG: Pinecone response code: " . $response_code);
     
-    if ($response_code !== 200) {
+        if ($response_code !== 200) {
+            $response_body = wp_remote_retrieve_body($response);
+            //error_log("MXCHAT DEBUG ERROR: Pinecone API error response: " . substr($response_body, 0, 500));
+            // Store empty array for valid URLs
+            $this->current_valid_urls = [];
+            return '';
+        }
+    
+        // ADD DETAILED DEBUG SECTION HERE
         $response_body = wp_remote_retrieve_body($response);
-        //error_log("MXCHAT DEBUG ERROR: Pinecone API error response: " . substr($response_body, 0, 500));
-        // Store empty array for valid URLs
-        $this->current_valid_urls = [];
-        return '';
+        //error_log("MXCHAT DEBUG: Raw Pinecone response length: " . strlen($response_body));
+    
+        $results = json_decode($response_body, true);
+    
+        if (json_last_error() !== JSON_ERROR_NONE) {
+            //error_log("MXCHAT DEBUG ERROR: JSON decode error: " . json_last_error_msg());
+            //error_log("MXCHAT DEBUG: First 500 chars of response: " . substr($response_body, 0, 500));
+            // Store empty array for valid URLs
+            $this->current_valid_urls = [];
+            return '';
+        }
+    
     }
-    
-    // ADD DETAILED DEBUG SECTION HERE
-    $response_body = wp_remote_retrieve_body($response);
-    //error_log("MXCHAT DEBUG: Raw Pinecone response length: " . strlen($response_body));
-    
-    $results = json_decode($response_body, true);
-    
-    if (json_last_error() !== JSON_ERROR_NONE) {
-        //error_log("MXCHAT DEBUG ERROR: JSON decode error: " . json_last_error_msg());
-        //error_log("MXCHAT DEBUG: First 500 chars of response: " . substr($response_body, 0, 500));
-        // Store empty array for valid URLs
-        $this->current_valid_urls = [];
-        return '';
-    }
-    
+
     //error_log("MXCHAT DEBUG: Pinecone response structure:");
     //error_log("  - Has 'matches' key: " . (isset($results['matches']) ? 'yes' : 'no'));
     //error_log("  - Has 'namespace' key: " . (isset($results['namespace']) ? 'yes (' . $results['namespace'] . ')' : 'no'));
@@ -9226,7 +9371,7 @@ private function find_relevant_content_pinecone($user_embedding, $bot_id = 'defa
             $chunks_remaining = min($max_chunks_per_source, $max_total_chunks - $total_chunks_used);
 
             // Fetch chunks for this URL with limit
-            $full_text = $this->reassemble_chunks_from_pinecone($source_url, $bot_config, $chunks_remaining, $chunks_in_this_source);
+            $full_text = $from_companion ? '' : $this->reassemble_chunks_from_pinecone($source_url, $bot_config, $chunks_remaining, $chunks_in_this_source);
 
             // If fetching all chunks fails, fall back to matched chunks
             if (empty($full_text)) {
@@ -9384,7 +9529,7 @@ private function find_relevant_content_pinecone($user_embedding, $bot_id = 'defa
         if ($citation_links_enabled) {
             $content .= "CRITICAL: When creating hyperlinks, always use proper markdown format with descriptive text: " .
                        "[descriptive text](url). NEVER use empty brackets like [](url). The text in brackets must describe what the link is about. " .
-                       "Only cite references that have a URL. Do not cite or add source labels to Information sections that have no URL.";
+                       $this->citation_source_rule($content);
         } else {
             $content .= "IMPORTANT: Do not include any citation links, source URLs, or hyperlinks in your responses. " .
                        "Simply provide helpful answers based on the reference information without citing sources.";
@@ -9877,7 +10022,7 @@ private function find_relevant_content_pinecone_documents($user_embedding, $bot_
         if ($citation_links_enabled) {
             $content .= "CRITICAL: When creating hyperlinks, always use proper markdown format with descriptive text: " .
                        "[descriptive text](url). NEVER use empty brackets like [](url). The text in brackets must describe what the link is about. " .
-                       "Only cite references that have a URL. Do not cite or add source labels to Information sections that have no URL.";
+                       $this->citation_source_rule($content);
         } else {
             $content .= "IMPORTANT: Do not include any citation links, source URLs, or hyperlinks in your responses. " .
                        "Simply provide helpful answers based on the reference information without citing sources.";
@@ -10585,31 +10730,37 @@ private function find_relevant_products_pinecone($user_embedding) {
         return trim($doc_content);
     }
 
-    $response = wp_remote_post($api_endpoint, array(
-        'headers' => array(
-            'Api-Key' => $api_key,
-            'accept' => 'application/json',
-            'content-type' => 'application/json'
-        ),
-        'body' => wp_json_encode($request_body),
-        'timeout' => 30
-    ));
+    // plan 8b8651: same seam as the chat query.
+    $results = MxChat_Utils::pre_vector_query($request_body, array('source' => 'products', 'bot_id' => 'default', 'namespace' => ''));
 
-    if (is_wp_error($response)) {
-        //error_log('Pinecone product query error: ' . $response->get_error_message());
-        return '';
+    if ($results === null) {
+        $response = wp_remote_post($api_endpoint, array(
+            'headers' => array(
+                'Api-Key' => $api_key,
+                'accept' => 'application/json',
+                'content-type' => 'application/json'
+            ),
+            'body' => wp_json_encode($request_body),
+            'timeout' => 30
+        ));
+
+        if (is_wp_error($response)) {
+            //error_log('Pinecone product query error: ' . $response->get_error_message());
+            return '';
+        }
+
+        $response_code = wp_remote_retrieve_response_code($response);
+        //error_log('Pinecone response code: ' . $response_code);
+
+        if ($response_code !== 200) {
+            //error_log('Pinecone API error during product search: ' . wp_remote_retrieve_body($response));
+            return '';
+        }
+
+        $results = json_decode(wp_remote_retrieve_body($response), true);
+        //error_log('Pinecone raw response: ' . wp_remote_retrieve_body($response));
+
     }
-
-    $response_code = wp_remote_retrieve_response_code($response);
-    //error_log('Pinecone response code: ' . $response_code);
-
-    if ($response_code !== 200) {
-        //error_log('Pinecone API error during product search: ' . wp_remote_retrieve_body($response));
-        return '';
-    }
-
-    $results = json_decode(wp_remote_retrieve_body($response), true);
-    //error_log('Pinecone raw response: ' . wp_remote_retrieve_body($response));
 
     if (empty($results['matches'])) {
         //error_log('No matches found in Pinecone response');
@@ -12348,25 +12499,7 @@ private function mxchat_generate_response_openrouter_stream($selected_model, $op
                 $relevant_content,
                 $session_id
             );
-            
-            // Save bot response to transcript
-            if (!empty($regular_response) && !empty($session_id)) {
-                $this->mxchat_save_chat_message($session_id, 'bot', $regular_response);
-            }
-            
-            $response_data = [
-                'text' => $regular_response,
-                'html' => '',
-                'session_id' => $session_id
-            ];
-            
-            if ($testing_data !== null) {
-                $response_data['testing_data'] = $testing_data;
-            }
-            
-            header('Content-Type: application/json');
-            echo json_encode($response_data);
-            return true;
+            return $this->mxchat_stream_emit_fallback('openai', $regular_response, $session_id, $testing_data); // plan 2f10bc
         }
 
         $body = json_encode([
@@ -12418,6 +12551,7 @@ private function mxchat_generate_response_openrouter_stream($selected_model, $op
                 $bot_id
             );
             curl_setopt($ch, CURLOPT_URL, $stream_url);
+            MxChat_Utils::curl_use_wp_proxy($ch, $stream_url); // plan ad6e8f
             curl_setopt($ch, CURLOPT_RETURNTRANSFER, false);
             curl_setopt($ch, CURLOPT_POST, true);
             curl_setopt($ch, CURLOPT_POSTFIELDS, $stream_body);
@@ -12595,25 +12729,7 @@ private function mxchat_generate_response_openai_stream($selected_model, $api_ke
                 $relevant_content,
                 $session_id
             );
-            
-            // Save bot response to transcript
-            if (!empty($regular_response) && !empty($session_id)) {
-                $this->mxchat_save_chat_message($session_id, 'bot', $regular_response);
-            }
-            
-            $response_data = [
-                'text' => $regular_response,
-                'html' => '',
-                'session_id' => $session_id
-            ];
-            
-            if ($testing_data !== null) {
-                $response_data['testing_data'] = $testing_data;
-            }
-            
-            header('Content-Type: application/json');
-            echo json_encode($response_data);
-            return true;
+            return $this->mxchat_stream_emit_fallback('openai', $regular_response, $session_id, $testing_data); // plan 2f10bc
         }
 
         // Build request body with optimal settings for fast streaming
@@ -12684,6 +12800,7 @@ private function mxchat_generate_response_openai_stream($selected_model, $api_ke
                 $bot_id
             );
             curl_setopt($ch, CURLOPT_URL, $stream_url);
+            MxChat_Utils::curl_use_wp_proxy($ch, $stream_url); // plan ad6e8f
             curl_setopt($ch, CURLOPT_RETURNTRANSFER, false);
             curl_setopt($ch, CURLOPT_POST, true);
             curl_setopt($ch, CURLOPT_POSTFIELDS, $stream_body);
@@ -12884,6 +13001,10 @@ private function mxchat_generate_response_openai_stream($selected_model, $api_ke
  */
 private function mxchat_stream_emit_fallback($provider_hint, $regular_response, $session_id, $testing_data = null) {
     $is_error_array = is_array($regular_response) && isset($regular_response['error']);
+    if ($is_error_array) {
+        // plan be30c9: the visitor-facing text through mxchat_error_response.
+        $regular_response['error'] = $this->mxchat_chat_error_text($regular_response['error'], $regular_response['error_code'] ?? 'api_error', $session_id, $this->get_current_bot_id($session_id));
+    }
 
     if ($this->streaming_headers_sent) {
         if ($is_error_array) {
@@ -12906,7 +13027,8 @@ private function mxchat_stream_emit_fallback($provider_hint, $regular_response, 
         if (!empty($fallback_message) && !empty($session_id)) {
             $this->mxchat_save_chat_message($session_id, 'bot', $fallback_message);
         }
-        echo "data: " . json_encode(['content' => $fallback_message]) . "\n\n";
+        // plan 2f10bc: replaces what a dropped stream already showed instead of adding to it.
+        echo "data: " . json_encode(['replace_content' => $fallback_message]) . "\n\n";
         echo "data: [DONE]\n\n";
         flush();
         return true;
@@ -12914,7 +13036,7 @@ private function mxchat_stream_emit_fallback($provider_hint, $regular_response, 
 
     // SSE channel never opened — clean JSON fallback.
     if ($is_error_array) {
-        header('Content-Type: application/json');
+        if (!headers_sent()) { header('Content-Type: application/json'); }
         echo json_encode(array(
             'error' => true,
             'error_message' => $regular_response['error'],
@@ -12939,7 +13061,7 @@ private function mxchat_stream_emit_fallback($provider_hint, $regular_response, 
     if ($testing_data !== null) {
         $response_data['testing_data'] = $testing_data;
     }
-    header('Content-Type: application/json');
+    if (!headers_sent()) { header('Content-Type: application/json'); }
     echo json_encode($response_data);
     return true;
 }
@@ -13089,6 +13211,7 @@ private function mxchat_generate_response_custom_stream($selected_model, $conver
                 $bot_id
             );
             curl_setopt($ch, CURLOPT_URL, $stream_url);
+            MxChat_Utils::curl_use_wp_proxy($ch, $stream_url); // plan ad6e8f
             curl_setopt($ch, CURLOPT_RETURNTRANSFER, false);
             curl_setopt($ch, CURLOPT_POST, true);
             curl_setopt($ch, CURLOPT_POSTFIELDS, $stream_body);
@@ -13529,6 +13652,7 @@ private function mxchat_web_search_streaming_response($request_body, $api_key, $
         $bot_id
     );
     curl_setopt($ch, CURLOPT_URL, $stream_url);
+    MxChat_Utils::curl_use_wp_proxy($ch, $stream_url); // plan ad6e8f
     curl_setopt($ch, CURLOPT_RETURNTRANSFER, false);
     curl_setopt($ch, CURLOPT_POST, true);
     curl_setopt($ch, CURLOPT_POSTFIELDS, $stream_body);
@@ -13748,30 +13872,7 @@ private function mxchat_generate_response_claude_stream($selected_model, $claude
                 $relevant_content,
                 $session_id
             );
-            
-            // Save bot response to transcript
-            if (!empty($regular_response) && !empty($session_id)) {
-                $this->mxchat_save_chat_message($session_id, 'bot', $regular_response);
-            }
-            
-            // Return as JSON with testing data
-            $response_data = [
-                'text' => $regular_response,
-                'html' => '',
-                'session_id' => $session_id
-            ];
-            
-            if ($testing_data !== null) {
-                $response_data['testing_data'] = $testing_data;
-                //error_log("MxChat Testing: Added testing data to Claude fallback response");
-            }
-            
-            // Clear any streaming headers and send JSON
-            if (headers_sent() === false) {
-                header('Content-Type: application/json');
-            }
-            echo json_encode($response_data);
-            return true; // Indicate we handled the response
+            return $this->mxchat_stream_emit_fallback('anthropic', $regular_response, $session_id, $testing_data); // plan 2f10bc
         }
 
         // V2 retry-on-initial-connect: setup_streaming_headers is lazy-fired in WRITEFUNCTION.
@@ -13813,6 +13914,7 @@ private function mxchat_generate_response_claude_stream($selected_model, $claude
                 $bot_id
             );
             curl_setopt($ch, CURLOPT_URL, $stream_url);
+            MxChat_Utils::curl_use_wp_proxy($ch, $stream_url); // plan ad6e8f
             curl_setopt($ch, CURLOPT_RETURNTRANSFER, false);
             curl_setopt($ch, CURLOPT_POST, true);
             curl_setopt($ch, CURLOPT_POSTFIELDS, $stream_body);
@@ -14011,26 +14113,7 @@ private function mxchat_generate_response_xai_stream($selected_model, $xai_api_k
                 $relevant_content,
                 $session_id
             );
-            
-            // Save bot response to transcript
-            if (!empty($regular_response) && !empty($session_id)) {
-                $this->mxchat_save_chat_message($session_id, 'bot', $regular_response);
-            }
-            
-            $response_data = [
-                'text' => $regular_response,
-                'html' => '',
-                'session_id' => $session_id
-            ];
-            
-            if ($testing_data !== null) {
-                $response_data['testing_data'] = $testing_data;
-                //error_log("MxChat Testing: Added testing data to X.AI fallback response");
-            }
-            
-            header('Content-Type: application/json');
-            echo json_encode($response_data);
-            return true;
+            return $this->mxchat_stream_emit_fallback('xai', $regular_response, $session_id, $testing_data); // plan 2f10bc
         }
 
         // Prepare the request body with stream: true
@@ -14081,6 +14164,7 @@ private function mxchat_generate_response_xai_stream($selected_model, $xai_api_k
                 $bot_id
             );
             curl_setopt($ch, CURLOPT_URL, $stream_url);
+            MxChat_Utils::curl_use_wp_proxy($ch, $stream_url); // plan ad6e8f
             curl_setopt($ch, CURLOPT_RETURNTRANSFER, false);
             curl_setopt($ch, CURLOPT_POST, true);
             curl_setopt($ch, CURLOPT_POSTFIELDS, $stream_body);
@@ -14258,26 +14342,7 @@ private function mxchat_generate_response_deepseek_stream($selected_model, $deep
                 $relevant_content,
                 $session_id
             );
-            
-            // Save bot response to transcript
-            if (!empty($regular_response) && !empty($session_id)) {
-                $this->mxchat_save_chat_message($session_id, 'bot', $regular_response);
-            }
-            
-            $response_data = [
-                'text' => $regular_response,
-                'html' => '',
-                'session_id' => $session_id
-            ];
-            
-            if ($testing_data !== null) {
-                $response_data['testing_data'] = $testing_data;
-                //error_log("MxChat Testing: Added testing data to DeepSeek fallback response");
-            }
-
-            header('Content-Type: application/json');
-            echo json_encode($response_data);
-            return true;
+            return $this->mxchat_stream_emit_fallback('openai', $regular_response, $session_id, $testing_data); // plan 2f10bc
         }
 
         // Prepare the request body with stream: true
@@ -14330,6 +14395,7 @@ private function mxchat_generate_response_deepseek_stream($selected_model, $deep
                 $bot_id
             );
             curl_setopt($ch, CURLOPT_URL, $stream_url);
+            MxChat_Utils::curl_use_wp_proxy($ch, $stream_url); // plan ad6e8f
             curl_setopt($ch, CURLOPT_RETURNTRANSFER, false);
             curl_setopt($ch, CURLOPT_POST, true);
             curl_setopt($ch, CURLOPT_POSTFIELDS, $stream_body);
@@ -15112,8 +15178,8 @@ private function mxchat_generate_response_claude($selected_model, $claude_api_ke
 
     // Check for WordPress errors
     if (is_wp_error($response)) {
-        //error_log("Claude API request error: " . $response->get_error_message());
-        return "Sorry, there was an error connecting to the API.";
+        // plan 2f10bc: an error array, so a failed turn is not saved as a bot reply.
+        return array('error' => $this->mxchat_friendly_chat_error(0, $response->get_error_message(), 'Anthropic', $selected_model), 'error_code' => 'claude_connection_error');
     }
 
     // Check HTTP response code
@@ -15132,7 +15198,9 @@ private function mxchat_generate_response_claude($selected_model, $claude_api_ke
         // model-access case) without leaking raw API internals to visitors. This
         // is the single chokepoint for BOTH the non-streaming and streaming Claude
         // paths (the stream's non-200 fallback re-enters this method). plan 1d3b0f.
-        return $this->mxchat_friendly_chat_error($http_code, $error_message, 'Anthropic', $selected_model);
+        // plan 2f10bc: an error array, so a failed turn is not saved as a bot reply;
+        // whoever handles the array applies the visitor error filter.
+        return array('error' => $this->mxchat_friendly_chat_error($http_code, $error_message, 'Anthropic', $selected_model), 'error_code' => 'claude_api_error');
     }
 
     // Parse response
@@ -15140,8 +15208,7 @@ private function mxchat_generate_response_claude($selected_model, $claude_api_ke
 
     // Check for JSON decode errors
     if (json_last_error() !== JSON_ERROR_NONE) {
-        //error_log("Claude API JSON decode error: " . json_last_error_msg());
-        return "Sorry, there was an error processing the API response.";
+        return array('error' => $this->mxchat_friendly_chat_error($http_code, 'the response body was not JSON', 'Anthropic'), 'error_code' => 'claude_api_error'); // plan 2f10bc
     }
     if (isset($response_body['usage'])) {
         $this->mxchat_usage_add('claude', $selected_model, $response_body['usage']); // plan 705b6c
@@ -15181,8 +15248,7 @@ private function mxchat_generate_response_claude($selected_model, $claude_api_ke
     }
 
     // Log unexpected response format
-    //error_log("Claude API unexpected response format: " . print_r($response_body, true));
-    return "Sorry, I received an unexpected response format from the API.";
+    return array('error' => $this->mxchat_friendly_chat_error($http_code, 'the response had an unexpected format', 'Anthropic'), 'error_code' => 'claude_api_error'); // plan 2f10bc
 }
 private function mxchat_generate_response_openai($selected_model, $api_key, $conversation_history, $relevant_content, $session_id = '') {
     // OpenAI retires gpt-5.1-chat-latest / gpt-5.3-chat-latest on 2026-08-10
@@ -15951,7 +16017,7 @@ private function mxchat_generate_response_gemini($selected_model, $gemini_api_ke
         // plan b13282: route the transport-error string through the leak-safe helper
         // (admin-actionable, generic for visitors) instead of echoing the raw WP HTTP
         // error. http_code 0 = no HTTP response, so the helper uses the generic branch.
-        return $this->mxchat_friendly_chat_error(0, $response->get_error_message(), 'Gemini', $selected_model);
+        return array('error' => $this->mxchat_friendly_chat_error(0, $response->get_error_message(), 'Gemini', $selected_model), 'error_code' => 'gemini_connection_error'); // plan 2f10bc
     }
     
     $response_body = json_decode(wp_remote_retrieve_body($response), true);
@@ -15966,7 +16032,7 @@ private function mxchat_generate_response_gemini($selected_model, $gemini_api_ke
             ? $response_body['error']['message']
             : 'Unknown error';
         $gemini_http_code = wp_remote_retrieve_response_code($response);
-        return $this->mxchat_friendly_chat_error($gemini_http_code, $gemini_error_message, 'Gemini', $selected_model);
+        return array('error' => $this->mxchat_friendly_chat_error($gemini_http_code, $gemini_error_message, 'Gemini', $selected_model), 'error_code' => 'gemini_api_error'); // plan 2f10bc
     }
     
     if (isset($response_body['usageMetadata'])) {
@@ -16062,7 +16128,7 @@ private function mxchat_gemini_no_text_error($response_body, $http_code, $model)
     $http_code = (int) $http_code;
     if (!is_array($response_body)) {
         $this->mxchat_gemini_log_no_text($model, $http_code, 'body-not-json', '', array());
-        return $this->mxchat_friendly_chat_error($http_code, sprintf('HTTP %d, the response body was not JSON', $http_code), 'Gemini', $model);
+        return array('error' => $this->mxchat_friendly_chat_error($http_code, sprintf('HTTP %d, the response body was not JSON', $http_code), 'Gemini', $model), 'error_code' => 'gemini_api_error'); // plan 2f10bc
     }
 
     $finish_reason = isset($response_body['candidates'][0]['finishReason']) && is_string($response_body['candidates'][0]['finishReason'])
@@ -17730,8 +17796,8 @@ public function mxchat_track_url_click() {
             'clicked_url' => $clicked_url,
             'message_context' => $message_context,
             'click_timestamp' => current_time('mysql', 1),
-            'user_ip' => $_SERVER['REMOTE_ADDR'],
-            'user_agent' => $_SERVER['HTTP_USER_AGENT']
+            'user_ip' => MxChat_User::mxchat_get_client_ip(),
+            'user_agent' => isset($_SERVER['HTTP_USER_AGENT']) ? (string) $_SERVER['HTTP_USER_AGENT'] : ''
         ]
     );
 

@@ -110,7 +110,6 @@ jQuery(document).ready(function($) {
             formData.append('action', 'mxchat_stream_chat');
             formData.append('message', 'Say "test 1", then "test 2", then "test 3" - each on a separate line.');
             formData.append('session_id', 'streaming_test_' + Date.now());
-            formData.append('nonce', mxchatTestStreamingAjax.nonce);
             formData.append('force_streaming_test', '1'); // Force streaming mode for testing
             
             fetch(mxchatTestStreamingAjax.ajax_url, {

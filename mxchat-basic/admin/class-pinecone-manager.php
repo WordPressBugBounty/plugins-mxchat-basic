@@ -221,21 +221,27 @@ private function mxchat_semantic_search_pinecone($pinecone_options, $search_quer
         );
     }
 
-    $response = wp_remote_post($query_url, array(
-        'headers' => array(
-            'Api-Key' => $api_key,
-            'Content-Type' => 'application/json'
-        ),
-        'body' => json_encode($query_data),
-        'timeout' => 20
-    ));
+    // plan 8b8651: a companion plugin may answer from its own vector store.
+    $data = MxChat_Utils::pre_vector_query($query_data, array('source' => 'admin_search', 'bot_id' => $bot_id, 'namespace' => $namespace));
 
-    if (is_wp_error($response) || wp_remote_retrieve_response_code($response) !== 200) {
-        return $this->mxchat_text_search_fallback($pinecone_options, $search_query, $page, $per_page, $bot_id, $content_type);
+    if ($data === null) {
+        $response = wp_remote_post($query_url, array(
+            'headers' => array(
+                'Api-Key' => $api_key,
+                'Content-Type' => 'application/json'
+            ),
+            'body' => json_encode($query_data),
+            'timeout' => 20
+        ));
+
+        if (is_wp_error($response) || wp_remote_retrieve_response_code($response) !== 200) {
+            return $this->mxchat_text_search_fallback($pinecone_options, $search_query, $page, $per_page, $bot_id, $content_type);
+        }
+
+        $body = wp_remote_retrieve_body($response);
+        $data = json_decode($body, true);
+
     }
-
-    $body = wp_remote_retrieve_body($response);
-    $data = json_decode($body, true);
 
     $records = array();
     if (isset($data['matches'])) {
@@ -440,21 +446,27 @@ private function mxchat_text_search_fallback($pinecone_options, $search_query, $
         $query_data['namespace'] = $namespace;
     }
 
-    $response = wp_remote_post($query_url, array(
-        'headers' => array(
-            'Api-Key' => $api_key,
-            'Content-Type' => 'application/json'
-        ),
-        'body' => json_encode($query_data),
-        'timeout' => 20
-    ));
+    // plan 8b8651: a companion plugin may answer from its own vector store.
+    $data = MxChat_Utils::pre_vector_query($query_data, array('source' => 'admin_text_search', 'bot_id' => $bot_id, 'namespace' => $namespace));
 
-    if (is_wp_error($response) || wp_remote_retrieve_response_code($response) !== 200) {
-        return array('data' => array(), 'total' => 0);
+    if ($data === null) {
+        $response = wp_remote_post($query_url, array(
+            'headers' => array(
+                'Api-Key' => $api_key,
+                'Content-Type' => 'application/json'
+            ),
+            'body' => json_encode($query_data),
+            'timeout' => 20
+        ));
+
+        if (is_wp_error($response) || wp_remote_retrieve_response_code($response) !== 200) {
+            return array('data' => array(), 'total' => 0);
+        }
+
+        $body = wp_remote_retrieve_body($response);
+        $data = json_decode($body, true);
+
     }
-
-    $body = wp_remote_retrieve_body($response);
-    $data = json_decode($body, true);
 
     $records = array();
     $search_lower = strtolower($search_query);
@@ -650,21 +662,27 @@ private function mxchat_query_based_list($pinecone_options, $page, $per_page, $b
         );
     }
 
-    $response = wp_remote_post($query_url, array(
-        'headers' => array(
-            'Api-Key' => $api_key,
-            'Content-Type' => 'application/json'
-        ),
-        'body' => json_encode($query_data),
-        'timeout' => 30
-    ));
+    // plan 8b8651: a companion plugin may answer from its own vector store.
+    $data = MxChat_Utils::pre_vector_query($query_data, array('source' => 'admin_list', 'bot_id' => $bot_id, 'namespace' => $namespace));
 
-    if (is_wp_error($response) || wp_remote_retrieve_response_code($response) !== 200) {
-        return array('data' => array(), 'total' => 0);
+    if ($data === null) {
+        $response = wp_remote_post($query_url, array(
+            'headers' => array(
+                'Api-Key' => $api_key,
+                'Content-Type' => 'application/json'
+            ),
+            'body' => json_encode($query_data),
+            'timeout' => 30
+        ));
+
+        if (is_wp_error($response) || wp_remote_retrieve_response_code($response) !== 200) {
+            return array('data' => array(), 'total' => 0);
+        }
+
+        $body = wp_remote_retrieve_body($response);
+        $data = json_decode($body, true);
+
     }
-
-    $body = wp_remote_retrieve_body($response);
-    $data = json_decode($body, true);
 
     $records = array();
     if (isset($data['matches'])) {
@@ -919,19 +937,25 @@ private function mxchat_get_recent_entries_safe($pinecone_options, $bot_id = 'de
                 $query_data['namespace'] = $namespace;
             }
 
-            $response = wp_remote_post($query_url, array(
-                'headers' => array(
-                    'Api-Key' => $api_key,
-                    'Content-Type' => 'application/json'
-                ),
-                'body' => json_encode($query_data),
-                'timeout' => 15
-            ));
+            // plan 8b8651: a companion plugin may answer from its own vector store.
+            $data = MxChat_Utils::pre_vector_query($query_data, array('source' => 'admin_recent', 'bot_id' => $bot_id, 'namespace' => $namespace));
 
-            if (!is_wp_error($response) && wp_remote_retrieve_response_code($response) === 200) {
-                $body = wp_remote_retrieve_body($response);
-                $data = json_decode($body, true);
+            if ($data === null) {
+                $response = wp_remote_post($query_url, array(
+                    'headers' => array(
+                        'Api-Key' => $api_key,
+                        'Content-Type' => 'application/json'
+                    ),
+                    'body' => json_encode($query_data),
+                    'timeout' => 15
+                ));
 
+                if (!is_wp_error($response) && wp_remote_retrieve_response_code($response) === 200) {
+                    $data = json_decode(wp_remote_retrieve_body($response), true);
+                }
+            }
+
+            if (is_array($data)) {
                 if (isset($data['matches'])) {
                     foreach ($data['matches'] as $match) {
                         $match_id = $match['id'] ?? '';
@@ -1098,11 +1122,21 @@ private function mxchat_generate_fixed_query_vectors() {
  * UPDATED 2.6.2: Uses direct ID lookup via fetch API instead of random vector scanning
  * This removes the 10K record limit and scales to any database size
  *
- * @param array $pinecone_options Pinecone configuration options
- * @param array $post_ids Optional array of specific post IDs to check (if empty, checks all published posts)
+ * Plan e869bf: the import list reads one page of posts through this. An entry is stored
+ * under md5(url), or md5(url)_chunk_N when chunked, and a media file under its file URL.
+ * total_chunks on the first chunk is the entry's chunk count. An entry imported under
+ * another form of the address (http after a move to https, the trailing slash changed)
+ * is found by a second fetch for the posts the first one did not find, and so is an entry
+ * that lost its first chunk and kept the rest (plan 2f10bc: four on mxchat.ai). An address
+ * with a query string or an anchor cannot be guessed: only the filters' scan finds those.
+ *
+ * @param array       $pinecone_options Pinecone configuration options
+ * @param array       $post_ids Optional array of specific post IDs to check (if empty, checks all published posts)
+ * @param string|null $error Set to the reason when Pinecone could not be read, '' otherwise: a post missing from the result is only "not indexed" when this is ''
  * @return array Processed data keyed by post ID
  */
-public function mxchat_scan_pinecone_for_processed_content($pinecone_options, $post_ids = array()) {
+public function mxchat_scan_pinecone_for_processed_content($pinecone_options, $post_ids = array(), &$error = null) {
+    $error = '';
     $api_key = $pinecone_options['mxchat_pinecone_api_key'] ?? '';
     $host = $pinecone_options['mxchat_pinecone_host'] ?? '';
 
@@ -1129,47 +1163,106 @@ public function mxchat_scan_pinecone_for_processed_content($pinecone_options, $p
             return array();
         }
 
-        // Build a map of vector_id => post data for lookup
-        $vector_id_map = array();
+        $lookups = array();
+        $is_file = array();
         foreach ($post_ids as $post_id) {
-            $permalink = get_permalink($post_id);
-            if ($permalink) {
-                $vector_id = md5($permalink);
-                $vector_id_map[$vector_id] = array(
-                    'post_id' => $post_id,
-                    'url' => $permalink
-                );
+            $is_file[$post_id] = get_post_type($post_id) === 'attachment';
+            $url = $is_file[$post_id] ? wp_get_attachment_url($post_id) : get_permalink($post_id);
+            if ($url) {
+                $lookups[] = array($post_id, $url);
             }
         }
 
-        if (empty($vector_id_map)) {
+        if (empty($lookups)) {
             return array();
         }
 
-        // Batch check Pinecone using fetch API.
-        // NOTE (plan 793b82): /vectors/fetch is a GET endpoint with the ids
-        // repeated in the query string (ids=a&ids=b); the old POST here was
-        // answered 200-with-an-empty-body, so this scan saw NOTHING as indexed
-        // and callers re-embedded content Pinecone already had. Chunk size 100:
-        // measured on a live serverless index, ~9KB of URL is accepted and
-        // ~18KB draws HTTP 414, so 100 32-char ids (~4KB) leaves real margin.
-        $namespace = $pinecone_options['mxchat_pinecone_namespace'] ?? '';
-        $all_vector_ids = array_keys($vector_id_map);
-        $chunks = array_chunk($all_vector_ids, 100);
-        $processed_data = array();
+        $processed_data = $this->mxchat_processed_rows_for_urls($pinecone_options, $lookups, $error);
 
-        // Document index (plan 362c31): one documents/fetch instead of the GET loop.
-        if (class_exists('MxChat_Pinecone_Documents') && MxChat_Pinecone_Documents::is_document_options($pinecone_options)) {
-            $chunks = array();
-            $doc_vectors = MxChat_Pinecone_Documents::fetch($all_vector_ids, MxChat_Pinecone_Documents::cfg_from_options($pinecone_options), array('source_url', 'created_at'));
-            foreach ($doc_vectors as $vector_id => $vector_data) {
-                if (isset($vector_id_map[$vector_id])) {
-                    $processed_data[$vector_id_map[$vector_id]['post_id']] = MxChat_Pinecone_Documents::processed_row($vector_id, $vector_id_map[$vector_id]['url'], $vector_data['metadata'] ?? array());
+        $second_look = array();
+        $later_chunks = array();
+        foreach ($lookups as $lookup) {
+            if (!isset($processed_data[$lookup[0]])) {
+                foreach ($this->mxchat_stored_url_variants($lookup[1], !$is_file[$lookup[0]]) as $variant) {
+                    $second_look[] = array($lookup[0], $variant);
                 }
+                $later_chunks[md5($lookup[1]) . '_chunk_1'] = $lookup;
             }
         }
+        if (!empty($later_chunks) && $error === '') {
+            $processed_data += $this->mxchat_processed_rows_for_urls($pinecone_options, $second_look, $error, $later_chunks);
+        }
 
-        foreach ($chunks as $chunk) {
+        return $processed_data;
+
+    } catch (Exception $e) {
+        $error = $e->getMessage();
+        return array();
+    }
+}
+
+/**
+ * Other forms an indexed address may have been stored under (plan e869bf): http or https,
+ * with or without www, the trailing slash changed. Eight forms at most, seven besides this one.
+ *
+ * @param string $url          The address as WordPress gives it today.
+ * @param bool   $toggle_slash Also try it with the trailing slash changed (not for a file).
+ * @return array
+ */
+private function mxchat_stored_url_variants($url, $toggle_slash) {
+    $forms = array($url, set_url_scheme($url, strpos($url, 'https://') === 0 ? 'http' : 'https'));
+    $host  = (string) parse_url($url, PHP_URL_HOST);
+    if (strpos($host, '.') !== false && !filter_var($host, FILTER_VALIDATE_IP)) {
+        $other_host = stripos($host, 'www.') === 0 ? substr($host, 4) : 'www.' . $host;
+        foreach ($forms as $form) {
+            $forms[] = str_replace('://' . $host, '://' . $other_host, $form);
+        }
+    }
+    if ($toggle_slash && strpos($url, '?') === false) {
+        foreach ($forms as $form) {
+            $forms[] = substr($form, -1) === '/' ? untrailingslashit($form) : trailingslashit($form);
+        }
+    }
+    return array_values(array_diff(array_unique($forms), array($url)));
+}
+
+/**
+ * Fetch the base and first-chunk vectors of these addresses and build one row per post.
+ *
+ * @param array  $pinecone_options Pinecone configuration options
+ * @param array  $lookups          array(post id, address) pairs
+ * @param string $error            Set to the reason when a fetch failed
+ * @param array  $extra_ids        More vector ids to fetch, vector id => array(post id, address)
+ * @return array Processed data keyed by post ID
+ */
+private function mxchat_processed_rows_for_urls($pinecone_options, array $lookups, &$error, array $extra_ids = array()) {
+    $api_key = $pinecone_options['mxchat_pinecone_api_key'] ?? '';
+    $host = $pinecone_options['mxchat_pinecone_host'] ?? '';
+    $namespace = $pinecone_options['mxchat_pinecone_namespace'] ?? '';
+
+    $vector_id_map = $extra_ids;
+    foreach ($lookups as $lookup) {
+        $base_id = md5($lookup[1]);
+        $vector_id_map[$base_id] = $lookup;
+        $vector_id_map[$base_id . '_chunk_0'] = $lookup;
+    }
+
+    // NOTE (plan 793b82): /vectors/fetch is a GET endpoint with the ids
+    // repeated in the query string (ids=a&ids=b); the old POST here was
+    // answered 200-with-an-empty-body. Chunk size 175: measured on a live
+    // serverless index, ~9KB of URL is accepted and ~18KB draws HTTP 414, and
+    // half of these ids are 32 characters and half 40, so a request stays near
+    // 7.5KB. A page of 100 posts not imported is 2 + 9 requests, the most it costs.
+    $vectors = array();
+    if (class_exists('MxChat_Pinecone_Documents') && MxChat_Pinecone_Documents::is_document_options($pinecone_options)) {
+        // Document index (plan 362c31): one documents/fetch instead of the GET loop.
+        $fetch_error = '';
+        $vectors = MxChat_Pinecone_Documents::fetch(array_keys($vector_id_map), MxChat_Pinecone_Documents::cfg_from_options($pinecone_options), array('source_url', 'created_at', 'last_updated', 'total_chunks'), false, $fetch_error);
+        if ($fetch_error !== '') {
+            $error = $fetch_error;
+        }
+    } else {
+        foreach (array_chunk(array_keys($vector_id_map), 175) as $chunk) {
             $fetch_query = array();
             foreach ($chunk as $fetch_vid) {
                 $fetch_query[] = 'ids=' . rawurlencode($fetch_vid);
@@ -1187,56 +1280,64 @@ public function mxchat_scan_pinecone_for_processed_content($pinecone_options, $p
             ));
 
             if (is_wp_error($response)) {
-                error_log('MxChat Pinecone: processed-content scan /vectors/fetch GET failed: ' . $response->get_error_message());
+                $error = $response->get_error_message();
+                error_log('MxChat Pinecone: processed-content scan /vectors/fetch GET failed: ' . $error);
                 continue;
             }
 
             $response_code = wp_remote_retrieve_response_code($response);
             if ($response_code !== 200) {
+                $error = 'HTTP ' . $response_code;
                 error_log('MxChat Pinecone: processed-content scan /vectors/fetch GET returned HTTP ' . $response_code);
                 continue;
             }
 
-            $body = wp_remote_retrieve_body($response);
-            $data = json_decode($body, true);
-
-            // Process returned vectors
+            $data = json_decode(wp_remote_retrieve_body($response), true);
+            if (!is_array($data)) {
+                $error = 'HTTP 200 with an unreadable answer';
+                continue;
+            }
             if (isset($data['vectors']) && is_array($data['vectors'])) {
-                foreach ($data['vectors'] as $vector_id => $vector_data) {
-                    if (isset($vector_id_map[$vector_id])) {
-                        $post_info = $vector_id_map[$vector_id];
-                        $post_id = $post_info['post_id'];
-                        $metadata = $vector_data['metadata'] ?? array();
+                $vectors += $data['vectors'];
+            }
+        }
+    }
 
-                        $created_at = $metadata['created_at'] ?? '';
-                        $processed_date = 'Recently';
-                        $timestamp = current_time('timestamp');
+    $processed_data = array();
+    foreach ($vectors as $vector_id => $vector_data) {
+        $vector_id = (string) $vector_id;
+        if (!isset($vector_id_map[$vector_id])) {
+            continue;
+        }
+        list($post_id, $url) = $vector_id_map[$vector_id];
+        $metadata = $vector_data['metadata'] ?? array();
+        $is_chunk = substr($vector_id, -8) === '_chunk_0';
+        if (isset($processed_data[$post_id]) && !$is_chunk) {
+            continue;
+        }
 
-                        if (!empty($created_at)) {
-                            $ts = is_numeric($created_at) ? $created_at : strtotime($created_at);
-                            if ($ts) {
-                                $timestamp = $ts;
-                                $processed_date = human_time_diff($ts, current_time('timestamp')) . ' ago';
-                            }
-                        }
-
-                        $processed_data[$post_id] = array(
-                            'db_id' => $vector_id,
-                            'processed_date' => $processed_date,
-                            'url' => $post_info['url'],
-                            'source' => 'pinecone',
-                            'timestamp' => $timestamp
-                        );
-                    }
-                }
+        $stamp = $metadata['created_at'] ?? ($metadata['last_updated'] ?? '');
+        $processed_date = 'Recently';
+        $timestamp = time();
+        if (!empty($stamp)) {
+            $ts = is_numeric($stamp) ? (int) $stamp : strtotime($stamp);
+            if ($ts) {
+                $timestamp = $ts;
+                $processed_date = human_time_diff($ts, time()) . ' ago';
             }
         }
 
-        return $processed_data;
-
-    } catch (Exception $e) {
-        return array();
+        $processed_data[$post_id] = array(
+            'db_id' => $vector_id,
+            'processed_date' => $processed_date,
+            'url' => $url,
+            'source' => 'pinecone',
+            'timestamp' => $timestamp,
+            'chunk_count' => $is_chunk ? max(1, (int) ($metadata['total_chunks'] ?? 1)) : 1
+        );
     }
+
+    return $processed_data;
 }
 
 /**

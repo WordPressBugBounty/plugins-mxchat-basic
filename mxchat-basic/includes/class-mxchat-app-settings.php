@@ -128,7 +128,10 @@ class MxChat_App_Settings {
      * cleaning to the options.php sanitizer, which is not attached outside wp-admin.
      */
     public static function clean(array $field, $value) {
-        $value = is_scalar($value) ? (string) $value : '';
+        if (!is_scalar($value)) {
+            return new WP_Error('mxchat_app_bad_value', __('That value cannot be saved.', 'mxchat'), array('status' => 400));
+        }
+        $value = (string) $value;
         switch ($field['type'] ?? 'text') {
             case 'toggle':
                 return in_array($value, array('on', '1', 'true', 'yes'), true) ? 'on' : 'off';

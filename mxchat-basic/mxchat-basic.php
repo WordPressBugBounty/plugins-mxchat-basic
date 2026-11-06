@@ -3,7 +3,7 @@
  * Plugin Name: MxChat
  * Plugin URI: https://mxchat.ai/
  * Description: AI chatbot for WordPress with OpenAI, Claude, xAI, DeepSeek, live agent, PDF uploads, WooCommerce, and training on website data.
- * Version: 3.2.27
+ * Version: 3.2.28
  * Author: MxChat
  * Author URI: https://mxchat.ai
  * License: GPLv2 or later
@@ -123,6 +123,62 @@ if (!function_exists('mxchat_ingest_user_agent')) {
         $version = defined('MXCHAT_VERSION') ? MXCHAT_VERSION : '1.0';
         $ua = 'MXChatBot/' . $version . ' (+https://mxchat.ai/bot)';
         return apply_filters('mxchat_ingest_user_agent', $ua);
+    }
+}
+
+/**
+ * The text a visitor sees for a chat error (plan be30c9). Every visitor-facing
+ * error the chat handler sends passes through the mxchat_error_response filter
+ * here, so a site can replace provider errors with its own wording. The
+ * payload's error_code is never changed. Administrators keep the original
+ * message, which can carry the provider's reason, so the filter is not run for
+ * them.
+ *
+ * Error codes include missing_session, empty_message, message_too_long,
+ * rate_limit_exceeded, banned_ip, banned_email, agent_send_failed, pdf_error,
+ * invalid_embedding, firewall_blocked (shown by the widget when a security
+ * firewall refuses the chat request), the embedding_* codes and the provider
+ * codes (for example openai_rate_limit, claude_api_error, api_error).
+ *
+ * @param string $message The message the visitor would see.
+ * @param string $code    The error code sent with it.
+ * @param array  $context session_id, bot_id, streaming (bool), provider.
+ * @return string
+ */
+if (!function_exists('mxchat_visitor_error')) {
+    function mxchat_visitor_error($message, $code = 'api_error', $context = array()) {
+        $message = (string) $message;
+        if (function_exists('current_user_can') && current_user_can('manage_options')) {
+            return $message;
+        }
+        $context = array_merge(array(
+            'session_id' => '',
+            'bot_id'     => 'default',
+            'streaming'  => false,
+            'provider'   => '',
+        ), is_array($context) ? $context : array());
+        $context['streaming'] = (bool) $context['streaming'];
+
+        /**
+         * Filter the error message a chat visitor sees.
+         *
+         * @param string $message The message (already escaped; may hold a link in the rate-limit text).
+         * @param string $code    The error code, unchanged in the response.
+         * @param array  $context session_id, bot_id, streaming (bool), provider (openai, claude,
+         *                        gemini, xai, deepseek, openrouter, custom, or '').
+         */
+        $filtered = apply_filters('mxchat_error_response', $message, (string) $code, $context);
+        if (!is_string($filtered) || trim($filtered) === '' || $filtered === $message) {
+            return $message;
+        }
+        return wp_kses($filtered, array(
+            'a'      => array('href' => true, 'target' => true, 'rel' => true),
+            'strong' => array(),
+            'b'      => array(),
+            'em'     => array(),
+            'i'      => array(),
+            'br'     => array(),
+        ));
     }
 }
 
@@ -436,6 +492,7 @@ function mxchat_include_classes() {
         'includes/class-mxchat-editor-assistant.php',
         'includes/class-rest-api.php',
         'includes/class-mxchat-app-auth.php',
+        'includes/class-mxchat-app-push.php',
         'includes/class-mxchat-app-addons.php',
         'includes/class-mxchat-app-settings.php',
         'includes/class-mxchat-app-api.php',
@@ -602,6 +659,11 @@ function mxchat_create_chat_transcripts_table() {
     $table_name = $wpdb->prefix . 'mxchat_chat_transcripts';
     $charset_collate = $wpdb->get_charset_collate();
     
+    // Prefix (191) on long varchar indexes here and in the tables below (plan fafa9e): a full-length
+    // index on varchar(255) in utf8mb4 is over the 767-byte limit of the older row formats, and the
+    // whole CREATE is refused. dbDelta ignores the prefix when it compares indexes, so a table made
+    // with the old index is left as it is. Session ids are capped at 128 characters and vector ids
+    // are hashes, so the prefix cannot merge two rows of a unique key.
     // Create table with ALL columns including user_name from the start
     $sql = "CREATE TABLE $table_name (
         id MEDIUMINT(9) NOT NULL AUTO_INCREMENT,
@@ -622,8 +684,8 @@ function mxchat_create_chat_transcripts_table() {
         retrieval_tokens_in INT(10) UNSIGNED DEFAULT NULL,
         retrieval_tokens_out INT(10) UNSIGNED DEFAULT NULL,
         PRIMARY KEY (id),
-        KEY session_id (session_id),
-        KEY user_email (user_email),
+        KEY session_id (session_id(191)),
+        KEY user_email (user_email(191)),
         KEY timestamp (timestamp)
     ) $charset_collate;";
     
@@ -810,7 +872,7 @@ function mxchat_create_pinecone_roles_table() {
         role_restriction varchar(50) DEFAULT 'public',
         updated_at timestamp DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
         PRIMARY KEY (id),
-        UNIQUE KEY vector_bot (vector_id, bot_id),
+        UNIQUE KEY vector_bot (vector_id(191), bot_id),
         KEY role_restriction (role_restriction),
         KEY bot_id (bot_id)
     ) $charset_collate;";
@@ -848,7 +910,7 @@ function mxchat_migrate_pinecone_roles_add_bot_id() {
 
         // Update the unique key to include bot_id
         $wpdb->query("ALTER TABLE {$table_name} DROP INDEX vector_id");
-        $wpdb->query("ALTER TABLE {$table_name} ADD UNIQUE KEY vector_bot (vector_id, bot_id)");
+        $wpdb->query("ALTER TABLE {$table_name} ADD UNIQUE KEY vector_bot (vector_id(191), bot_id)");
 
         // Add index for bot_id
         $wpdb->query("ALTER TABLE {$table_name} ADD KEY bot_id (bot_id)");
@@ -1019,7 +1081,7 @@ function mxchat_create_queue_tables() {
         meta_value longtext,
         PRIMARY KEY  (id),
         KEY queue_id (queue_id),
-        KEY meta_key (meta_key)
+        KEY meta_key (meta_key(191))
     ) $charset_collate;";
     
     require_once(ABSPATH . 'wp-admin/includes/upgrade.php');
@@ -1045,8 +1107,8 @@ function mxchat_create_translations_table() {
         created_at datetime NOT NULL,
         updated_at datetime NOT NULL,
         PRIMARY KEY  (id),
-        UNIQUE KEY session_lang (session_id, language_code),
-        KEY session_id (session_id)
+        UNIQUE KEY session_lang (session_id(191), language_code),
+        KEY session_id (session_id(191))
     ) $charset_collate;";
 
     require_once(ABSPATH . 'wp-admin/includes/upgrade.php');
@@ -1070,7 +1132,7 @@ function mxchat_create_session_ratings_table() {
         rating_feedback text DEFAULT NULL,
         created_at datetime NOT NULL,
         PRIMARY KEY  (id),
-        UNIQUE KEY session_id (session_id),
+        UNIQUE KEY session_id (session_id(191)),
         KEY bot_id (bot_id),
         KEY created_at (created_at)
     ) $charset_collate;";
@@ -1181,12 +1243,78 @@ function mxchat_fix_url_column_size() {
  * Version 2.5.1: Migrate Claude 3.5 Sonnet (deprecated) to Claude 3.7 Sonnet
  * Version 3.1.2: Convert chat transcripts table to utf8mb4 for emoji support
  * Without utf8mb4, any bot response containing emojis silently fails to insert.
+ *
+ * Recorded only once the message column really is utf8mb4 (plan fafa9e). An admin request only looks: the
+ * conversion rebuilds the whole table (100,000 rows took 5 to 8 seconds on the test server), so it runs in a
+ * background event, never inside a page. A table that needs it waits a day before it is looked at again.
  */
 function mxchat_migrate_transcripts_charset() {
     global $wpdb;
+    $flag = 'mxchat_transcripts_charset_checked';
+    if (get_option($flag) || get_transient($flag . '_retry')) {
+        return;
+    }
     $table_name = $wpdb->prefix . 'mxchat_chat_transcripts';
-    $wpdb->query("ALTER TABLE $table_name CONVERT TO CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci");
+    if ($wpdb->get_var($wpdb->prepare('SHOW TABLES LIKE %s', $wpdb->esc_like($table_name))) !== $table_name) {
+        return; // Activation creates it; check again later.
+    }
+    if (mxchat_transcripts_message_is_utf8mb4()) {
+        update_option($flag, '3.2.28');
+        return;
+    }
+    set_transient($flag . '_retry', 1, DAY_IN_SECONDS);
+    if (!wp_next_scheduled('mxchat_convert_transcripts_charset')) {
+        wp_schedule_single_event(time(), 'mxchat_convert_transcripts_charset');
+    }
 }
+
+/**
+ * Whether the transcripts message column is really utf8mb4.
+ *
+ * @return bool
+ */
+function mxchat_transcripts_message_is_utf8mb4() {
+    global $wpdb;
+    $column = $wpdb->get_row("SHOW FULL COLUMNS FROM `{$wpdb->prefix}mxchat_chat_transcripts` LIKE 'message'");
+    return $column && strpos((string) $column->Collation, 'utf8mb4') === 0;
+}
+
+/**
+ * The background event behind mxchat_migrate_transcripts_charset(). Under the 767-byte limit the conversion is
+ * refused while session_id and user_email have full-length indexes (the database leaves the table as it was),
+ * so that case converts with the same 191 prefix a new table gets, in one statement. Visitors' writes wait for
+ * the rebuild on databases that cannot rebuild online and are saved when it ends; the short lock wait keeps
+ * their queries from queuing behind the rebuild if something else holds the table. A conversion that fails
+ * waits a day, set before it starts.
+ */
+function mxchat_convert_transcripts_charset() {
+    global $wpdb;
+    $flag       = 'mxchat_transcripts_charset_checked';
+    $table_name = $wpdb->prefix . 'mxchat_chat_transcripts';
+    if (get_option($flag) || $wpdb->get_var($wpdb->prepare('SHOW TABLES LIKE %s', $wpdb->esc_like($table_name))) !== $table_name) {
+        return;
+    }
+    if (!mxchat_transcripts_message_is_utf8mb4()) {
+        set_transient($flag . '_retry', 1, DAY_IN_SECONDS);
+        $suppress = $wpdb->suppress_errors(true);
+        $lock_wait = $wpdb->get_var('SELECT @@SESSION.lock_wait_timeout');
+        $wpdb->query('SET SESSION lock_wait_timeout = 10');
+        $wpdb->query("ALTER TABLE `{$table_name}` CONVERT TO CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci");
+        if (!mxchat_transcripts_message_is_utf8mb4()) {
+            $wpdb->query("ALTER TABLE `{$table_name}` DROP INDEX session_id, ADD KEY session_id (session_id(191)), DROP INDEX user_email, ADD KEY user_email (user_email(191)), CONVERT TO CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci");
+        }
+        if ($lock_wait) {
+            $wpdb->query($wpdb->prepare('SET SESSION lock_wait_timeout = %d', $lock_wait));
+        }
+        $wpdb->suppress_errors($suppress);
+        if (!mxchat_transcripts_message_is_utf8mb4()) {
+            return;
+        }
+    }
+    delete_transient($flag . '_retry');
+    update_option($flag, '3.2.28');
+}
+add_action('mxchat_convert_transcripts_charset', 'mxchat_convert_transcripts_charset');
 
 /**
  * Move every saved model a provider has discontinued to its replacement.
@@ -1875,6 +2003,7 @@ function mxchat_deactivate() {
     wp_clear_scheduled_hook('mxchat_send_delayed_transcript');
     wp_clear_scheduled_hook('mxchat_model_liveness_check');
     wp_clear_scheduled_hook('mxchat_license_check');
+    wp_clear_scheduled_hook('mxchat_convert_transcripts_charset');
 
     // Clear fallback options
     delete_option('mxchat_use_fallback_rate_limits');
@@ -1942,7 +2071,7 @@ function mxchat_check_for_update() {
 
         if (!$chat_exists || !$queue_exists || !$sessions_exists) {
             //error_log("MxChat: Critical tables missing, running activation");
-            mxchat_activate();
+            mxchat_activate_for_missing_tables();
         }
 
         // Version-specific migrations
@@ -2283,8 +2412,21 @@ function mxchat_ensure_tables_exist() {
 
     if (!$chat_exists || !$queue_exists || !$sessions_exists) {
         //error_log("MxChat: Tables missing on admin load, running activation");
-        mxchat_activate();
+        mxchat_activate_for_missing_tables();
     }
+}
+
+/**
+ * Run activation because a critical table is missing, at most once an hour (plan fafa9e). A table
+ * the database refuses stays missing, and this check runs on every request, so an unthrottled
+ * activation meant the whole of it on every page view.
+ */
+function mxchat_activate_for_missing_tables() {
+    if (get_transient('mxchat_activate_retry')) {
+        return;
+    }
+    set_transient('mxchat_activate_retry', 1, HOUR_IN_SECONDS);
+    mxchat_activate();
 }
 
 /**
@@ -2602,6 +2744,7 @@ function mxchat_check_and_run_migrations() {
     mxchat_migrate_neutralise_rating_feedback();
     mxchat_migrate_add_transcript_usage_columns();
     mxchat_migrate_add_transcript_retrieval_usage_columns();
+    mxchat_migrate_transcripts_charset();
 }
 
 /**
@@ -2674,12 +2817,38 @@ function mxchat_migrate_add_transcript_usage_columns() {
  * For users upgrading from versions before 3.2.6
  */
 function mxchat_migrate_add_session_ratings_table() {
-    $migration_key = 'mxchat_session_ratings_table_created';
-    if (get_option($migration_key)) {
+    mxchat_migrate_ensure_table('mxchat_session_ratings_table_created', 'mxchat_session_ratings', 'mxchat_create_session_ratings_table');
+}
+
+/**
+ * Create a table for a migration and record it only once it is really there (plan fafa9e). The flag's
+ * old values (3.0.4, 3.2.6) were written whether the create worked or not, so a site carrying one gets
+ * one check; the value below means checked. A create the database refuses is tried again an hour later,
+ * not on every admin request.
+ *
+ * @param string   $migration_key Option holding the flag; the retry transient is named after it.
+ * @param string   $table_suffix  Table name without the site prefix.
+ * @param callable $create        Creates the table.
+ */
+function mxchat_migrate_ensure_table($migration_key, $table_suffix, $create) {
+    global $wpdb;
+    $checked = '3.2.28';
+    if (get_option($migration_key) === $checked || get_transient($migration_key . '_retry')) {
         return;
     }
-    mxchat_create_session_ratings_table();
-    update_option($migration_key, '3.2.6');
+
+    $table = $wpdb->prefix . $table_suffix;
+    $like  = $wpdb->prepare('SHOW TABLES LIKE %s', $wpdb->esc_like($table));
+    if ($wpdb->get_var($like) !== $table) {
+        $suppress = $wpdb->suppress_errors(true);
+        call_user_func($create);
+        $wpdb->suppress_errors($suppress);
+    }
+    if ($wpdb->get_var($like) === $table) {
+        update_option($migration_key, $checked);
+        return;
+    }
+    set_transient($migration_key . '_retry', 1, HOUR_IN_SECONDS);
 }
 
 /**
@@ -2794,18 +2963,7 @@ function mxchat_migrate_neutralise_rating_feedback() {
  * For users upgrading from versions before 3.0.4
  */
 function mxchat_migrate_add_translations_table() {
-    $migration_key = 'mxchat_translations_table_created';
-
-    // Check if migration already ran
-    if (get_option($migration_key)) {
-        return;
-    }
-
-    // Create the translations table
-    mxchat_create_translations_table();
-
-    // Mark migration as complete
-    update_option($migration_key, '3.0.4');
+    mxchat_migrate_ensure_table('mxchat_translations_table_created', 'mxchat_transcript_translations', 'mxchat_create_translations_table');
 }
 
 /**

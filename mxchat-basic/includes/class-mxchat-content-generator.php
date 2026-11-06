@@ -856,6 +856,7 @@ class MxChat_Content_Generator {
         foreach ($curl_configs as $i => $item) {
             $ch = curl_init();
             curl_setopt($ch, CURLOPT_URL, $item['config']['url']);
+            MxChat_Utils::curl_use_wp_proxy($ch, $item['config']['url']); // plan ad6e8f
             curl_setopt($ch, CURLOPT_POST, true);
             curl_setopt($ch, CURLOPT_POSTFIELDS, $item['config']['body']);
             curl_setopt($ch, CURLOPT_HTTPHEADER, $item['config']['headers']);

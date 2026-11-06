@@ -252,6 +252,11 @@ public static function save_session_message($session_id, $role, $message) {
     $row_id = (int) $wpdb->insert_id;
     self::flush_session_history_cache($session_id);
 
+    // Same hook as the chat writer: the MxChat app's instant alerts (row id and role, never the text).
+    if ($row_id) {
+        do_action('mxchat_app_message_saved', $session_id, $role, $row_id);
+    }
+
     return $row_id;
 }
 
@@ -2949,5 +2954,93 @@ public static function filter_stream_request($url, array $headers, $body, $provi
     }
 
     return array($new_url, $new_headers, $new_body);
+}
+
+/**
+ * Send a raw cURL request through the site's outbound proxy, when it has one (plan ad6e8f).
+ *
+ * Streamed replies and parallel image requests use cURL directly, so the
+ * WP_PROXY_* constants that wp_remote_*() honours never reach them: on a site
+ * that can only leave through a proxy they tried to connect directly. This
+ * applies WordPress's own rules, including WP_PROXY_BYPASS_HOSTS and the
+ * pre_http_send_through_proxy filter. With no proxy configured it sets nothing.
+ *
+ * @param resource|CurlHandle $ch  cURL handle.
+ * @param string              $url The final request URL.
+ */
+public static function curl_use_wp_proxy($ch, $url) {
+    if (!class_exists('WP_HTTP_Proxy')) {
+        return;
+    }
+    $proxy = new WP_HTTP_Proxy();
+    if (!$proxy->is_enabled() || !$proxy->send_through_proxy($url)) {
+        return;
+    }
+    curl_setopt($ch, CURLOPT_PROXYTYPE, CURLPROXY_HTTP);
+    curl_setopt($ch, CURLOPT_PROXY, $proxy->host());
+    curl_setopt($ch, CURLOPT_PROXYPORT, (int) $proxy->port());
+    // The stream code reads the first status line as the provider's answer. Hide
+    // the proxy's own CONNECT reply, or a provider error would read as success.
+    if (defined('CURLOPT_SUPPRESS_CONNECT_HEADERS')) {
+        curl_setopt($ch, CURLOPT_SUPPRESS_CONNECT_HEADERS, true);
+    }
+    if ($proxy->use_authentication()) {
+        // Basic goes out with the first CONNECT. CURLAUTH_ANY waits for a 407 first,
+        // and fails with "Proxy CONNECT aborted" on a proxy that then closes.
+        curl_setopt($ch, CURLOPT_PROXYAUTH, CURLAUTH_BASIC);
+        curl_setopt($ch, CURLOPT_PROXYUSERPWD, $proxy->authentication());
+    }
+}
+
+/**
+ * Let a companion plugin answer a classic Pinecone vector query itself (plan 8b8651).
+ *
+ * Returns the companion's Pinecone-shaped answer, or null to send the query to
+ * Pinecone as usual. A return without a matches list counts as null, so a
+ * mistake in a companion plugin never takes the chat down. Matches still pass
+ * the caller's threshold and role checks. Document indexes are not covered:
+ * they do not use this query.
+ *
+ * @param array $query   The body that would go to Pinecone's /query.
+ * @param array $context source, bot_id and namespace.
+ * @return array|null
+ */
+public static function pre_vector_query(array $query, array $context = array()) {
+    if (!has_filter('mxchat_pre_vector_query')) {
+        return null;
+    }
+
+    $vector = (isset($query['vector']) && is_array($query['vector'])) ? $query['vector'] : array();
+    $top_k  = isset($query['topK']) ? (int) $query['topK'] : 0;
+    $context['query'] = $query;
+
+    /**
+     * Answer a vector query from your own store instead of Pinecone.
+     *
+     * @param array|null $results Null sends the query to Pinecone. Return ['matches' => [['id' => string, 'score' => float, 'metadata' => array], ...]] to replace it.
+     * @param float[]    $vector  The query vector.
+     * @param int        $top_k   How many matches are wanted.
+     * @param array      $context source (chat, products, admin_search, admin_text_search, admin_list, admin_recent or content_scan), bot_id, namespace and query (the full body, including any filter).
+     */
+    $results = apply_filters('mxchat_pre_vector_query', null, $vector, $top_k, $context);
+
+    if (!is_array($results) || !isset($results['matches']) || !is_array($results['matches'])) {
+        return null;
+    }
+
+    $matches = array();
+    foreach ($results['matches'] as $match) {
+        if (!is_array($match)) {
+            continue;
+        }
+        $match['score'] = (isset($match['score']) && is_numeric($match['score'])) ? (float) $match['score'] : 0.0;
+        if (!isset($match['metadata']) || !is_array($match['metadata'])) {
+            $match['metadata'] = array();
+        }
+        $matches[] = $match;
+    }
+    $results['matches'] = $matches;
+
+    return $results;
 }
 }

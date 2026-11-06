@@ -347,8 +347,11 @@ class MxChat_Pinecone_Documents {
     /**
      * Fetch documents by id. Returns the classic /vectors/fetch shape:
      * [id => ['id' => …, 'values' => [...] (only when asked), 'metadata' => [...]]].
+     * $error is set to the reason when Pinecone could not be read (plan e869bf); a namespace
+     * with no documents yet answers 404 and is not a failure.
      */
-    public static function fetch(array $ids, array $cfg, $include_fields = null, $with_vector = false) {
+    public static function fetch(array $ids, array $cfg, $include_fields = null, $with_vector = false, &$error = null) {
+        $error = '';
         $ok = self::require_cfg($cfg);
         if (is_wp_error($ok) || empty($ids)) {
             return array();
@@ -360,6 +363,9 @@ class MxChat_Pinecone_Documents {
         $out = array();
         foreach (array_chunk(array_values(array_unique(array_map('strval', $ids))), 1000) as $chunk) {
             $res = self::request('POST', self::data_url($cfg, 'fetch'), array('ids' => $chunk, 'include_fields' => $fields), $cfg['api_key'], 30);
+            if ($res['error'] !== '' && $res['code'] !== 404) {
+                $error = $res['error'];
+            }
             if ($res['error'] !== '' || !is_array($res['data']) || empty($res['data']['documents'])) {
                 continue;
             }

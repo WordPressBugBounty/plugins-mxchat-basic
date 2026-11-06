@@ -57,8 +57,8 @@
      * card, a modal or another notice stays where its page put it. Notices
      * already in the content column (Advanced Content places its own) stay.
      */
-    function placeAdminNotices(wrapper) {
-        var content = wrapper.querySelector('.mxch-content');
+    function placeAdminNotices(wrapper, contentSelector) {
+        var content = wrapper.querySelector(contentSelector || '.mxch-content');
         var page = document.getElementById('wpbody-content');
         if (!content || !page) {
             return;
@@ -309,6 +309,15 @@
         var wrappers = document.querySelectorAll('.mxch-admin-wrapper');
         if (wrappers.length) {
             placeAdminNotices(wrappers[0]);
+        } else {
+            // Two add-on screens keep a fixed shell of their own. Their notices go in
+            // their content column too, or that shell paints over them (plan fafa9e).
+            [['.mxch-theme-admin-wrapper', '.mxch-theme-content'], ['.mxchat-app-wrapper', '.mxchat-main-panel']].forEach(function (shell) {
+                var forked = document.querySelector(shell[0]);
+                if (forked) {
+                    placeAdminNotices(forked, shell[1]);
+                }
+            });
         }
         if (!NOTICES_ONLY) {
             wrappers.forEach(wire);
