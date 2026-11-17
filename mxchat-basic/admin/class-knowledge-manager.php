@@ -718,6 +718,43 @@ public function mxchat_handle_pdf_file_submission() {
 }
 
 /**
+ * Long documents (plan 15eaa6). Document Upload and the media-library importer estimate a
+ * document's length in pages of about 2,500 characters (the .docx cleaner collapses every newline,
+ * so a paragraph count reads 1 for any Word file). Up to DOCUMENT_SYNC_MAX_PAGES a document still
+ * imports in the one request that receives it, exactly as before: that is the most the visitor
+ * chat PDF setting (pdf_max_pages, 1-69) ever let through, so nothing that imported before changes
+ * path. Above it, Document Upload queues the document's chunks and the Knowledge screen stores them
+ * one request at a time, as it does PDF pages. The import limit is its own number, filterable, and
+ * pdf_max_pages governs only visitor chat uploads again.
+ */
+const DOCUMENT_PAGE_CHARS       = 2500;
+const DOCUMENT_SYNC_MAX_PAGES   = 69;
+const DOCUMENT_IMPORT_MAX_PAGES = 1000;
+
+/**
+ * The most pages a Word, text or Markdown document may have to be imported (plan 15eaa6).
+ *
+ * @return int
+ */
+private static function mxchat_document_import_max_pages() {
+    /**
+     * Filter the longest document, in estimated pages of about 2,500 characters, that Document
+     * Upload and the media-library importer accept. Visitor chat uploads keep their own setting.
+     *
+     * @param int $max_pages Default 1000. A value below 1 keeps the default.
+     */
+    $max_pages = (int) apply_filters('mxchat_document_import_max_pages', self::DOCUMENT_IMPORT_MAX_PAGES);
+    return $max_pages > 0 ? $max_pages : self::DOCUMENT_IMPORT_MAX_PAGES;
+}
+
+/**
+ * A document's length in estimated pages: bytes / 2,500, as the size cap has always counted.
+ */
+private static function mxchat_document_estimated_pages($text) {
+    return (int) ceil(strlen((string) $text) / self::DOCUMENT_PAGE_CHARS);
+}
+
+/**
  * Handle direct document upload (.docx / .txt / .md) from the knowledge base
  * page (plan 0485e5). Unlike PDF Upload there is no per-page queue: the text
  * extracts in one pass and routes through submit_content_to_db, whose chunker
@@ -812,17 +849,18 @@ public function mxchat_handle_document_file_submission() {
         exit;
     }
 
-    // Size cap — same pdf_max_pages setting the PDF/toolbar paths use, but
-    // estimated by CHARACTERS (~2500/page): the .docx cleaner collapses all
-    // newlines to spaces, so a paragraph count reads 1 for any Word file.
-    // Processing is synchronous — an unbounded document risks a timeout.
+    // Size cap: the document import limit (plan 15eaa6), no longer the visitor chat
+    // PDF setting it used to share. Estimated by CHARACTERS (~2500/page): the .docx
+    // cleaner collapses all newlines to spaces, so a paragraph count reads 1 for
+    // any Word file.
     $options = get_option('mxchat_options', array());
-    $max_pages = isset($options['pdf_max_pages']) ? intval($options['pdf_max_pages']) : 69;
-    $estimated_pages = (int) ceil(strlen($text) / 2500);
+    $max_pages = self::mxchat_document_import_max_pages();
+    $estimated_pages = self::mxchat_document_estimated_pages($text);
     if ($estimated_pages > $max_pages) {
         set_transient('mxchat_admin_notice_error',
             sprintf(
-                esc_html__('The document is too large (about %1$d pages; the limit is %2$d). Split it into smaller files, or raise the PDF max pages setting.', 'mxchat'),
+                /* translators: 1: estimated page count, 2: the document import limit in pages */
+                esc_html__('The document is too large to import (about %1$d pages; the import limit is %2$d pages). Split it into smaller files.', 'mxchat'),
                 $estimated_pages,
                 $max_pages
             ),
@@ -847,6 +885,39 @@ public function mxchat_handle_document_file_submission() {
     // threshold, where the single-vector path would not clean them), then
     // submit — the chunked path re-deletes harmlessly.
     $source_label = 'upload://' . $original_filename;
+
+    // A long document (plan 15eaa6): its chunks are queued and the Knowledge screen
+    // stores them one request at a time, under the identity, chunk ids and metadata a
+    // whole import gives them. Up to DOCUMENT_SYNC_MAX_PAGES, or with chunking turned
+    // off (one embedding, nothing to queue), it is imported right here as before.
+    if ($estimated_pages > self::DOCUMENT_SYNC_MAX_PAGES && MxChat_Chunker::from_settings()->should_chunk($text)) {
+        $queued = $this->mxchat_queue_document($text, $source_label, $bot_id, 'document');
+        if (is_wp_error($queued)) {
+            set_transient('mxchat_admin_notice_error',
+                esc_html__('Failed to import the document: ', 'mxchat') . esc_html($queued->get_error_message()),
+                30
+            );
+        } else {
+            // Optional page the document is cited as (plan 025ea2), kept now, as PDF Upload does.
+            MxChat_Utils::set_upload_source_url(
+                $source_label,
+                $bot_id,
+                isset($_POST['source_page_url']) ? wp_unslash($_POST['source_page_url']) : ''
+            );
+            set_transient('mxchat_admin_notice_success',
+                sprintf(
+                    /* translators: 1: file name, 2: estimated page count */
+                    esc_html__('Document "%1$s" (about %2$d pages) queued for processing. Processing will start automatically.', 'mxchat'),
+                    esc_html($original_filename),
+                    $estimated_pages
+                ),
+                30
+            );
+        }
+        wp_safe_redirect(esc_url($redirect_url));
+        exit;
+    }
+
     MxChat_Utils::delete_chunks_for_url($source_label, $bot_id);
     $result = MxChat_Utils::submit_content_to_db($text, $source_label, $api_key, null, $bot_id, 'document');
 
@@ -2084,6 +2155,16 @@ private function mxchat_decode_entities_for_indexing($text) {
  * independent of when the import ran. The currency CODE is emitted alongside the symbol
  * so the model cannot read a bare "$" as USD on a store whose plugin swapped symbols.
  * (Plan 7403ec.)
+ *
+ * Two developer filters (plan 66cd11), for stores whose stored price is not what a
+ * visitor should be told (quote-only products kept at 0, for example):
+ *   mxchat_product_index_prices ( array $prices, WC_Product $product ) - the three
+ *     amounts read below, keys regular_price / sale_price / price. '' for a key leaves
+ *     its line out, as an empty price does. A non-array return, or a missing or
+ *     non-scalar key, keeps the stored value.
+ *   mxchat_product_price_lines ( string $lines, WC_Product $product, array $prices ) -
+ *     the finished lines. A non-string return keeps them as built.
+ * Every product path (import, auto-sync, re-import) builds its price lines here.
  */
 private function mxchat_product_price_lines($product) {
     if (!is_object($product) || !method_exists($product, 'get_regular_price')) {
@@ -2100,6 +2181,23 @@ private function mxchat_product_price_lines($product) {
     $regular_price = $product->get_regular_price('edit');
     $sale_price    = $product->get_sale_price('edit');
     $price         = $product->get_price('edit');
+
+    $prices = array(
+        'regular_price' => $regular_price,
+        'sale_price'    => $sale_price,
+        'price'         => $price,
+    );
+    $filtered = apply_filters('mxchat_product_index_prices', $prices, $product);
+    if (is_array($filtered)) {
+        foreach ($prices as $key => $value) {
+            if (array_key_exists($key, $filtered) && is_scalar($filtered[$key]) && $filtered[$key] !== $value) {
+                $prices[$key] = (string) $filtered[$key];
+            }
+        }
+    }
+    $regular_price = $prices['regular_price'];
+    $sale_price    = $prices['sale_price'];
+    $price         = $prices['price'];
 
     $lines = '';
 
@@ -2121,7 +2219,9 @@ private function mxchat_product_price_lines($product) {
         }
     }
 
-    return $lines;
+    $filtered_lines = apply_filters('mxchat_product_price_lines', $lines, $product, $prices);
+
+    return is_string($filtered_lines) ? $filtered_lines : $lines;
 }
 
 /**
@@ -2713,9 +2813,12 @@ public function mxchat_ajax_get_status_updates() {
         // Verify the request
         check_ajax_referer('mxchat_status_nonce', 'nonce');
         
-        // Get active queue IDs
-        $sitemap_queue_id = get_transient('mxchat_active_queue_sitemap');
-        $pdf_queue_id = get_transient('mxchat_active_queue_pdf');
+        // Get active queue IDs (the transient, else the newest unfinished queue: plan 495b92)
+        $sitemap_queue_id = $this->mxchat_get_active_queue_id('sitemap');
+        $pdf_queue_id = $this->mxchat_get_active_queue_id('pdf');
+        // A long document imported a chunk at a time (plan 15eaa6), looked up the same way.
+        $document_queue_id = $this->mxchat_get_active_queue_id('document');
+        $document_status = $document_queue_id ? $this->mxchat_get_queue_status_data($document_queue_id, 'document') : false;
         
         $sitemap_status = false;
         $pdf_status = false;
@@ -2732,7 +2835,8 @@ public function mxchat_ajax_get_status_updates() {
         
         $is_active_processing = 
             ($sitemap_status && $sitemap_status['status'] === 'processing') || 
-            ($pdf_status && $pdf_status['status'] === 'processing');
+            ($pdf_status && $pdf_status['status'] === 'processing') ||
+            ($document_status && $document_status['status'] === 'processing');
         
         // Return JSON response with the status data
         wp_send_json(array(
@@ -2741,7 +2845,11 @@ public function mxchat_ajax_get_status_updates() {
             'is_processing' => $is_active_processing,
             'sitemap_queue_id' => $sitemap_queue_id,
             'pdf_queue_id' => $pdf_queue_id
-        ));
+        ) + ($document_queue_id ? array(
+            // Only while there is a document queue, so the answer is otherwise unchanged (plan 15eaa6).
+            'document_status' => $document_status,
+            'document_queue_id' => $document_queue_id
+        ) : array()));
         
     } catch (Exception $e) {
         //error_log('MxChat Status Update Error: ' . $e->getMessage());
@@ -2794,6 +2902,14 @@ private function mxchat_get_queue_status_data($queue_id, $type = 'sitemap') {
                 break;
         }
     }
+
+    // A row stuck in 'processing' past the stale cutoff is a dead request: it counts as
+    // pending, and the next get-next call reclaims it (plan 495b92).
+    if ($processing > 0) {
+        $stale = min($processing, $this->mxchat_count_stale_processing($queue_id));
+        $processing -= $stale;
+        $pending += $stale;
+    }
     
     if ($total === 0) {
         return false;
@@ -2820,13 +2936,21 @@ private function mxchat_get_queue_status_data($queue_id, $type = 'sitemap') {
             $data = json_decode($item->item_data, true);
             $url = $type === 'pdf' ? ($data['pdf_url'] ?? '') : ($data['url'] ?? '');
             
-            $failed_items[] = array(
+            $failed_entry = array(
                 'url' => $url,
                 'page' => $type === 'pdf' ? ($data['page_number'] ?? 0) : 0,
                 'error' => $item->error_message,
                 'retries' => $item->attempts,
-                'time' => strtotime($item->completed_at)
+                // A failed row has no completed_at; (string) keeps the same false without the
+                // PHP 8.1 null deprecation, now that "Timed out" rows are listed here (plan 495b92).
+                'time' => strtotime((string) $item->completed_at)
             );
+            if ($type === 'document') {
+                // A failed chunk of a long document (plan 15eaa6): the document, and the chunk numbered from 1.
+                $failed_entry['url'] = $data['source_url'] ?? '';
+                $failed_entry['chunk'] = ((int) ($data['chunk_index'] ?? 0)) + 1;
+            }
+            $failed_items[] = $failed_entry;
         }
     }
     
@@ -2847,6 +2971,22 @@ private function mxchat_get_queue_status_data($queue_id, $type = 'sitemap') {
     $last_update_text = $last_update ? human_time_diff($last_update, time()) . ' ' . __('ago', 'mxchat') : __('Just now', 'mxchat');
     
     // Format based on type
+    if ($type === 'document') {
+        // A long document imported a chunk at a time (plan 15eaa6).
+        $source_url = (string) $source_url;
+        return array(
+            'total_chunks' => $total,
+            'processed_chunks' => $completed + $failed,
+            'failed_chunks' => $failed,
+            'percentage' => $percentage,
+            'status' => $is_complete ? 'complete' : 'processing',
+            'last_update' => $last_update_text,
+            'failed_chunks_list' => $failed_items,
+            'document_url' => $source_url,
+            'document_name' => MxChat_Utils::is_upload_source($source_url) ? MxChat_Utils::upload_source_name($source_url) : $source_url,
+            'queue_id' => $queue_id
+        );
+    }
     if ($type === 'pdf') {
         return array(
             'total_pages' => $total,
@@ -2881,8 +3021,10 @@ private function mxchat_get_queue_status_data($queue_id, $type = 'sitemap') {
  * @return array Array with 'sitemap_status', 'pdf_status', and 'is_processing' keys
  */
 public function mxchat_get_processing_statuses() {
-    $sitemap_queue_id = get_transient('mxchat_active_queue_sitemap');
-    $pdf_queue_id = get_transient('mxchat_active_queue_pdf');
+    // The transient, else the newest unfinished queue (plan 495b92)
+    $sitemap_queue_id = $this->mxchat_get_active_queue_id('sitemap');
+    $pdf_queue_id = $this->mxchat_get_active_queue_id('pdf');
+    $document_status = $this->mxchat_get_document_processing_status();
 
     $sitemap_status = false;
     $pdf_status = false;
@@ -2897,13 +3039,27 @@ public function mxchat_get_processing_statuses() {
 
     $is_processing =
         ($sitemap_status && $sitemap_status['status'] === 'processing') ||
-        ($pdf_status && $pdf_status['status'] === 'processing');
+        ($pdf_status && $pdf_status['status'] === 'processing') ||
+        ($document_status && $document_status['status'] === 'processing');
 
     return array(
         'sitemap_status' => $sitemap_status,
         'pdf_status' => $pdf_status,
+        'document_status' => $document_status,
         'is_processing' => $is_processing
     );
+}
+
+/**
+ * Status of the document queue (plan 15eaa6), for the Knowledge screen's Document Processing
+ * card: the transient, else the newest unfinished document queue, as for PDFs and sitemaps.
+ * The page asks for it itself because its caller hands it only the PDF and sitemap statuses.
+ *
+ * @return array|false
+ */
+public function mxchat_get_document_processing_status() {
+    $queue_id = $this->mxchat_get_active_queue_id('document');
+    return $queue_id ? $this->mxchat_get_queue_status_data($queue_id, 'document') : false;
 }
 
 /**
@@ -4220,6 +4376,7 @@ public function mxchat_stop_processing() {
     // Get active queue IDs
     $sitemap_queue_id = get_transient('mxchat_active_queue_sitemap');
     $pdf_queue_id = get_transient('mxchat_active_queue_pdf');
+    $document_queue_id = get_transient('mxchat_active_queue_document');
     
     // Delete all pending items from active queues
     if ($sitemap_queue_id) {
@@ -4228,6 +4385,16 @@ public function mxchat_stop_processing() {
             array(
                 'queue_id' => $sitemap_queue_id,
                 'status' => 'pending'
+            ),
+            array('%s', '%s')
+        );
+        // Rows still 'processing' go too: left behind, they would go stale and the
+        // stalled-queue recovery would resume a stopped queue (plan 495b92).
+        $wpdb->delete(
+            $table_name,
+            array(
+                'queue_id' => $sitemap_queue_id,
+                'status' => 'processing'
             ),
             array('%s', '%s')
         );
@@ -4248,6 +4415,15 @@ public function mxchat_stop_processing() {
             ),
             array('%s', '%s')
         );
+        // Rows still 'processing' go too (see the sitemap branch, plan 495b92).
+        $wpdb->delete(
+            $table_name,
+            array(
+                'queue_id' => $pdf_queue_id,
+                'status' => 'processing'
+            ),
+            array('%s', '%s')
+        );
         
         // Delete PDF file
         if ($pdf_path && file_exists($pdf_path)) {
@@ -4256,6 +4432,16 @@ public function mxchat_stop_processing() {
         
         delete_transient('mxchat_active_queue_pdf');
         delete_transient('mxchat_last_pdf_url');
+    }
+
+    // A document queue (plan 15eaa6) stops the same way: its pending and in-flight rows go,
+    // the chunks already stored stay, and the copy of its text kept for the Vector Store
+    // mirror goes with the queue.
+    if ($document_queue_id) {
+        $wpdb->delete($table_name, array('queue_id' => $document_queue_id, 'status' => 'pending'), array('%s', '%s'));
+        $wpdb->delete($table_name, array('queue_id' => $document_queue_id, 'status' => 'processing'), array('%s', '%s'));
+        $wpdb->delete($wpdb->prefix . 'mxchat_queue_meta', array('queue_id' => $document_queue_id, 'meta_key' => 'document_text'), array('%s', '%s'));
+        delete_transient('mxchat_active_queue_document');
     }
 
     // Redirect back with a success message
@@ -7253,20 +7439,34 @@ private function mxchat_extract_attachment_text($attachment_id) {
         );
     }
 
-    // Same cap Document Upload applies to the same three formats: the pdf_max_pages
-    // setting, estimated by CHARACTERS (~2500/page) because the .docx cleaner
-    // collapses newlines and a paragraph count reads 1 for any Word file. Importing
-    // is synchronous, so an unbounded document risks a timeout.
-    $options   = get_option('mxchat_options', array());
-    $max_pages = isset($options['pdf_max_pages']) ? intval($options['pdf_max_pages']) : 69;
-    $estimated_pages = (int) ceil(strlen($text) / 2500);
-    if ($max_pages > 0 && $estimated_pages > $max_pages) {
+    // Size caps (plan 15eaa6), estimated by CHARACTERS (~2500/page) because the .docx
+    // cleaner collapses newlines and a paragraph count reads 1 for any Word file. The
+    // document import limit applies here as in Document Upload, no longer the visitor
+    // chat PDF setting. Every caller (the Media importer, media auto-sync, the re-import
+    // tool) imports in the one request it runs in, so a file longer than the synchronous
+    // ceiling is refused with a pointer to Document Upload, which imports long documents
+    // a chunk at a time.
+    $max_pages       = self::mxchat_document_import_max_pages();
+    $estimated_pages = self::mxchat_document_estimated_pages($text);
+    if ($estimated_pages > $max_pages) {
         return array(
             'text'   => '',
             'reason' => sprintf(
-                /* translators: 1: estimated page count, 2: configured page limit */
-                __('Too large (about %1$d pages; the limit is %2$d). Split the file, or raise the PDF max pages setting.', 'mxchat'),
+                /* translators: 1: estimated page count, 2: the document import limit in pages */
+                __('Too large (about %1$d pages; the import limit is %2$d pages). Split the file.', 'mxchat'),
                 $estimated_pages,
+                $max_pages
+            ),
+        );
+    }
+    if ($estimated_pages > self::DOCUMENT_SYNC_MAX_PAGES) {
+        return array(
+            'text'   => '',
+            'reason' => sprintf(
+                /* translators: 1: estimated page count, 2: pages a Media Library file can have, 3: the document import limit in pages */
+                __('Too long to import from the Media Library (about %1$d pages; the limit there is %2$d pages). Import it with Document Upload, which takes documents of up to %3$d pages.', 'mxchat'),
+                $estimated_pages,
+                self::DOCUMENT_SYNC_MAX_PAGES,
                 $max_pages
             ),
         );
@@ -12456,7 +12656,7 @@ public function mxchat_create_queue_table() {
  * Add items to the processing queue
  * 
  * @param string $queue_id Unique identifier for this queue batch
- * @param string $item_type Type of item (url, pdf_page)
+ * @param string $item_type Type of item (url, pdf_page, document_chunk)
  * @param array $items Array of items to queue
  * @param string $bot_id Bot ID for processing
  * @return int Number of items queued
@@ -12548,6 +12748,108 @@ private function mxchat_get_queue_meta($queue_id, $meta_key) {
     return maybe_unserialize($value);
 }
 
+/**
+ * Stalled-queue recovery (plan 495b92). The queue runs from the admin's browser: a row is
+ * marked 'processing' when a tab takes it, and a request that dies with the tab (closed
+ * mid-batch, timed out) never writes a result back. A row left in 'processing' for longer
+ * than this is treated as dead. started_at is written with current_time('mysql'), the site
+ * clock, so the cutoff is computed in that same clock.
+ */
+private function mxchat_queue_stale_cutoff() {
+    return wp_date('Y-m-d H:i:s', time() - 5 * MINUTE_IN_SECONDS);
+}
+
+/**
+ * Rows of a queue stuck in 'processing' past the stale cutoff (plan 495b92).
+ */
+private function mxchat_count_stale_processing($queue_id) {
+    global $wpdb;
+    $table_name = $wpdb->prefix . 'mxchat_processing_queue';
+
+    return absint($wpdb->get_var($wpdb->prepare(
+        "SELECT COUNT(*) FROM $table_name
+        WHERE queue_id = %s
+        AND status = 'processing'
+        AND started_at < %s",
+        $queue_id,
+        $this->mxchat_queue_stale_cutoff()
+    )));
+}
+
+/**
+ * The active queue of a type ('pdf' or 'sitemap'). Its id lives in a transient for a day;
+ * when the transient is gone, the newest queue of that type that still has pending or stale
+ * rows is the active one, and the transient is set again (plan 495b92). Only a queue with
+ * activity in the last 7 days qualifies (last activity = its newest completed_at, started_at
+ * or created_at, all written in the site clock): an older unfinished queue is left alone, not
+ * resumed and not deleted, so an update never restarts (and bills) an import abandoned long
+ * ago. A queue the transient still points at is used whatever its age. Returns what
+ * get_transient() returned when there is none.
+ */
+private function mxchat_get_active_queue_id($type) {
+    $transient = 'mxchat_active_queue_' . $type;
+    $queue_id = get_transient($transient);
+    if ($queue_id) {
+        return $queue_id;
+    }
+
+    global $wpdb;
+    $table_name = $wpdb->prefix . 'mxchat_processing_queue';
+
+    // Candidate queues (those with an open row) newest first; each is then checked for
+    // recent activity across all of its rows.
+    $found = $wpdb->get_var($wpdb->prepare(
+        "SELECT open_q.queue_id FROM (
+            SELECT queue_id, MAX(id) AS newest_id FROM $table_name
+            WHERE queue_id LIKE %s
+            AND status IN ('pending', 'processing')
+            AND (status = 'pending' OR started_at < %s)
+            GROUP BY queue_id
+        ) open_q
+        WHERE (
+            SELECT MAX(COALESCE(all_q.completed_at, all_q.started_at, all_q.created_at))
+            FROM $table_name all_q
+            WHERE all_q.queue_id = open_q.queue_id
+        ) >= %s
+        ORDER BY open_q.newest_id DESC
+        LIMIT 1",
+        $wpdb->esc_like($type . '_') . '%',
+        $this->mxchat_queue_stale_cutoff(),
+        wp_date('Y-m-d H:i:s', time() - 7 * DAY_IN_SECONDS)
+    ));
+
+    if (empty($found)) {
+        return $queue_id;
+    }
+
+    set_transient($transient, $found, DAY_IN_SECONDS);
+    return $found;
+}
+
+/**
+ * Keep the active-queue transient alive while its queue makes progress: re-set it, with a
+ * fresh day, when it still points at this queue (plan 495b92).
+ */
+private function mxchat_refresh_active_queue($queue_id) {
+    if (!is_string($queue_id) || $queue_id === '') {
+        return;
+    }
+
+    if (strpos($queue_id, 'sitemap_') === 0) {
+        $transient = 'mxchat_active_queue_sitemap';
+    } elseif (strpos($queue_id, 'pdf_') === 0) {
+        $transient = 'mxchat_active_queue_pdf';
+    } elseif (strpos($queue_id, 'document_') === 0) {
+        $transient = 'mxchat_active_queue_document'; // plan 15eaa6
+    } else {
+        return;
+    }
+
+    if (get_transient($transient) === $queue_id) {
+        set_transient($transient, $queue_id, DAY_IN_SECONDS);
+    }
+}
+
 // ========================================
 // AJAX QUEUE PROCESSING HANDLERS
 // ========================================
@@ -12571,39 +12873,77 @@ public function ajax_mxchat_get_next_queue_item() {
     
     global $wpdb;
     $table_name = $wpdb->prefix . 'mxchat_processing_queue';
+
+    // Reclaim this queue's dead rows (plan 495b92): a row left in 'processing' past the
+    // stale cutoff goes back to 'pending' while it has attempts left, else it becomes
+    // 'failed' as "Timed out" and is counted and listed with the other failures.
+    $wpdb->query($wpdb->prepare(
+        "UPDATE $table_name
+        SET error_message = CASE WHEN attempts < max_attempts THEN error_message ELSE %s END,
+        status = CASE WHEN attempts < max_attempts THEN 'pending' ELSE 'failed' END
+        WHERE queue_id = %s
+        AND status = 'processing'
+        AND started_at < %s",
+        'Timed out',
+        $queue_id,
+        $this->mxchat_queue_stale_cutoff()
+    ));
     
-    // Get next pending item with retry logic for failed items
-    $next_item = $wpdb->get_row($wpdb->prepare(
-        "SELECT * FROM $table_name 
-        WHERE queue_id = %s 
+    // Hand out one row, claimed atomically (plan 15eaa6). The page asks for five rows at once,
+    // and a SELECT followed by an UPDATE let two of those requests take the same row (it was then
+    // processed, and embedded, twice). A candidate is claimed with an UPDATE that only succeeds
+    // while the row is still free; a request that loses the race moves on to the next candidate.
+    $candidates = $wpdb->get_col($wpdb->prepare(
+        "SELECT id FROM $table_name
+        WHERE queue_id = %s
         AND status IN ('pending', 'failed')
         AND attempts < max_attempts
         ORDER BY priority ASC, id ASC
-        LIMIT 1",
+        LIMIT 10",
         $queue_id
     ));
-    
+
+    $next_item = null;
+    foreach ($candidates as $candidate_id) {
+        $claimed = $wpdb->query($wpdb->prepare(
+            "UPDATE $table_name
+            SET status = 'processing', started_at = %s, attempts = attempts + 1
+            WHERE id = %d
+            AND status IN ('pending', 'failed')
+            AND attempts < max_attempts",
+            current_time('mysql'),
+            $candidate_id
+        ));
+        if ($claimed === 1) {
+            $next_item = $wpdb->get_row($wpdb->prepare("SELECT * FROM $table_name WHERE id = %d", $candidate_id));
+            break;
+        }
+    }
+
     if (!$next_item) {
-        // No more items - queue complete
+        // Nothing to hand out right now. While rows of this queue are still in flight (taken by a
+        // request in the last 5 minutes; older ones were reclaimed above), the queue is not done:
+        // answer "wait", so the page asks again later instead of reporting complete with rows
+        // outstanding (plan 15eaa6). Only a queue with nothing left in flight is complete.
+        $in_flight = (int) $wpdb->get_var($wpdb->prepare(
+            "SELECT COUNT(*) FROM $table_name WHERE queue_id = %s AND status = 'processing'",
+            $queue_id
+        ));
+        if ($in_flight > 0) {
+            wp_send_json_success(array(
+                'complete' => false,
+                'wait' => true,
+                'in_progress' => $in_flight,
+                'message' => 'Items still in progress'
+            ));
+        }
+
         wp_send_json_success(array(
             'complete' => true,
             'message' => 'Queue processing complete'
         ));
     }
-    
-    // Mark item as processing
-    $wpdb->update(
-        $table_name,
-        array(
-            'status' => 'processing',
-            'started_at' => current_time('mysql'),
-            'attempts' => $next_item->attempts + 1
-        ),
-        array('id' => $next_item->id),
-        array('%s', '%s', '%d'),
-        array('%d')
-    );
-    
+
     wp_send_json_success(array(
         'complete' => false,
         'item' => array(
@@ -12611,7 +12951,7 @@ public function ajax_mxchat_get_next_queue_item() {
             'type' => $next_item->item_type,
             'data' => json_decode($next_item->item_data, true),
             'bot_id' => $next_item->bot_id,
-            'attempt' => $next_item->attempts + 1
+            'attempt' => (int) $next_item->attempts
         )
     ));
 }
@@ -12668,6 +13008,10 @@ public function ajax_mxchat_process_queue_item() {
             case 'pdf_page':
                 $result = $this->mxchat_process_queue_pdf_page($item_data, $bot_id);
                 break;
+
+            case 'document_chunk':
+                $result = $this->mxchat_process_queue_document_chunk($item_data, $bot_id);
+                break;
                 
             default:
                 throw new Exception('Unknown item type: ' . $item_type);
@@ -12676,7 +13020,7 @@ public function ajax_mxchat_process_queue_item() {
         if (is_wp_error($result)) {
             $error_code = $result->get_error_code();
             // Content errors (empty page, sanitization) are permanent — retrying won't help
-            $permanent_codes = array('empty_page', 'empty_after_sanitization', 'no_api_key', 'page_not_found');
+            $permanent_codes = array('empty_page', 'empty_after_sanitization', 'no_api_key', 'page_not_found', 'invalid_chunk');
             if (in_array($error_code, $permanent_codes)) {
                 // Mark as permanently failed — set attempts = max_attempts so it won't be retried
                 $current_item = $wpdb->get_row($wpdb->prepare(
@@ -12693,6 +13037,7 @@ public function ajax_mxchat_process_queue_item() {
                     array('%s', '%s', '%d'),
                     array('%d')
                 );
+                $this->mxchat_finish_document_queue($item_queue_id); // plan 15eaa6: may have been its last item
                 wp_send_json_error(array(
                     'message' => $result->get_error_message(),
                     'permanent_failure' => true,
@@ -12719,6 +13064,12 @@ public function ajax_mxchat_process_queue_item() {
             array('%s', '%s', '%s'),
             array('%d')
         );
+
+        // The queue is making progress: give its active-queue transient a fresh day (plan 495b92).
+        $this->mxchat_refresh_active_queue($item_queue_id);
+
+        // A document queue whose last chunk this was is finished off (plan 15eaa6).
+        $this->mxchat_finish_document_queue($item_queue_id);
         
         wp_send_json_success(array(
             'processed' => true,
@@ -12749,6 +13100,7 @@ public function ajax_mxchat_process_queue_item() {
                 array('%d')
             );
             
+            $this->mxchat_finish_document_queue(isset($item_queue_id) ? $item_queue_id : ''); // plan 15eaa6
             wp_send_json_error(array(
                 'message' => 'Item failed after maximum attempts: ' . $error_message,
                 'permanent_failure' => true,
@@ -13170,6 +13522,251 @@ private function mxchat_process_queue_pdf_page($item_data, $bot_id = 'default') 
 }
 
 /**
+ * Queue a long document a chunk at a time (plan 15eaa6). Called by Document Upload above the
+ * synchronous threshold. The entry gets the identity, chunk boundaries, chunk ids and chunk metadata
+ * MxChat_Utils::submit_content_to_db() gives a document imported whole: the text is prepared and
+ * split here exactly as there, each queued item is one of those chunks, and
+ * mxchat_process_queue_document_chunk() stores it under the same index and total. As in the
+ * synchronous path, the entry already stored under this identity is removed, after the queue is in
+ * place; so are the rows still waiting in an earlier queue of the same document, which would
+ * otherwise write their older chunks into the new entry.
+ *
+ * @return int|WP_Error Number of chunks queued.
+ */
+private function mxchat_queue_document($text, $source_url, $bot_id, $content_type) {
+    global $wpdb;
+    $table_name = $wpdb->prefix . 'mxchat_processing_queue';
+    $meta_table = $wpdb->prefix . 'mxchat_queue_meta';
+
+    // Refused before anything is queued or removed when the embedding provider cannot be called:
+    // the check every queued item makes.
+    $bot_options = $this->get_bot_options($bot_id);
+    $preflight = MxChat_Utils::embedding_preflight(!empty($bot_options) ? $bot_options : get_option('mxchat_options'));
+    if (!$preflight['ok']) {
+        return new WP_Error('no_api_key', $preflight['reason']);
+    }
+
+    // The identity and the text exactly as submit_content_to_db() prepares them.
+    $source_url = preg_match('#^(mxchat|upload)://#i', $source_url) ? sanitize_text_field($source_url) : esc_url_raw($source_url);
+    $content_type = sanitize_key($content_type);
+    if ($content_type === '') {
+        $content_type = 'content';
+    }
+    $safe_content = wp_check_invalid_utf8($text);
+    $safe_content = (string) preg_replace('/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/u', '', $safe_content);
+
+    $chunks = MxChat_Chunker::from_settings()->chunk_text($safe_content);
+    $total_chunks = count($chunks);
+    if ($total_chunks === 0) {
+        return new WP_Error('chunking_failed', __('The document could not be split into chunks.', 'mxchat'));
+    }
+
+    $items = array();
+    foreach (array_values($chunks) as $index => $chunk_text) {
+        $items[] = array(
+            'source_url'   => $source_url,
+            'content_type' => $content_type,
+            'chunk_index'  => $index,
+            'total_chunks' => $total_chunks,
+            'text'         => $chunk_text,
+        );
+    }
+
+    $queue_id = 'document_' . md5($source_url . microtime());
+    if ($this->mxchat_add_to_queue($queue_id, 'document_chunk', $items, $bot_id) !== $total_chunks) {
+        $wpdb->delete($table_name, array('queue_id' => $queue_id), array('%s'));
+        return new WP_Error('queue_error', __('Failed to add the document to the processing queue.', 'mxchat'));
+    }
+
+    // An earlier, unfinished queue of this document for this bot: its waiting rows go.
+    $earlier = $wpdb->get_col($wpdb->prepare(
+        "SELECT s.queue_id FROM $meta_table s
+        INNER JOIN $meta_table b ON b.queue_id = s.queue_id AND b.meta_key = 'bot_id'
+        WHERE s.meta_key = 'source_url' AND s.meta_value = %s AND b.meta_value = %s
+        AND s.queue_id LIKE %s AND s.queue_id <> %s",
+        maybe_serialize($source_url),
+        maybe_serialize($bot_id),
+        $wpdb->esc_like('document_') . '%',
+        $queue_id
+    ));
+    foreach ($earlier as $earlier_id) {
+        $wpdb->query($wpdb->prepare("DELETE FROM $table_name WHERE queue_id = %s AND status IN ('pending', 'processing')", $earlier_id));
+        $wpdb->delete($meta_table, array('queue_id' => $earlier_id, 'meta_key' => 'document_text'), array('%s', '%s'));
+    }
+
+    // Clean slate, as the synchronous path: the entry stored under this identity goes.
+    MxChat_Utils::delete_chunks_for_url($source_url, $bot_id);
+
+    $this->mxchat_set_queue_meta($queue_id, 'source_url', $source_url);
+    $this->mxchat_set_queue_meta($queue_id, 'queue_type', 'document');
+    $this->mxchat_set_queue_meta($queue_id, 'total_items', $total_chunks);
+    $this->mxchat_set_queue_meta($queue_id, 'bot_id', $bot_id);
+    $this->mxchat_set_queue_meta($queue_id, 'content_type', $content_type);
+    $this->mxchat_set_queue_meta($queue_id, 'created_at', current_time('mysql'));
+    // Vector Store sync mirrors an entry whole once it is stored, as submit_content_to_db() does
+    // after a whole import's last chunk: keep the text for that, only while sync is on.
+    if (class_exists('MxChat_Vectorstore_Manager')) {
+        $sync_config = MxChat_Vectorstore_Manager::get_sync_config($bot_id);
+        if (!empty($sync_config['enabled'])) {
+            $this->mxchat_set_queue_meta($queue_id, 'document_text', $safe_content);
+        }
+    }
+
+    set_transient('mxchat_active_queue_document', $queue_id, DAY_IN_SECONDS);
+    return $total_chunks;
+}
+
+/**
+ * Store one queued chunk of a long document (plan 15eaa6): the body of
+ * MxChat_Utils::submit_chunked_content()'s loop for that chunk. Same metadata (through the same
+ * mxchat_embedding_chunk_metadata filter), same chunk id, same embedding routing and the same
+ * writers, so the entry reads as if the document had been imported whole.
+ *
+ * @return true|WP_Error
+ */
+private function mxchat_process_queue_document_chunk($item_data, $bot_id = 'default') {
+    $chunk_text   = isset($item_data['text']) ? (string) $item_data['text'] : '';
+    $source_url   = isset($item_data['source_url']) ? (string) $item_data['source_url'] : '';
+    $content_type = isset($item_data['content_type']) ? sanitize_key($item_data['content_type']) : '';
+    $index        = isset($item_data['chunk_index']) ? (int) $item_data['chunk_index'] : -1;
+    $total        = isset($item_data['total_chunks']) ? (int) $item_data['total_chunks'] : 0;
+
+    if ($chunk_text === '' || $source_url === '' || $content_type === '' || $index < 0 || $index >= $total) {
+        return new WP_Error('invalid_chunk', 'Invalid document chunk');
+    }
+
+    $bot_options = $this->get_bot_options($bot_id);
+    $options = !empty($bot_options) ? $bot_options : get_option('mxchat_options');
+    $preflight = MxChat_Utils::embedding_preflight($options);
+    if (!$preflight['ok']) {
+        return new WP_Error('no_api_key', $preflight['reason'] . ' (bot: ' . $bot_id . ')');
+    }
+
+    $chunk_metadata = MxChat_Chunker::create_chunk_metadata($index, $total, $source_url);
+    $chunk_metadata['source']     = $source_url;
+    $chunk_metadata['part_index'] = $index;
+    $chunk_metadata['part_total'] = $total;
+    /** This filter is documented in includes/class-mxchat-utils.php (submit_chunked_content). */
+    $chunk_metadata = apply_filters(
+        'mxchat_embedding_chunk_metadata',
+        $chunk_metadata,
+        $chunk_text,
+        array(
+            'bot_id'       => $bot_id,
+            'content_type' => $content_type,
+            'source_url'   => $source_url,
+            'part_index'   => $index,
+            'part_total'   => $total,
+        )
+    );
+
+    $embedding = MxChat_Utils::regenerate_embedding($chunk_text, $preflight['api_key'], $bot_id);
+    if (!is_array($embedding)) {
+        $reason = is_wp_error($embedding) ? $embedding->get_error_message() : '';
+        // Numbered from 1, as the status card and the Knowledge list number chunks ("Chunk 6 of 53").
+        return new WP_Error('embedding_failed', 'Failed to generate embedding for chunk ' . ($index + 1) . ' of ' . $total . ($reason !== '' ? ' — ' . $reason : ''));
+    }
+
+    return $this->mxchat_store_document_chunk(
+        $embedding,
+        $chunk_text,
+        $source_url,
+        MxChat_Chunker::generate_chunk_vector_id($source_url, $index),
+        $bot_id,
+        $content_type,
+        $chunk_metadata
+    );
+}
+
+/**
+ * Write one chunk of a long document with the writer a whole import uses (plan 15eaa6):
+ * MxChat_Utils::store_document_chunk(), the store branch of submit_chunked_content()'s loop, so the
+ * row or vector stored is the one a whole import stores, in whichever store the bot uses. A chunk is
+ * written once even if it is processed twice (a reclaimed row can still be finished by the request
+ * that was thought dead): Pinecone upserts by chunk id, and a second WordPress-database copy of the
+ * same chunk is removed right after the insert (in Pinecone mode the lookup finds nothing).
+ *
+ * @return true|WP_Error
+ */
+private function mxchat_store_document_chunk($embedding, $chunk_text, $source_url, $vector_id, $bot_id, $content_type, $chunk_metadata) {
+    if (!method_exists('MxChat_Utils', 'store_document_chunk')) {
+        return new WP_Error('storage_unavailable', 'Knowledge base storage is not available (MxChat_Utils::store_document_chunk)');
+    }
+
+    try {
+        $result = MxChat_Utils::store_document_chunk($embedding, $chunk_text, $source_url, $vector_id, $bot_id, $content_type, $chunk_metadata);
+    } catch (Throwable $e) {
+        return new WP_Error('storage_failed', 'Failed to store chunk: ' . $e->getMessage());
+    }
+
+    if ($result === true) {
+        global $wpdb;
+        $table_name = $wpdb->prefix . 'mxchat_system_prompt_content';
+        $ids = $wpdb->get_col($wpdb->prepare(
+            "SELECT id FROM $table_name WHERE source_url = %s AND article_content = %s ORDER BY id ASC",
+            $source_url,
+            MxChat_Chunker::format_chunk_for_storage($chunk_text, $chunk_metadata)
+        ));
+        if (count($ids) > 1) {
+            array_shift($ids);
+            $wpdb->query("DELETE FROM $table_name WHERE id IN (" . implode(',', array_map('absint', $ids)) . ")");
+        }
+    }
+
+    return $result;
+}
+
+/**
+ * Finish a document queue once nothing is left to do in it (plan 15eaa6): no row pending, in flight,
+ * or failed with attempts left. When every chunk was stored, the entry is mirrored to the Vector
+ * Store whole, as submit_content_to_db() does after a whole import's last chunk; with a chunk
+ * missing it is not, as a partly failed whole import is not. The copy of the text kept for that
+ * goes either way, and removing it is the claim: only the request that removes it mirrors, so two
+ * last chunks finishing together mirror once. Other queues are left alone.
+ */
+private function mxchat_finish_document_queue($queue_id) {
+    if (!is_string($queue_id) || strpos($queue_id, 'document_') !== 0) {
+        return;
+    }
+
+    global $wpdb;
+    $table_name = $wpdb->prefix . 'mxchat_processing_queue';
+    $meta_table = $wpdb->prefix . 'mxchat_queue_meta';
+
+    $open = (int) $wpdb->get_var($wpdb->prepare(
+        "SELECT COUNT(*) FROM $table_name
+        WHERE queue_id = %s
+        AND (status IN ('pending', 'processing') OR (status = 'failed' AND attempts < max_attempts))",
+        $queue_id
+    ));
+    if ($open > 0) {
+        return;
+    }
+
+    $text = $this->mxchat_get_queue_meta($queue_id, 'document_text');
+    if (!is_string($text) || $text === '') {
+        return;
+    }
+    if (!$wpdb->delete($meta_table, array('queue_id' => $queue_id, 'meta_key' => 'document_text'), array('%s', '%s'))) {
+        return;
+    }
+
+    $missing = (int) $wpdb->get_var($wpdb->prepare(
+        "SELECT COUNT(*) FROM $table_name WHERE queue_id = %s AND status <> 'completed'",
+        $queue_id
+    ));
+    if ($missing === 0 && class_exists('MxChat_Vectorstore_Manager')) {
+        $bot_id = $this->mxchat_get_queue_meta($queue_id, 'bot_id');
+        MxChat_Vectorstore_Manager::sync_upsert_entry(
+            (string) $this->mxchat_get_queue_meta($queue_id, 'source_url'),
+            $text,
+            (is_string($bot_id) && $bot_id !== '') ? $bot_id : 'default',
+            (string) $this->mxchat_get_queue_meta($queue_id, 'content_type')
+        );
+    }
+}
+
+/**
  * AJAX: Get queue processing status
  */
 public function ajax_mxchat_get_queue_status() {
@@ -13223,6 +13820,14 @@ public function ajax_mxchat_get_queue_status() {
                 break;
         }
     }
+
+    // A row stuck in 'processing' past the stale cutoff is a dead request: it counts as
+    // pending, and the next get-next call reclaims it (plan 495b92).
+    if ($processing > 0) {
+        $stale = min($processing, $this->mxchat_count_stale_processing($queue_id));
+        $processing -= $stale;
+        $pending += $stale;
+    }
     
     // Calculate percentage
     $percentage = $total > 0 ? round((($completed + $failed) / $total) * 100) : 0;
@@ -13239,6 +13844,16 @@ public function ajax_mxchat_get_queue_status() {
             LIMIT 50",
             $queue_id
         ));
+        // A document chunk's item data carries the chunk's text; the card needs only its number (plan 15eaa6).
+        foreach ($failed_items as $failed_item) {
+            if ($failed_item->item_type === 'document_chunk') {
+                $failed_data = json_decode($failed_item->item_data, true);
+                if (is_array($failed_data)) {
+                    unset($failed_data['text']);
+                    $failed_item->item_data = wp_json_encode($failed_data);
+                }
+            }
+        }
     }
     
     // Get queue metadata
@@ -13365,6 +13980,10 @@ public function ajax_mxchat_mark_queue_complete() {
         delete_transient('mxchat_active_queue_sitemap');
     } else if (strpos($queue_id, 'pdf_') === 0) {
         delete_transient('mxchat_active_queue_pdf');
+    } else if (strpos($queue_id, 'document_') === 0) {
+        // A queue that ends on chunks marked "Timed out" had no last item to finish it off (plan 15eaa6).
+        $this->mxchat_finish_document_queue($queue_id);
+        delete_transient('mxchat_active_queue_document');
     }
     
     wp_send_json_success(array('message' => 'Queue marked as complete'));

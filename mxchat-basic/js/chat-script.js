@@ -365,10 +365,22 @@ jQuery(document).ready(function($) {
     //                         launcher, the pre-chat bubble, an embedded widget
     //                         (at load), or any script that reveals it.
     // Same facts, readable late: MxChatInstances.toolbarReady / hasOpened(botId).
+    //   mxchat:bot-reply      detail { botId, count }     a reply the server
+    //                         answered has finished rendering (count 1), or a
+    //                         chat-history load restored count replies. Never
+    //                         for the thinking bubble, an error shown in the
+    //                         chat or a local notice (plan 13cf5d).
     function mxchatDispatch(name, detail) {
         try {
             document.dispatchEvent(new CustomEvent(name, { detail: detail || {} }));
         } catch (err) { /* CustomEvent unsupported — nothing to notify */ }
+    }
+
+    // A real reply for the satisfaction rating's two-reply threshold (plan
+    // 13cf5d): only the success paths call this, so a conversation whose
+    // replies all failed never gets a prompt that could only fail.
+    function mxchatNoteBotReply(botId, count) {
+        mxchatDispatch('mxchat:bot-reply', { botId: botId || 'default', count: count || 1 });
     }
 
     function mxchatFireOpened(botId) {
@@ -1292,6 +1304,9 @@ function callMxChat(message, callback, botId, sendOptions) {
                     } else if (responseMessage) {
                         replaceLastMessage("bot", responseMessage, '', [], botId);
                     }
+                    if (!response.error) {
+                        mxchatNoteBotReply(botId); // same rule as handleNonStreamResponse (plan 13cf5d)
+                    }
 
                     // Check if chat is hidden and show notification
                     var $floatingChatbot = getElement(botId, 'floating-chatbot');
@@ -1546,6 +1561,7 @@ function callMxChatStream(message, callback, botId) {
                     enableChatInput(botId);
 
                     flushAppendHtml();
+                    mxchatNoteBotReply(botId);
 
                     // Scroll the user's last message to the top now that the
                     // bot's full reply has rendered (gives max reading room).
@@ -1580,6 +1596,7 @@ function callMxChatStream(message, callback, botId) {
                             enableChatInput(botId);
 
                             flushAppendHtml();
+                            mxchatNoteBotReply(botId);
 
                             // Scroll the user's last message to the top now
                             // that the bot's full reply has rendered.
@@ -1805,6 +1822,13 @@ function handleNonStreamResponse(data, callback, botId) {
             replaceLastMessage("bot", "", data.html, [], botId);
         } else if (data.message) {
             replaceLastMessage("bot", data.message, '', [], botId);
+        }
+        // A provider failure can arrive in this shape too: the streaming
+        // fallback sends { error: true, error_message, text } with no success
+        // flag, and the visitor sees its text. Nothing was saved for it, so it
+        // is not a reply the rating may count (plan 13cf5d).
+        if (!data.error) {
+            mxchatNoteBotReply(botId);
         }
     }
 
@@ -3480,6 +3504,7 @@ function loadChatHistory(botId, onComplete) {
                             var $mxTurnBubble = null;
                             var mxTurnBubbleTs = 0;
                             var mxTurnBubbleHasHtml = false;
+                            var mxRestoredReplies = 0; // for the rating (plan 13cf5d)
 
                             $.each(response.data.conversation, function(index, message) {
                                 // Skip agent messages if persistence is off
@@ -3580,6 +3605,7 @@ function loadChatHistory(botId, onComplete) {
                                 }
 
                                 $fragment.append(messageElement);
+                                if (messageClass === 'bot-message') { mxRestoredReplies++; }
 
                                 // Only a bot bubble from this turn takes the
                                 // turn's html parts; any other row ends the turn.
@@ -3608,6 +3634,7 @@ function loadChatHistory(botId, onComplete) {
                             }
                             $chatBox.append($fragment);
                             scrollToBottom(botId, true);
+                            if (mxRestoredReplies > 0) { mxchatNoteBotReply(botId, mxRestoredReplies); }
 
                             // Re-attach live semantics AFTER the rehydration
                             // mutations have been processed with the region off
@@ -5160,8 +5187,16 @@ jQuery(function($) {
         return ratingState[botId];
     }
 
+    // The id this bot's chat requests carry (plan 13cf5d). A send uses the
+    // instance's in-memory id once ensureSession() has run, while the cookie can
+    // change under it (another tab clearing its chat writes a new id there), so
+    // prefer the in-memory id: the rating then names the conversation whose
+    // transcript rows the server saved.
     function getSessionId(botId) {
-        if (typeof MxChatInstances !== 'undefined' && MxChatInstances.getChatSession) {
+        if (typeof MxChatInstances === 'undefined') return null;
+        var inst = MxChatInstances.instances ? MxChatInstances.instances[botId] : null;
+        if (inst && inst.sessionId) return inst.sessionId;
+        if (MxChatInstances.getChatSession) {
             return MxChatInstances.getChatSession(botId);
         }
         return null;
@@ -5240,7 +5275,10 @@ jQuery(function($) {
             placeholder: 'Tell us what could be better…',
             send: 'Send',
             skip: 'Skip',
-            saved: 'Thanks for the feedback.'
+            saved: 'Thanks for the feedback.',
+            // Localized by the server since plan 13cf5d (satisfaction_rating_copy.save_failed);
+            // this English line is only the fallback for a page cached before that.
+            save_failed: "Your rating couldn't be saved. Please try again."
         };
         return c[key] || d[key];
     }
@@ -5318,17 +5356,72 @@ jQuery(function($) {
         scrollChatBoxToBottom($chatBox);
     }
 
-    function submitRating(botId, rating, feedback) {
+    // Save the rating (or its comment) and wait for the answer (plan 13cf5d).
+    // done(true) only when the server says it saved, and only then is the
+    // session marked rated; otherwise done(false, code), with the error code
+    // (unknown_session, rate_limited, ratings_table_missing, http_403, ...)
+    // also written to the console for whoever is debugging the site.
+    function submitRating(botId, rating, feedback, done) {
         var sessionId = getSessionId(botId);
-        if (!sessionId) return;
-        $.post(mxchatChat.ajax_url, {
-            action: 'mxchat_save_rating',
-            session_id: sessionId,
-            bot_id: botId,
-            rating: rating,
-            feedback: feedback || ''
+        var failed = function(code) {
+            if (window.console && console.error) {
+                console.error('MxChat: rating not saved (' + code + ')');
+            }
+            done(false, code);
+        };
+        if (!sessionId) { failed('no_session'); return; }
+        $.ajax({
+            url: mxchatChat.ajax_url,
+            type: 'POST',
+            dataType: 'json',
+            timeout: 20000,
+            data: {
+                action: 'mxchat_save_rating',
+                session_id: sessionId,
+                bot_id: botId,
+                rating: rating,
+                feedback: feedback || ''
+            }
+        }).done(function(res) {
+            if (res && res.success === true) {
+                markRated(sessionId);
+                done(true);
+                return;
+            }
+            failed(ratingErrorCode(res, null, ''));
+        }).fail(function(xhr, textStatus) {
+            var body = xhr ? xhr.responseJSON : null;
+            if (!body && xhr && xhr.responseText) {
+                try { body = JSON.parse(xhr.responseText); } catch (err) { body = null; }
+            }
+            failed(ratingErrorCode(body, xhr, textStatus));
         });
-        markRated(sessionId);
+    }
+
+    function ratingErrorCode(body, xhr, textStatus) {
+        if (body && body.data && typeof body.data.message === 'string' && body.data.message !== '') {
+            return body.data.message;
+        }
+        if (textStatus === 'timeout' || textStatus === 'parsererror') return textStatus;
+        if (xhr && xhr.status) return 'http_' + xhr.status;
+        return textStatus || 'unexpected_response';
+    }
+
+    function setRatingBusy($el, busy) {
+        $el.attr('aria-busy', busy ? 'true' : 'false');
+        $el.find('button').prop('disabled', busy);
+    }
+
+    // The failure line sits under the controls in the same bubble, so the
+    // visitor can simply try again (plan 13cf5d). It takes the feedback label's
+    // type and the bubble's colors; role=alert announces it.
+    function showRatingError($el, botId) {
+        var $line = $el.children('.mxchat-rating-error');
+        if (!$line.length) {
+            $line = $('<div class="mxchat-rating-error mxchat-rating-feedback-label" role="alert"></div>').appendTo($el);
+        }
+        $line.text(copy('save_failed'));
+        scrollChatBoxToBottom(getChatBoxByBotId(botId));
     }
 
     function onBotReply(botId) {
@@ -5352,6 +5445,10 @@ jQuery(function($) {
         return id.indexOf('chat-box-') === 0 ? id.substring('chat-box-'.length) : 'default';
     }
 
+    // A visitor message stops the idle timer. Bot replies are not counted from
+    // the DOM any more (plan 13cf5d): the thinking bubble and an error shown in
+    // the chat are .bot-message nodes too, so a conversation whose replies all
+    // failed reached the prompt and could only get "unknown_session".
     function setupObserver(chatBox) {
         var botId = botIdFromChatBox(chatBox);
         try {
@@ -5359,11 +5456,7 @@ jQuery(function($) {
                 mutations.forEach(function(m) {
                     for (var i = 0; i < m.addedNodes.length; i++) {
                         var node = m.addedNodes[i];
-                        if (!node || node.nodeType !== 1) continue;
-                        var $n = $(node);
-                        if ($n.hasClass('mxchat-rating-bot-bubble') || $n.hasClass('mxchat-rating-prompt') || $n.hasClass('mxchat-rating-feedback') || $n.hasClass('mxchat-rating-saved')) continue;
-                        if ($n.hasClass('bot-message')) onBotReply(botId); // count at insert time — streaming providers append with .temporary-message first, then remove later (childList observer can't see attr changes)
-                        else if ($n.hasClass('user-message')) onUserMessage(botId);
+                        if (node && node.nodeType === 1 && node.classList.contains('user-message')) onUserMessage(botId);
                     }
                 });
             });
@@ -5373,18 +5466,34 @@ jQuery(function($) {
 
     $('.chat-box').each(function() { setupObserver(this); });
 
+    // Real replies only: the widget dispatches mxchat:bot-reply when a reply
+    // the server answered finishes rendering, and once per restored reply.
+    document.addEventListener('mxchat:bot-reply', function(e) {
+        var d = (e && e.detail) || {};
+        var n = parseInt(d.count, 10);
+        if (!isFinite(n) || n < 1) n = 1;
+        for (var i = 0; i < n; i++) onBotReply(d.botId || 'default');
+    });
+
     $(document).on('click', '.mxchat-rating-btn', function(e) {
         e.preventDefault();
         var $btn = $(this);
         var $prompt = $btn.closest('.mxchat-rating-prompt');
+        if ($prompt.attr('aria-busy') === 'true') return;
         var $wrap = $btn.closest('.mxchat-rating-bot-bubble');
         var botId = $prompt.data('bot-id') || 'default';
         var rating = parseInt($btn.attr('data-rating'), 10);
         if (rating !== 1 && rating !== -1) return;
-        submitRating(botId, rating, '');
-        ($wrap.length ? $wrap : $prompt).replaceWith(buildFeedbackHtml(botId, rating));
-        syncRatingBubbleColors(botId);
-        scrollChatBoxToBottom(getChatBoxByBotId(botId));
+        // Plan 13cf5d: the comment step follows a confirmed save only; a failed
+        // save keeps this prompt usable, with the failure line under it.
+        setRatingBusy($prompt, true);
+        submitRating(botId, rating, '', function(ok) {
+            setRatingBusy($prompt, false);
+            if (!ok) { showRatingError($prompt, botId); return; }
+            ($wrap.length ? $wrap : $prompt).replaceWith(buildFeedbackHtml(botId, rating));
+            syncRatingBubbleColors(botId);
+            scrollChatBoxToBottom(getChatBoxByBotId(botId));
+        });
     });
 
     $(document).on('click', '.mxchat-rating-dismiss', function(e) {
@@ -5414,14 +5523,20 @@ jQuery(function($) {
     $(document).on('click', '.mxchat-rating-submit', function(e) {
         e.preventDefault();
         var $fb = $(this).closest('.mxchat-rating-feedback');
+        if ($fb.attr('aria-busy') === 'true') return;
         var botId = $fb.data('bot-id') || 'default';
         var rating = parseInt($fb.attr('data-rating'), 10);
         if (rating !== 1 && rating !== -1) { closeFeedback($fb); return; }
         var text = String($fb.find('.mxchat-rating-feedback-input').val() || '').trim();
-        if (text !== '') {
-            submitRating(botId, rating, text);
-        }
-        closeFeedback($fb);
+        if (text === '') { closeFeedback($fb); return; }
+        // Plan 13cf5d: the comment shows as saved only once the server says so;
+        // a failed save keeps the panel and the text, with the failure line.
+        setRatingBusy($fb, true);
+        submitRating(botId, rating, text, function(ok) {
+            setRatingBusy($fb, false);
+            if (!ok) { showRatingError($fb, botId); return; }
+            closeFeedback($fb);
+        });
     });
 });
 

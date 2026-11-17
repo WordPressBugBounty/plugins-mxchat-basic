@@ -537,6 +537,8 @@ public function get_dynamic_widget_settings($fresh = false) {
             'send'        => esc_html__('Send', 'mxchat'),
             'skip'        => esc_html__('Skip', 'mxchat'),
             'saved'       => !empty($options['satisfaction_rating_saved'])       ? esc_html($options['satisfaction_rating_saved'])       : esc_html__('Thanks for the feedback.', 'mxchat'),
+            // Plan 13cf5d: __() and not esc_html__(); the widget writes it with .text().
+            'save_failed' => __("Your rating couldn't be saved. Please try again.", 'mxchat'),
         ),
     );
 }
@@ -2347,7 +2349,7 @@ public function mxchat_handle_chat_request() {
 
     //   Check if this is a streaming request
     //   Allow force_streaming_test parameter to bypass the setting check (for admin compatibility testing)
-    $force_streaming_test = isset($_POST['force_streaming_test']) && $_POST['force_streaming_test'] === '1' && current_user_can('administrator');
+    $force_streaming_test = isset($_POST['force_streaming_test']) && $_POST['force_streaming_test'] === '1' && current_user_can('manage_options');
     $this->mxchat_streaming_test = $force_streaming_test;
     $is_streaming = isset($_POST['action']) && $_POST['action'] === 'mxchat_stream_chat' &&
                    ($force_streaming_test || (isset($current_options['enable_streaming_toggle']) && $current_options['enable_streaming_toggle'] === 'on'));
@@ -2660,7 +2662,7 @@ public function mxchat_handle_chat_request() {
     // ===== SIMPLIFIED TESTING PANEL INITIALIZATION =====
         // Always initialize testing data for admins (no toggle needed)
         $testing_data = null;
-        if (current_user_can('administrator')) {
+        if (current_user_can('manage_options')) {
             // For vision messages, use the original user message for the query display
             $query_for_testing = $message;
             if (isset($_POST['vision_processed']) && $_POST['vision_processed'] && isset($_POST['original_user_message'])) {
@@ -17465,7 +17467,7 @@ public function mxchat_get_system_info() {
     }
     
     // Only allow admin users
-    if (!current_user_can('administrator')) {
+    if (!current_user_can('manage_options')) {
         wp_send_json_error(['message' => 'Unauthorized']);
         return;
     }
@@ -17521,7 +17523,7 @@ public function mxchat_get_similarity_threshold() {
     }
     
     // Only allow admin users
-    if (!current_user_can('administrator')) {
+    if (!current_user_can('manage_options')) {
         wp_send_json_error(['message' => 'Unauthorized']);
         return;
     }
@@ -17548,7 +17550,7 @@ public function mxchat_get_kb_status() {
     }
 
     // Only allow admin users
-    if (!current_user_can('administrator')) {
+    if (!current_user_can('manage_options')) {
         wp_send_json_error(['message' => 'Unauthorized']);
         return;
     }
@@ -17606,7 +17608,7 @@ public function mxchat_start_fresh_session() {
     }
     
     // Only allow admin users
-    if (!current_user_can('administrator')) {
+    if (!current_user_can('manage_options')) {
         wp_send_json_error(['message' => 'Unauthorized']);
         return;
     }
@@ -17723,7 +17725,7 @@ private function clear_word_transients($session_id) {
  */
 private function capture_testing_data($user_embedding, $message, $session_id) {
     // Only capture for admin users
-    if (!current_user_can('administrator')) {
+    if (!current_user_can('manage_options')) {
         return null;
     }
     

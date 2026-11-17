@@ -1211,6 +1211,12 @@ private static function store_in_pinecone_main($embedding_vector, $content, $url
     
     //error_log('[MXCHAT-PINECONE-MAIN] Request body prepared (embedding dimensions: ' . count($embedding_vector) . ')');
 
+    // plan 927825: a companion plugin may store the vector itself (see pre_vector_store()).
+    $handled = self::pre_vector_store('upsert', $request_body, array('bot_id' => $bot_id, 'namespace' => $namespace));
+    if ($handled !== null) {
+        return $handled;
+    }
+
     $response = wp_remote_post($api_endpoint, array(
         'headers' => array(
             'Api-Key' => $api_key,
@@ -1935,6 +1941,12 @@ private static function store_chunk_in_pinecone($embedding_vector, $chunk_text, 
         $request_body['namespace'] = $namespace;
     }
 
+    // plan 927825: a companion plugin may store the chunk itself (see pre_vector_store()).
+    $handled = self::pre_vector_store('upsert', $request_body, array('bot_id' => $bot_id, 'namespace' => $namespace));
+    if ($handled !== null) {
+        return $handled;
+    }
+
     $response = wp_remote_post($api_endpoint, array(
         'headers' => array(
             'Api-Key' => $api_key,
@@ -1988,6 +2000,40 @@ private static function store_chunk_in_wordpress_db($content_with_metadata, $sou
     }
 
     return true;
+}
+
+/**
+ * Store one chunk of a chunked entry exactly as submit_chunked_content() stores it: the store
+ * branch of its loop (Pinecone when the bot uses it, else the WordPress knowledge table).
+ *
+ * For internal use by the knowledge manager's document queue (plan 15eaa6), which stores a long
+ * document one chunk per request and must write what a whole import writes. Not a public API:
+ * the signature follows the private writers and may change with them.
+ *
+ * @param array  $embedding_vector The chunk's embedding.
+ * @param string $chunk_text       The chunk's text, without metadata.
+ * @param string $source_url       The entry's identity, sanitised as submit_content_to_db() does.
+ * @param string $vector_id        md5($source_url) . '_chunk_' . $index (the Pinecone id).
+ * @param string $bot_id           The bot whose store is used.
+ * @param string $content_type     The entry's type.
+ * @param array  $chunk_metadata   create_chunk_metadata() plus its aliases, after the
+ *                                 mxchat_embedding_chunk_metadata filter.
+ * @return true|WP_Error
+ */
+public static function store_document_chunk($embedding_vector, $chunk_text, $source_url, $vector_id, $bot_id, $content_type, $chunk_metadata) {
+    if (self::is_pinecone_enabled_for_bot($bot_id)) {
+        return self::store_chunk_in_pinecone($embedding_vector, $chunk_text, $source_url, $vector_id, $bot_id, $content_type, $chunk_metadata);
+    }
+
+    global $wpdb;
+    return self::store_chunk_in_wordpress_db(
+        MxChat_Chunker::format_chunk_for_storage($chunk_text, $chunk_metadata),
+        $source_url,
+        maybe_serialize($embedding_vector),
+        $wpdb->prefix . 'mxchat_system_prompt_content',
+        $content_type,
+        $chunk_metadata
+    );
 }
 
 /**
@@ -2306,6 +2352,19 @@ private static function cleanup_pinecone_chunk_stragglers($source_url, $bot_id) 
         return;
     }
 
+    // plan 927825: a companion plugin may list and sweep the stragglers itself (see pre_vector_store()).
+    $companion_ids = self::pre_vector_store('list_ids', array('prefix' => md5($source_url) . '_chunk_', 'namespace' => $namespace), array('bot_id' => $bot_id, 'namespace' => $namespace));
+    if ($companion_ids !== null) {
+        if (!empty($companion_ids)) {
+            $swept = self::pre_vector_store('delete', array('ids' => $companion_ids, 'namespace' => $namespace), array('bot_id' => $bot_id, 'namespace' => $namespace));
+            // Logged like the Pinecone sweep below; null here means the stragglers stayed.
+            if ($swept !== true && class_exists('MxChat_Admin') && method_exists('MxChat_Admin', 'mxchat_log_debug')) {
+                MxChat_Admin::mxchat_log_debug('pinecone_error', 'Failed to sweep stale chunk vectors after single-vector re-store', array('source_url' => $source_url, 'bot_id' => $bot_id, 'count' => count($companion_ids)));
+            }
+        }
+        return;
+    }
+
     $stragglers = array();
 
     // Pinecone /vectors/list is a GET endpoint with query-string parameters (a POST
@@ -2382,7 +2441,7 @@ private static function cleanup_pinecone_chunk_stragglers($source_url, $bot_id) 
  * delete path and the count path can never resolve different credentials.
  *
  * @param  string $bot_id
- * @return array{api_key:string,host:string,namespace:string}
+ * @return array{api_key:string,host:string,namespace:string,bot_id:string,index_type:string}
  */
 private static function pinecone_config_for_bot($bot_id) {
     if ($bot_id === 'default' || !class_exists('MxChat_Multi_Bot_Manager')) {
@@ -2397,6 +2456,7 @@ private static function pinecone_config_for_bot($bot_id) {
             'api_key'    => $pinecone_options['mxchat_pinecone_api_key'] ?? '',
             'host'       => $pinecone_options['mxchat_pinecone_host'] ?? '',
             'namespace'  => $pinecone_options['mxchat_pinecone_namespace'] ?? '',
+            'bot_id'     => $bot_id,
             // 'vector' | 'document' (plan 362c31) — the delete / count paths branch on it.
             'index_type' => (($pinecone_options['mxchat_pinecone_index_type'] ?? 'vector') === 'document') ? 'document' : 'vector',
         );
@@ -2406,6 +2466,7 @@ private static function pinecone_config_for_bot($bot_id) {
         'api_key'    => $bot_pinecone_config['api_key'] ?? '',
         'host'       => $bot_pinecone_config['host'] ?? '',
         'namespace'  => $bot_pinecone_config['namespace'] ?? '',
+        'bot_id'     => $bot_id,
         'index_type' => (($bot_pinecone_config['index_type'] ?? 'vector') === 'document') ? 'document' : 'vector',
     );
 }
@@ -2424,6 +2485,12 @@ private static function pinecone_list_ids_by_prefix($prefix, array $cfg) {
     // Document index (plan 362c31): the documents API lists by prefix too.
     if (($cfg['index_type'] ?? 'vector') === 'document' && class_exists('MxChat_Pinecone_Documents')) {
         return MxChat_Pinecone_Documents::list_ids($prefix, $cfg);
+    }
+
+    // plan 927825: a companion plugin may list the ids itself (see pre_vector_store()).
+    $companion_ids = self::pre_vector_store('list_ids', array('prefix' => $prefix, 'namespace' => $cfg['namespace'] ?? ''), array('bot_id' => $cfg['bot_id'] ?? 'default', 'namespace' => $cfg['namespace'] ?? ''));
+    if ($companion_ids !== null) {
+        return $companion_ids;
     }
 
     $ids = array();
@@ -2547,6 +2614,12 @@ private static function delete_pinecone_chunks_by_url($source_url, $bot_id) {
 
     if (!empty($namespace)) {
         $delete_body['namespace'] = $namespace;
+    }
+
+    // plan 927825: a companion plugin may delete the vectors itself (see pre_vector_store()).
+    $handled = self::pre_vector_store('delete', $delete_body, array('bot_id' => $bot_id, 'namespace' => $namespace));
+    if ($handled !== null) {
+        return $handled;
     }
 
     $delete_response = wp_remote_post($delete_url, array(
@@ -3042,5 +3115,59 @@ public static function pre_vector_query(array $query, array $context = array()) 
     $results['matches'] = $matches;
 
     return $results;
+}
+
+/**
+ * Let a companion plugin store, list and delete vectors itself, the write-side
+ * twin of pre_vector_query() (plan 927825).
+ *
+ * Returns null when no companion answers, so the caller sends the request to
+ * Pinecone as usual. For 'upsert' and 'delete' a companion answers true (done) or
+ * a WP_Error (failed); for 'list_ids' it answers an array of ids. Any other
+ * return counts as null, so a mistake in a companion plugin never loses a write
+ * silently. Document indexes are not covered.
+ *
+ * @param string $op      'upsert', 'delete' or 'list_ids'.
+ * @param array  $payload upsert: the body for Pinecone's /vectors/upsert
+ *                        (vectors[] of id, values, metadata; namespace).
+ *                        delete: the body for /vectors/delete (ids[]; namespace).
+ *                        list_ids: prefix and namespace.
+ * @param array  $context bot_id and namespace.
+ * @return true|string[]|WP_Error|null
+ */
+public static function pre_vector_store($op, array $payload, array $context = array()) {
+    if (!has_filter('mxchat_pre_vector_store')) {
+        return null;
+    }
+
+    $context['namespace'] = isset($context['namespace']) ? (string) $context['namespace'] : '';
+
+    /**
+     * Store, list or delete vectors in your own store instead of Pinecone.
+     *
+     * @param true|string[]|WP_Error|null $result  Null sends the request to Pinecone. true or a WP_Error answers an upsert or delete; an array of ids answers list_ids.
+     * @param string                      $op      upsert, delete or list_ids.
+     * @param array                       $payload The Pinecone-shaped body described above.
+     * @param array                       $context bot_id and namespace.
+     */
+    $result = apply_filters('mxchat_pre_vector_store', null, $op, $payload, $context);
+
+    if ($op === 'list_ids') {
+        if (!is_array($result)) {
+            return null;
+        }
+        // Ids are strings. A list holding anything else (Pinecone's own
+        // {vectors: [{id}]} shape, objects) counts as null too, never a fatal.
+        $ids = array();
+        foreach ($result as $id) {
+            if (!is_string($id) && !is_int($id)) {
+                return null;
+            }
+            $ids[] = (string) $id;
+        }
+        return $ids;
+    }
+
+    return ($result === true || is_wp_error($result)) ? $result : null;
 }
 }

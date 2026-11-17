@@ -5,7 +5,7 @@ Tags: ai chatbot, chatgpt, woocommerce, customer support, content generation
 Requires at least: 5.3
 Tested up to: 7.1
 Requires PHP: 7.4
-Stable tag: 3.2.28
+Stable tag: 3.2.29
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -302,6 +302,17 @@ Instant alerts for the MxChat mobile app use MxChat's notification service, host
 
 == Changelog ==
 
+= 3.2.29 - November 17, 2026 =
+* New: Developers can change the WooCommerce prices written into the knowledge base with the new mxchat_product_index_prices and mxchat_product_price_lines filters, for example to show Price on request for quote-only products.
+* New: Developers can store, list and delete knowledge base vectors in their own vector store instead of Pinecone with the new mxchat_pre_vector_store filter, the companion of mxchat_pre_vector_query. Thanks to Paul Argoud for the patch.
+* Security: Hardened the import status cards on the Knowledge screen.
+* Fixed: PDF and sitemap imports no longer stall when the tab is closed or a request dies mid-batch. Interrupted pages are retried, and an unfinished import resumes the next time you open the Knowledge page within a week.
+* Fixed: The Testing tab now works for any role that can manage the site's settings, not only Administrator, so custom admin roles see the threshold, system information, knowledge base status and test reply scores.
+* Fixed: Word, text and Markdown files longer than 69 pages now import with Document Upload, in the background a part at a time with a progress card, up to 1,000 pages. The chat's PDF page limit no longer applies to knowledge base imports.
+* Fixed: PDF, sitemap and document imports no longer process the same page twice or report complete while pages are still in progress, and their status cards show the real page counts.
+* Fixed: Satisfaction ratings show as saved only once they are stored. A failed save tells the visitor so they can try again, a missing ratings table is created automatically, the prompt only follows real answers, and visitors on one shared network address no longer use up each other's rating limit.
+* Improved: The Knowledge screen now says when your chatbot answers from an OpenAI Vector Store that imported content does not reach, and when a non-OpenAI chat model means the Vector Store is skipped.
+
 = 3.2.28 - November 5, 2026 =
 * New: Developers can replace the error messages visitors see in the chat with their own wording using the new mxchat_error_response filter, and answer knowledge base queries from their own vector store using the new mxchat_pre_vector_query filter.
 * Fixed: With Contextual Awareness on, security firewalls such as Cloudflare or Wordfence no longer block chat messages. The page text is sent in a firewall-safe form without hidden page content, and a blocked message is retried once without it.
@@ -402,6 +413,9 @@ Instant alerts for the MxChat mobile app use MxChat's notification service, host
 Older releases are archived in the plugin's full version history on WordPress.org.
 
 == Upgrade Notice ==
+
+= 3.2.29 =
+Long documents now import in the background and interrupted imports resume, ratings only show as saved once stored, the Testing tab works for custom admin roles, and the Knowledge screen shows which source your chatbot searches. Includes security hardening and new developer filters.
 
 = 3.2.28 =
 Contextual Awareness no longer trips firewalls, blocked messages say so, the chatbot remembers messages with an ampersand, formatting or code, answers name uploaded files, tables install on older databases, a filter sets chat error messages, and the Pinecone list follows the selected bot.

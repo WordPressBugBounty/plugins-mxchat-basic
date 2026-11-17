@@ -303,6 +303,130 @@ function mxchat_knowledge_bot_uses_shared_database($bot_id) {
 }
 
 /**
+ * Where the default bot's knowledge is searched, for the Knowledge screen's Vector Store
+ * notices (plan 2d5e55).
+ *
+ * Makes the integrator's retrieval decision for the default bot. Its rule lives in
+ * private methods there (mxchat_vectorstore_serves_turn() and is_openai_chat_model()):
+ * the Vector Store answers a turn only when it is turned on AND the chat model is an
+ * OpenAI one, meaning an id that starts with gpt-, o1- or o3- (an unset model counts as
+ * gpt-5.6-sol, the integrator's default). Otherwise Pinecone answers when it is on, and
+ * the WordPress database when it is not (mxchat_knowledge_uses_pinecone()). The sync
+ * target is the store the sync code writes to: MxChat_Vectorstore_Manager::
+ * get_sync_config() uses the first Vector Store ID when the sync ID is blank.
+ *
+ * @return string '' (Vector Store off), 'not_openai' (Vector Store on, but Pinecone or the
+ *                WordPress database answers), 'unsynced' (the Vector Store answers, and
+ *                content saved here is not sent to it) or 'synced' (the Vector Store
+ *                answers, and sync sends content saved here to it).
+ */
+function mxchat_knowledge_vectorstore_notice_state() {
+    $vs_options = get_option('mxchat_openai_vectorstore_options', array());
+    if (!is_array($vs_options) || ($vs_options['mxchat_use_openai_vectorstore'] ?? '0') !== '1') {
+        return '';
+    }
+
+    $mxchat_options = get_option('mxchat_options', array());
+    $model = (is_array($mxchat_options) && isset($mxchat_options['model'])) ? (string) $mxchat_options['model'] : 'gpt-5.6-sol';
+    $is_openai_model = false;
+    foreach (array('gpt-', 'o1-', 'o3-') as $prefix) {
+        if (strpos($model, $prefix) === 0) {
+            $is_openai_model = true;
+            break;
+        }
+    }
+    if (!$is_openai_model) {
+        return 'not_openai';
+    }
+
+    if (class_exists('MxChat_Vectorstore_Manager')) {
+        $sync_config = MxChat_Vectorstore_Manager::get_sync_config('default');
+        $store_id = (string) ($sync_config['store_id'] ?? '');
+    } else {
+        // Same fallback as get_sync_config(): a blank sync ID means the first Vector Store ID.
+        $store_id = trim((string) ($vs_options['mxchat_vectorstore_sync_store_id'] ?? ''));
+        if ($store_id === '') {
+            $ids = array_filter(array_map('trim', explode(',', (string) ($vs_options['mxchat_vectorstore_ids'] ?? ''))));
+            $store_id = $ids ? (string) reset($ids) : '';
+        }
+    }
+    $sync_on = ($vs_options['mxchat_vectorstore_sync_enabled'] ?? '0') === '1';
+
+    return ($sync_on && $store_id !== '') ? 'synced' : 'unsynced';
+}
+
+/**
+ * Whether the default bot keeps its knowledge base in Pinecone (plan 2d5e55): the option
+ * the page reads for $is_pinecone_active. Imports and Auto-sync then save to Pinecone, and
+ * Pinecone answers whenever the Vector Store does not.
+ */
+function mxchat_knowledge_uses_pinecone() {
+    $pinecone_options = get_option('mxchat_pinecone_addon_options', array());
+    return is_array($pinecone_options) && ($pinecone_options['mxchat_use_pinecone'] ?? '0') === '1';
+}
+
+/**
+ * Print the default bot's Vector Store notice (plan 2d5e55): the full copy at the top of
+ * Import Options, the short copy under the Auto-Sync settings card, naming Pinecone or the
+ * WordPress knowledge base as the store content is saved to. Prints nothing unless
+ * mxchat_knowledge_vectorstore_notice_state() is 'unsynced' or 'not_openai'. The warning's
+ * button is a plain #openai-vectorstore link: the shared shell script (js/admin-sidebar.js)
+ * opens the section a hash names. A [data-target] button would also switch tabs, but that
+ * script leaves its "active" class on every [data-target] it matches, so it would stay on.
+ *
+ * @param string $variant 'full' or 'short'.
+ */
+function mxchat_render_knowledge_vectorstore_notice($variant = 'full') {
+    $state = mxchat_knowledge_vectorstore_notice_state();
+    if ($state !== 'unsynced' && $state !== 'not_openai') {
+        return;
+    }
+    $short    = ($variant === 'short');
+    $pinecone = mxchat_knowledge_uses_pinecone();
+    $store    = $pinecone ? 'pinecone' : 'wordpress';
+
+    if ($state === 'unsynced') {
+        if ($pinecone) {
+            $message = $short
+                ? __('Auto-sync saves to your Pinecone index, which the chatbot does not search while Vector Store is on. Turn on Vector Store sync to send it there too.', 'mxchat')
+                : __('Your chatbot searches your OpenAI Vector Store. Content you import or auto-sync here is saved to your Pinecone index, which the chatbot does not search while Vector Store is on. Turn on Vector Store sync to send it there too.', 'mxchat');
+        } else {
+            $message = $short
+                ? __('Auto-sync saves to the WordPress knowledge base, which the chatbot does not search while Vector Store is on. Turn on Vector Store sync to send it there too.', 'mxchat')
+                : __('Your chatbot searches your OpenAI Vector Store. Content you import or auto-sync here is saved to the WordPress knowledge base, which the chatbot does not search while Vector Store is on. Turn on Vector Store sync to send it there too.', 'mxchat');
+        }
+        ?>
+        <div class="mxch-notice mxch-notice-warning mxch-notice-block" data-vs-notice="unsynced" data-vs-store="<?php echo esc_attr($store); ?>" data-vs-variant="<?php echo $short ? 'short' : 'full'; ?>">
+            <svg class="mxch-notice-icon" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+            <div class="mxch-notice-body">
+                <?php echo esc_html($message); ?>
+                <div class="mxch-notice-actions">
+                    <a class="mxch-btn mxch-btn-secondary mxch-btn-sm" href="#openai-vectorstore"><?php esc_html_e('Open Vector Store settings', 'mxchat'); ?></a>
+                </div>
+            </div>
+        </div>
+        <?php
+        return;
+    }
+
+    if ($pinecone) {
+        $message = $short
+            ? __('Your chat model is not an OpenAI model, so the chatbot searches your Pinecone index that Auto-sync updates.', 'mxchat')
+            : __('Vector Store is on, but your chat model is not an OpenAI model, so the chatbot searches your Pinecone index.', 'mxchat');
+    } else {
+        $message = $short
+            ? __('Your chat model is not an OpenAI model, so the chatbot searches the WordPress knowledge base that Auto-sync updates.', 'mxchat')
+            : __('Vector Store is on, but your chat model is not an OpenAI model, so the chatbot searches the WordPress knowledge base.', 'mxchat');
+    }
+    ?>
+    <div class="mxch-notice mxch-notice-info mxch-notice-block" data-vs-notice="not_openai" data-vs-store="<?php echo esc_attr($store); ?>" data-vs-variant="<?php echo $short ? 'short' : 'full'; ?>">
+        <svg class="mxch-notice-icon" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+        <div class="mxch-notice-body"><?php echo esc_html($message); ?></div>
+    </div>
+    <?php
+}
+
+/**
  * Render Multi-Bot Selector
  */
 function mxchat_render_knowledge_bot_selector($multibot_active, $current_bot_id) {
@@ -419,6 +543,40 @@ function mxchat_render_global_processing_status($page_data, $knowledge_manager) 
             </div>
         <?php endif;
 
+        // Document Processing Status (plan 15eaa6): a long document imported a chunk at a time.
+        // The PDF card's pattern and classes, so knowledge-processing.js drives it the same way;
+        // counted in chunks, the unit the Knowledge list shows for these entries.
+        $document_status = $knowledge_manager->mxchat_get_document_processing_status();
+        if ($document_status && $document_status['status'] === 'processing') : ?>
+            <div class="mxchat-status-card mxch-card" data-card-type="document" data-queue-id="<?php echo esc_attr($document_status['queue_id']); ?>" style="border-left: 4px solid var(--mxch-primary); margin-bottom: 16px;">
+                <div class="mxchat-status-header mxch-card-header" style="background: var(--mxch-primary-light);">
+                    <h4 style="margin: 0; display: flex; align-items: center; gap: 8px; font-size: 15px; font-weight: 600;">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><line x1="10" y1="9" x2="8" y2="9"/></svg>
+                        <?php esc_html_e('Document Processing Status', 'mxchat'); ?>
+                    </h4>
+                    <div class="mxchat-status-warning" style="background: #fff3cd; color: #856404; padding: 8px 12px; border-radius: 4px; font-size: 13px; margin: 10px 0;">
+                        <?php esc_html_e('Keep this tab open - Processing runs in your browser', 'mxchat'); ?>
+                    </div>
+                    <form method="post" class="mxchat-stop-form" action="<?php echo esc_url(admin_url('admin-post.php?action=mxchat_stop_processing')); ?>">
+                        <?php wp_nonce_field('mxchat_stop_processing_action', 'mxchat_stop_processing_nonce'); ?>
+                        <button type="submit" name="stop_processing" class="mxchat-button-secondary mxch-btn mxch-btn-secondary mxch-btn-sm">
+                            <?php esc_html_e('Stop Processing', 'mxchat'); ?>
+                        </button>
+                    </form>
+                </div>
+                <div class="mxchat-progress-bar" style="height: 8px; background: #e2e8f0; border-radius: 4px; overflow: hidden; margin: 0;">
+                    <div class="mxchat-progress-fill" style="height: 100%; background: var(--mxch-primary); width: <?php echo esc_attr($document_status['percentage']); ?>%; transition: width 0.3s;"></div>
+                </div>
+                <div class="mxchat-status-details mxch-card-body">
+                    <p><?php printf(esc_html__('Progress: %1$d of %2$d chunks (%3$d%%)', 'mxchat'), absint($document_status['processed_chunks']), absint($document_status['total_chunks']), absint($document_status['percentage'])); ?></p>
+                    <?php if (!empty($document_status['failed_chunks']) && $document_status['failed_chunks'] > 0) : ?>
+                        <p class="error-count" style="color: var(--mxch-error);"><strong><?php esc_html_e('Failed chunks:', 'mxchat'); ?></strong> <?php echo esc_html($document_status['failed_chunks']); ?></p>
+                    <?php endif; ?>
+                    <p><strong><?php esc_html_e('Status:', 'mxchat'); ?></strong> <?php esc_html_e('Processing', 'mxchat'); ?></p>
+                </div>
+            </div>
+        <?php endif;
+
         // Completed status cards
         echo $knowledge_manager->mxchat_render_completed_status_cards();
         ?>
@@ -483,6 +641,14 @@ function mxchat_render_import_options_section($admin_instance, $knowledge_manage
             <h1 class="mxch-content-title"><?php esc_html_e('Import Options', 'mxchat'); ?></h1>
             <p class="mxch-content-subtitle"><?php esc_html_e('Import content to your knowledge base from various sources.', 'mxchat'); ?></p>
         </div>
+
+        <?php
+        // Plan 2d5e55: say so when the OpenAI Vector Store hides what is imported here. Those
+        // settings are the default bot's, so an import into another bot gets no notice.
+        if (!isset($current_bot_id) || $current_bot_id === 'default') {
+            mxchat_render_knowledge_vectorstore_notice('full');
+        }
+        ?>
 
         <!-- API Key Status -->
         <div class="mxch-notice <?php echo $has_required_key ? 'mxch-notice-success' : 'mxch-notice-warning'; ?>" style="margin-bottom: 24px;">
@@ -944,10 +1110,16 @@ function mxchat_render_knowledge_base_section($admin_instance, $knowledge_manage
             <p class="mxch-content-subtitle"><?php esc_html_e('View and manage your imported knowledge entries.', 'mxchat'); ?></p>
         </div>
 
-        <?php if (!empty($use_vectorstore)) : ?>
-        <div class="mxch-notice mxch-notice-info" style="margin-bottom: 20px;">
+        <?php
+        // Plan 2d5e55: the Vector Store hides the entries below only when it answers the turn
+        // (turned on, with an OpenAI chat model); with another model they ARE searched. The
+        // entries come from Pinecone when $use_pinecone, so the copy names that store then.
+        $vectorstore_claims_turn = in_array(mxchat_knowledge_vectorstore_notice_state(), array('unsynced', 'synced'), true);
+        ?>
+        <?php if ($vectorstore_claims_turn) : ?>
+        <div class="mxch-notice mxch-notice-info" style="margin-bottom: 20px;" data-vs-kb-notice="<?php echo $use_pinecone ? 'pinecone' : 'wordpress'; ?>">
             <svg class="mxch-notice-icon" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
-            <span><strong><?php esc_html_e('OpenAI Vector Store is Active', 'mxchat'); ?></strong> - <?php esc_html_e('Your chatbot is using OpenAI\'s hosted Vector Store for knowledge retrieval. The entries below are stored locally and are not being searched. To use this local database, disable Vector Store in the Integrations settings.', 'mxchat'); ?></span>
+            <span><strong><?php esc_html_e('OpenAI Vector Store is Active', 'mxchat'); ?></strong> - <?php if ($use_pinecone) : ?><?php esc_html_e('Your chatbot is using OpenAI\'s hosted Vector Store for knowledge retrieval. The entries below are stored in your Pinecone index and are not being searched. To use your Pinecone index, disable Vector Store in the Integrations settings.', 'mxchat'); ?><?php else : ?><?php esc_html_e('Your chatbot is using OpenAI\'s hosted Vector Store for knowledge retrieval. The entries below are stored locally and are not being searched. To use this local database, disable Vector Store in the Integrations settings.', 'mxchat'); ?><?php endif; ?></span>
         </div>
         <?php endif; ?>
 
@@ -957,7 +1129,7 @@ function mxchat_render_knowledge_base_section($admin_instance, $knowledge_manage
                     <?php esc_html_e('Knowledge Entries', 'mxchat'); ?>
                     <?php $count_unit = $count_unit ?? ''; ?>
                     <span id="mxchat-entry-count" style="font-weight: normal; color: var(--mxch-text-secondary);" data-count="<?php echo esc_attr($total_records); ?>" data-unit="<?php echo esc_attr($count_unit); ?>"<?php if ($count_unit === 'vectors') : ?> title="<?php esc_attr_e('Pinecone reports vectors, not documents; a long entry is stored as several vectors.', 'mxchat'); ?>"<?php endif; ?>>(<?php echo esc_html(number_format_i18n($total_records)); ?><?php if ($count_unit === 'vectors') : ?> <?php esc_html_e('vectors', 'mxchat'); ?><?php endif; ?>)</span>
-                    <?php if (!empty($use_vectorstore)) : ?>
+                    <?php if ($vectorstore_claims_turn) : ?>
                         <span style="display: inline-flex; align-items: center; gap: 4px; padding: 4px 8px; border-radius: 12px; font-size: 12px; font-weight: 500; margin-left: 8px; background: #fff3e0; color: #e65100;">
                             <span class="dashicons dashicons-database" style="font-size: 14px;"></span>
                             <?php esc_html_e('Not in use', 'mxchat'); ?>
@@ -1555,6 +1727,8 @@ function mxchat_render_auto_sync_section($knowledge_manager) {
                 </div>
             </div>
         </div>
+
+        <?php mxchat_render_knowledge_vectorstore_notice('short'); // plan 2d5e55; Auto-sync writes to the default bot ?>
     </div>
     <?php
 }

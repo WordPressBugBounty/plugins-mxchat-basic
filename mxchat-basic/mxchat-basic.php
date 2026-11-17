@@ -3,7 +3,7 @@
  * Plugin Name: MxChat
  * Plugin URI: https://mxchat.ai/
  * Description: AI chatbot for WordPress with OpenAI, Claude, xAI, DeepSeek, live agent, PDF uploads, WooCommerce, and training on website data.
- * Version: 3.2.28
+ * Version: 3.2.29
  * Author: MxChat
  * Author URI: https://mxchat.ai
  * License: GPLv2 or later
@@ -2389,7 +2389,7 @@ function mxchat_ensure_tables_exist() {
     global $wpdb;
     
     // Only run for admin users to avoid performance impact
-    if (!current_user_can('administrator')) {
+    if (!current_user_can('manage_options')) {
         return;
     }
     
@@ -3005,6 +3005,10 @@ register_deactivation_hook(__FILE__, 'mxchat_deactivate');
  * feedback can be added once but never replaced, and each address gets a
  * small hourly budget of new ratings (filter `mxchat_rating_rate_limit`,
  * default 10, 0 turns the throttle off).
+ *
+ * Plan 13cf5d (3.2.29): the budget counts per address AND session, default 30
+ * an hour, so visitors behind one proxy address no longer share it; a missing
+ * ratings table is created by the core table check and the save tried again.
  */
 function mxchat_save_session_rating() {
     global $wpdb;
@@ -3034,34 +3038,49 @@ function mxchat_save_session_rating() {
     }
 
     $table_name = $wpdb->prefix . 'mxchat_session_ratings';
+    // A missing ratings table is handled at the insert below; its database
+    // error must not print into the JSON answer (plan 13cf5d).
+    $suppress = $wpdb->suppress_errors(true);
     $existing = $wpdb->get_row($wpdb->prepare(
         "SELECT id, rating_feedback FROM $table_name WHERE session_id = %s LIMIT 1",
         $session_id
     ));
+    $wpdb->suppress_errors($suppress);
 
     if ($existing) {
         // The widget saves the thumb first and the optional comment second, so
-        // feedback may be added to a rating that has none. It is never replaced.
+        // feedback may be added to a rating that has none. It is never replaced:
+        // a comment that is not added because one exists stays a success.
         $updated = false;
         if ($feedback !== '' && ($existing->rating_feedback === null || $existing->rating_feedback === '')) {
-            $updated = (bool) $wpdb->update(
+            $suppress = $wpdb->suppress_errors(true);
+            $result = $wpdb->update(
                 $table_name,
                 array('rating_feedback' => $feedback),
                 array('id' => (int) $existing->id),
                 array('%s'),
                 array('%d')
             );
+            $wpdb->suppress_errors($suppress);
+            // A database failure is an error the widget can show (plan 13cf5d),
+            // not "updated: false".
+            if ($result === false) {
+                wp_send_json_error(array('message' => 'feedback_save_failed'), 500);
+            }
+            $updated = (bool) $result;
         }
         wp_send_json_success(array('updated' => $updated));
     }
 
-    // Light per-address throttle on new ratings, fixed one-hour window. Feedback
-    // additions above need no budget of their own: each rating takes one at most.
-    $limit = (int) apply_filters('mxchat_rating_rate_limit', 10);
+    // Light throttle on new ratings, fixed one-hour window, counted per address
+    // AND session (plan 13cf5d): visitors behind one proxy address no longer
+    // share a budget, and a session stores one rating at most, so its count
+    // bounds retries. Feedback additions above need no budget of their own.
+    $limit = (int) apply_filters('mxchat_rating_rate_limit', 30);
     if ($limit > 0) {
         $ip = class_exists('MxChat_User') ? MxChat_User::mxchat_get_client_ip() : '';
         if ($ip !== '' && $ip !== 'unknown') {
-            $rl_key = 'mxchat_rating_rl_' . md5($ip);
+            $rl_key = 'mxchat_rating_rl_' . md5($ip . '|' . $session_id);
             $window = get_transient($rl_key);
             $now    = time();
             if (!is_array($window) || empty($window['t']) || ($now - (int) $window['t']) >= HOUR_IN_SECONDS) {
@@ -3075,17 +3094,55 @@ function mxchat_save_session_rating() {
         }
     }
 
-    $inserted = $wpdb->insert(
-        $table_name,
-        array(
-            'session_id'      => $session_id,
-            'bot_id'          => $bot_id !== '' ? $bot_id : 'default',
-            'rating_value'    => $rating_raw,
-            'rating_feedback' => $feedback !== '' ? $feedback : null,
-            'created_at'      => current_time('mysql'),
-        ),
-        array('%s', '%s', '%d', '%s', '%s')
+    $row = array(
+        'session_id'      => $session_id,
+        'bot_id'          => $bot_id !== '' ? $bot_id : 'default',
+        'rating_value'    => $rating_raw,
+        'rating_feedback' => $feedback !== '' ? $feedback : null,
+        'created_at'      => current_time('mysql'),
     );
+    $formats = array('%s', '%s', '%d', '%s', '%s');
+
+    $suppress = $wpdb->suppress_errors(true);
+    $inserted = $wpdb->insert($table_name, $row, $formats);
+
+    // Plan 13cf5d: the table is missing where an older CREATE failed (up to
+    // 3.2.27 it indexed all 255 characters of session_id, over the 767-byte key
+    // limit some databases still have). Run the core table check once, past its
+    // "already checked" flag and hourly retry, then save again.
+    if ($inserted === false) {
+        $insert_error = $wpdb->last_error; // read before the next query resets it
+        $like = $wpdb->prepare('SHOW TABLES LIKE %s', $wpdb->esc_like($table_name));
+        if ($wpdb->get_var($like) !== $table_name) {
+            $retry_error  = '';
+            delete_option('mxchat_session_ratings_table_created');
+            delete_transient('mxchat_session_ratings_table_created_retry');
+            mxchat_migrate_add_session_ratings_table();
+            $created = ($wpdb->get_var($like) === $table_name);
+            if ($created) {
+                $inserted = $wpdb->insert($table_name, $row, $formats);
+                if ($inserted === false) {
+                    $retry_error = $wpdb->last_error;
+                }
+            }
+            if (class_exists('MxChat_Admin') && method_exists('MxChat_Admin', 'mxchat_log_debug')) {
+                MxChat_Admin::mxchat_log_debug(
+                    'rating_save',
+                    !$created
+                        ? 'Satisfaction rating not saved: the ratings table is missing and could not be created'
+                        : ($inserted === false
+                            ? 'Satisfaction ratings table was missing and has been created, but the rating still failed to save'
+                            : 'Satisfaction ratings table was missing and has been created; the rating was saved'),
+                    array('session_id' => $session_id, 'insert_error' => $insert_error, 'retry_error' => $retry_error)
+                );
+            }
+            if (!$created) {
+                $wpdb->suppress_errors($suppress);
+                wp_send_json_error(array('message' => 'ratings_table_missing'), 500);
+            }
+        }
+    }
+    $wpdb->suppress_errors($suppress);
 
     if ($inserted === false) {
         wp_send_json_error(array('message' => 'db_insert_failed'), 500);

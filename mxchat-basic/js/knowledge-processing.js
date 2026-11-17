@@ -76,9 +76,14 @@ jQuery(document).ready(function($) {
     let isProcessingQueue = false;
     let currentQueueId = null;
     let currentQueueType = null;
+    let waitingInFlight = 0; // rows of the queue still in flight elsewhere, shown on the card (plan 15eaa6)
 
     // Process 5 items at a time
     const BATCH_SIZE = 5;
+
+    // While rows of the queue are still in flight elsewhere (a closed tab, an interrupted
+    // request), check again after this long (plan 15eaa6)
+    const WAIT_POLL_MS = 10000;
 
     // Check if we should start queue processing on page load
     checkForActiveQueues();
@@ -153,9 +158,19 @@ function checkForActiveQueues() {
                     updatePdfStatus(response.pdf_status);
                 }
             }
+
+            // A long document imported a chunk at a time (plan 15eaa6)
+            if (response.document_queue_id && response.document_status) {
+                if (response.document_status.status === 'processing') {
+                    startQueueProcessing(response.document_queue_id, 'document');
+                } else if (response.document_status.status === 'complete') {
+                    $('.mxchat-processing-message').remove();
+                    updateDocumentStatus(response.document_status);
+                }
+            }
             
             // ADD THIS: If no queues found at all, remove the message
-            if (!response.sitemap_queue_id && !response.pdf_queue_id) {
+            if (!response.sitemap_queue_id && !response.pdf_queue_id && !response.document_queue_id) {
                 $('.mxchat-processing-message').remove();
             }
         },
@@ -227,24 +242,32 @@ function checkForActiveQueues() {
             // Filter out completed/error responses and extract items
             const items = [];
             let queueComplete = false;
+            let queueWaiting = false;
 
             for (let response of responses) {
-                if (response.success && response.data && !response.data.complete) {
+                if (response.success && response.data && response.data.item) {
                     items.push(response.data.item);
+                } else if (response.data && response.data.wait) {
+                    // Rows of this queue are still in flight elsewhere (plan 15eaa6)
+                    queueWaiting = true;
                 } else if (response.data && response.data.complete) {
                     queueComplete = true;
                 }
             }
 
-            // If no items to process, queue is done
+            // No items to process: done only when the server says so and nothing is in flight;
+            // otherwise check the queue, which waits for rows still in flight (plan 15eaa6)
             if (items.length === 0) {
-                if (queueComplete) {
+                if (queueComplete && !queueWaiting) {
                     handleQueueComplete();
                 } else {
                     verifyQueueCompletion();
                 }
                 return;
             }
+
+            // Items again: nothing to wait for (plan 15eaa6)
+            waitingInFlight = 0;
 
             // Process all items in this batch simultaneously
             const processPromises = items.map(item => processQueueItem(item));
@@ -298,13 +321,17 @@ function checkForActiveQueues() {
                 if (response.success) {
                     const status = response.data;
                     
-                    // If no pending or processing items, queue is done
-                    if (status.pending === 0 && status.processing === 0) {
-                        //console.log('MxChat: Queue verified as complete');
+                    // Done only when nothing is pending, in flight or failed. Failed rows get one
+                    // more round of get-next calls: those hand a row out again while it has
+                    // attempts left, else answer complete (plan 15eaa6)
+                    if (status.pending === 0 && status.processing === 0 && !status.failed) {
                         handleQueueComplete();
+                    } else if (status.pending === 0 && status.processing > 0) {
+                        // Only rows another request still holds: wait for them and check again.
+                        // They are handed out again once they are 5 minutes old (plans 495b92, 15eaa6)
+                        waitForInFlight(status);
                     } else {
                         // Still has items, try to continue
-                        //console.log('MxChat: Queue still has pending items, continuing...');
                         processNextBatch();
                     }
                 } else {
@@ -321,6 +348,47 @@ function checkForActiveQueues() {
         });
     }
     
+    /**
+     * Wait for rows of the queue still in flight elsewhere (plan 15eaa6): say so on the card and
+     * check the queue again shortly. The card never says Complete while rows are outstanding.
+     */
+    function waitForInFlight(status) {
+        if (!isProcessingQueue) {
+            return;
+        }
+        waitingInFlight = Number(status.processing) || 0;
+        if (currentQueueType === 'pdf') {
+            updatePdfStatusFromQueue(status);
+        } else if (currentQueueType === 'document') {
+            updateDocumentStatusFromQueue(status);
+        } else {
+            updateSitemapStatusFromQueue(status);
+        }
+        appendWaitingNote();
+        setTimeout(function() {
+            if (isProcessingQueue) {
+                verifyQueueCompletion();
+            }
+        }, WAIT_POLL_MS);
+    }
+
+    /**
+     * The waiting note under the card's progress (plan 15eaa6), while rows are in flight elsewhere.
+     */
+    function appendWaitingNote() {
+        if (!waitingInFlight || !isProcessingQueue) {
+            return;
+        }
+        const title = currentQueueType === 'pdf' ? 'PDF Processing' : (currentQueueType === 'document' ? 'Document Processing' : 'Sitemap Processing');
+        const unit = currentQueueType === 'pdf' ? 'pages' : (currentQueueType === 'document' ? 'chunks' : 'URLs');
+        const $card = $('.mxchat-status-card:contains("' + title + '")');
+        $card.find('.mxchat-status-waiting-note').remove();
+        $card.find('.mxchat-status-details').append(
+            '<p class="mxchat-status-waiting-note"><strong>Waiting:</strong> ' + waitingInFlight + ' ' + unit +
+            ' still in progress. Any left behind by a closed tab are picked up again after 5 minutes.</p>'
+        );
+    }
+
     /**
      * Process a single queue item
      * Returns a Promise that resolves when processing is complete
@@ -374,9 +442,13 @@ function checkForActiveQueues() {
                     // Update the appropriate status card
                     if (currentQueueType === 'pdf') {
                         updatePdfStatusFromQueue(status);
+                    } else if (currentQueueType === 'document') {
+                        updateDocumentStatusFromQueue(status);
                     } else {
                         updateSitemapStatusFromQueue(status);
                     }
+                    // A redraw that lands after the queue started waiting keeps the note (plan 15eaa6)
+                    appendWaitingNote();
                 }
             }
         });
@@ -388,6 +460,7 @@ function checkForActiveQueues() {
      */
     function handleQueueComplete() {
         isProcessingQueue = false;
+        waitingInFlight = 0;
 
         // Stop real-time entries polling if function exists
         if (typeof stopEntriesPolling === 'function') {
@@ -413,6 +486,8 @@ function checkForActiveQueues() {
                     // Show completed status card (NO REFRESH)
                     if (currentQueueType === 'pdf') {
                         showCompletedPdfCard(status);
+                    } else if (currentQueueType === 'document') {
+                        showCompletedDocumentCard(documentResultFromQueue(status));
                     } else {
                         showCompletedSitemapCard(status);
                     }
@@ -506,10 +581,11 @@ function checkForActiveQueues() {
                 try { data = JSON.parse(item.item_data); } catch(e) { data = {}; }
                 const pageNum = data.page_number || 'Unknown';
 
+                // Server text is written as text (plan 15eaa6)
                 detailsHtml += '<tr style="border-bottom: 1px solid #ddd;">';
-                detailsHtml += '<td style="padding: 8px;">Page ' + pageNum + '</td>';
-                detailsHtml += '<td style="padding: 8px; word-break: break-word;">' + (item.error_message || 'Unknown error') + '</td>';
-                detailsHtml += '<td style="padding: 8px;">' + item.attempts + '</td>';
+                detailsHtml += '<td style="padding: 8px;">Page ' + escapeQueueText(pageNum) + '</td>';
+                detailsHtml += '<td style="padding: 8px; word-break: break-word;">' + escapeQueueText(item.error_message || 'Unknown error') + '</td>';
+                detailsHtml += '<td style="padding: 8px;">' + escapeQueueText(item.attempts) + '</td>';
                 detailsHtml += '</tr>';
             });
 
@@ -580,14 +656,18 @@ function checkForActiveQueues() {
             status.failed_items.forEach(function(item) {
                 let data;
                 try { data = JSON.parse(item.item_data); } catch(e) { data = {}; }
-                const url = data.url || data.pdf_url || 'Unknown URL';
+                const url = String(data.url || data.pdf_url || 'Unknown URL');
                 const pageInfo = data.page_number ? ' (page ' + data.page_number + ')' : '';
                 const displayUrl = (url.length > 60 ? url.substring(0, 57) + '...' : url) + pageInfo;
 
+                // Server and sitemap text is written as text, and only a web address becomes a link (plan 15eaa6)
+                const urlCell = /^https?:\/\//i.test(url)
+                    ? '<a href="' + escapeQueueText(url) + '" target="_blank" rel="noopener noreferrer" style="color: #0073aa; text-decoration: none;">' + escapeQueueText(displayUrl) + '</a>'
+                    : escapeQueueText(displayUrl);
                 detailsHtml += '<tr style="border-bottom: 1px solid #ddd;">';
-                detailsHtml += '<td style="padding: 8px;"><a href="' + url + '" target="_blank" style="color: #0073aa; text-decoration: none;">' + displayUrl + '</a></td>';
-                detailsHtml += '<td style="padding: 8px; word-break: break-word;">' + (item.error_message || 'Unknown error') + '</td>';
-                detailsHtml += '<td style="padding: 8px;">' + item.attempts + '</td>';
+                detailsHtml += '<td style="padding: 8px;">' + urlCell + '</td>';
+                detailsHtml += '<td style="padding: 8px; word-break: break-word;">' + escapeQueueText(item.error_message || 'Unknown error') + '</td>';
+                detailsHtml += '<td style="padding: 8px;">' + escapeQueueText(item.attempts) + '</td>';
                 detailsHtml += '</tr>';
             });
 
@@ -637,16 +717,19 @@ function checkForActiveQueues() {
      * Create or update status card
      */
     function createOrUpdateStatusCard(queueType) {
-        const cardTitle = queueType === 'pdf' ? 'PDF Processing Status' : 'Sitemap Processing Status';
+        const cardTitle = queueType === 'pdf' ? 'PDF Processing Status' : (queueType === 'document' ? 'Document Processing Status' : 'Sitemap Processing Status');
         let $card = $('.mxchat-status-card:contains("' + cardTitle + '")');
         
         if ($card.length === 0) {
             // Create new card
-            let html = '<div class="mxchat-status-card">';
+            // A document card carries its queue id, so Dismiss clears that queue (plan 15eaa6).
+            let html = queueType === 'document'
+                ? '<div class="mxchat-status-card" data-card-type="document" data-queue-id="' + String(currentQueueId || '').replace(/[^A-Za-z0-9_]/g, '') + '">'
+                : '<div class="mxchat-status-card">';
             html += '<div class="mxchat-status-header">';
             html += '<h4>' + cardTitle + '</h4>';
             html += '<div class="mxchat-status-warning" style="background: #fff3cd; color: #856404; padding: 8px 12px; border-radius: 4px; font-size: 13px; margin: 10px 0;">';
-            html += '⚠️ <strong>Keep this tab open</strong> - Processing runs in your browser';
+            html += (queueType === 'document' ? '' : '⚠️ ') + '<strong>Keep this tab open</strong> - Processing runs in your browser';
             html += '</div>';
             html += '<form method="post" class="mxchat-stop-form" action="' + 
                    mxchatAdmin.admin_url + 'admin-post.php?action=mxchat_stop_processing">';
@@ -777,8 +860,8 @@ function checkForActiveQueues() {
         }
         
         if ($pdfCard.length > 0 && status.status === 'complete') {
-            // Show as completed (same as showCompletedPdfCard but from server data)
-            showCompletedPdfCard(status);
+            // Show as completed (same as showCompletedPdfCard but from server data, in its shape: plan 15eaa6)
+            showCompletedPdfCard(queueResultFromPageStatus(status, 'pdf'));
         }
     }
     
@@ -794,8 +877,8 @@ function checkForActiveQueues() {
         }
         
         if ($sitemapCard.length > 0 && status.status === 'complete') {
-            // Show as completed (same as showCompletedSitemapCard but from server data)
-            showCompletedSitemapCard(status);
+            // Show as completed (same as showCompletedSitemapCard but from server data, in its shape: plan 15eaa6)
+            showCompletedSitemapCard(queueResultFromPageStatus(status, 'sitemap'));
         }
     }
     
@@ -803,15 +886,15 @@ function checkForActiveQueues() {
      * Create PDF status card
      */
     function createPdfStatusCard(status) {
-        let html = '<div class="mxchat-status-card" data-queue-id="' + (status.queue_id || '') + '">';
+        let html = '<div class="mxchat-status-card" data-queue-id="' + String(status.queue_id || '').replace(/[^A-Za-z0-9_]/g, '') + '">';
         html += '<div class="mxchat-status-header">';
         html += '<h4>PDF Processing Status</h4>';
         html += '</div>';
         html += '<div class="mxchat-progress-bar">';
-        html += '<div class="mxchat-progress-fill" style="width: ' + status.percentage + '%"></div>';
+        html += '<div class="mxchat-progress-fill" style="width: ' + Number(status.percentage || 0) + '%"></div>';
         html += '</div>';
         html += '<div class="mxchat-status-details">';
-        html += '<p>Progress: ' + status.processed_pages + ' of ' + status.total_pages + ' pages</p>';
+        html += '<p>Progress: ' + Number(status.processed_pages || 0) + ' of ' + Number(status.total_pages || 0) + ' pages</p>';
         html += '</div>';
         html += '</div>';
         
@@ -822,21 +905,201 @@ function checkForActiveQueues() {
      * Create sitemap status card
      */
     function createSitemapStatusCard(status) {
-        let html = '<div class="mxchat-status-card" data-queue-id="' + (status.queue_id || '') + '">';
+        let html = '<div class="mxchat-status-card" data-queue-id="' + String(status.queue_id || '').replace(/[^A-Za-z0-9_]/g, '') + '">';
         html += '<div class="mxchat-status-header">';
         html += '<h4>Sitemap Processing Status</h4>';
         html += '</div>';
         html += '<div class="mxchat-progress-bar">';
-        html += '<div class="mxchat-progress-fill" style="width: ' + status.percentage + '%"></div>';
+        html += '<div class="mxchat-progress-fill" style="width: ' + Number(status.percentage || 0) + '%"></div>';
         html += '</div>';
         html += '<div class="mxchat-status-details">';
-        html += '<p>Progress: ' + status.processed_urls + ' of ' + status.total_urls + ' URLs</p>';
+        html += '<p>Progress: ' + Number(status.processed_urls || 0) + ' of ' + Number(status.total_urls || 0) + ' URLs</p>';
         html += '</div>';
         html += '</div>';
         
         $('.mxchat-import-section').after($(html));
     }
     
+    // ========================================
+    // DOCUMENT QUEUE CARD (plan 15eaa6)
+    // ========================================
+    // A long document imported a chunk at a time: the PDF card's pattern, counted in chunks
+    // (the unit the Knowledge list shows for these entries), with no emoji.
+
+    function escapeQueueText(value) {
+        return String(value === undefined || value === null ? '' : value).replace(/[&<>"']/g, function(c) {
+            return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+        });
+    }
+
+    /**
+     * The page-load status answer (pdf_status / sitemap_status from mxchat_get_status_updates) in the
+     * shape the completed PDF and sitemap cards read, the queue status answer's: the page-load answer
+     * names its counts differently, so the card said "Total Pages: undefined" (plan 15eaa6).
+     */
+    function queueResultFromPageStatus(status, type) {
+        const isPdf = type === 'pdf';
+        const total = Number(isPdf ? status.total_pages : status.total_urls) || 0;
+        const processed = Number(isPdf ? status.processed_pages : status.processed_urls) || 0;
+        const failed = Number(isPdf ? status.failed_pages : status.failed_urls) || 0;
+        const list = (isPdf ? status.failed_pages_list : status.failed_urls_list) || [];
+        return {
+            total: total,
+            completed: Math.max(0, processed - failed),
+            failed: failed,
+            failed_items: list.map(function(item) {
+                const data = isPdf ? { pdf_url: item.url, page_number: item.page } : { url: item.url };
+                if (!isPdf && item.page) {
+                    data.page_number = item.page;
+                }
+                return { item_data: JSON.stringify(data), error_message: item.error, attempts: item.retries };
+            })
+        };
+    }
+
+    /**
+     * The queue status answer (mxchat_get_queue_status) as the completed card reads it.
+     */
+    function documentResultFromQueue(status) {
+        const rows = (status.failed_items || []).map(function(item) {
+            let data;
+            try { data = JSON.parse(item.item_data); } catch (e) { data = {}; }
+            return {
+                chunk: (data && data.chunk_index !== undefined) ? Number(data.chunk_index) + 1 : '',
+                error: item.error_message,
+                attempts: item.attempts
+            };
+        });
+        return { total: status.total, completed: status.completed, failed: status.failed, rows: rows };
+    }
+
+    /**
+     * The page-load status answer (document_status from mxchat_get_status_updates) the same way.
+     */
+    function documentResultFromPageStatus(status) {
+        const failed = Number(status.failed_chunks || 0);
+        const rows = (status.failed_chunks_list || []).map(function(item) {
+            return { chunk: item.chunk, error: item.error, attempts: item.retries };
+        });
+        return { total: status.total_chunks, completed: Number(status.processed_chunks || 0) - failed, failed: failed, rows: rows };
+    }
+
+    /**
+     * Update the document card from queue data (DURING PROCESSING)
+     */
+    function updateDocumentStatusFromQueue(status) {
+        const $card = $('.mxchat-status-card:contains("Document Processing")');
+        if ($card.length === 0) {
+            return;
+        }
+
+        $card.find('.mxchat-progress-fill').css('width', status.percentage + '%');
+
+        let detailsHtml = '<p>Progress: ' + (status.completed + status.failed) + ' of ' +
+                         status.total + ' chunks (' + status.percentage + '%)</p>';
+        if (status.completed > 0) {
+            detailsHtml += '<p><strong>Processed successfully:</strong> ' + status.completed + '</p>';
+        }
+        if (status.failed > 0) {
+            detailsHtml += '<p class="error-count"><strong>Failed chunks:</strong> ' + status.failed + '</p>';
+        }
+        detailsHtml += '<p><strong>Status:</strong> Processing</p>';
+
+        $card.find('.mxchat-status-details').html(detailsHtml);
+    }
+
+    /**
+     * Show the completed document card with its failed chunks (NO RETRY BUTTON)
+     */
+    function showCompletedDocumentCard(result) {
+        const $card = $('.mxchat-status-card:contains("Document Processing")');
+        if ($card.length === 0) {
+            return;
+        }
+
+        $card.find('.mxchat-stop-form').remove();
+        $card.find('.mxchat-status-warning').remove();
+        $card.find('.mxchat-status-badge').remove();
+
+        const failed = Number(result.failed || 0);
+        if (failed > 0) {
+            $card.find('.mxchat-status-header h4').after(
+                '<span class="mxchat-status-badge mxchat-status-warning" style="margin-left: 10px; padding: 4px 12px; border-radius: 4px; font-size: 12px; font-weight: normal;">Completed with ' +
+                failed + (failed === 1 ? ' failure' : ' failures') + ' - Refresh to view entries</span>'
+            );
+        } else {
+            $card.find('.mxchat-status-header h4').after(
+                '<span class="mxchat-status-badge mxchat-status-success" style="margin-left: 10px; padding: 4px 12px; border-radius: 4px; font-size: 12px; font-weight: normal;">Complete - Refresh to view entries</span>'
+            );
+        }
+
+        addDismissButton($card);
+        $card.find('.mxchat-progress-fill').css('width', '100%');
+
+        let detailsHtml = '<div style="background: #f0f7ff; padding: 15px; border-radius: 4px; margin-bottom: 15px;">';
+        detailsHtml += '<h4 style="margin: 0 0 10px 0;">Final Results</h4>';
+        detailsHtml += '<p style="margin: 5px 0;"><strong>Total Chunks:</strong> ' + escapeQueueText(result.total) + '</p>';
+        detailsHtml += '<p style="margin: 5px 0; color: #2ea44f;"><strong>Successfully Processed:</strong> ' + escapeQueueText(result.completed) + '</p>';
+        if (failed > 0) {
+            detailsHtml += '<p style="margin: 5px 0; color: #cf222e;"><strong>Failed:</strong> ' + failed + '</p>';
+        }
+        detailsHtml += '</div>';
+
+        if (failed > 0 && result.rows && result.rows.length > 0) {
+            detailsHtml += '<div class="mxchat-error-summary" style="background: #fff3cd; border-left: 4px solid #ffc107; padding: 15px; margin-top: 15px;">';
+            detailsHtml += '<h4 style="margin: 0 0 10px 0; color: #856404;">Failed Chunks</h4>';
+            detailsHtml += '<div style="margin-top: 10px; max-height: 400px; overflow-y: auto;">';
+            detailsHtml += '<table style="width: 100%; border-collapse: collapse;">';
+            detailsHtml += '<thead><tr style="background: #f5f5f5;"><th style="padding: 8px; text-align: left;">Chunk</th><th style="padding: 8px; text-align: left;">Error</th><th style="padding: 8px; text-align: left;">Attempts</th></tr></thead>';
+            detailsHtml += '<tbody>';
+            result.rows.forEach(function(row) {
+                detailsHtml += '<tr style="border-bottom: 1px solid #ddd;">';
+                detailsHtml += '<td style="padding: 8px;">Chunk ' + escapeQueueText(row.chunk) + '</td>';
+                detailsHtml += '<td style="padding: 8px; word-break: break-word;">' + escapeQueueText(row.error || 'Unknown error') + '</td>';
+                detailsHtml += '<td style="padding: 8px;">' + escapeQueueText(row.attempts) + '</td>';
+                detailsHtml += '</tr>';
+            });
+            detailsHtml += '</tbody></table>';
+            detailsHtml += '</div>';
+            detailsHtml += '</div>';
+        }
+
+        $card.find('.mxchat-status-details').html(detailsHtml);
+    }
+
+    /**
+     * Update the document card (for an already completed queue on page load)
+     */
+    function updateDocumentStatus(status) {
+        let $card = $('.mxchat-status-card:contains("Document Processing")');
+        if ($card.length === 0 && status) {
+            createDocumentStatusCard(status);
+            $card = $('.mxchat-status-card:contains("Document Processing")');
+        }
+        if ($card.length > 0 && status.status === 'complete') {
+            showCompletedDocumentCard(documentResultFromPageStatus(status));
+        }
+    }
+
+    /**
+     * Create the document card
+     */
+    function createDocumentStatusCard(status) {
+        let html = '<div class="mxchat-status-card" data-card-type="document" data-queue-id="' + String(status.queue_id || '').replace(/[^A-Za-z0-9_]/g, '') + '">';
+        html += '<div class="mxchat-status-header">';
+        html += '<h4>Document Processing Status</h4>';
+        html += '</div>';
+        html += '<div class="mxchat-progress-bar">';
+        html += '<div class="mxchat-progress-fill" style="width: ' + Number(status.percentage || 0) + '%"></div>';
+        html += '</div>';
+        html += '<div class="mxchat-status-details">';
+        html += '<p>Progress: ' + Number(status.processed_chunks || 0) + ' of ' + Number(status.total_chunks || 0) + ' chunks</p>';
+        html += '</div>';
+        html += '</div>';
+
+        $('.mxchat-import-section').after($(html));
+    }
+
     /**
      * Add dismiss button to completed cards
      */
